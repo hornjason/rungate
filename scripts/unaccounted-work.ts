@@ -6,7 +6,11 @@
  * cited issues are open, and picks the exit code.
  *
  *   rungate unaccounted-work [--project-root <dir>] [--repo <owner/name>]
- *                            [--issues-fixture <file.json>] [--json]
+ *                            [--since <YYYY-MM-DD>] [--issues-fixture <file.json>]
+ *                            [--prs-fixture <file.json>] [--json]
+ *
+ * `--since` adds pull request bodies as a source (#2489): those merged on or
+ * after the date, and every open one.
  *
  * Exit 0: every source read and nothing unaccounted. `EXIT_UNACCOUNTED`:
  * declarations cite no open issue. `EXIT_REFUSED`: a source, a file, or the
@@ -22,7 +26,21 @@ import { homedir } from "os";
 import { resolve } from "path";
 
 import { createGitHubClient, parseOwnerRepo } from "../lib/github";
-import { buildReport, citedNumbers, discoverSources, openIssuesInPage, renderReport, type IssueStates } from "../lib/unaccounted-work";
+import { nextCursor } from "../lib/graphql-cursor";
+import {
+  buildReport,
+  citedNumbers,
+  discoverSources,
+  openIssuesInPage,
+  prBodiesSource,
+  prsFromSearch,
+  renderReport,
+  trustedAuthors,
+  type PrSearchPage,
+  type IssueStates,
+  type PrBody,
+  type SourceReading,
+} from "../lib/unaccounted-work";
 import { parseRemoteSlug } from "../lib/verified-push";
 
 /** The one exit for a reading not taken. Assigned once; the test mutates it. */
@@ -31,7 +49,78 @@ export const EXIT_REFUSED = 2;
 export const EXIT_UNACCOUNTED = 1;
 
 const USAGE =
-  "rungate unaccounted-work [--project-root <dir>] [--repo <owner/name>] [--issues-fixture <file.json>] [--json]";
+  "rungate unaccounted-work [--project-root <dir>] [--repo <owner/name>] [--since <YYYY-MM-DD>] [--issues-fixture <file.json>] [--prs-fixture <file.json>] [--json]";
+
+type AuthoredPr = PrBody & { author_association?: string };
+
+/**
+ * The one place pull requests become the source, for the fixture and the live
+ * read alike. Only a trusted author's body is read (review of #2494: with the
+ * filter in the live path alone, no test could see it removed).
+ */
+function sourceFromPrs(prs: readonly AuthoredPr[]): SourceReading {
+  const trusted = trustedAuthors(prs);
+  return prBodiesSource({ prs: trusted.map(p => ({ number: p.number, body: p.body })), skipped: prs.length - trusted.length });
+}
+
+/** `[{ "number": 12, "body": "…", "author_association": "OWNER" }]`, the shape the live read collects. */
+function fixturePrs(path: string): SourceReading {
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf-8")) as unknown;
+    if (!Array.isArray(raw)) throw new Error("not an array of { number, body, author_association }");
+    const prs: AuthoredPr[] = raw.map(r => {
+      const { number, body, author_association } = r as { number?: unknown; body?: unknown; author_association?: unknown };
+      if (typeof number !== "number" || (body !== null && typeof body !== "string")) throw new Error("an entry is not { number, body }");
+      return { number, body, author_association: typeof author_association === "string" ? author_association : undefined };
+    });
+    return sourceFromPrs(prs);
+  } catch (e) {
+    return prBodiesSource({ kind: "UNMEASURED", why: `--prs-fixture ${path} could not be read (${(e as Error).message})` });
+  }
+}
+
+/** Pull requests merged on or after `since`, and every open one, with their bodies. */
+async function fetchPrBodies(repo: string | null, since: string): Promise<SourceReading> {
+  if (!repo) {
+    return prBodiesSource({ kind: "UNMEASURED", why: "no repository to read pull requests from: pass --repo, or give the tree an origin remote" });
+  }
+  try {
+    // Validated before anything is sent (review of #2494): search matches
+    // nothing for a malformed `repo:` qualifier and returns zero results, and
+    // zero would read as "no pull requests" rather than a reading not taken.
+    const { owner, repo: name } = parseOwnerRepo(repo);
+    const slug = `${owner}/${name}`;
+    const client = createGitHubClient();
+    const seen = new Map<number, AuthoredPr>();
+    const query = `query($q: String!, $after: String) {
+      search(query: $q, type: ISSUE, first: 100, after: $after) {
+        issueCount
+        pageInfo { hasNextPage endCursor }
+        nodes { ... on PullRequest { number body authorAssociation } }
+      }
+    }`;
+    for (const q of [`repo:${slug} is:pr merged:>=${since}`, `repo:${slug} is:pr is:open`]) {
+      const pages: PrSearchPage[] = [];
+      let after: string | null = null;
+      // The one pager (lib/graphql-cursor.ts): a page that cannot say whether
+      // more exist is UNMEASURED, never read as the last one.
+      for (;;) {
+        const data = (await client.graphql(query, { q, after })) as { search: PrSearchPage };
+        pages.push(data.search);
+        const next = nextCursor(data.search?.pageInfo);
+        if (next.kind === "unreadable") return prBodiesSource({ kind: "UNMEASURED", why: `${q}: ${next.why}` });
+        if (next.kind === "done") break;
+        after = next.cursor;
+      }
+      const read = prsFromSearch(pages);
+      if ("why" in read) return prBodiesSource({ kind: "UNMEASURED", why: `${q}: ${read.why}` });
+      for (const it of read.prs) seen.set(it.number, it);
+    }
+    return sourceFromPrs([...seen.values()].sort((a, b) => b.number - a.number));
+  } catch (e) {
+    return prBodiesSource({ kind: "UNMEASURED", why: `GitHub could not list the pull requests (${(e as Error).message})` });
+  }
+}
 
 /** `{ "12": "OPEN", "13": "CLOSED" }`; a number absent from it is not open. */
 function fixtureStates(path: string): IssueStates {
@@ -81,11 +170,13 @@ export async function main(argv: readonly string[]): Promise<number> {
   let rootArg: string | undefined;
   let repoArg: string | undefined;
   let fixture: string | undefined;
+  let prsFixture: string | undefined;
+  let since: string | undefined;
   let asJson = false;
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--json") asJson = true;
-    else if (a === "--project-root" || a === "--repo" || a === "--issues-fixture") {
+    else if (a === "--project-root" || a === "--repo" || a === "--issues-fixture" || a === "--prs-fixture" || a === "--since") {
       const next = argv[i + 1];
       if (next === undefined || next.startsWith("--")) {
         console.error(`UNMEASURED: ${a} needs a value after it. Usage: ${USAGE}. Nothing was read.`);
@@ -93,15 +184,42 @@ export async function main(argv: readonly string[]): Promise<number> {
       }
       if (a === "--project-root") rootArg = next;
       else if (a === "--repo") repoArg = next;
-      else fixture = next;
+      else if (a === "--prs-fixture") prsFixture = next;
+      else if (a === "--since") {
+        // A calendar date, checked as one, so a typo is refused rather than
+        // handed to GitHub's search and read back as "no pull requests".
+        // Round-tripped, because Date.parse rolls 2026-02-30 over to March 2
+        // rather than refusing it (review of #2494).
+        const at = new Date(`${next}T00:00:00Z`);
+        // UTC-INTENTIONAL: --since is a calendar date read as UTC midnight, and the round-trip compares it in that same zone.
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(next) || Number.isNaN(at.getTime()) || at.toISOString().slice(0, 10) !== next) {
+          console.error(`UNMEASURED: --since needs a date as YYYY-MM-DD, not ${JSON.stringify(next)}. Nothing was read.`);
+          return EXIT_REFUSED;
+        }
+        since = next;
+      } else fixture = next;
       i++;
     } else {
       console.error(`UNMEASURED: unknown argument ${JSON.stringify(a)}. Usage: ${USAGE}. Nothing was read.`);
       return EXIT_REFUSED;
     }
   }
+  // Review of #2494: the fixture replaces the live read, so naming both is a
+  // contradiction, refused like every other bad input rather than settled silently.
+  if (prsFixture && since) {
+    console.error(`UNMEASURED: --prs-fixture and --since both name where pull requests come from; pass one. Usage: ${USAGE}. Nothing was read.`);
+    return EXIT_REFUSED;
+  }
   const root = resolve(rootArg ?? process.cwd());
   const sources = discoverSources(root, homedir());
+  // #2489: pull request bodies, only when asked for — a plain run stays local.
+  sources.push(
+    prsFixture
+      ? fixturePrs(prsFixture)
+      : since
+        ? await fetchPrBodies(repoFor(root, repoArg), since)
+        : prBodiesSource({ kind: "ABSENT", why: "pull request bodies are read only with --since <YYYY-MM-DD>" }),
+  );
   const cited = citedNumbers(sources);
   let states: IssueStates;
   if (fixture) states = fixtureStates(fixture);

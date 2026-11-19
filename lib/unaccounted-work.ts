@@ -21,7 +21,7 @@ import { spawnSync } from "child_process";
 import { existsSync, lstatSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 
-export type SourceName = "tracked-files" | "plan-file" | "agent-memory";
+export type SourceName = "tracked-files" | "plan-file" | "agent-memory" | "pr-bodies";
 
 export interface Declaration {
   source: SourceName;
@@ -33,7 +33,7 @@ export interface Declaration {
 }
 
 export type SourceReading =
-  | { source: SourceName; kind: "READ"; declarations: Declaration[]; unreadable: string[]; files: number }
+  | { source: SourceName; kind: "READ"; declarations: Declaration[]; unreadable: string[]; files: number; skipped?: number }
   | { source: SourceName; kind: "ABSENT"; why: string }
   | { source: SourceName; kind: "UNMEASURED"; why: string };
 
@@ -52,13 +52,58 @@ export function citationsIn(text: string): number[] {
   return [...text.matchAll(/(?<![\w&/#])#(\d{1,9})\b(?!;)/g)].map(m => Number(m[1]));
 }
 
-const clip = (s: string) => (s.length > 160 ? `${s.slice(0, 157)}...` : s);
+/**
+ * Control characters out, then at most 160 characters. A pull request body is
+ * written by whoever opened the PR, and the report prints it to a terminal, so
+ * an escape sequence in it must not reach one (#2489, security review). Nor
+ * may a character that changes what a line appears to say without being seen:
+ * bidirectional overrides and isolates, and zero-width characters (review of
+ * #2494).
+ */
+export const clip = (s: string) => {
+  // By code point (the u flag), so characters outside the BMP are matched
+  // whole: the tag block U+E0000–E007F, which can carry text an agent reads
+  // and a person does not see, and the variation selectors supplement
+  // U+E0100–E01EF (review of #2494).
+  const safe = s.replace(
+    /[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069\ufeff\u{E0000}-\u{E007F}\u{E0100}-\u{E01EF}]/gu,
+    "\uFFFD",
+  );
+  // Cut by code point too, so an emoji at the boundary is never split into a lone surrogate.
+  const points = Array.from(safe);
+  return points.length > 160 ? `${points.slice(0, 157).join("")}...` : safe;
+};
+
+/** Who may add a line to the report through a pull request body: people with a say in the repository. */
+export const TRUSTED_ASSOCIATIONS: ReadonlySet<string> = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
+/**
+ * The pull requests whose author has a say in the repository (#2489, security
+ * review). Merged ones too: an author can edit a body after the merge, so
+ * "a maintainer merged it" says nothing about the text read today. A PR from
+ * anyone else is not read, or anyone could make this command report work.
+ */
+export function trustedAuthors<T extends { author_association?: string }>(items: readonly T[]): T[] {
+  return items.filter(i => TRUSTED_ASSOCIATIONS.has(i.author_association ?? ""));
+}
+
+/**
+ * The markers read in a pull request body (#2489): the prose markers, plus the
+ * two ways an agent writes down work it could not file at the time. Kept off
+ * the tracked-file scan, where "not done" is ordinary prose.
+ */
+export const PR_BODY_MARKERS: readonly RegExp[] = [...PROSE_MARKERS, /\bnot (?:yet )?filed\b/i, /\bnot done\b/i];
 
 /** Every line of `text` carrying a marker. */
-export function declarationsIn(text: string, path: string, source: SourceName): Declaration[] {
+export function declarationsIn(
+  text: string,
+  path: string,
+  source: SourceName,
+  markers: readonly RegExp[] = PROSE_MARKERS,
+): Declaration[] {
   const out: Declaration[] = [];
   text.split("\n").forEach((line, i) => {
-    if (PROSE_MARKERS.some(re => re.test(line))) {
+    if (markers.some(re => re.test(line))) {
       out.push({ source, path, line: i + 1, text: clip(line.trim()), cites: citationsIn(line) });
     }
   });
@@ -224,6 +269,60 @@ export function agentMemorySource(root: string, home: string): SourceReading {
   return { source, kind: "READ", declarations, unreadable, files: names.length };
 }
 
+/** One pull request's number and body, as GitHub returns them. A PR with no description has a null body. */
+export interface PrBody {
+  number: number;
+  body: string | null;
+}
+
+/**
+ * Pull request bodies as a source (#2489). The PRs are fetched by the command
+ * (`--since`, or `--prs-fixture` in tests), so this only turns the reading it
+ * is handed into declarations, each placed at `PR #N` and its line in the body.
+ * Not reading them is ABSENT, and a read that failed is UNMEASURED, both with
+ * the reason; neither is a zero.
+ */
+export function prBodiesSource(
+  read: { prs: readonly PrBody[]; skipped?: number } | { kind: "ABSENT" | "UNMEASURED"; why: string },
+): SourceReading {
+  const source = "pr-bodies";
+  if ("kind" in read) return { source, kind: read.kind, why: read.why };
+  const declarations = read.prs.flatMap(pr =>
+    pr.body ? declarationsIn(pr.body, `PR #${pr.number}`, source, PR_BODY_MARKERS) : [],
+  );
+  // A PR set aside for its author is counted, not dropped (review of #2494):
+  // "every author was untrusted" must not read like "no pull requests".
+  const skipped = read.skipped ?? 0;
+  return { source, kind: "READ", declarations, unreadable: [], files: read.prs.length + skipped, ...(skipped ? { skipped } : {}) };
+}
+
+/**
+ * One page of a GraphQL `search(type: ISSUE)` for pull requests, as the
+ * command reads it: the nodes, whether there is another page, and how many the
+ * search says exist (#2489). Exported so the truncation rule is tested
+ * without GitHub.
+ */
+export interface PrSearchPage {
+  issueCount: number;
+  nodes: Array<{ number?: number; body?: string | null; authorAssociation?: string } | null>;
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+}
+
+/**
+ * The pull requests a paged search returned, or why the reading is not whole.
+ * GitHub's search stops at 1,000 results. When the search says more exist than
+ * the pages held, the source is UNMEASURED with both numbers, never a partial
+ * list reported as READ (review of #2494).
+ */
+export function prsFromSearch(pages: readonly PrSearchPage[]): { prs: Array<PrBody & { author_association?: string }> } | { why: string } {
+  const prs = pages.flatMap(p =>
+    p.nodes.flatMap(n => (n && typeof n.number === "number" ? [{ number: n.number, body: n.body ?? null, author_association: n.authorAssociation }] : [])),
+  );
+  const claimed = pages.length > 0 ? pages[0].issueCount : 0;
+  if (claimed > prs.length) return { why: `the search found ${claimed} pull requests and only ${prs.length} could be read` };
+  return { prs };
+}
+
 /** Every source this command knows how to discover, in report order. */
 export function discoverSources(root: string, home: string): SourceReading[] {
   return [trackedFilesSource(root), planFileSource(root), agentMemorySource(root, home)];
@@ -239,7 +338,7 @@ export function isAccounted(d: Declaration, states: IssueStates): boolean {
 
 export interface Report {
   root: string;
-  sources: Array<{ source: SourceName; kind: SourceReading["kind"]; why?: string; files?: number; declarations?: number }>;
+  sources: Array<{ source: SourceName; kind: SourceReading["kind"]; why?: string; files?: number; declarations?: number; skipped?: number }>;
   issueStates: { kind: IssueStates["kind"]; why?: string; cited: number; open?: number };
   unaccounted: Declaration[];
   unmeasured: string[];
@@ -258,7 +357,7 @@ export function buildReport(root: string, sources: readonly SourceReading[], cit
     root,
     sources: sources.map(s =>
       s.kind === "READ"
-        ? { source: s.source, kind: s.kind, files: s.files, declarations: s.declarations.length }
+        ? { source: s.source, kind: s.kind, files: s.files, declarations: s.declarations.length, ...(s.skipped ? { skipped: s.skipped } : {}) }
         : { source: s.source, kind: s.kind, why: s.why },
     ),
     issueStates:
@@ -281,7 +380,7 @@ export function renderReport(r: Report): string[] {
   for (const s of r.sources) {
     lines.push(
       s.kind === "READ"
-        ? `  ${s.source}: READ — ${s.files} file(s), ${s.declarations} declaration(s)`
+        ? `  ${s.source}: READ — ${s.files} file(s), ${s.declarations} declaration(s)${s.skipped ? `, ${s.skipped} skipped (author not an owner, member or collaborator)` : ""}`
         : `  ${s.source}: ${s.kind} — ${s.why}`,
     );
   }
