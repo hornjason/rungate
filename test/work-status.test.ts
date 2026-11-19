@@ -1007,6 +1007,19 @@ describe("#1853 H4: the candidate list says how many are UNPLACED", () => {
     expect(code, "the next list must come from the in-scope set").toContain("[...scoped.inScope].sort(");
   });
 
+  test("SC-2741: the report ranks by the due date and open-unblock count the writer reads", () => {
+    // The same two keys `board-ready` reads off GraphQL, from the REST
+    // fields that carry them, so START HERE prints the order the writer pulls.
+    expect(code, "the report's candidates carry no due date, so it ranks by phase alone").toMatch(
+      /dueOn:[^\n]*i\.milestone\?\.due_on/,
+    );
+    expect(code, "the report's candidates carry no unblock count").toMatch(
+      /unblocks:\s*typeof i\.issue_dependencies_summary\?\.blocking === "number"/,
+    );
+    // `total_blocking` counts closed dependents too; the rule counts open ones.
+    expect(code).not.toContain("total_blocking");
+  });
+
   test("the candidates are sorted with readyOrder, so the report shows plan order", () => {
     expect(code, "sorting by anything else makes this list disagree with the writer").toContain(
       ".sort(readyOrderFor(",
