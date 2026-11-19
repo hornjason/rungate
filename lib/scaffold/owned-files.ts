@@ -273,6 +273,15 @@ export const OWNED_FILES: OwnedFile[] = [
     avoid: "Don't delete its `generated-sha` marker, or edits stop surviving",
   },
   {
+    // #2484, ADR-023 row 5, SC-2791: `/board`, reading the repository it
+    // sits in. A provenance file for the same reason as dry-run.md.
+    path: ".claude/commands/board.md",
+    strategy: "provenance",
+    servedBy: "writeProcessFiles (lib/scaffold/write-steps.ts) via decideRuleWrite — the rule-provenance decision",
+    customize: "Edit freely — a hand-edited command is preserved and reported",
+    avoid: "Don't delete its `generated-sha` marker, or edits stop surviving",
+  },
+  {
     // #2048, ADR-014 row 5: step 2's template. Regenerated with no marker,
     // because every ADR is copied from it and a marker would travel into each.
     path: "docs/adr/TEMPLATE.md",

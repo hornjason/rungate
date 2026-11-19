@@ -275,7 +275,8 @@ describe("SC-2746: rungate scaffold installs the dry-run command and the ADR tem
   test("an installation missing a source refuses by name and writes nothing", () => {
     const empty = mkdtempSync(join(tmpdir(), "rg-process-templates-"));
     try {
-      const files = processFiles(false, empty);
+      // #2484 added /board as a third; its refusal is test/board-command.test.ts's.
+      const files = processFiles(false, empty).filter(f => f.path === DRY_RUN_COMMAND_PATH || f.path === ADR_TEMPLATE_PATH);
       expect(files.map(f => f.content)).toEqual([null, null]);
       expect(files.map(f => ("why" in f ? f.why : ""))).toEqual([
         "templates/process/dry-run.md is missing from this rungate installation",
