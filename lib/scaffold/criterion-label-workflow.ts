@@ -13,7 +13,7 @@
  * (by `/board` and `work-status`), and until #2467 only this repository had
  * the workflow. It was caller-owned and ran `bun scripts/criterion-label.ts`,
  * a path no consumer has, so every consumer read the label at 0 beside a
- * real shortfall — asaCommandCenter, 2026-11-19: `criteria-named` 196 short,
+ * real shortfall — our first consumer, 2026-11-19: `criteria-named` 196 short,
  * label 0.
  *
  * ## It calls the published CLI
