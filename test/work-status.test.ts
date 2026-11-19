@@ -748,21 +748,19 @@ describe("the status reader does not leak the token on any hop", () => {
   test("the repository is named once — no query spells the owner itself", () => {
     const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
 
-    // Anti-vacuity: the constant must exist and must be the thing the count
-    // below is counting. Without this the assertion passes on a file that
-    // renamed REPO away entirely.
-    expect(code, "scripts/work-status.ts must declare REPO").toMatch(
-      /const REPO = "hornjason\/rungate";/,
+    // Anti-vacuity: REPO must exist, once, and come from the one reading
+    // (#2482). Without this the assertions below pass on a file that renamed
+    // REPO away entirely.
+    expect(code, "scripts/work-status.ts must declare REPO from the resolved reading").toMatch(
+      /const REPO = repoReading\.repo;/,
     );
+    expect((code.match(/\bconst REPO\b/g) ?? []).length).toBe(1);
 
-    for (const word of ["hornjason", "rungate"]) {
-      expect(
-        (code.match(new RegExp(word, "g")) ?? []).length,
-        `"${word}" must appear exactly once in scripts/work-status.ts — inside ` +
-          `REPO. A query that spells it again is a second decider over which ` +
-          `repository this tool reports on, and a rename moves only one of them.`,
-      ).toBe(1);
-    }
+    // #2482 removed the one literal the file held, so none may come back. A
+    // query that spells a repository is a second decider over which one this
+    // tool reports on, and a rename or a consumer moves only one of them.
+    expect(code, "a repository is spelled as a literal").not.toMatch(/hornjason/);
+    expect(code, "a query spells its owner").not.toMatch(/owner:\s*"[^"$]/);
   });
 
   // The population the row above was too narrow to cover. Every abandonment of
@@ -1374,6 +1372,7 @@ describe("#1944: the report names local work every run, from the one decider", (
   // whole report, the same as an absent board or credential.
   const KNOWN_EXITS_BEFORE_SECTION = [
     "if (PROJECT === null)",
+    'if ("why" in repoReading)',
     "if (!token)",
     'if (focus.kind === "unknown")',
     'if (dir === undefined || dir.trim() === "" || dir.startsWith("--"))',

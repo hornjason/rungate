@@ -14,7 +14,7 @@
  *
  * Read-only. It opens nothing, edits nothing and writes nothing.
  */
-import { assertTokenMayReach, resolveGitHubToken } from "../lib/github";
+import { assertTokenMayReach, parseOwnerRepo, resolveGitHubToken } from "../lib/github";
 import {
   NO_MILESTONE,
   isPickable,
@@ -66,18 +66,10 @@ import { enginePrefixReading, readBoardProjectId, readExpediteLabel } from "../l
 import { measureClosedIssues } from "../lib/board-throughput";
 import { nextCursor } from "../lib/graphql-cursor";
 import { fileOverlapGroups, overlapLines } from "../lib/issue-file-overlap";
+import { resolveRepo } from "./status-view";
 import { readFileSync } from "fs";
 import { join, resolve } from "path";
 
-const REPO = "hornjason/rungate";
-// **Split once, so GraphQL and REST cannot disagree about the repository.**
-// Two queries below spelled `owner:"hornjason",name:"rungate"` themselves
-// while every REST path was built from `REPO` — two deciders over one fact.
-// This repository was `hornjason/pai-harness` until 2026-10-28, and GitHub
-// redirects the old name, so after a rename the literals would have gone on
-// WORKING against the wrong repository while the REST reads followed the
-// constant: one table, two repositories, no error. Caught in review of #1740.
-const [OWNER, NAME] = REPO.split("/");
 // **The tree every read below names** (#1968, Claim 2), read once:
 // `--project-root <dir>`, else the directory the run started in — the shape
 // `board-mirror.ts` takes. Config, local branches and worktrees all come from
@@ -104,6 +96,40 @@ if (PROJECT === null) {
   );
   process.exit(2);
 }
+// **The repository every read below names** (#2482, ADR-023): `--repo`, then
+// `GITHUB_REPOSITORY`, then ROOT's origin remote, through `rungate board`'s
+// own resolver so the two commands cannot disagree about which repository a
+// checkout is. This was a constant, so run in a consumer the report listed
+// rungate's issues under the consumer's board. Read after the board and
+// before the credential; a name that is not `owner/name` is refused here,
+// never sent to the API to come back as an empty repository.
+const repoReading = ((): { repo: string } | { why: string } => {
+  const named = resolveRepo(Bun.argv.slice(2), process.env, ROOT);
+  if (named === null) return { why: "no --repo, no GITHUB_REPOSITORY, and no GitHub origin remote" };
+  try {
+    const { owner, repo } = parseOwnerRepo(named);
+    return { repo: `${owner}/${repo}` };
+  } catch (e) {
+    return { why: (e as Error).message };
+  }
+})();
+if ("why" in repoReading) {
+  console.error(
+    `UNMEASURED: no repository to read (${repoReading.why}). Name it with --repo owner/name, ` +
+      "set GITHUB_REPOSITORY, or run it in a checkout whose origin remote is on GitHub. Nothing was read.",
+  );
+  process.exit(2);
+}
+const REPO = repoReading.repo;
+console.log(`Repository: ${REPO}`);
+// **Split once, so GraphQL and REST cannot disagree about the repository.**
+// Two queries below spelled the owner and name as literals themselves while
+// every REST path was built from `REPO` — two deciders over one fact. This
+// repository was renamed on 2026-10-28, and GitHub redirects the old name, so
+// after a rename the literals would have gone on WORKING against the wrong
+// repository while the REST reads followed the constant: one table, two
+// repositories, no error. Caught in review of #1740.
+const [OWNER, NAME] = REPO.split("/");
 
 /**
  * WHICH MILESTONE TO DETAIL — and the default is EVERY ONE.
@@ -383,7 +409,9 @@ const { statuses: status, abandonedOnBoard, unseenByLane } = await boardStatus()
 // `ladderReport` decides; `ladderLines` only prints. Absent, unparseable and
 // malformed each print UNMEASURED with their own reason, never an empty list.
 bar("THE PLAN — stages from project-state.json, read every run");
-const STATE_FILE = join(import.meta.dir, "..", "project-state.json");
+// The project's plan, under the project root (#2482). Read beside the script,
+// a consumer's run would read the installed package's copy instead.
+const STATE_FILE = join(ROOT, "project-state.json");
 // Absent, unreadable, a directory, or gone between two calls: each is "could
 // not be read", which `ladderReport` turns into UNMEASURED. One read, no
 // existence pre-check, so no read can throw past it and take the report down.

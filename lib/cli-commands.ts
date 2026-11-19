@@ -289,6 +289,15 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     summary: "Each phase's open issues and blockers",
     usage: "rungate board [--repo <owner/name>] [--markdown]   (repository defaults to GITHUB_REPOSITORY, then the origin remote)",
   },
+  // ADR-023 (#2482): what is being worked, what is Ready, and the plan, read
+  // live for the repository the command is run in. No `projectRootFlag`: the
+  // script's root already defaults to the working directory.
+  "work-status": {
+    script: "scripts/work-status.ts",
+    summary: "What is being worked, what is Ready next, and the plan, read live",
+    usage:
+      'rungate work-status [--repo <owner/name>] [--milestone "<name>"|none] [--project-root <dir>]   (repository defaults to GITHUB_REPOSITORY, then the origin remote)',
+  },
   // Step 5 of ADR-003, as ADR-021 reworded it: the `blocked by` links an
   // accepted ADR's Decomposition declares, never the order of the milestones
   // (SC-2606). AGENTS.md rule 4 — ordering is data, not prose.
