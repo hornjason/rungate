@@ -2632,3 +2632,65 @@ describe("#2047: no board.id is an annotation, and nothing else is", () => {
     expect(ok.out).not.toContain("::warning::");
   });
 });
+
+/**
+ * SC-2741 (#2434, ADR-021 row 79): focus is a milestone's due date, so a
+ * milestone created, edited or deleted refills Ready on that event, not on
+ * the next issue event. The fill body is EXECUTED against a stub `bunx` that
+ * prints the arguments it was handed, as #2047's rows are.
+ */
+describe("SC-2741: a milestone created, edited or deleted refills Ready", () => {
+  const yml = readFileSync(join(ROOT, ".github/workflows/board-ready.yml"), "utf-8");
+  const live = yml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+  const milestoneTypes = (/^ {2}milestone:\s*\n\s+types:\s*\[([^\]]*)\]/m.exec(live)?.[1] ?? "")
+    .split(",").map(s => s.trim()).filter(s => s !== "");
+
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "board-ready-milestone-")));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const stubs = join(dir, "bin");
+  mkdirSync(stubs);
+  writeFileSync(join(stubs, "bunx"), '#!/bin/sh\nprintf "ARGV:%s\\n" "$*"\nexit 0\n', { mode: 0o755 });
+  const body = join(dir, "fill.sh");
+  writeFileSync(body, buildBoardReadyScript("9.9.9"));
+  const fill = (mode: string) => {
+    const r = Bun.spawnSync(["bash", "-e", "-o", "pipefail", body], {
+      env: {
+        PATH: `${stubs}:${process.env.PATH}`,
+        RUNNER_TEMP: dir,
+        GITHUB_REPOSITORY: "o/n",
+        ACTOR: "someone",
+        MODE: mode,
+        // What `github.event.issue.number` is on a milestone event: nothing.
+        ISSUE: "",
+        WRITE: "--write",
+      },
+    });
+    const out = r.stdout.toString();
+    return { code: r.exitCode, argv: /^ARGV:(.*)$/m.exec(out)?.[1] ?? null, out };
+  };
+
+  test("the workflow fires on a milestone created, edited or deleted", () => {
+    expect(milestoneTypes, "no `milestone: types: [...]` trigger in board-ready.yml").toEqual(["created", "edited", "deleted"]);
+  });
+
+  test("each milestone event tops up Ready, writes, and names no closed issue", () => {
+    for (const t of milestoneTypes) {
+      const r = fill(`milestone-${t}`);
+      expect(r.code, `milestone-${t} refused: ${r.out}`).toBe(0);
+      expect(r.argv, `milestone-${t} never reached the command`).not.toBeNull();
+      expect(r.argv).toContain("--top-up");
+      expect(r.argv).toContain("--write");
+      expect(r.argv).not.toContain("--closed-issue");
+    }
+  });
+
+  test("the mode names a milestone event apart from an issue event with the same action", () => {
+    // `closed`, `deleted` and `opened` are actions of both events. Unprefixed,
+    // a milestone's could reach an issue arm, so the step prefixes it.
+    expect(live).toContain("format('milestone-{0}', github.event.action)");
+    expect(live).toMatch(/WRITE:[^\n]*github\.event_name == 'milestone'/);
+    // CONTROL: the unprefixed action is not an arm, so a step that forgot the
+    // prefix refuses instead of quietly topping up.
+    expect(fill("edited").code).toBe(1);
+  });
+});
