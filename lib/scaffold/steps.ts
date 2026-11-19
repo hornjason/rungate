@@ -5494,15 +5494,29 @@ export function harnessDevDepRange(version?: string): string {
   return `^${m[1]}.${m[2]}.0`;
 }
 
-function harnessVersion(): string {
+/**
+ * The version in `root`'s `package.json`, or a throw naming the path and why
+ * (#2501). Every generated `bunx rungate@<version>` pin carries this value,
+ * so an unreadable manifest must stop the scaffold before it writes anything.
+ * The empty string it used to return became `bunx rungate@ <command>` in
+ * every generated workflow, with scaffold reporting success.
+ */
+export function readHarnessVersion(root: string): string {
+  const path = join(root, "package.json");
+  let pkg: { version?: unknown };
   try {
-    const pkg = JSON.parse(
-      readFileSync(join(dirname(dirname(__dirname)), "package.json"), "utf-8"),
-    );
-    return typeof pkg?.version === "string" ? pkg.version : "";
-  } catch {
-    return "";
+    pkg = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown };
+  } catch (e) {
+    throw new Error(`rungate scaffold: ${path} could not be read (${(e as Error).message}), so no generated workflow can be pinned to a version`);
   }
+  if (typeof pkg?.version !== "string" || pkg.version === "") {
+    throw new Error(`rungate scaffold: ${path} has no version string, so no generated workflow can be pinned to a version`);
+  }
+  return pkg.version;
+}
+
+function harnessVersion(): string {
+  return readHarnessVersion(dirname(dirname(__dirname)));
 }
 
 /**

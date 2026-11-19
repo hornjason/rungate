@@ -47,7 +47,9 @@ describe("#2501: readHarnessVersion", () => {
     const dir = join(ROOT, ".github/workflows");
     const empty = readdirSync(dir)
       .filter(f => f.endsWith(".yml"))
-      .filter(f => /bunx rungate@(?![0-9])/.test(readFileSync(join(dir, f), "utf8")));
+      // An empty pin is `bunx rungate@` followed by nothing, on a line that runs.
+      // A comment showing `bunx rungate@<version>` as a placeholder is not one.
+      .filter(f => /^(?!\s*#).*bunx rungate@(?:\s|$)/m.test(readFileSync(join(dir, f), "utf8")));
     expect(empty).toEqual([]);
   });
 });
