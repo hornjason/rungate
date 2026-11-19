@@ -406,7 +406,13 @@ const UNCLAIMED_RATCHET = 150;
 // fourth needs, a reading of a prose document and a prompt no registered
 // pattern expresses; the `#1653` describes in test/ai-review-conventions.test.ts
 // name it.
-const CLAIMED_UNBINDABLE = 184;
+// 184 -> 185: SC-2787 (#2495) ticked by `sync-sc-status --only SC-2787`:
+// adr-accepted.yml gains a workflow_run trigger when board.mergeWorkflow names
+// a merge workflow, and reads its range from its own last successful run, a
+// reading of a generated workflow and a git history no registered pattern
+// expresses; the `SC-2787` describes in test/board-merge-workflow.test.ts
+// name it.
+const CLAIMED_UNBINDABLE = 185;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

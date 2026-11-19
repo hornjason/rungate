@@ -495,11 +495,20 @@ export function sinceLastSuccessfulRun(
 }
 
 export const LIVE_RUNS: RunsGitHub = {
-  runs: async (repo, workflowFile) => {
-    const body = JSON.parse(gh(["api", `repos/${repo}/actions/workflows/${workflowFile}/runs?status=success&per_page=30`])) as { workflow_runs?: unknown };
-    if (!Array.isArray(body.workflow_runs)) throw new Error("the response carried no workflow_runs list");
-    return body.workflow_runs;
-  },
+  // Every page, newest first: an on-branch run past the first page is still
+  // a range, and reading one page would refuse it as "none on this branch".
+  // One JSON object per line, because --paginate concatenates the pages.
+  runs: async (repo, workflowFile) =>
+    gh([
+      "api",
+      "--paginate",
+      `repos/${repo}/actions/workflows/${workflowFile}/runs?status=success&per_page=100`,
+      "--jq",
+      ".workflow_runs[] | {id, head_sha} | @json",
+    ])
+      .split("\n")
+      .filter(line => line.trim() !== "")
+      .map(line => JSON.parse(line) as unknown),
 };
 
 async function acceptedSinceLastRun(root: string, repo: string, workflowFile: string, api: RunsGitHub): Promise<number> {
