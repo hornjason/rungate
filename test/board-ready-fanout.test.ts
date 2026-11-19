@@ -2010,6 +2010,79 @@ describe("BR-72: the script runs end to end and its writes are observed", () => 
     }
   }, 60_000);
 
+  // SC-2786 (#2431), end to end through the real script. Held fixed: two
+  // backlog cards in the focus, unblocked and unclaimed, and a throughput
+  // that leaves room for both (60 delivered in 14 days is a depth of 2). What varies is which files their bodies name
+  // and what an open pull request changes.
+  const naming = (...files: string[]) => `## Files this will change\n\n${files.map(f => `- \`${f}\``).join("\n")}\n`;
+  const card = (itemId: string, number: number, body: string) =>
+    ({ itemId, number, status: "Backlog", blockedBy: 0, assignees: 0, milestone: FOCUS, body }) as const;
+
+  test("SC-2786: control — two cards naming different files are both promoted", async () => {
+    const fake = startFakeGitHub(
+      plan({ items: [card("PVTI_a", 101, naming("lib/a.ts")), card("PVTI_b", 102, naming("lib/b.ts"))], openIssues: [101, 102], delivered: 60 }),
+    );
+    try {
+      const { code, out } = await run(fake, ["--top-up", "--write"]);
+      expect(code, out).toBe(0);
+      expect(fake.writes.map(w => w.itemId).sort(), out).toEqual(["PVTI_a", "PVTI_b"]);
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("SC-2786: two cards naming the same file — one fill promotes only the first, and names why", async () => {
+    const fake = startFakeGitHub(
+      plan({ items: [card("PVTI_a", 101, naming("lib/a.ts")), card("PVTI_b", 102, naming("lib/a.ts"))], openIssues: [101, 102], delivered: 60 }),
+    );
+    try {
+      const { code, out } = await run(fake, ["--top-up", "--write"]);
+      expect(code, out).toBe(0);
+      expect(fake.writes.map(w => w.itemId), out).toEqual(["PVTI_a"]);
+      expect(out).toContain("#102 eligible but passed over: it names lib/a.ts, which #101 (picked this fill) holds");
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("SC-2786: a card naming a file an open pull request changes is not promoted", async () => {
+    const fake = startFakeGitHub(
+      plan({
+        items: [card("PVTI_a", 101, naming("lib/a.ts"))],
+        openIssues: [101],
+        openPullRequests: [{ number: 300, files: ["lib/a.ts"] }],
+      }),
+    );
+    try {
+      const { code, out } = await run(fake, ["--top-up", "--write"]);
+      expect(code, out).toBe(0);
+      expect(fake.writes, out).toEqual([]);
+      expect(out).toContain("which PR #300 holds");
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
+  test("SC-2786: a card naming a file a claimed issue names is not promoted", async () => {
+    const fake = startFakeGitHub(
+      plan({
+        items: [
+          { ...card("PVTI_w", 90, naming("lib/a.ts")), status: "In progress", assignees: 1 },
+          card("PVTI_a", 101, naming("lib/a.ts")),
+        ],
+        openIssues: [90, 101],
+      }),
+    );
+    try {
+      const { code, out } = await run(fake, ["--top-up", "--write"]);
+      expect(code, out).toBe(0);
+      expect(fake.writes, out).toEqual([]);
+      expect(out).toContain("which #90 (in progress) holds");
+    } finally {
+      await fake.stop();
+    }
+  }, 60_000);
+
   test("BR-74: the negative control — the same board, that card blocked, writes nothing", async () => {
     // ONE VARIABLE DIFFERS from BR-73: `blockedBy`. Same fixture, same
     // invocation, same credential — so a green BR-73 cannot be a script that
