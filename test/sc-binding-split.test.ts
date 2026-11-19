@@ -416,7 +416,12 @@ const UNCLAIMED_RATCHET = 150;
 // scaffold installs a /board command that names no repository, a reading of a
 // rendered command file no registered pattern expresses; the `SC-2791`
 // describe in test/board-command.test.ts names it (2026-11-19).
-const CLAIMED_UNBINDABLE = 186;
+// 186 -> 187: SC-2789 (#2480) ticked by `sync-sc-status --only SC-2789`:
+// board-init makes a consumer's board and writes its ids into the config, a
+// reading of GitHub project mutations and a config write no registered
+// pattern expresses; the `SC-2789` describes in test/board-init.test.ts name
+// it (2026-11-19).
+const CLAIMED_UNBINDABLE = 187;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
