@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-19
 updated: 2026-11-19
 ---
@@ -9,7 +9,7 @@ updated: 2026-11-19
 
 ## Status
 
-**Proposed, 2026-11-19.** Filed under #2344. Jason has decided the direction (decisions 1 to 3 below). Still open, and his: the six criterion texts in *Criteria*, the two questions under *Open for Jason*, and his merge. Until he merges it, nothing is filed.
+**Accepted, 2026-11-19.** Filed under #2344. Jason decided the direction (decisions 1 to 3 below), and on 2026-11-19 accepted the six criterion texts in *Criteria* and both proposals under *Decided by Jason, 2026-11-19*. His merge of this file places the plan (`adr-accepted.yml`); until he merges it, nothing is filed.
 
 ## Context
 
@@ -50,10 +50,12 @@ One rungate command makes a consumer's board and writes its ids into the config,
 2. **Rungate's scaffolded `/board` and `/dry-run` replace the user-level skills — 2026-11-18, recorded on #2344.** Jason has no personal skills: the user-level ones were written by the agent, so there is no clash to settle. Once the scaffolded commands ship, the user-level copies are retired. That is an edit under `~/.claude`, which an agent here is denied, so it is a one-command hand step for Jason after the release and is not a row below.
 3. **The work loop belongs in this ADR, not in a separate runner issue — 2026-11-17, agreed with the rungate session and recorded on #2344.** Jason's test: "i just dont want to duplicate issues if someting is working in rungate already but is carried forward to consumers". The loop is a session prompt plus scripts and rules, so carrying it forward means shipping the scripts and scaffolding the prompt.
 
-## Open for Jason
+## Decided by Jason, 2026-11-19
 
-- **Whose account owns a consumer's board.** `board-init` can create the project under the repository's owner, a user or an organisation, with the token the person running it holds. Proposed: the repository's owner, with `--owner` to override. An organisation board needs a token with organisation project scope, which the human-steps row reports.
-- **`census-routing` stays rungate's own.** #2344 listed it with the scripts to ship. Its triggers name this repository's census tests (`CENSUS_TRIGGERS` in `scripts/census-routing.ts`), so in a consumer it would print commands for test files that do not exist. Proposed: it does not ship, and the work-loop command tells a consumer's agent to run its own `test.command` from config. Say if you want it shipped anyway.
+Both were open questions in the proposal. Jason accepted each as proposed.
+
+- **Whose account owns a consumer's board.** `board-init` can create the project under the repository's owner, a user or an organisation, with the token the person running it holds. Decided: the repository's owner, with `--owner` to override. An organisation board needs a token with organisation project scope, which the human-steps row reports.
+- **`census-routing` stays rungate's own.** #2344 listed it with the scripts to ship. Its triggers name this repository's census tests (`CENSUS_TRIGGERS` in `scripts/census-routing.ts`), so in a consumer it would print commands for test files that do not exist. Decided: it does not ship, and the work-loop command tells a consumer's agent to run its own `test.command` from config.
 
 ## Not decided here
 
@@ -62,7 +64,7 @@ One rungate command makes a consumer's board and writes its ids into the config,
 - **Moving the consumer.** After the release, asaCommandCenter runs `board-init` once through its own session. That happens in another repository and is not a row here.
 - **The Priority field and saved views beyond the one board layout.** Nothing reads them (ADR-021, *Context*).
 
-## Criteria, proposed wording (Jason's to accept or edit)
+## Criteria (Jason accepted these texts, 2026-11-19)
 
 Each goes in `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`, under *The process reaches consumers through scaffold*, placed in Phase 7 beside SC-2742 to SC-2749, the other criteria of that section. Phase 10 is "strictly last, and the only phase whose subject is not this document"; these are criteria of this document (review of #2454). The ids are reserved to this branch in `specs/sc-reservations.json`.
 
