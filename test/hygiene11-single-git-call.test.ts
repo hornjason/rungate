@@ -146,6 +146,11 @@ describe("#323: HYGIENE-11's date lookup is one git call and still agrees with g
     // c main's. Without this the case could agree with git about nothing.
     expect(perFile).toEqual({ "a.md": "2026-01-05", "b.md": "2026-01-02", "c.md": "2026-01-03" });
     expect(Object.fromEntries(files.map(f => [f, fast.get(f)]))).toEqual(perFile);
+    // Review of #2456: the long-standing `-c`, not `--diff-merges=<value>`,
+    // which older gits reject outright and consumers run this module too.
+    const code = stripJsComments(readFileSync(join(ROOT, "lib", "git-dates.ts"), "utf-8"));
+    expect(code).toContain('"-c", "--name-only"');
+    expect(code).not.toContain("--diff-merges");
   });
 
   test("an untracked file gets no date, rather than a wrong one", () => {
