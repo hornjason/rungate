@@ -1005,3 +1005,64 @@ describe("the properties the mutant depends on are asserted, not assumed", () =>
     expect([...new Set(declared)].filter(d => !produced.has(d as Reading))).toEqual([]);
   });
 });
+
+/**
+ * Covers SC-2792 (SPEC-TO-BOARD-PIPELINE-SPEC.md, ADR-023): `work-status`
+ * (#2482) and `verify-merge-ref` run as rungate CLI commands that ship in
+ * `files[]`, and read the repository from `--repo`, then
+ * `GITHUB_REPOSITORY`, then the origin remote, never from a constant.
+ *
+ * The origin remote is `gh`'s own inference from the working directory, so
+ * the third reading is `gh pr view` asked with no `--repo` at all.
+ */
+describe("SC-2792: verify-merge-ref reads the repository it is in, and runs as rungate verify-merge-ref", () => {
+  const made: string[] = [];
+  afterAll(() => {
+    for (const d of made) rmSync(d, { recursive: true, force: true });
+  });
+  /** A `gh` that records the arguments it was given and answers nothing. */
+  const recordingGh = () => {
+    const at = mkdtempSync(join(tmpdir(), "vmr-repo-"));
+    made.push(at);
+    const bin = join(at, "bin");
+    mkdirSync(bin, { recursive: true });
+    const log = join(at, "args");
+    writeFileSync(join(bin, "gh"), `#!/bin/sh\nprintf '%s\\n' "$@" > '${log}'\nexit 1\n`);
+    chmodSync(join(bin, "gh"), 0o755);
+    return { bin, args: () => readFileSync(log, "utf-8").trim().split("\n") };
+  };
+  const run = (entry: string[], args: string[], env: Record<string, string | undefined>) => {
+    const gh = recordingGh();
+    const e: Record<string, string | undefined> = { ...process.env, PATH: `${gh.bin}:${process.env.PATH}` };
+    delete e.GITHUB_REPOSITORY;
+    Object.assign(e, env);
+    const r = Bun.spawnSync(["bun", ...entry, ...args], { cwd: REPO, env: e as Record<string, string>, stdout: "pipe", stderr: "pipe" });
+    return { code: r.exitCode, args: gh.args() };
+  };
+  const repoAsked = (args: string[]) => {
+    const i = args.indexOf("--repo");
+    return i === -1 ? null : args[i + 1];
+  };
+
+  test("SC-2792: --repo wins, then GITHUB_REPOSITORY, then gh's own reading of the origin remote", () => {
+    expect(repoAsked(run([SCRIPT], ["--pr", "7", "--repo", "flag/repo"], { GITHUB_REPOSITORY: "env/repo" }).args)).toBe("flag/repo");
+    expect(repoAsked(run([SCRIPT], ["--pr", "7"], { GITHUB_REPOSITORY: "env/repo" }).args)).toBe("env/repo");
+    // An empty GITHUB_REPOSITORY names nothing and falls through, as in rungate board.
+    expect(repoAsked(run([SCRIPT], ["--pr", "7"], { GITHUB_REPOSITORY: "" }).args)).toBeNull();
+    expect(repoAsked(run([SCRIPT], ["--pr", "7"], {}).args)).toBeNull();
+  });
+
+  test("SC-2792: rungate verify-merge-ref dispatches the script, and a read that answered nothing still refuses", () => {
+    const r = run([join(REPO, "bin", "rungate.ts"), "verify-merge-ref"], ["--pr", "7"], { GITHUB_REPOSITORY: "env/repo" });
+    expect(r.args.slice(0, 3)).toEqual(["pr", "view", "7"]);
+    expect(repoAsked(r.args)).toBe("env/repo");
+    expect(r.code).toBe(REFUSE_EXIT);
+  });
+
+  test("SC-2792: both commands ship, and the script names no repository", () => {
+    const files = (JSON.parse(readFileSync(join(REPO, "package.json"), "utf-8")) as { files: string[] }).files;
+    expect(files).toContain("scripts/verify-merge-ref.ts");
+    expect(files).toContain("scripts/work-status.ts");
+    expect(SOURCE).not.toMatch(/["'`]hornjason\//);
+  });
+});
