@@ -170,7 +170,14 @@ export interface BoardReadyWorkflowOptions {
   version: string;
 }
 
-/** The whole `board-ready.yml` body. */
+/**
+ * The whole `board-ready.yml` body.
+ *
+ * `milestone:` is the LAST trigger (SC-2741, #2434). A re-scaffold does not
+ * regenerate an existing `on:` block; it appends the triggers the tree lacks.
+ * Emitting the new one last means a fresh tree and an updated one get the
+ * same bytes (review of #2453; the fanout suite compares the two blocks).
+ */
 export function buildBoardReadyWorkflow(opts: BoardReadyWorkflowOptions): string {
   const indent = (text: string, pad: string) =>
     text
@@ -194,9 +201,6 @@ name: Board — keep Ready full from the events the repo already emits
 on:
   issues:
     types: [closed, assigned, unassigned, opened, reopened, milestoned, demilestoned, labeled, unlabeled]
-  # SC-2741: focus is a milestone's due date, so changing one refills Ready.
-  milestone:
-    types: [created, edited, deleted]
   workflow_dispatch:
     inputs:
       mode:
@@ -212,6 +216,9 @@ on:
         description: "Perform the moves (default: report only)"
         type: boolean
         default: false
+  # SC-2741: focus is a milestone's due date, so changing one refills Ready.
+  milestone:
+    types: [created, edited, deleted]
 
 permissions:
   contents: read

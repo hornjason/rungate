@@ -2553,6 +2553,23 @@ describe("#2047: board-ready.yml is generated and names no board", () => {
     expect(generated).toContain(`bunx rungate@9.9.9 ${BOARD_READY_COMMAND} "\${args[@]}"`);
   });
 
+  // Review of #2453: the run bodies were held and the triggers were not, so
+  // the committed `on:` block drifted from the generator's with this row
+  // green. The `on:` block takes no option, so it is compared whole.
+  test("the committed on: block is the generator's, trigger for trigger and in order", () => {
+    const onBlock = (text: string) => /^on:\n((?:[ \t]+.*\n|\n)*?)(?=^\S)/m.exec(text)?.[1]?.trimEnd() ?? null;
+    const generated = buildBoardReadyWorkflow({
+      runsOn: '"ubuntu-24.04"',
+      checkout: "actions/checkout@v4",
+      setupBun: "oven-sh/setup-bun@0000000000000000000000000000000000000000",
+      setupBunWith: '          bun-version-file: ".bun-version"',
+      setupBunEnv: "",
+      version: "9.9.9",
+    });
+    expect(onBlock(generated), "no on: block parsed from the generator").not.toBeNull();
+    expect(onBlock(yml)).toBe(onBlock(generated));
+  });
+
   test("it calls the published CLI at the generating version, and runs no script", () => {
     expect(live).toContain(`bunx rungate@${version} board-ready "\${args[@]}"`);
     expect(live, "a consumer has no scripts/ to run").not.toMatch(/\bbun\s+scripts\//);
