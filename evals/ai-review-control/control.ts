@@ -140,6 +140,19 @@ export interface ReviewControlSubject {
   candidatePath: string;
   /** Absolute path of the baseline — the committed pre-change file. */
   baselinePath: string;
+  /**
+   * #1533. 1-based lines of the candidate that differ from the baseline —
+   * what the diff a reviewer is handed actually changed. A clean arm scores
+   * FIRED only on these. `null` on a planted arm, which scores on its
+   * declared range and never reads this (review of #2450).
+   */
+  changedLines: readonly number[] | null;
+  /**
+   * #1533. How many lines the candidate has, so a cited line outside
+   * 1..this is unattributable rather than "unchanged". `null` on a planted
+   * arm, with `changedLines`.
+   */
+  candidateLineCount: number | null;
   /** The defect, or why this subject is clean. */
   note: string;
 }
@@ -158,6 +171,12 @@ export interface ReviewControlReading {
   advisoryCount: number | null;
   /** Blocking findings that landed on this subject's declared plant. */
   plantHits: number;
+  /**
+   * #1533. Clean arm only: blocking findings on no line the candidate
+   * changed — named in `detail`, never scored. `null` on a planted arm and
+   * on an UNMEASURED reading, where the question was not asked.
+   */
+  preExistingBlocking: number | null;
   /** The payload's own outcome, carried rather than restated. */
   payloadOutcome: AiReviewOutcome | null;
   unmeasuredReasons: ReviewControlUnmeasuredReason[];
@@ -184,8 +203,10 @@ export interface ReviewControlSummary {
   advisory: number;
   /**
    * Blocking findings that landed on a declared plant, over every blocking
-   * finding written. `null` when the reviewer wrote none — an undefined ratio
-   * is withheld, because a reviewer that says nothing is not perfectly precise.
+   * finding scored — a clean-arm finding on no line the candidate changed is
+   * pre-existing and in neither half (#1533). `null` when none was scored — an
+   * undefined ratio is withheld, because a reviewer that says nothing is not
+   * perfectly precise.
    */
   precision: number | null;
   /** Plants detected over plants measured. `null` when none was measured. */
@@ -210,11 +231,101 @@ function unmeasuredReading(
     blockingCount: null,
     advisoryCount: null,
     plantHits: 0,
+    preExistingBlocking: null,
     payloadOutcome: null,
     unmeasuredReasons: reasons,
     payloadReasons,
     detail,
   };
+}
+
+/** #1533. The largest baseline × candidate line product `changedLines` will tabulate. */
+export const CHANGED_LINES_MAX_CELLS = 4_000_000;
+
+/**
+ * #1533. The 1-based lines of `candidate` outside a longest common
+ * subsequence with `baseline`: the lines it changed or added. Line-level
+ * LCS, so a moved block reads as changed — the direction that keeps a
+ * finding scored rather than excused.
+ */
+export function changedLines(baseline: string, candidate: string): number[] {
+  const a = baseline.split("\n");
+  const b = candidate.split("\n");
+  const n = a.length;
+  const m = b.length;
+  // The table is n × m cells. Subjects are compacted copies of a few hundred
+  // lines; a pair past this bound is not one, and refusing it by name beats
+  // allocating it in silence on every load (review of #2450).
+  if (n * m > CHANGED_LINES_MAX_CELLS) {
+    throw new Error(
+      `changedLines: ${n} × ${m} lines is past the ${CHANGED_LINES_MAX_CELLS}-cell bound; ` +
+        `a control subject is a compacted copy, not a whole module`,
+    );
+  }
+  const dp = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
+    }
+  }
+  const kept = new Set<number>();
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) {
+      kept.add(j);
+      i++;
+      j++;
+    } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) i++;
+    else j++;
+  }
+  const out: number[] = [];
+  for (let k = 0; k < m; k++) if (!kept.has(k)) out.push(k + 1);
+  return out;
+}
+
+/**
+ * #1533's one decider: does this finding land on a line the candidate
+ * changed? The direction it is allowed to be wrong in is toward FIRED, which
+ * a reader then argues with. **The whole case set**, over the three inputs
+ * the answer reads, enumerated once and held row for row by the
+ * `#1533: the decider's case set` test. The rows partition the inputs: each
+ * finding matches exactly one, in the order the code tests them.
+ *
+ * | file      | `line`                              | changed lines computed | answer |
+ * |-----------|-------------------------------------|------------------------|--------|
+ * | another   | anything                            | either | false — not about the diff |
+ * | subject's | not a number                        | either | true — unattributable |
+ * | subject's | a non-integer number                | either | true — unattributable |
+ * | subject's | an integer                          | no     | true — a planted arm is never excused |
+ * | subject's | an integer < 1 or past the last line| yes    | true — unattributable |
+ * | subject's | in range, a line it did not change  | yes    | false — pre-existing |
+ * | subject's | in range, a line it changed         | yes    | true |
+ */
+export function findingOnChangedLine(
+  subject: ReviewControlSubject,
+  finding: Record<string, unknown>,
+): boolean {
+  const f = AI_REVIEW_FINDING_FIELDS;
+  if (finding[f.file] !== subject.file) return false;
+  const line = finding[f.line];
+  if (typeof line !== "number" || !Number.isInteger(line)) return true;
+  // A subject whose changed lines were not computed — a planted arm — cannot
+  // excuse a finding as pre-existing; it is read toward FIRED.
+  if (subject.changedLines === null || subject.candidateLineCount === null) return true;
+  // A line that is not in the candidate — 0, negative, past its end — is as
+  // unusable as no line at all, so it is unattributable, not unchanged
+  // (review of #2450).
+  if (line < 1 || line > subject.candidateLineCount) return true;
+  return subject.changedLines.includes(line);
+}
+
+/** A clean arm's outcome over its blocking findings: FIRED only on a changed line. */
+export function cleanArmOutcome(
+  subject: ReviewControlSubject,
+  blocking: readonly Record<string, unknown>[],
+): "QUIET" | "FIRED" {
+  return blocking.some(f => findingOnChangedLine(subject, f)) ? "FIRED" : "QUIET";
 }
 
 /** True when a finding names this subject's planted file and lands in range. */
@@ -320,6 +431,7 @@ export function readReviewControl(
       blockingCount: blocking.length,
       advisoryCount,
       plantHits: hits.length,
+      preExistingBlocking: null,
       payloadOutcome: payload.outcome,
       unmeasuredReasons: [],
       payloadReasons: [],
@@ -327,13 +439,30 @@ export function readReviewControl(
     };
   }
 
-  const outcome: ReviewControlOutcome = blocking.length === 0 ? "QUIET" : "FIRED";
-  if (outcome === "FIRED") {
-    for (const [i, finding] of blocking.entries()) {
+  // #1533: scoped to the lines the candidate changed. A blocking finding
+  // elsewhere is a defect the diff did not introduce — #1524's `high` at
+  // line 19 was byte-identical in the baseline — so it is NAMED and counted
+  // as pre-existing, never scored. Whole-file scoring left the arm one
+  // reachable outcome, because a compacted copy always carries true defects.
+  const outcome: ReviewControlOutcome = cleanArmOutcome(subject, blocking);
+  let preExistingBlocking = 0;
+  for (const [i, finding] of blocking.entries()) {
+    if (findingOnChangedLine(subject, finding)) {
       detail.push(`FIRED on a clean subject: ${renderFinding(i, finding)}`);
+    } else {
+      preExistingBlocking++;
+      // Two reasons a finding is not about the diff, and the sentence names
+      // which (review of #2450): a line the candidate left alone in its own
+      // file, or a file the candidate does not change at all.
+      const where =
+        finding[AI_REVIEW_FINDING_FIELDS.file] === subject.file
+          ? `not on a line the candidate changed (${subject.file}: ${subject.changedLines?.join(", ") || "none"})`
+          : `it names ${JSON.stringify(finding[AI_REVIEW_FINDING_FIELDS.file])}, a file the candidate ` +
+            `does not change (the candidate is ${subject.file})`;
+      detail.push(`pre-existing, not scored: ${renderFinding(i, finding)} — ${where}`);
     }
-    detail.push(subject.note);
   }
+  if (outcome === "FIRED") detail.push(subject.note);
   return {
     subject: subject.id,
     kind: subject.kind,
@@ -343,6 +472,7 @@ export function readReviewControl(
     blockingCount: blocking.length,
     advisoryCount,
     plantHits: 0,
+    preExistingBlocking,
     payloadOutcome: payload.outcome,
     unmeasuredReasons: [],
     payloadReasons: [],
@@ -371,7 +501,10 @@ export function summariseReviewControl(readings: ReviewControlReading[]): Review
   const fired = count("FIRED");
   const unmeasured = count("UNMEASURED");
 
-  const blockingTotal = measured.reduce((n, r) => n + (r.blockingCount ?? 0), 0);
+  // #1533, review of #2450: a pre-existing finding is not scored, so it is in
+  // neither half of precision. Left in the denominator with no hit to match,
+  // it read as a precision failure the reading had just said was not one.
+  const blockingTotal = measured.reduce((n, r) => n + (r.blockingCount ?? 0) - (r.preExistingBlocking ?? 0), 0);
   const plantHits = measured.reduce((n, r) => n + r.plantHits, 0);
   const advisory = measured.reduce((n, r) => n + (r.advisoryCount ?? 0), 0);
   const contradictions = measured.filter(r => r.payloadOutcome === "CONTRADICTION").length;
@@ -568,14 +701,22 @@ export function loadReviewControlSubjects(dir: string): ReviewControlSubject[] {
       if (kind === "planted" && lines === null) {
         throw new Error(`${manifestPath}: planted case ${c.id} needs a two-number lines range`);
       }
+      const candidatePath = join(subjectDir, c.candidate);
+      const baselinePath = join(subjectDir, baseline);
+      const candidateText = kind === "clean" ? readFileSync(candidatePath, "utf-8") : null;
       subjects.push({
         id: c.id,
         kind,
         file: reviewPath,
         lines,
         marker: typeof c.marker === "string" ? c.marker : null,
-        candidatePath: join(subjectDir, c.candidate),
-        baselinePath: join(subjectDir, baseline),
+        candidatePath,
+        baselinePath,
+        changedLines:
+          candidateText === null ? null : changedLines(readFileSync(baselinePath, "utf-8"), candidateText),
+        // Lines as an editor numbers them: a trailing newline ends the last
+        // line rather than starting another.
+        candidateLineCount: candidateText === null ? null : candidateText.replace(/\n$/, "").split("\n").length,
         note: String(c.defect ?? c.why ?? ""),
       });
     }

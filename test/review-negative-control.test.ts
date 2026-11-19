@@ -24,7 +24,8 @@
  * entirely and watches it pass.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
 import {
@@ -33,6 +34,7 @@ import {
   AI_REVIEW_FINDING_FIELDS,
   AI_REVIEW_PASS_VERDICT,
   AI_REVIEW_VERDICT_KEY,
+  severityBlocks,
 } from "../lib/scaffold/ai-review-findings";
 
 import { AI_REVIEW_UNTRUSTED_PATHS } from "../lib/scaffold/ai-review-step";
@@ -40,6 +42,9 @@ import { AI_REVIEW_UNTRUSTED_PATHS } from "../lib/scaffold/ai-review-step";
 import {
   REVIEW_CONTROL_SUBJECTS_DIR,
   UnreadableReviewPathReading,
+  changedLines,
+  cleanArmOutcome,
+  findingOnChangedLine,
   loadReviewControlSubjects,
   readReviewControl,
   reviewPathViolations,
@@ -104,6 +109,16 @@ const MUTANT_ALWAYS_CLEAN = payload([], AI_REVIEW_PASS_VERDICT);
 /** The other direction: blocks, but on something nobody planted. */
 const MUTANT_WRONG_FILE = payload(
   [onThePlant({ file: "lib/somewhere-else.ts", line: 1 })],
+  AI_REVIEW_BLOCK_VERDICT,
+);
+
+/**
+ * #1533. Blocks on the refactor itself: line 22 of the clean candidate is a
+ * line it changed against its baseline, so this is a false positive about
+ * the diff and the clean arm must score FIRED.
+ */
+const MUTANT_ON_THE_REFACTOR = payload(
+  [onThePlant({ file: "lib/full-suite-command.ts", line: 22 })],
   AI_REVIEW_BLOCK_VERDICT,
 );
 
@@ -481,18 +496,35 @@ describe("#1169: the control can fail — the mutant reviewers", () => {
     expect(run.precision).toBeNull();
   });
 
-  test("a reviewer that blocks on an unplanted file makes BOTH subjects RED", () => {
-    // Predicted before running: 2 red readings of 2 — MISSED and FIRED.
+  test("a reviewer that blocks on an unplanted file is MISSED on the plant, and pre-existing on the clean arm", () => {
+    // #1533 changed the clean half of this row. A block on a file the clean
+    // candidate does not change is not about the diff, so it is named as
+    // pre-existing and does not score FIRED — the attribution CRC-B7 gives
+    // the deployed adjudicator. The run is still red, on the planted arm.
     const missed = readReviewControl(PLANTED, MUTANT_WRONG_FILE, REVIEWER);
-    const fired = readReviewControl(CLEAN, MUTANT_WRONG_FILE, REVIEWER);
+    const clean = readReviewControl(CLEAN, MUTANT_WRONG_FILE, REVIEWER);
 
     expect(missed.outcome).toBe("MISSED");
-    expect(fired.outcome).toBe("FIRED");
+    expect(clean.outcome).toBe("QUIET");
+    expect(clean.preExistingBlocking).toBe(1);
+    // Named as another file, not as an unchanged line of the subject's own.
+    expect(clean.detail.join("\n")).toContain("a file the candidate does not change");
+    expect(clean.detail.join("\n")).not.toContain("not on a line the candidate changed");
 
-    const run = summariseReviewControl([missed, fired]);
-    expect(run.readings.filter(r => !r.passed)).toHaveLength(2);
+    const run = summariseReviewControl([missed, clean]);
     expect(run.passed).toBe(false);
-    expect(run.precision).toBe(0);
+  });
+
+  test("#1533: a reviewer that blocks on the refactor itself makes the clean subject RED", () => {
+    // The clean arm's own failure, kept reachable: a block on a line the
+    // candidate changed is a false positive about the diff.
+    const fired = readReviewControl(CLEAN, MUTANT_ON_THE_REFACTOR, REVIEWER);
+    expect(fired.outcome).toBe("FIRED");
+    expect(fired.passed).toBe(false);
+    expect(fired.preExistingBlocking).toBe(0);
+    const run = summariseReviewControl([readReviewControl(PLANTED, payload([onThePlant()], AI_REVIEW_BLOCK_VERDICT), REVIEWER), fired]);
+    // One true positive on the plant, one false positive on the refactor.
+    expect(run.precision).toBe(0.5);
   });
 
   test("the cheapest wrong fix is green over a payload that found nothing", () => {
@@ -525,6 +557,171 @@ describe("#1169: the control can fail — the mutant reviewers", () => {
     );
     expect(r.outcome).toBe("MISSED");
     expect(r.detail.join("\n")).toContain("must block");
+  });
+});
+
+/**
+ * #1533 — the clean arm is scored on the lines the candidate changed.
+ *
+ * #1524's two readings of `suite-lock-redirect/clean` came back FIRED on
+ * `high` at line 19, a line byte-identical in `baseline.ts`: a TRUE defect in
+ * the compacted copy, on no line the refactor touched. A compacted copy always
+ * carries such defects, so whole-file scoring left the arm one reachable
+ * outcome. Scoped to changed lines, a finding elsewhere is named pre-existing
+ * and does not score. Rejected: a clean candidate with nothing true to say
+ * about it, which would stop being a compacted copy of anything.
+ */
+describe("#1533: the clean arm scores FIRED only on a line the candidate changed", () => {
+  const READINGS = JSON.parse(
+    readFileSync(join(import.meta.dir, "..", "evals", "ai-review-control", "baselines", "review-control-readings.json"), "utf-8"),
+  );
+  const banked = (Object.values(READINGS.thirdReadings.cases) as any[]).find(c => c.subject === "suite-lock-redirect/clean");
+
+  test("the changed lines are the ones the banked diff recorded", () => {
+    expect(banked, "the banked third readings no longer carry the clean case").toBeDefined();
+    expect(CLEAN.changedLines).toEqual(banked.changedLinesInTheDiff);
+    expect(changedLines("a\nb\nc\n", "a\nB\nc\nd\n")).toEqual([2, 4]);
+    expect(changedLines("same\n", "same\n")).toEqual([]);
+    // Computed for a clean arm only; a planted arm scores on its range.
+    expect(PLANTED.changedLines).toBeNull();
+    const huge = "x\n".repeat(2100);
+    expect(() => changedLines(huge, huge), "a pair past the bound was tabulated").toThrow("bound");
+  });
+
+  test("#1524's two FIRED draws re-score QUIET: their blocking finding is on no changed line", () => {
+    expect(banked.draws).toHaveLength(2);
+    for (const draw of banked.draws) {
+      expect(draw.scoreOutcome, "the banked draw is not the FIRED reading this re-scores").toBe("FIRED");
+      // `onAChangedLine` was banked by #1532 on 2026-10-24, before
+      // `changedLines` existed, so this compares the decider with an
+      // independent record rather than with its own output (review of #2450).
+      for (const f of draw.findings) {
+        expect(findingOnChangedLine(CLEAN, f), `the banked onAChangedLine for line ${f.line} disagrees`).toBe(f.onAChangedLine);
+      }
+      const blocking = draw.findings.filter((f: Record<string, unknown>) => severityBlocks(f.severity));
+      expect(blocking.length, "the draw carries no blocking finding, so it re-scores nothing").toBeGreaterThan(0);
+      expect(cleanArmOutcome(CLEAN, blocking), "a finding on an unchanged line still scored FIRED").toBe("QUIET");
+    }
+  });
+
+  test("every banked reading, re-scored under the rule, gives the totals the README states", () => {
+    // Derived, not typed: the README's sentence is checked against this count.
+    const totals: Record<string, number> = { DETECTED: 0, QUIET: 0, FIRED: 0, UNMEASURED: 0 };
+    for (const k of ["cases", "secondReadings", "thirdReadings"]) {
+      const block = READINGS[k];
+      const cases = (Array.isArray(block) ? block : (block.cases ?? block)) as Record<string, any>;
+      for (const c of Object.values(cases)) {
+        if (!c || typeof c.subject !== "string") continue;
+        const s = subject(c.subject);
+        for (const draw of c.draws) {
+          const scored = String(draw.scoreOutcome);
+          const blocking = ((draw.findings ?? []) as Record<string, unknown>[]).filter(f => severityBlocks(f.severity));
+          const re = s.kind === "clean" && (scored === "FIRED" || scored === "QUIET") ? cleanArmOutcome(s, blocking) : scored;
+          totals[re] = (totals[re] ?? 0) + 1;
+        }
+      }
+    }
+    expect(totals).toEqual({ DETECTED: 4, QUIET: 4, FIRED: 0, UNMEASURED: 7 });
+    const readme = readFileSync(join(import.meta.dir, "..", "evals", "ai-review-control", "README.md"), "utf-8");
+    expect(readme.replace(/\s+/g, " ")).toContain(
+      `\`DETECTED\` ×${totals.DETECTED}, \`QUIET\` ×${totals.QUIET}, \`FIRED\` ×${totals.FIRED}, \`UNMEASURED\` ×${totals.UNMEASURED}`,
+    );
+  });
+
+  test("a blocking finding on an unchanged line is QUIET and named pre-existing", () => {
+    const r = readReviewControl(CLEAN, payload([onThePlant({ file: CLEAN.file, line: 19 })], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
+    expect(r.outcome).toBe("QUIET");
+    expect(r.preExistingBlocking).toBe(1);
+    expect(r.detail.join("\n")).toContain("not on a line the candidate changed");
+  });
+
+  // Review of #2450, round 5: the reading excused the finding and the run's
+  // precision still counted it, with no plant hit to match. Both halves of
+  // the pair: a pre-existing finding is in neither half of the ratio, and a
+  // FIRED one stays in it — so excluding every clean-arm finding, the
+  // cheapest repair, is red on the second assertion.
+  test("a pre-existing finding is in neither half of the run's precision; a FIRED one stays in it", () => {
+    const detected = readReviewControl(PLANTED, payload([onThePlant()], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
+    const preExisting = readReviewControl(CLEAN, payload([onThePlant({ file: CLEAN.file, line: 19 })], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
+    expect([detected.outcome, preExisting.outcome]).toEqual(["DETECTED", "QUIET"]);
+    const run = summariseReviewControl([detected, preExisting]);
+    expect(run.passed).toBe(true);
+    expect(run.precision, "a finding the reading declared not scored dragged the run's precision down").toBe(1);
+    const fired = readReviewControl(CLEAN, MUTANT_ON_THE_REFACTOR, REVIEWER);
+    expect(fired.outcome).toBe("FIRED");
+    expect(summariseReviewControl([detected, fired]).precision).toBe(0.5);
+    // Only pre-existing findings written anywhere but the plant: nothing was
+    // scored against a hit, and the ratio is still the planted arm's alone.
+    expect(summariseReviewControl([preExisting]).precision, "no scored finding, so no ratio").toBeNull();
+  });
+
+  test("a blocking finding on the subject file that names no line is FIRED — unattributable is not pre-existing", () => {
+    const r = readReviewControl(CLEAN, payload([onThePlant({ file: CLEAN.file, line: "n/a" })], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
+    expect(r.outcome).toBe("FIRED");
+    // Review of #2450: a line that is not in the candidate is as unusable.
+    const last = CLEAN.candidateLineCount!;
+    for (const line of [0, -3, last + 1]) {
+      const out = readReviewControl(CLEAN, payload([onThePlant({ file: CLEAN.file, line })], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
+      expect(out.outcome, `line ${line} of a ${last}-line candidate was excused as pre-existing`).toBe("FIRED");
+    }
+    // And the last real line is a real line: unchanged there is still QUIET.
+    expect(CLEAN.changedLines).not.toContain(last);
+    const atLast = readReviewControl(CLEAN, payload([onThePlant({ file: CLEAN.file, line: last })], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
+    expect(atLast.outcome).toBe("QUIET");
+  });
+
+  test("#1533: the decider's case set, every row of its docblock table", () => {
+    // Review of #2450, round 4: the cases were added one round at a time.
+    // They are listed once here, row for row with `findingOnChangedLine`'s
+    // docblock, so a missing row is a red case rather than a next round.
+    const last = CLEAN.candidateLineCount!;
+    const changed = CLEAN.changedLines![0]!;
+    const unchanged = 19;
+    expect(CLEAN.changedLines).not.toContain(unchanged);
+    const rows: [string, Record<string, unknown>, ReviewControlSubject, boolean][] = [
+      ["another file", { file: "lib/elsewhere.ts", line: changed }, CLEAN, false],
+      ["subject file, line not a number", { file: CLEAN.file, line: "n/a" }, CLEAN, true],
+      ["subject file, non-integer line", { file: CLEAN.file, line: changed + 0.5 }, CLEAN, true],
+      ["subject file, line 0", { file: CLEAN.file, line: 0 }, CLEAN, true],
+      ["subject file, line past the end", { file: CLEAN.file, line: last + 1 }, CLEAN, true],
+      ["subject file, unchanged line", { file: CLEAN.file, line: unchanged }, CLEAN, false],
+      ["subject file, changed line", { file: CLEAN.file, line: changed }, CLEAN, true],
+      ["planted arm, any line", { file: PLANTED.file, line: 1 }, PLANTED, true],
+      // Review of #2450, round 6: the first row's "either" — another file on
+      // a subject with no computed lines is still not about the diff.
+      ["planted arm, another file", { file: "lib/elsewhere.ts", line: 1 }, PLANTED, false],
+    ];
+    for (const [label, finding, s, want] of rows) {
+      expect(findingOnChangedLine(s, finding), label).toBe(want);
+    }
+    // And the docblock lists exactly as many rows as this table holds.
+    const source = readFileSync(join(import.meta.dir, "..", "evals", "ai-review-control", "control.ts"), "utf-8");
+    const block = source.slice(source.indexOf("#1533's one decider"), source.indexOf("export function findingOnChangedLine"));
+    // Seven rows; the test holds eight inputs because the first row's
+    // "either" is held on both kinds of subject.
+    expect(block.split("\n").filter(l => /^\s*\* \| (another|subject's) /.test(l))).toHaveLength(7);
+  });
+
+  test("the scope can fail: with the decider answering every line, line 19 FIRES again", async () => {
+    const source = readFileSync(join(import.meta.dir, "..", "evals", "ai-review-control", "control.ts"), "utf-8");
+    const needle = "return subject.changedLines.includes(line);";
+    expect(source.split(needle).length - 1, "the changed-line decider is not spelled once").toBe(1);
+    const dir = mkdtempSync(join(tmpdir(), "control-1533-mutant-"));
+    try {
+      const lib = join(import.meta.dir, "..", "lib");
+      const path = join(dir, "control.ts");
+      writeFileSync(
+        path,
+        source.replace(needle, "return true;").replace(/from "\.\.\/\.\.\/lib\//g, `from "${lib}/`),
+      );
+      const mutant = (await import(path)) as typeof import("../evals/ai-review-control/control");
+      const subjects = mutant.loadReviewControlSubjects(REVIEW_CONTROL_SUBJECTS_DIR);
+      const mClean = subjects.find(s => s.id === CLEAN.id)!;
+      const at19 = payload([onThePlant({ file: CLEAN.file, line: 19 })], AI_REVIEW_BLOCK_VERDICT);
+      expect(mutant.readReviewControl(mClean, at19, REVIEWER).outcome, "the mutant changed nothing").toBe("FIRED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -667,9 +864,14 @@ describe("#1225: the harmful-change count, and why it is UNMEASURED here", () =>
 
   test("and FIRED is measured over more than one clean subject, so it can be a rate", () => {
     const quiet = readReviewControl(CLEAN, payload([], AI_REVIEW_PASS_VERDICT), REVIEWER);
+    // #1533: on the subject's own file and a line clean-loop changed. This
+    // fixture used to name `lib/test-suite-lock.ts`, the path from before
+    // #1513 moved the subject, which scoped scoring reads as another file.
+    const loop = subject("suite-lock-redirect/clean-loop");
+    expect(loop.changedLines?.length ?? 0, "clean-loop changed nothing, so it is not a refactor").toBeGreaterThan(0);
     const fired = readReviewControl(
-      subject("suite-lock-redirect/clean-loop"),
-      payload([onThePlant({ file: "lib/test-suite-lock.ts", line: 20 })], AI_REVIEW_BLOCK_VERDICT),
+      loop,
+      payload([onThePlant({ file: loop.file, line: loop.changedLines![0] })], AI_REVIEW_BLOCK_VERDICT),
       REVIEWER,
     );
     const run = summariseReviewControl([

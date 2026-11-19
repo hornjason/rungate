@@ -561,14 +561,52 @@ number can be read from the clean arm until a finding set can be scoped to
 the diff or the subject's baseline carries nothing true to say (**#1533**);
 and both arms were drawn from one run each.
 
+## The clean arm is scored on the lines the candidate changed (#1533)
+
+**The rule.** A clean arm scores `FIRED` only when a blocking finding lands
+on a line the candidate changed against its baseline. Those lines are
+computed by the subject loader, as a line-level longest common subsequence
+(`changedLines` in `control.ts`). For `suite-lock-redirect/clean` they are
+7-11, 22, 25, 28, 30, 38 and 41, the same set the banked third readings
+recorded from git's own diff, and a test holds the two equal. A blocking
+finding anywhere else is named in the reading as *pre-existing, not scored*
+and counted in `preExistingBlocking`. A finding on the subject's file that
+names no usable line still scores `FIRED`: unattributable is not
+pre-existing. This is the attribution CRC-B7 gives the deployed adjudicator,
+which demotes a finding about code the pull request did not touch. The run's
+`precision` follows the same rule: a pre-existing finding is in neither half
+of the ratio, and a `FIRED` one stays in its denominator.
+
+**What it costs.** A finding on an unchanged line is now invisible to the
+score, even when it is something a reviewer should have said. That is the
+price of a precision claim being about what the diff introduced, which is
+the only thing a clean arm can be about. A compacted copy always carries
+true defects (#1524's line 19), so whole-file scoring left the clean arm one
+reachable outcome. The planted arm is unchanged: it was already scored on its
+declared range.
+
+**Rejected:** building a clean candidate the reviewer has nothing true to say
+about. A subject with no defects is not a compacted copy of anything, and a
+compacted copy is what *The subjects* argues a subject has to be.
+
+**The banked readings, re-scored under this rule** by
+`test/review-negative-control.test.ts`, not by hand: `DETECTED` ×4,
+`QUIET` ×4, `FIRED` ×0, `UNMEASURED` ×7. Two readings moved:
+`suite-lock-redirect/clean`'s `FIRED` ×2 are now `QUIET`, each carrying one
+pre-existing blocking finding, `high` at line 19. The `UNMEASURED` readings
+stay `UNMEASURED`, because their payloads could not be read and that is
+decided before any scope is applied. The `scoreOutcome` written on each draw
+is left as it was banked, because a scored value is never hand-edited. The
+re-score is a separate reading over the same findings.
+
 ## The five readings
 
 | outcome | subject | meaning | verdict |
 |---|---|---|---|
 | `DETECTED` | planted | a blocking finding at the declared file and line range | green |
 | `MISSED` | planted | no such finding — recall, measured | red |
-| `QUIET` | clean | no blocking finding | green |
-| `FIRED` | clean | a blocking finding — precision, measured | red |
+| `QUIET` | clean | no blocking finding on a line the candidate changed (#1533) | green |
+| `FIRED` | clean | a blocking finding on a line the candidate changed — precision, measured | red |
 | `UNMEASURED` | either | the payload could not be read, or the reading does not name its reviewer | **red** |
 
 `UNMEASURED` is a distinct outcome from `QUIET` and it fails. "The reviewer
@@ -584,10 +622,12 @@ line the diff never touched, occupies the blocking slot without the draw ever
 reaching the question — so the honest outcome is `UNMEASURED`, in exactly the
 sense the row above gives it.
 
-`score` cannot see this, by design-as-it-stands: it reads severity, file and
-line, and it has no notion of which lines the diff changed. Whether it should
-is **#1533**. Until that is decided, a reading in this state is recorded with
-**both** values and they are never merged:
+`score` could not see this until **#1533**, which scopes the clean arm to the
+lines the candidate changed (see *The clean arm is scored on the lines the
+candidate changed* above): a finding true of the base on an untouched line is
+now named *pre-existing* and does not score `FIRED`. The readings banked
+before that rule were scored without it, so for them the two values are still
+recorded side by side and never merged:
 
 | field | what it is | may it be hand-written? |
 |---|---|---|
