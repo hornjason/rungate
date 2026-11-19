@@ -5485,6 +5485,10 @@ export function createGitHooks(root: string, actions: string[]): void {
  * when a consumer genuinely needs a newer line.
  */
 export function harnessDevDepRange(version?: string): string {
+  // No version given reads rungate's own package.json, and an unreadable one
+  // throws (#2501) instead of reaching the fallback below. The fallback is for
+  // a version STRING that does not parse; on a manifest nobody could read,
+  // `^0.2.0` would pin a consumer of a 0.8 tree to the 0.2 line, silently.
   const v = version ?? harnessVersion();
   const m = /^(\d+)\.(\d+)\./.exec(v);
   // An unparseable version falls back to the widest range that is still a
