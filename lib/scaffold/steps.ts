@@ -4222,6 +4222,17 @@ ${setupBunEnv("        ")}
       - run: bun install
       - name: Conformity + spec drift
         run: bun test test/scaffold-conformity.test.ts
+      - name: Spec evidence
+        # #2499: a ticked criterion that does not name what proved it fails
+        # here. A spec that does not declare \`evidence: required\` is counted,
+        # not refused, so a project that has not opted in stays green. No
+        # specs/ at all is a reading not taken, said out loud, never a pass.
+        run: |
+          if [ -d specs ]; then
+            bunx rungate@${harnessVersion()} audit-spec-evidence --project-root .
+          else
+            echo "::warning title=Spec evidence UNMEASURED::There is no specs/ directory, so no criterion's evidence was read."
+          fi
       - name: Secret scan
         run: |
           # CI has nothing staged, so the old --cached scan examined zero files
