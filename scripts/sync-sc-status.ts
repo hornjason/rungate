@@ -33,6 +33,7 @@ import {
   buildScRegistry,
   isQualifiedBy,
   isTemplateSpec,
+  qualifierTokens,
   oneScMentionPattern,
   parseScDeclarations,
   requiresQualification,
@@ -857,7 +858,105 @@ export function onlyRefusesShortFlip(only: readonly string[] | null, asked: numb
   return only !== null && flipped < asked;
 }
 
-export function flipCheckboxes(specFile: string, scIds: string[], specsDir?: string, isDryRun?: boolean): number {
+/**
+ * The `describe`/`test`/`it` title whose string literal contains offset
+ * `at` in `source`, or undefined when `at` is not inside one (#2487).
+ *
+ * Read off the one line `at` sits on: a title that spans lines is rare
+ * enough that naming the file alone is the right answer for it, and the
+ * proof line still names what ran.
+ */
+export function testTitleAt(source: string, at: number): string | undefined {
+  const start = source.lastIndexOf("\n", at - 1) + 1;
+  const endAt = source.indexOf("\n", at);
+  const line = source.slice(start, endAt === -1 ? source.length : endAt);
+  const col = at - start;
+  for (const m of line.matchAll(/\b(?:describe|test|it)\b[^(]*\(\s*(["'`])((?:\\.|(?!\1).)*)\1/g)) {
+    // m[0] ends at the closing delimiter, so the opening one sits two before the content.
+    const open = m.index! + m[0].length - m[2].length - 2;
+    if (col > open && col <= open + m[2].length) return m[2];
+  }
+  return undefined;
+}
+
+/**
+ * What each passing criterion's `proved-by:` line should say, keyed by
+ * `scopedKey` (#2487): the first passing test file that claimed it, and the
+ * title when the claim sits in one. A criterion credited only by a file that
+ * failed gets nothing, because nothing proved it.
+ */
+export function proofsFor(
+  testFileMap: ReadonlyMap<string, readonly ScCredit[]>,
+  passing: ReadonlySet<string>,
+  testDir?: string,
+): Map<string, string> {
+  // Spelled with ?? on purpose: the || spelling is the anchor test/sync-sc-todo-outranks-comment.test.ts cuts findTestFilesForSCs on.
+  const root = testDir ?? TEST_DIR;
+  const out = new Map<string, string>();
+  for (const [file, credits] of testFileMap) {
+    const live = credits.filter(c => passing.has(scopedKey(c.specFile, c.id)) && !out.has(scopedKey(c.specFile, c.id)));
+    if (live.length === 0) continue;
+    const source = readFileSync(join(root, file), "utf-8");
+    const sites = coverageClaimSites(source);
+    for (const c of live) {
+      // Review of #2492: an id two specs declare can be claimed in one file by
+      // two titles, one per spec, and each criterion must cite its own. So a
+      // title naming this credit's spec wins, then one qualified by the window
+      // the credit rule itself uses, then the first.
+      const titled = sites
+        .filter(s => s.id === c.id && s.kind === "title")
+        .map(s => ({ s, title: testTitleAt(source, s.at) }));
+      const tokens = qualifierTokens(c.specFile).map(t => t.toLowerCase());
+      const pick =
+        titled.find(t => t.title !== undefined && tokens.some(k => t.title!.toLowerCase().includes(k))) ??
+        titled.find(t => isQualifiedBy(source, t.s.at, c.specFile)) ??
+        titled[0];
+      const title = pick?.title;
+      out.set(scopedKey(c.specFile, c.id), `test/${file}${title ? ` "${title}"` : ""}`);
+    }
+  }
+  return out;
+}
+
+const PROOF_OR_WAIVER = /^\s{2,}(?:proved-by|waived-reason|waived-by|waived-until):/;
+
+/**
+ * `content` with a `proved-by:` line written under ticked criterion `id`
+ * (#2487), unless its block already has one or carries a waiver, which
+ * replaces it. The block is the run of indented lines under the bullet, the
+ * same run `parseCriteria` in lib/spec-evidence.ts reads, and the line goes
+ * at its end, at the indent of the block's first annotation, or six spaces.
+ */
+export function withProofLine(content: string, id: string, proof: string): { content: string; wrote: boolean } {
+  const lines = content.split("\n");
+  const at = lines.findIndex(l => l.startsWith(`- [x] ${id}:`) || l.startsWith(`- [X] ${id}:`));
+  if (at === -1) return { content, wrote: false };
+  let end = at + 1;
+  let indent = "      ";
+  let sawAnnotation = false;
+  // An unindented `<!-- REVIEW: … -->` marker from `audit-specs --fix` sits
+  // inside the block, as parseCriteria reads it; stopping there would miss a
+  // proof or waiver below it and write a second one (review of #2492).
+  while (end < lines.length && (/^\s{2,}\S/.test(lines[end]) || /^\s*<!--/.test(lines[end]))) {
+    if (PROOF_OR_WAIVER.test(lines[end])) return { content, wrote: false };
+    const kv = lines[end].match(/^(\s{2,})[a-z-]+:/);
+    if (kv && !sawAnnotation) {
+      indent = kv[1];
+      sawAnnotation = true;
+    }
+    end++;
+  }
+  lines.splice(end, 0, `${indent}proved-by: ${proof}`);
+  return { content: lines.join("\n"), wrote: true };
+}
+
+export function flipCheckboxes(
+  specFile: string,
+  scIds: string[],
+  specsDir?: string,
+  isDryRun?: boolean,
+  proofs?: ReadonlyMap<string, string>,
+): number {
   const dir = specsDir || SPECS_DIR;
   const filePath = join(dir, specFile);
   let content = readFileSync(filePath, "utf-8");
@@ -873,16 +972,27 @@ export function flipCheckboxes(specFile: string, scIds: string[], specsDir?: str
 
   let flipped = 0;
 
+  // Write unless dry-run: use explicit isDryRun param if provided, else module-level flag
+  const shouldSkipWrite = isDryRun !== undefined ? isDryRun : dryRun;
+
   for (const id of scIds) {
     const pattern = `- [ ] ${id}:`;
     if (content.includes(pattern)) {
       content = content.replace(pattern, `- [x] ${id}:`);
       flipped++;
+      // #2487: the tick and the line audit-spec-evidence reads land in one
+      // write. A spec that records evidence was red after every tick until a
+      // person wrote this line by hand.
+      const proof = proofs?.get(id);
+      if (proof) {
+        const r = withProofLine(content, id, proof);
+        if (r.wrote) {
+          content = r.content;
+          console.log(`  ${id}: ${shouldSkipWrite ? "would write" : "wrote"} proved-by: ${proof}`);
+        }
+      }
     }
   }
-
-  // Write unless dry-run: use explicit isDryRun param if provided, else module-level flag
-  const shouldSkipWrite = isDryRun !== undefined ? isDryRun : dryRun;
   if (flipped > 0 && !shouldSkipWrite) {
     writeSpec(filePath, content, { label: specFile });
   }
@@ -1159,9 +1269,16 @@ if (isDirectExecution) {
     process.exit(0);
   }
 
+  // #2487: what proved each one, from the test files that just passed.
+  const proofs = proofsFor(testFileMap, passingSCs);
   let totalFlipped = 0;
   for (const [specFile, scs] of selected) {
-    const flipped = flipCheckboxes(specFile, scs);
+    const forSpec = new Map<string, string>();
+    for (const id of scs) {
+      const proof = proofs.get(scopedKey(specFile, id));
+      if (proof) forSpec.set(id, proof);
+    }
+    const flipped = flipCheckboxes(specFile, scs, undefined, undefined, forSpec);
     if (flipped > 0) {
       console.log(`${dryRun ? "Would flip" : "Flipped"} ${flipped} SCs in ${specFile}: ${scs.join(", ")}`);
       totalFlipped += flipped;
