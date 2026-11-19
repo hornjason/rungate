@@ -27,6 +27,8 @@ import { spawnSync } from "child_process";
 import {
   COMMAND_NOT_FOUND,
   ITEM_SCOPES,
+  REFUSAL_EXCERPT_LINES,
+  refusalExcerpt,
   claimedImprovements,
   ladderViolations,
   nextStage,
@@ -340,6 +342,34 @@ describe("the live plan", () => {
     expect(run("echo ' 0 pass' | /usr/bin/grep -qE '^ [1-9][0-9]* pass'").status).not.toBe(0);
   });
 
+  // #2457: the report of a refusing item names what refused. The shape seen
+  // twice on 2026-11-19: `board-conformance` writes a long preamble to stderr
+  // and its verdict to stdout, and the first 300 characters of stderr cut off
+  // mid-line before any reading.
+  test("#2457: a refusing item's report carries the verdict, not the stderr preamble", () => {
+    const stderr =
+      "rungate-version: 0.8.35 (resolved at runtime, not the pin)\n" +
+      `board-snapshot: resolved from the repository, not the command line — spec=specs/X.md (board.engineSpec), prefix=Engine (board.milestonePrefix)\n` +
+      `board-snapshot: spec read from origin/main at 8bfb0e1e (${"specs/SPEC-TO-BOARD-PIPELINE-SPEC.md ".repeat(6)})\n`;
+    const stdout =
+      "MET         criteria-named       52 of 52\n" +
+      "SHORT       declared-work        44 of 46 — 2 short\n" +
+      "               SC-2787 (specs/X.md) names no open issue\n" +
+      "board-conformance: 1 of 11 reading(s) are not met — declared-work (short).\n";
+    const excerpt = refusalExcerpt(stdout, stderr);
+    expect(excerpt).toContain("board-conformance: 1 of 11 reading(s) are not met — declared-work (short).");
+    expect(excerpt).toContain("SC-2787 (specs/X.md) names no open issue");
+    // The old spelling, as the control: it shows only the preamble.
+    expect((stderr || stdout).trim().slice(0, 300)).not.toContain("declared-work");
+    // Bounded: a flood keeps its last lines only, and nothing is "(no output)"
+    // unless both streams were empty.
+    const flood = Array.from({ length: 500 }, (_, i) => `line ${i}`).join("\n");
+    expect(refusalExcerpt(flood, "").split("\n").filter(l => l.startsWith("line ")).length).toBe(REFUSAL_EXCERPT_LINES);
+    expect(refusalExcerpt(flood, "")).toContain("line 499");
+    expect(refusalExcerpt("", "")).toBe("(no output)");
+    expect(refusalExcerpt(null, "only stderr")).toContain("only stderr");
+  });
+
   test("every DONE item's verify command exits 0 — this is what 'done' means", () => {
     // Timeout is EXPLICIT below, and it has to be. Items here read the live
     // GitHub API and run in sequence, and Bun's 5s default killed this the
@@ -380,7 +410,7 @@ describe("the live plan", () => {
           failed.push(
             `${item.id} exited ${r.status}: ${item.verify}\n` +
               `     ${item.what}\n` +
-              `     ${(r.stderr || r.stdout || "(no output)").trim().slice(0, 300)}`,
+              `     ${refusalExcerpt(r.stdout, r.stderr).split("\n").join("\n     ")}`,
           );
         }
       }
