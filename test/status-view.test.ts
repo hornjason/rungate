@@ -696,6 +696,31 @@ describe("#2466: --repo naming another repository does not print this checkout's
     }
   });
 
+  test("#2466: a remote still naming a repository's old name reads its plan once GitHub says they are one", () => {
+    // Review of #2469: GitHub redirects a renamed repository, and git never
+    // rewrites a remote URL, so a checkout cloned as hornjason/pai-harness
+    // asked about hornjason/rungate is the same repository. The names differ,
+    // so each is resolved through the API, and the canonical names decide.
+    const renamedGh = (canonical: Record<string, string>) => (args: string[]) => {
+      const path = args.find(a => a.startsWith("repos/")) ?? "";
+      const name = path.replace(/^repos\//, "");
+      return name in canonical
+        ? { ok: true as const, out: JSON.stringify({ full_name: canonical[name] }) }
+        : { ok: false as const, why: "gh exited 1: HTTP 404" };
+    };
+    const dir = checkout("https://github.com/hornjason/pai-harness.git");
+    try {
+      const same = renamedGh({ "hornjason/pai-harness": "hornjason/rungate", "hornjason/rungate": "hornjason/rungate" });
+      const v = gather(dir, "hornjason/rungate", same, at, () => gone("not run in this case"));
+      expect(v.goal.kind, v.goal.kind === "UNMEASURED" ? v.goal.why : "").toBe("READ");
+      // The control: GitHub resolves them to two different repositories.
+      const two = renamedGh({ "hornjason/pai-harness": "hornjason/pai-harness", "hornjason/rungate": "hornjason/rungate" });
+      expect(gather(dir, "hornjason/rungate", two, at, () => gone("not run in this case")).goal.kind).toBe("UNMEASURED");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("#2466: a checkout with no origin keeps reading its plan, as it did before", () => {
     // Nothing says which repository the plan describes, so nothing contradicts
     // --repo; the existing gather cases all run in such a directory.
