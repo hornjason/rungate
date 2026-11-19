@@ -270,7 +270,7 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   // tracker and the working directory's specs, so it takes no root flag.
   "criterion-label": {
     script: "scripts/criterion-label.ts",
-    summary: "Label each open issue that names no criterion, and unlabel it once it does",
+    summary: "Label open issues that name no criterion",
     usage: "rungate criterion-label --repo <owner/name> [--issue <n>] [--comment] [--write]",
   },
   // #2275, onboarding existing specs. Read-only: what each spec holds, its
