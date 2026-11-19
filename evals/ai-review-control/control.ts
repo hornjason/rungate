@@ -203,8 +203,10 @@ export interface ReviewControlSummary {
   advisory: number;
   /**
    * Blocking findings that landed on a declared plant, over every blocking
-   * finding written. `null` when the reviewer wrote none — an undefined ratio
-   * is withheld, because a reviewer that says nothing is not perfectly precise.
+   * finding scored — a clean-arm finding on no line the candidate changed is
+   * pre-existing and in neither half (#1533). `null` when none was scored — an
+   * undefined ratio is withheld, because a reviewer that says nothing is not
+   * perfectly precise.
    */
   precision: number | null;
   /** Plants detected over plants measured. `null` when none was measured. */
@@ -497,7 +499,10 @@ export function summariseReviewControl(readings: ReviewControlReading[]): Review
   const fired = count("FIRED");
   const unmeasured = count("UNMEASURED");
 
-  const blockingTotal = measured.reduce((n, r) => n + (r.blockingCount ?? 0), 0);
+  // #1533, review of #2450: a pre-existing finding is not scored, so it is in
+  // neither half of precision. Left in the denominator with no hit to match,
+  // it read as a precision failure the reading had just said was not one.
+  const blockingTotal = measured.reduce((n, r) => n + (r.blockingCount ?? 0) - (r.preExistingBlocking ?? 0), 0);
   const plantHits = measured.reduce((n, r) => n + r.plantHits, 0);
   const advisory = measured.reduce((n, r) => n + (r.advisoryCount ?? 0), 0);
   const contradictions = measured.filter(r => r.payloadOutcome === "CONTRADICTION").length;

@@ -635,6 +635,26 @@ describe("#1533: the clean arm scores FIRED only on a line the candidate changed
     expect(r.detail.join("\n")).toContain("not on a line the candidate changed");
   });
 
+  // Review of #2450, round 5: the reading excused the finding and the run's
+  // precision still counted it, with no plant hit to match. Both halves of
+  // the pair: a pre-existing finding is in neither half of the ratio, and a
+  // FIRED one stays in it — so excluding every clean-arm finding, the
+  // cheapest repair, is red on the second assertion.
+  test("a pre-existing finding is in neither half of the run's precision; a FIRED one stays in it", () => {
+    const detected = readReviewControl(PLANTED, payload([onThePlant()], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
+    const preExisting = readReviewControl(CLEAN, payload([onThePlant({ file: CLEAN.file, line: 19 })], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
+    expect([detected.outcome, preExisting.outcome]).toEqual(["DETECTED", "QUIET"]);
+    const run = summariseReviewControl([detected, preExisting]);
+    expect(run.passed).toBe(true);
+    expect(run.precision, "a finding the reading declared not scored dragged the run's precision down").toBe(1);
+    const fired = readReviewControl(CLEAN, MUTANT_ON_THE_REFACTOR, REVIEWER);
+    expect(fired.outcome).toBe("FIRED");
+    expect(summariseReviewControl([detected, fired]).precision).toBe(0.5);
+    // Only pre-existing findings written anywhere but the plant: nothing was
+    // scored against a hit, and the ratio is still the planted arm's alone.
+    expect(summariseReviewControl([preExisting]).precision, "no scored finding, so no ratio").toBeNull();
+  });
+
   test("a blocking finding on the subject file that names no line is FIRED — unattributable is not pre-existing", () => {
     const r = readReviewControl(CLEAN, payload([onThePlant({ file: CLEAN.file, line: "n/a" })], AI_REVIEW_BLOCK_VERDICT), REVIEWER);
     expect(r.outcome).toBe("FIRED");

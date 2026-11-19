@@ -573,7 +573,9 @@ finding anywhere else is named in the reading as *pre-existing, not scored*
 and counted in `preExistingBlocking`. A finding on the subject's file that
 names no usable line still scores `FIRED`: unattributable is not
 pre-existing. This is the attribution CRC-B7 gives the deployed adjudicator,
-which demotes a finding about code the pull request did not touch.
+which demotes a finding about code the pull request did not touch. The run's
+`precision` follows the same rule: a pre-existing finding is in neither half
+of the ratio, and a `FIRED` one stays in its denominator.
 
 **What it costs.** A finding on an unchanged line is now invisible to the
 score, even when it is something a reviewer should have said. That is the
