@@ -225,6 +225,14 @@ const WRITE_CALL = new RegExp(
     .join("|")})\\s*\\(`,
 );
 
+/**
+ * The directories `test/anti.test.ts` walks for non-test `.ts` files (#2477).
+ * A second spelling of that suite's `findTsFiles` calls, held to them by
+ * `test/census-routing.test.ts`: the suite is a test file, so this script
+ * cannot import the list from it.
+ */
+export const ANTI_SCANNED_DIRS = ["gates", "lib", "scripts"] as const;
+
 export const CENSUS_TRIGGERS: CensusTrigger[] = [
   {
     id: "new-file",
