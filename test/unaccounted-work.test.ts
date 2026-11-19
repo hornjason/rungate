@@ -383,5 +383,10 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
     const r = run(SCRIPT, ["--project-root", root, "--since", "last week"]);
     expect(r.code).toBe(2);
     expect(r.err).toContain("--since");
+    // Review of #2494: a day past the end of its month is a typo, not a later date.
+    for (const bad of ["2026-02-30", "2026-04-31", "2025-02-29"]) {
+      const b = run(SCRIPT, ["--project-root", root, "--since", bad]);
+      expect(b.code, bad).toBe(2);
+    }
   });
 });
