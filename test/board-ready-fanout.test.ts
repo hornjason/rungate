@@ -2553,6 +2553,23 @@ describe("#2047: board-ready.yml is generated and names no board", () => {
     expect(generated).toContain(`bunx rungate@9.9.9 ${BOARD_READY_COMMAND} "\${args[@]}"`);
   });
 
+  // Review of #2453: the run bodies were held and the triggers were not, so
+  // the committed `on:` block drifted from the generator's with this row
+  // green. The `on:` block takes no option, so it is compared whole.
+  test("the committed on: block is the generator's, trigger for trigger and in order", () => {
+    const onBlock = (text: string) => /^on:\n((?:[ \t]+.*\n|\n)*?)(?=^\S)/m.exec(text)?.[1]?.trimEnd() ?? null;
+    const generated = buildBoardReadyWorkflow({
+      runsOn: '"ubuntu-24.04"',
+      checkout: "actions/checkout@v4",
+      setupBun: "oven-sh/setup-bun@0000000000000000000000000000000000000000",
+      setupBunWith: '          bun-version-file: ".bun-version"',
+      setupBunEnv: "",
+      version: "9.9.9",
+    });
+    expect(onBlock(generated), "no on: block parsed from the generator").not.toBeNull();
+    expect(onBlock(yml)).toBe(onBlock(generated));
+  });
+
   test("it calls the published CLI at the generating version, and runs no script", () => {
     expect(live).toContain(`bunx rungate@${version} board-ready "\${args[@]}"`);
     expect(live, "a consumer has no scripts/ to run").not.toMatch(/\bbun\s+scripts\//);
@@ -2630,5 +2647,84 @@ describe("#2047: no board.id is an annotation, and nothing else is", () => {
     const ok = fill(0, "");
     expect(ok.code).toBe(0);
     expect(ok.out).not.toContain("::warning::");
+  });
+});
+
+/**
+ * SC-2741 (#2434, ADR-021 row 79): focus is a milestone's due date, so a
+ * milestone created, edited or deleted refills Ready on that event, not on
+ * the next issue event. The fill body is EXECUTED against a stub `bunx` that
+ * prints the arguments it was handed, as #2047's rows are.
+ */
+describe("SC-2741: a milestone created, edited or deleted refills Ready", () => {
+  const yml = readFileSync(join(ROOT, ".github/workflows/board-ready.yml"), "utf-8");
+  const live = yml.split("\n").filter(l => !/^\s*#/.test(l)).join("\n");
+  const milestoneTypes = (/^ {2}milestone:\s*\n\s+types:\s*\[([^\]]*)\]/m.exec(live)?.[1] ?? "")
+    .split(",").map(s => s.trim()).filter(s => s !== "");
+
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "board-ready-milestone-")));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+  const stubs = join(dir, "bin");
+  mkdirSync(stubs);
+  writeFileSync(join(stubs, "bunx"), '#!/bin/sh\nprintf "ARGV:%s\\n" "$*"\nexit 0\n', { mode: 0o755 });
+  const body = join(dir, "fill.sh");
+  writeFileSync(body, buildBoardReadyScript("9.9.9"));
+  const fill = (mode: string) => {
+    const r = Bun.spawnSync(["bash", "-e", "-o", "pipefail", body], {
+      env: {
+        PATH: `${stubs}:${process.env.PATH}`,
+        RUNNER_TEMP: dir,
+        GITHUB_REPOSITORY: "o/n",
+        ACTOR: "someone",
+        MODE: mode,
+        // What `github.event.issue.number` is on a milestone event: nothing.
+        ISSUE: "",
+        WRITE: "--write",
+      },
+    });
+    const out = r.stdout.toString();
+    return { code: r.exitCode, argv: /^ARGV:(.*)$/m.exec(out)?.[1] ?? null, out };
+  };
+
+  test("the fill reads both rank keys off both candidate queries and hands them to the ranking", () => {
+    const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    // The blocking walk and the open-issue walk: a key read by one only
+    // ranks half the candidates.
+    expect(code.match(/milestone\{title dueOn\}/g)?.length, "both candidate queries must read dueOn").toBe(2);
+    expect(code.match(/issueDependenciesSummary\{blockedBy blocking\}/g)?.length, "both must read blocking").toBe(2);
+    expect(code).toMatch(/dueOfNumber\.set\(b\.number, typeof b\.milestone\?\.dueOn === "string"/);
+    expect(code).toMatch(/typeof b\.issueDependenciesSummary\?\.blocking === "number"/);
+    // And the eligible rows the selection ranks carry them; a key read and
+    // dropped here leaves Ready ranked by phase alone.
+    expect(code).toContain("dueOn: dueOfNumber.get(dec.number) ?? null");
+    expect(code).toContain("unblocks: unblocksOfNumber.get(dec.number) ?? null");
+  });
+
+  test("the workflow fires on a milestone created, edited or deleted", () => {
+    expect(milestoneTypes, "no `milestone: types: [...]` trigger in board-ready.yml").toEqual(["created", "edited", "deleted"]);
+  });
+
+  test("each milestone event tops up Ready, writes, and names no closed issue", () => {
+    // The three actions by name, not the parsed list: a trigger dropped from
+    // the workflow would otherwise empty this loop and leave it green.
+    for (const t of ["created", "edited", "deleted"]) {
+      const r = fill(`milestone-${t}`);
+      expect(r.code, `milestone-${t} refused: ${r.out}`).toBe(0);
+      expect(r.argv, `milestone-${t} never reached the command`).not.toBeNull();
+      expect(r.argv).toContain("--top-up");
+      expect(r.argv).toContain("--write");
+      expect(r.argv).not.toContain("--closed-issue");
+    }
+  });
+
+  test("the mode names a milestone event apart from an issue event with the same action", () => {
+    // `closed`, `deleted` and `opened` are actions of both events. Unprefixed,
+    // a milestone's could reach an issue arm, so the step prefixes it.
+    expect(live).toContain("format('milestone-{0}', github.event.action)");
+    expect(live).toMatch(/WRITE:[^\n]*github\.event_name == 'milestone'/);
+    // CONTROL: the unprefixed action is not an arm, so a step that forgot the
+    // prefix refuses instead of quietly topping up.
+    expect(fill("edited").code).toBe(1);
   });
 });

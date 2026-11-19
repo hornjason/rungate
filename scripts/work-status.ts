@@ -55,6 +55,7 @@ import {
   placementCensus,
   placementOf,
   readyCap,
+  rankableFromRestIssue,
   readyOrderFor,
   scopedCandidates,
   needsCriterionLine,
@@ -748,13 +749,10 @@ for (const line of overlapLines(fileOverlapGroups(pickable), pickable.length)) c
 // UNPLACED is its own count rather than part of `(no milestone)`: an issue
 // nothing can rank reads identically to one ranked last, which is the
 // distinction every row in the lane-health report below exists to keep.
-const candidateRankables = pickable.map((i: any) => ({
-  number: i.number,
-  milestone: i.milestone?.title ?? null,
-  labels: (i.labels ?? [])
-    .map((l: any) => (typeof l === "string" ? l : l?.name))
-    .filter((n: any) => typeof n === "string"),
-}));
+// SC-2741 (#2434): the same two ranking keys the writer reads, so this list
+// is the order `board-ready` would pull in. One mapping, tested against a
+// recorded REST issue in test/work-status.test.ts.
+const candidateRankables = pickable.map(rankableFromRestIssue);
 // The ENGINE milestone family, from this project's own config (#1943).
 // Without it `Convergence Phase 3` outranked `Pipeline Phase 6` and the
 // report printed the payload above the engine that ships it.

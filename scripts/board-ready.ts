@@ -330,8 +330,8 @@ async function main(): Promise<number> {
        blocking(first:100,after:$c){
          pageInfo{hasNextPage endCursor}
          nodes{
-           number state milestone{title} assignees{totalCount}
-           issueDependenciesSummary{blockedBy}
+           number state milestone{title dueOn} assignees{totalCount}
+           issueDependenciesSummary{blockedBy blocking}
            projectItems(first:20){
              pageInfo{hasNextPage endCursor}
              nodes{
@@ -354,8 +354,8 @@ async function main(): Promise<number> {
        issues(first:100,after:$c,states:[OPEN]){
          pageInfo{hasNextPage endCursor}
          nodes{
-           number state milestone{title} assignees{totalCount}
-           issueDependenciesSummary{blockedBy}
+           number state milestone{title dueOn} assignees{totalCount}
+           issueDependenciesSummary{blockedBy blocking}
            projectItems(first:20){
              pageInfo{hasNextPage endCursor}
              nodes{
@@ -782,7 +782,19 @@ async function main(): Promise<number> {
   // and it was the one guaranteed to be skipped. The field belongs to the
   // PROJECT; it is resolved once, below. BR-34..BR-36.
   const itemOf = new Map<number, { itemId: string }>();
+  // SC-2741 (#2434): the ranking's due date and unblock count, read in the
+  // one mapping below as the item id is, so both candidate sources still
+  // converge on one `candidates.map` (BR-48). Scalars on selections already
+  // made, so the node product is unchanged (BR-46). An absent `blocking` is
+  // unread, never zero.
+  const dueOfNumber = new Map<number, string | null>();
+  const unblocksOfNumber = new Map<number, number | null>();
   const dependents: Dependent[] = candidates.map((b: any) => {
+    dueOfNumber.set(b.number, typeof b.milestone?.dueOn === "string" ? b.milestone.dueOn : null);
+    unblocksOfNumber.set(
+      b.number,
+      typeof b.issueDependenciesSummary?.blocking === "number" ? (b.issueDependenciesSummary.blocking as number) : null,
+    );
     const item = (b.projectItems?.nodes ?? []).find((i: any) => i.project?.id === project);
     const statusValue = item?.fieldValues?.nodes?.find((f: any) => f?.field?.name === "Status");
     if (item) {
@@ -881,6 +893,8 @@ async function main(): Promise<number> {
       ...dec,
       milestone: milestoneOfNumber.get(dec.number) ?? null,
       labels: labelsOfNumber.get(dec.number) ?? [],
+      dueOn: dueOfNumber.get(dec.number) ?? null,
+      unblocks: unblocksOfNumber.get(dec.number) ?? null,
     }));
   const occ = readyOccupancy(occupied, dispatchable, cap);
   // The ENGINE milestone family, from this project's own config (#1943):

@@ -135,6 +135,54 @@ export interface Rankable {
   readonly milestone: string | null;
   readonly number: number;
   readonly labels: readonly string[];
+  /**
+   * SC-2741 (#2434): the milestone's due date, ISO 8601, or `null` for an
+   * undated milestone. Absent is undated. Earliest first, undated last —
+   * focus is an edit on GitHub's milestone page, not a pull request.
+   */
+  readonly dueOn?: string | null;
+  /**
+   * SC-2741: how many open issues this one blocks. More first, inside one
+   * milestone and phase. Absent or `null` is unread, and ranks after every
+   * count that was read.
+   */
+  readonly unblocks?: number | null;
+}
+
+/**
+ * SC-2741's due-date key: milliseconds since the epoch, or `Infinity` for an
+ * undated or unreadable date, so undated sorts last. One binding, so one
+ * mutation reaches every comparison that reads it.
+ */
+export function dueRank(r: Rankable): number {
+  const t = typeof r.dueOn === "string" ? Date.parse(r.dueOn) : Number.NaN;
+  return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+}
+
+/**
+ * SC-2741 (#2434): one issue from GitHub's REST issue list
+ * (`GET /repos/{owner}/{repo}/issues`) as a Rankable, so `work-status`
+ * ranks by the same keys `board-ready` reads over GraphQL.
+ *
+ * The REST list carries both keys. Measured 2026-11-19 on #2434:
+ * `milestone.due_on` and `issue_dependencies_summary` =
+ * `{blocked_by: 0, blocking: 3, total_blocked_by: 3, total_blocking: 4}`.
+ * `blocking` is the OPEN count the rule ranks by; `total_blocking` counts
+ * closed dependents too. An absent field is unread (`null`), never zero.
+ */
+export function rankableFromRestIssue(i: any): Rankable {
+  return {
+    number: i.number,
+    milestone: i.milestone?.title ?? null,
+    labels: (i.labels ?? [])
+      .map((l: any) => (typeof l === "string" ? l : l?.name))
+      .filter((n: any): n is string => typeof n === "string"),
+    dueOn: typeof i.milestone?.due_on === "string" ? (i.milestone.due_on as string) : null,
+    unblocks:
+      typeof i.issue_dependencies_summary?.blocking === "number"
+        ? (i.issue_dependencies_summary.blocking as number)
+        : null,
+  };
 }
 
 /**
@@ -661,6 +709,12 @@ export function readyOrderFor(
     if (TIER_ORDER[pa.tier] !== TIER_ORDER[pb.tier]) {
       return TIER_ORDER[pa.tier] - TIER_ORDER[pb.tier];
     }
+    // SC-2741 (#2434): the milestone's due date, earliest first and undated
+    // last, ABOVE family and phase. Jason, 2026-11-18: focus is a date on a
+    // milestone. Two undated compare `Infinity === Infinity` and fall through.
+    const da = dueRank(a);
+    const db = dueRank(b);
+    if (da !== db) return da < db ? -1 : 1;
     // **Then family, INSIDE the tier, and before rank** (#1943). A phase
     // number is only meaningful inside its own family, so comparing
     // `Convergence Phase 3` against `Pipeline Phase 6` on the number alone
@@ -671,6 +725,11 @@ export function readyOrderFor(
     // issue honorary engine — a category beating a declared plan.
     if (pa.family !== pb.family) return pa.family - pb.family;
     if (pa.rank !== pb.rank) return pa.rank - pb.rank;
+    // SC-2741: then how many open issues each unblocks, more first. Unread
+    // ranks after every count that was read, never as zero.
+    const ua = typeof a.unblocks === "number" ? a.unblocks : -1;
+    const ub = typeof b.unblocks === "number" ? b.unblocks : -1;
+    if (ua !== ub) return ub - ua;
     return a.number - b.number;
   };
 }

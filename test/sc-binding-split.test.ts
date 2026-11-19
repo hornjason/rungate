@@ -396,7 +396,12 @@ const UNCLAIMED_RATCHET = 150;
 // Ready passes over an issue naming a file already taken, a reading of issue
 // bodies and open pull requests no registered pattern expresses; the
 // `SC-2786` describe in test/board-ready-rule.test.ts names it.
-const CLAIMED_UNBINDABLE = 182;
+// 182 -> 183: SC-2741 (#2434) ticked again by `sync-sc-status --only SC-2741`,
+// as the #2430 line above said it would be: Ready ranked by milestone due
+// date and refilled on a milestone event, a reading no registered pattern
+// expresses; the `SC-2741` describes in test/board-ready-rule.test.ts and
+// test/board-ready-fanout.test.ts name it.
+const CLAIMED_UNBINDABLE = 183;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

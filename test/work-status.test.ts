@@ -24,6 +24,7 @@ import {
   readyRefusal,
   resolveFocus,
 } from "../lib/work-status";
+import { rankableFromRestIssue, readyOrderFor } from "../lib/board-ready-rule";
 
 const ROOT = join(import.meta.dir, "..");
 const open = (blockers: { state: string }[] = [], assignees: unknown[] = []) =>
@@ -1005,6 +1006,40 @@ describe("#1853 H4: the candidate list says how many are UNPLACED", () => {
     expect(code).toContain("activeMilestone(");
     expect(code).toContain("scopedCandidates(candidateRankables, active, workNext.honoured)");
     expect(code, "the next list must come from the in-scope set").toContain("[...scoped.inScope].sort(");
+  });
+
+  // Review of #2453: the first spelling matched source text, which cannot
+  // show the field is ever populated. These rows run the mapping on an issue
+  // as the REST list returns it, recorded 2026-11-19 from
+  // `gh api 'repos/hornjason/rungate/issues?state=open&per_page=100'` (#2434's
+  // entry, trimmed to the keys the mapping reads).
+  const REST_2434 = {
+    number: 2434,
+    milestone: { title: "Engine Phase 6 — the board's state is a reading", due_on: null },
+    labels: [{ name: "engine" }],
+    issue_dependencies_summary: { blocked_by: 0, blocking: 3, total_blocked_by: 3, total_blocking: 4 },
+  };
+
+  test("SC-2741: the report reads the due date and the OPEN unblock count off a REST issue", () => {
+    const r = rankableFromRestIssue(REST_2434);
+    // 3 open, not the lifetime 4: a mapping reading `total_blocking` is red here.
+    expect(r.unblocks).toBe(3);
+    expect(r.dueOn).toBeNull();
+    expect(r.milestone).toBe("Engine Phase 6 — the board's state is a reading");
+    expect(r.labels).toEqual(["engine"]);
+    const dated = { ...REST_2434, milestone: { ...REST_2434.milestone, due_on: "2026-12-01T08:00:00Z" } };
+    expect(rankableFromRestIssue(dated).dueOn).toBe("2026-12-01T08:00:00Z");
+    // A pull request in the same list has `issue_dependencies_summary: null`:
+    // unread, never zero.
+    expect(rankableFromRestIssue({ ...REST_2434, issue_dependencies_summary: null }).unblocks).toBeNull();
+  });
+
+  test("SC-2741: two REST issues in one milestone rank by what each unblocks, as the writer ranks them", () => {
+    const none = { ...REST_2434, number: 2000, issue_dependencies_summary: { ...REST_2434.issue_dependencies_summary, blocking: 0 } };
+    const order = [none, REST_2434].map(rankableFromRestIssue).sort(readyOrderFor("Engine", new Set())).map(r => r.number);
+    expect(order, "the lower number won, so the unblock count was not read").toEqual([2434, 2000]);
+    // And the report sorts THIS mapping's output, not a second copy of it.
+    expect(code).toContain("pickable.map(rankableFromRestIssue)");
   });
 
   test("the candidates are sorted with readyOrder, so the report shows plan order", () => {
