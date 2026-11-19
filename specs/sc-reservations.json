@@ -36,9 +36,10 @@
   ],
   "reservations": [
     {
-      "owner": "rg/2331-adr-phases-order",
-      "from": 2786,
-      "to": 2786
+      "owner": "rg/2337-adr-bot-merges",
+      "from": 2787,
+      "to": 2788,
+      "note": "ADR-022 criteria (#2337)"
     },
     { "owner": "rg/fa-unmeasured-headline", "from": 288, "to": 289, "namespace": "FG" },
     {
