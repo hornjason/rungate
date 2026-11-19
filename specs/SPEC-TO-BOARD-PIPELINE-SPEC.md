@@ -283,6 +283,24 @@ take.
       needs: test
       proved-by: test/human-steps.test.ts — 8 pass, 0 fail; 2026-11-14, on the PR for #2051. `humanSteps` prints one OWED command each for an absent `RUNGATE_PROJECT_TOKEN`, a `RUNGATE_REQUIRE_CLOSING_REF` that is not the string `true`, and a process check this tree defines that the default branch does not require; an unreadable reading is `UNMEASURED` with its reason; the all-clear names what it measured and never says done. `scripts/scaffold-project.ts` prints the section on every run, executed in the last case.
       fingerprint: 29c768f6
+- [ ] SC-2789: `rungate board-init` makes a consumer's project board: it creates a project linked to the repository, or adopts the one `board.id` names, gives it the Status options Backlog, Ready, In progress, In review, Done and Cancelled, a Criteria text field and a board view by Status, turns off the built-in automations that move cards on close and on a linked pull request, and writes `board.id` and `board.fields` into `.claude/rungate/config.json`; a second run changes nothing, and anything it cannot create or read is named UNMEASURED with no partial config written (ADR-023, proposed)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2790: `rungate scaffold` emits `.github/workflows/board-flow.yml` as an owned workflow that calls the published CLI and reads the board from `board.id`, so a consumer's card moves to In progress when its issue is assigned, to In review when a pull request for it opens, and to Done or Cancelled when it closes; this repository's copy is the generated one (ADR-023, proposed)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2791: `rungate scaffold` installs `.claude/commands/board.md`, a `/board` command that runs the published CLI against the repository it sits in and names no other repository (ADR-023, proposed)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2792: `work-status` and `verify-merge-ref` run as `rungate` CLI commands that ship in `files[]` and read the repository from `--repo`, then `GITHUB_REPOSITORY`, then the origin remote, never from a constant (ADR-023, proposed)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2793: `rungate scaffold`'s report of human steps owed says whether `board.id` is set and whether the project token can write that board, each as one OWED command or UNMEASURED with its reason, never "done" (ADR-023, proposed)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2794: `rungate scaffold` installs the work loop as `.claude/commands/work-loop.md` (pick from Ready with `rungate work-status`, claim, work in a worktree off the default branch, test first with the project's own test command, open a pull request with `Fixes #N`, merge pinned with `rungate verify-merge-ref`), naming only commands a consumer has (ADR-023, proposed)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
 
 ### Nothing in the engine is hand-run
 
@@ -375,7 +393,7 @@ is built from this document.
 | **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749, SC-2751 |
 | **Phase 8** | SC-2622, SC-2623, SC-2624 |
 | **Phase 9** | SC-2776, SC-2777, SC-2778, SC-2779, SC-2780, SC-2782, SC-2783, SC-2784, SC-2785 |
-| **Phase 10** | SC-2625 |
+| **Phase 10** | SC-2625, SC-2789, SC-2790, SC-2791, SC-2792, SC-2793, SC-2794 |
 
 ### Phase 0 — the transform refuses
 
