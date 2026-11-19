@@ -55,10 +55,13 @@ export function citationsIn(text: string): number[] {
 /**
  * Control characters out, then at most 160 characters. A pull request body is
  * written by whoever opened the PR, and the report prints it to a terminal, so
- * an escape sequence in it must not reach one (#2489, security review).
+ * an escape sequence in it must not reach one (#2489, security review). Nor
+ * may a character that changes what a line appears to say without being seen:
+ * bidirectional overrides and isolates, and zero-width characters (review of
+ * #2494).
  */
 export const clip = (s: string) => {
-  const safe = s.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "\uFFFD");
+  const safe = s.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "\uFFFD");
   return safe.length > 160 ? `${safe.slice(0, 157)}...` : safe;
 };
 

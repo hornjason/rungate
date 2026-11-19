@@ -340,6 +340,10 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
     expect(text).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
     expect(text).toContain("TODO");
     expect(clip("a\tb")).toBe("a\tb");
+    // Review of #2494: text that reorders or hides itself is the same class.
+    for (const ch of ["\u202e", "\u2066", "\u2069", "\u200b", "\u200d", "\ufeff"]) {
+      expect(clip(`TODO ${ch}x`), JSON.stringify(ch)).toBe("TODO \uFFFDx");
+    }
   });
 
   test("a PR body counts only from an owner, member or collaborator, merged or open", () => {
