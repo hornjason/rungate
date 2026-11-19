@@ -23,13 +23,20 @@ export const INCOMPLETE_INSTALL_EXIT = 1;
  * Every package in `packageRoot`'s `package.json` `dependencies` that does
  * not resolve from `packageRoot`, in declaration order.
  *
- * An unreadable `package.json` throws rather than reading as "nothing
- * missing": a check that cannot read what it checks has not passed.
+ * An unreadable `package.json` is itself the incomplete install, and is
+ * named as the one thing missing: never "nothing missing", because a check
+ * that cannot read what it checks has not passed, and never a throw, because
+ * the same race that half-writes a dependency can half-write this file, and a
+ * stack trace naming a temp path is the crash this module exists to replace
+ * (review of #2491).
  */
 export function missingDependencies(packageRoot: string): string[] {
-  const pkg = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as {
-    dependencies?: Record<string, string>;
-  };
+  let pkg: { dependencies?: Record<string, string> };
+  try {
+    pkg = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+  } catch (e) {
+    return [`package.json (unreadable: ${(e as Error).message})`];
+  }
   const missing: string[] = [];
   for (const name of Object.keys(pkg.dependencies ?? {})) {
     try {

@@ -108,6 +108,26 @@ describe("#2479: the install is checked before a command runs", () => {
     expect(missingDependencies(pkg)).toEqual(["zod"]);
   });
 
+  // Review of #2491: the race that half-writes a dependency can half-write
+  // rungate's own manifest, and the check must refuse by name, not throw.
+  test("a truncated package.json is named as missing, not thrown", () => {
+    const { pkg } = install();
+    writeFileSync(join(pkg, "package.json"), '{ "name": "rungate", "dependencies": { "zod"');
+    const missing = missingDependencies(pkg);
+    expect(missing.length).toBe(1);
+    expect(missing[0]).toStartWith("package.json (unreadable: ");
+  });
+
+  test("a run from an install whose package.json is truncated refuses with the message, not a stack trace", () => {
+    const { pkg, project } = install();
+    writeFileSync(join(pkg, "package.json"), '{ "name": "rungate", "dependencies": { "zod"');
+    const r = run(pkg, project, ["sync-sc-status", "--dry-run"]);
+    expect(r.stderr, `no guard message; stderr was:\n${r.stderr}`).toContain(MARK);
+    expect(r.stderr).toContain("package.json (unreadable: ");
+    expect(r.stderr, "an uncaught throw reached the user").not.toMatch(/^\s+at /m);
+    expect(r.code).toBe(INCOMPLETE_INSTALL_EXIT);
+  });
+
   test("the message names the install, every missing package, the cause and the way out", () => {
     const msg = incompleteInstallMessage("/x/node_modules/rungate", ["zod", "@octokit/rest"]);
     expect(msg).toContain(MARK);
