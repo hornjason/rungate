@@ -160,11 +160,17 @@ function projectIdIn(row: Record<string, unknown>): string | null {
 export function readBoardInputs(projectRoot: string): {
   engineSpec: string | null;
   milestonePrefix: string | null;
+  /**
+   * The consumer's merge workflow, by its `name:` (ADR-022, SC-2787). A merge
+   * it makes with GITHUB_TOKEN starts no push run, so adr-accepted.yml also
+   * runs when it completes. Absent means no such workflow, and nothing changes.
+   */
+  mergeWorkflow: string | null;
 } {
   const config = tryLoadRungateConfig(projectRoot);
   const board = (config as Record<string, unknown> | null)?.board;
   if (!board || typeof board !== "object" || Array.isArray(board)) {
-    return { engineSpec: null, milestonePrefix: null };
+    return { engineSpec: null, milestonePrefix: null, mergeWorkflow: null };
   }
   const row = board as Record<string, unknown>;
   const read = (key: string): string | null => {
@@ -173,7 +179,7 @@ export function readBoardInputs(projectRoot: string): {
     const value = raw.trim();
     return value === "" ? null : value;
   };
-  return { engineSpec: read("engineSpec"), milestonePrefix: read("milestonePrefix") };
+  return { engineSpec: read("engineSpec"), milestonePrefix: read("milestonePrefix"), mergeWorkflow: read("mergeWorkflow") };
 }
 
 /**

@@ -4519,6 +4519,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     version: harnessVersion(),
     engineSpec: boardInputs.engineSpec,
     milestonePrefix: boardInputs.milestonePrefix,
+    mergeWorkflow: boardInputs.mergeWorkflow,
   });
 
   // SC-2780, ADR-018 Decision 1: a push to main that changes specs/ runs
