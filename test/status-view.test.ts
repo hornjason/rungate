@@ -655,3 +655,55 @@ describe("#2330: any repository that uses rungate can read its own board", () =>
     }
   });
 });
+
+describe("#2466: --repo naming another repository does not print this checkout's plan as that repository's", () => {
+  // Reported by a consumer's session on 2026-11-19: run from rungate's
+  // checkout with --repo pointed at the consumer, the view printed rungate's
+  // goal and stages A to H above the consumer's phases, as one view.
+  const refuse = () => ({ ok: false as const, why: "gh exited 1: HTTP 401" });
+  const at = new Date("2026-11-19T00:00:00Z");
+  function checkout(origin: string | null): string {
+    const dir = mkdtempSync(join(tmpdir(), "status-view-2466-"));
+    expect(spawnSync("git", ["init", "-q", dir]).status).toBe(0);
+    if (origin !== null) expect(spawnSync("git", ["-C", dir, "remote", "add", "origin", origin]).status).toBe(0);
+    // This repository's real plan, so the control reads a goal and stages.
+    writeFileSync(join(dir, "project-state.json"), readFileSync(join(import.meta.dir, "..", "project-state.json"), "utf-8"));
+    return dir;
+  }
+
+  test("#2466: a checkout of one repository asked about another prints no goal or stages, and says why", () => {
+    const dir = checkout("https://github.com/hornjason/rungate.git");
+    try {
+      const v = gather(dir, "someone/consumer", refuse, at, () => gone("not run in this case"));
+      expect(v.goal.kind, "the goal of this checkout was printed as another repository's").toBe("UNMEASURED");
+      expect(v.stages.kind).toBe("UNMEASURED");
+      const why = v.goal.kind === "UNMEASURED" ? v.goal.why : "";
+      expect(why).toContain("hornjason/rungate");
+      expect(why).toContain("someone/consumer");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2466: the control — the same checkout asked about itself reads its plan, however the name is cased", () => {
+    const dir = checkout("git@github.com:hornjason/rungate.git");
+    try {
+      const v = gather(dir, "HornJason/Rungate", refuse, at, () => gone("not run in this case"));
+      expect(v.goal.kind, v.goal.kind === "UNMEASURED" ? v.goal.why : "").toBe("READ");
+      expect(v.stages.kind).toBe("READ");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2466: a checkout with no origin keeps reading its plan, as it did before", () => {
+    // Nothing says which repository the plan describes, so nothing contradicts
+    // --repo; the existing gather cases all run in such a directory.
+    const dir = checkout(null);
+    try {
+      expect(gather(dir, "someone/consumer", refuse, at, () => gone("not run in this case")).goal.kind).toBe("READ");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

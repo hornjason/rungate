@@ -572,6 +572,27 @@ interface OpenItem {
   milestone: string | null;
 }
 
+/**
+ * #2466: the plan in `project-state.json` is this checkout's, so it is printed
+ * only as this checkout's repository's. Asked about another repository, the
+ * goal and stages are left out and the reason names both, rather than one
+ * repository's finish line printed above another's phases. A checkout with
+ * no readable origin says nothing about which repository its plan is, so
+ * nothing contradicts `repo` and the plan is read as before.
+ */
+export function planFor(root: string, repo: string): ReturnType<typeof planLines> {
+  const origin = spawnSync("git", ["-C", root, "remote", "get-url", "origin"], { encoding: "utf-8" });
+  const own = origin.status === 0 ? repoFromRemote(origin.stdout) : null;
+  if (own !== null && own.toLowerCase() !== repo.toLowerCase()) {
+    const why =
+      `this checkout's project-state.json is ${own}'s plan and this view is of ${repo}, ` +
+      `so its goal and stages are left out rather than printed as ${repo}'s`;
+    return { goal: unmeasured(why), stages: unmeasured(why) };
+  }
+  const planPath = join(root, "project-state.json");
+  return planLines(existsSync(planPath) ? readFileSync(planPath, "utf-8") : null, "project-state.json");
+}
+
 export function gather(
   root: string,
   repo: string,
@@ -579,8 +600,7 @@ export function gather(
   now = new Date(),
   health: (root: string) => Reading<HealthLine[]> = readHealth,
 ): StatusView {
-  const planPath = join(root, "project-state.json");
-  const plan = planLines(existsSync(planPath) ? readFileSync(planPath, "utf-8") : null, "project-state.json");
+  const plan = planFor(root, repo);
   const { engineSpec, milestonePrefix } = readBoardInputs(root);
   const queueLabel = readQueueLabel(root);
   let specText: string | null = null;
