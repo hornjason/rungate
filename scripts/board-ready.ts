@@ -782,7 +782,19 @@ async function main(): Promise<number> {
   // and it was the one guaranteed to be skipped. The field belongs to the
   // PROJECT; it is resolved once, below. BR-34..BR-36.
   const itemOf = new Map<number, { itemId: string }>();
+  // SC-2741 (#2434): the ranking's due date and unblock count, read in the
+  // one mapping below as the item id is, so both candidate sources still
+  // converge on one `candidates.map` (BR-48). Scalars on selections already
+  // made, so the node product is unchanged (BR-46). An absent `blocking` is
+  // unread, never zero.
+  const dueOfNumber = new Map<number, string | null>();
+  const unblocksOfNumber = new Map<number, number | null>();
   const dependents: Dependent[] = candidates.map((b: any) => {
+    dueOfNumber.set(b.number, typeof b.milestone?.dueOn === "string" ? b.milestone.dueOn : null);
+    unblocksOfNumber.set(
+      b.number,
+      typeof b.issueDependenciesSummary?.blocking === "number" ? (b.issueDependenciesSummary.blocking as number) : null,
+    );
     const item = (b.projectItems?.nodes ?? []).find((i: any) => i.project?.id === project);
     const statusValue = item?.fieldValues?.nodes?.find((f: any) => f?.field?.name === "Status");
     if (item) {
@@ -875,18 +887,6 @@ async function main(): Promise<number> {
   // either, and `[]` is the honest reading for it: UNPLACED, sorted behind
   // everything the plan does place.
   const labelsOfNumber = new Map(dependents.map(d => [d.number, d.labels]));
-  // SC-2741 (#2434): the ranking's due date and unblock count, off the same
-  // candidate nodes. Scalars on selections already made, so the node product
-  // is unchanged (BR-46). An absent `blocking` is unread, never zero.
-  const dueOfNumber = new Map<number, string | null>(
-    candidates.map((b: any) => [b.number, typeof b.milestone?.dueOn === "string" ? b.milestone.dueOn : null]),
-  );
-  const unblocksOfNumber = new Map<number, number | null>(
-    candidates.map((b: any) => [
-      b.number,
-      typeof b.issueDependenciesSummary?.blocking === "number" ? (b.issueDependenciesSummary.blocking as number) : null,
-    ]),
-  );
   const eligible = decisions
     .filter(dec => dec.move)
     .map(dec => ({
