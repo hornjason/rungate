@@ -21,7 +21,7 @@ import { join } from "path";
 import { spawnSync } from "child_process";
 
 import { CLI_COMMANDS } from "../lib/cli-commands";
-import { arrayElementLines, citationsIn, declarationsIn, memoryDirFor, openIssuesInPage, prBodiesSource } from "../lib/unaccounted-work";
+import { arrayElementLines, citationsIn, clip, declarationsIn, memoryDirFor, openIssuesInPage, prBodiesSource, trustedOpen } from "../lib/unaccounted-work";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "unaccounted-work.ts");
@@ -329,6 +329,30 @@ describe("#2489: pull request bodies are a source, read when asked for", () => {
     expect(json(real.out).unmeasured.join("\n")).toMatch(/^pr-bodies — --prs-fixture .* could not be read/m);
     expect(real.code).toBe(2);
     expect(run(MUTANT, args).code).toBe(0);
+  });
+
+  // Security review of #2489: a PR body is written by whoever opened the PR.
+  test("an escape sequence in a PR body never reaches the report", () => {
+    const reading = prBodiesSource({ prs: [{ number: 7, body: "TODO \x1b]8;;https://x\x07click\x1b[31m red\r" }] });
+    expect(reading.kind).toBe("READ");
+    if (reading.kind !== "READ") return;
+    const text = reading.declarations[0].text;
+    expect(text).not.toMatch(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+    expect(text).toContain("TODO");
+    expect(clip("a\tb")).toBe("a\tb");
+  });
+
+  test("an open PR counts only from an owner, member or collaborator", () => {
+    const items = [
+      { number: 1, author_association: "OWNER" },
+      { number: 2, author_association: "MEMBER" },
+      { number: 3, author_association: "COLLABORATOR" },
+      { number: 4, author_association: "CONTRIBUTOR" },
+      { number: 5, author_association: "NONE" },
+      { number: 6, author_association: "FIRST_TIME_CONTRIBUTOR" },
+      { number: 7 },
+    ];
+    expect(trustedOpen(items).map(i => i.number)).toEqual([1, 2, 3]);
   });
 
   test("a --since that is not a date is refused before anything is read", () => {

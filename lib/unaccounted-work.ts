@@ -52,7 +52,28 @@ export function citationsIn(text: string): number[] {
   return [...text.matchAll(/(?<![\w&/#])#(\d{1,9})\b(?!;)/g)].map(m => Number(m[1]));
 }
 
-const clip = (s: string) => (s.length > 160 ? `${s.slice(0, 157)}...` : s);
+/**
+ * Control characters out, then at most 160 characters. A pull request body is
+ * written by whoever opened the PR, and the report prints it to a terminal, so
+ * an escape sequence in it must not reach one (#2489, security review).
+ */
+export const clip = (s: string) => {
+  const safe = s.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "\uFFFD");
+  return safe.length > 160 ? `${safe.slice(0, 157)}...` : safe;
+};
+
+/** Who may add a line to the report through an OPEN pull request: people with a say in the repository. */
+export const TRUSTED_ASSOCIATIONS: ReadonlySet<string> = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+
+/**
+ * The open pull requests whose author has a say in the repository (#2489,
+ * security review). A merged PR was merged by a maintainer, so its body is
+ * read whoever wrote it. An open one from a stranger is not read, or anyone
+ * could make this command report work by opening a PR.
+ */
+export function trustedOpen<T extends { author_association?: string }>(items: readonly T[]): T[] {
+  return items.filter(i => TRUSTED_ASSOCIATIONS.has(i.author_association ?? ""));
+}
 
 /**
  * The markers read in a pull request body (#2489): the prose markers, plus the
