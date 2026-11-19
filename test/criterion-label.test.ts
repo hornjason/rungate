@@ -14,6 +14,8 @@ import { readFileSync, readdirSync } from "fs";
 import { join } from "path";
 import { NAMES_NONE, NEEDS_CRITERION_LABEL, answerableIds, criterionAnswer } from "../lib/board-mirror";
 import { COMMENT_BODY, LABEL_COLOR, LABEL_DESCRIPTION, labelPlan, run } from "../scripts/criterion-label";
+import { CLI_COMMANDS } from "../lib/cli-commands";
+import { spawnSync } from "child_process";
 
 const ROOT = join(import.meta.dir, "..");
 const IDS = ["ZZ-1", "ZZ-2"];
@@ -277,5 +279,26 @@ describe("#2020: the workflow", () => {
     // An issue's title and body are written by whoever opened it.
     expect(code).not.toMatch(/\$\{\{\s*github\.event\.issue\.(title|body)/);
     expect(code).toMatch(/ISSUE:\s*\$\{\{\s*github\.event\.issue\.number\s*\}\}/);
+  });
+});
+
+describe("#2470: criterion-label is a published command a consumer workflow can call", () => {
+  // #2467 scaffolds this workflow into consumers, and a scaffolded workflow
+  // calls `bunx rungate@<pin> <command>`, never a script path in a checkout
+  // it does not have. RELEASING.md: the command ships before the workflow.
+  const root = join(import.meta.dir, "..");
+
+  test("#2470: the registry routes criterion-label to its script, and the script ships", () => {
+    expect(CLI_COMMANDS["criterion-label"]?.script, "criterion-label is not a registered command").toBe("scripts/criterion-label.ts");
+    const files: string[] = JSON.parse(readFileSync(join(root, "package.json"), "utf-8")).files;
+    expect(files, "the script is not in package.json files[], so the published package cannot run it").toContain(
+      "scripts/criterion-label.ts",
+    );
+  });
+
+  test("#2470: the CLI dispatches it — with no --repo it refuses with the script's own usage", () => {
+    const r = spawnSync("bun", [join(root, "bin", "rungate.ts"), "criterion-label"], { encoding: "utf-8", cwd: root });
+    expect(r.status, "an unregistered command and a refusal must not look alike").not.toBe(0);
+    expect(r.stdout + r.stderr).toContain("--repo owner/name is required");
   });
 });
