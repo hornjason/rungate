@@ -2669,6 +2669,21 @@ describe("SC-2741: a milestone created, edited or deleted refills Ready", () => 
     return { code: r.exitCode, argv: /^ARGV:(.*)$/m.exec(out)?.[1] ?? null, out };
   };
 
+  test("the fill reads both rank keys off both candidate queries and hands them to the ranking", () => {
+    const src = readFileSync(join(ROOT, "scripts/board-ready.ts"), "utf-8");
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*\/\/.*$/gm, "");
+    // The blocking walk and the open-issue walk: a key read by one only
+    // ranks half the candidates.
+    expect(code.match(/milestone\{title dueOn\}/g)?.length, "both candidate queries must read dueOn").toBe(2);
+    expect(code.match(/issueDependenciesSummary\{blockedBy blocking\}/g)?.length, "both must read blocking").toBe(2);
+    expect(code).toMatch(/dueOfNumber\.set\(b\.number, typeof b\.milestone\?\.dueOn === "string"/);
+    expect(code).toMatch(/typeof b\.issueDependenciesSummary\?\.blocking === "number"/);
+    // And the eligible rows the selection ranks carry them; a key read and
+    // dropped here leaves Ready ranked by phase alone.
+    expect(code).toContain("dueOn: dueOfNumber.get(dec.number) ?? null");
+    expect(code).toContain("unblocks: unblocksOfNumber.get(dec.number) ?? null");
+  });
+
   test("the workflow fires on a milestone created, edited or deleted", () => {
     expect(milestoneTypes, "no `milestone: types: [...]` trigger in board-ready.yml").toEqual(["created", "edited", "deleted"]);
   });
