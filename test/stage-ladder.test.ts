@@ -354,11 +354,11 @@ describe("the live plan", () => {
     const stdout =
       "MET         criteria-named       52 of 52\n" +
       "SHORT       declared-work        44 of 46 — 2 short\n" +
-      "               SC-2787 (specs/X.md) names no open issue\n" +
+      "               SC-9787 (specs/X.md) names no open issue\n" +
       "board-conformance: 1 of 11 reading(s) are not met — declared-work (short).\n";
     const excerpt = refusalExcerpt(stdout, stderr);
     expect(excerpt).toContain("board-conformance: 1 of 11 reading(s) are not met — declared-work (short).");
-    expect(excerpt).toContain("SC-2787 (specs/X.md) names no open issue");
+    expect(excerpt).toContain("SC-9787 (specs/X.md) names no open issue");
     // The old spelling, as the control: it shows only the preamble.
     expect((stderr || stdout).trim().slice(0, 300)).not.toContain("declared-work");
     // Bounded: a flood keeps its last lines only, and nothing is "(no output)"
