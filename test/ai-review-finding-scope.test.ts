@@ -16,15 +16,20 @@ import {
   aiReviewScopeLine,
   argumentsBeyondTheContract,
   AI_REVIEW_RESTORED_LINE,
+  citedLinePastEnd,
+  findingCitedLine,
+  lineCountsNotSupplied,
   main,
   readAiReviewChangedFiles,
+  readAiReviewLineCounts,
   readAiReviewFindings,
   restoredFromBase,
   restoredFromBaseLine,
   scopeMeasured,
   scopeNotSupplied,
 } from "../lib/scaffold/ai-review-findings";
-import { AI_REVIEW_UNTRUSTED_PATHS } from "../lib/scaffold/ai-review-step";
+import { AI_REVIEW_LINE_COUNTS_PATH_VAR, AI_REVIEW_UNTRUSTED_PATHS } from "../lib/scaffold/ai-review-step";
+import type { AiReviewLineCountReading } from "../lib/scaffold/ai-review-findings";
 
 /**
  * Covers #1204 — a blocking finding may name a file the pull request never
@@ -131,7 +136,10 @@ function scopeOver(paths: string[]) {
 }
 
 /** Run `main` with its two streams captured. */
-function runMain(argv: string[]): { code: number; out: string; err: string } {
+function runMain(
+  argv: string[],
+  lineCounts: AiReviewLineCountReading = lineCountsNotSupplied(),
+): { code: number; out: string; err: string } {
   const out: string[] = [];
   const err: string[] = [];
   const log = console.log;
@@ -140,7 +148,7 @@ function runMain(argv: string[]): { code: number; out: string; err: string } {
   console.error = (...a: unknown[]) => void err.push(a.map(String).join(" "));
   let code: number;
   try {
-    code = main(argv);
+    code = main(argv, null, null, null, lineCounts);
   } finally {
     console.log = log;
     console.error = error;
@@ -563,6 +571,189 @@ describe("#1204: a blocking finding is adjudicated only where it can be located"
     expect(
       mutant.readAiReviewFindings(located, mutantScope).outcome,
       "the mutant stopped blocking a located finding, so it is broken rather than mutated",
+    ).toBe("BLOCKED");
+  });
+});
+
+/**
+ * #1357 — a blocking finding may cite a line that does not exist in the file
+ * it names. #1298's instance: BLOCKED by a finding citing
+ * `.claude/rules/specs-routing.md:39`. The pull request DID touch that file,
+ * so #1204's bound (above) could not catch it.
+ *
+ * Decidable with no judgement about whether the finding is right: the file's
+ * line count at the reviewed tree, taken by the changed-files step BEFORE the
+ * reviewer runs (`test/ai-review-changed-files-step.test.ts` CF-10). Whether
+ * the line SAYS what the finding claims is not decided here and must not be.
+ *
+ * The finding is DEMOTED on CRC-B7's terms — carried in `reported`, named in
+ * `pastEndReported`, counted on the scope line — never dropped.
+ */
+describe("#1357: a blocking finding citing a line past the end of its file does not block", () => {
+  const f = AI_REVIEW_FINDING_FIELDS;
+  const CITED = ".claude/rules/specs-routing.md";
+  const cites = (over: Record<string, unknown> = {}) =>
+    blockingFinding(BLOCKING_SEVERITY, { [f.file]: CITED, [f.line]: 39, ...over });
+  /** Line counts on disk, in the step's `<count><TAB><path>` rows, read by the real reader. */
+  const countsOver = (rows: [string, number][]) =>
+    readAiReviewLineCounts(scratchFile(rows.map(([p, n]) => `${n}\t${p}\n`).join(""), "tsv"));
+
+  test("#1357 / L-1 control: :39 of a 40-line file adjudicates exactly as it does today", () => {
+    const scope = scopeOver([CITED]);
+    const counts = countsOver([[CITED, 40]]);
+    expect(counts.status, "the control's own line counts did not read").toBe("MEASURED");
+
+    const payload = payloadOf("BLOCK", [cites()]);
+    const r = readAiReviewFindings(payload, scope, null, null, counts);
+    expect(r.outcome).toBe("BLOCKED");
+    expect(r.blockingReported).toHaveLength(1);
+    expect(r.pastEndReported, "a line that exists was judged missing").toEqual([]);
+    expect(aiReviewExitCode(r)).toBe(AI_REVIEW_REQUIRED_EXIT);
+    // And the same verdict as a run with no counts at all: the reading only
+    // ever subtracts, so a citation it can locate is untouched.
+    expect(readAiReviewFindings(payload, scope).outcome).toBe(r.outcome);
+  });
+
+  test("#1357 / L-2 witness: the same finding against a 20-line file is carried, named, and does not block", () => {
+    const scope = scopeOver([CITED]);
+    const r = readAiReviewFindings(payloadOf("BLOCK", [cites()]), scope, null, null, countsOver([[CITED, 20]]));
+
+    // CLEAN, not CONTRADICTION: the reviewer said BLOCK over a finding it
+    // could not know was unlocatable, so the demotion counts toward the
+    // verdict agreement the way CRC-B7's does.
+    expect(r.outcome).toBe("CLEAN");
+    expect(r.blocked).toBe(false);
+    expect(aiReviewExitCode(r)).toBe(0);
+    expect(r.reported, "the finding was dropped instead of demoted").toHaveLength(1);
+    expect(r.blockingReported).toHaveLength(0);
+    expect(r.pastEndReported, "the demotion was not recorded by name").toHaveLength(1);
+    expect(r.unlocatableReported, "a past-end citation was filed as a file outside the diff").toEqual([]);
+    const said = r.detail.join("\n");
+    expect(said).toContain("line 39");
+    expect(said).toContain("20 line");
+    expect(aiReviewScopeLine(r)).toContain("past end of file: 1");
+  });
+
+  test("#1357 / L-3: a non-blocking finding is not subject, matching the line #1198 and #1204 drew", () => {
+    const scope = scopeOver([CITED]);
+    const counts = countsOver([[CITED, 20]]);
+    for (const severity of ADVISORY_SEVERITIES) {
+      const r = readAiReviewFindings(
+        payloadOf("PASS", [blockingFinding(severity, { [f.file]: CITED, [f.line]: 39 })]),
+        scope,
+        null,
+        null,
+        counts,
+      );
+      expect(r.pastEndReported, `an advisory '${severity}' was counted as past the end`).toEqual([]);
+      expect(r.outcome).toBe("CLEAN");
+    }
+    expect(ADVISORY_SEVERITIES.length, "the loop ran over nothing").toBeGreaterThan(0);
+  });
+
+  test("#1357 / L-4 control: counts nobody supplied leave the verdict where it is, and say so", () => {
+    expect(readAiReviewLineCounts(undefined).status).toBe("NOT_SUPPLIED");
+    expect(readAiReviewLineCounts("").status).toBe("NOT_SUPPLIED");
+    const r = readAiReviewFindings(payloadOf("BLOCK", [cites()]), scopeOver([CITED]));
+    expect(r.outcome).toBe("BLOCKED");
+    expect(r.lineCounts.status).toBe("NOT_SUPPLIED");
+    expect(
+      r.pastEndReported,
+      "a check that did not run reported an empty result — null and [] are different facts",
+    ).toBeNull();
+    expect(aiReviewScopeLine(r)).toContain("past end of file: not checked (line counts NOT_SUPPLIED)");
+  });
+
+  test("#1357 / L-5: counts that could not be taken REFUSE, and differ from counts that were taken", () => {
+    const absent = readAiReviewLineCounts(join(SCRATCH, "nowhere", "counts.tsv"));
+    const garbled = readAiReviewLineCounts(scratchFile(`40\t${CITED}\nforty\tlib/x.ts\n`, "tsv"));
+    for (const counts of [absent, garbled]) {
+      expect(counts.status).toBe("UNMEASURED");
+      expect(counts.reason).toBe("LINE_COUNTS_UNREADABLE");
+      const r = readAiReviewFindings(payloadOf("BLOCK", [cites()]), scopeOver([CITED]), null, null, counts);
+      expect(r.outcome).toBe("UNMEASURED");
+      expect(r.unmeasuredReasons).toEqual(["LINE_COUNTS_UNREADABLE"]);
+      expect(r.blocked, "a withheld decision was defaulted").toBeNull();
+      expect(r.pastEndReported, "counts nobody could read judged a line anyway").toBeNull();
+      expect(r.reported, "the payload's findings were lost with the counts").toHaveLength(1);
+      expect(aiReviewExitCode(r)).toBe(AI_REVIEW_REQUIRED_EXIT);
+    }
+    // TAKEN and empty is a reading: a pull request that only deletes files
+    // has no file left to count. It judges nothing, so the finding blocks.
+    const empty = readAiReviewLineCounts(scratchFile("", "tsv"));
+    expect(empty.status).toBe("MEASURED");
+    const r = readAiReviewFindings(payloadOf("BLOCK", [cites()]), scopeOver([CITED]), null, null, empty);
+    expect(r.outcome).toBe("BLOCKED");
+    expect(r.pastEndReported).toEqual([]);
+  });
+
+  test("#1357 / L-6: a file the counts do not name keeps blocking — no count is not a short file", () => {
+    // The step writes no row for a path in neither the reviewed tree nor the
+    // base. Reading that absence as zero lines would demote every finding
+    // about such a path, the wrong direction for this stage.
+    const r = readAiReviewFindings(
+      payloadOf("BLOCK", [cites()]),
+      scopeOver([CITED, "lib/other.ts"]),
+      null,
+      null,
+      countsOver([["lib/other.ts", 1]]),
+    );
+    expect(r.outcome).toBe("BLOCKED");
+    expect(r.pastEndReported).toEqual([]);
+  });
+
+  test("#1357 / L-7: a line given only as a `:N` suffix on the file is the line judged, and the one a thread anchors on", () => {
+    const suffixed = cites({ [f.file]: `${CITED}:39`, [f.line]: "see the summary" });
+    expect(findingCitedLine(suffixed)).toBe(39);
+    expect(findingCitedLine(cites())).toBe(39);
+    expect(findingCitedLine(cites({ [f.line]: "n/a" })), "a line nobody gave was invented").toBeNull();
+    const scope = scopeOver([CITED]);
+    expect(readAiReviewFindings(payloadOf("BLOCK", [suffixed]), scope, null, null, countsOver([[CITED, 20]])).outcome).toBe("CLEAN");
+    expect(readAiReviewFindings(payloadOf("BLOCK", [suffixed]), scope, null, null, countsOver([[CITED, 40]])).outcome).toBe("BLOCKED");
+    // A spelling difference is not a different file: `./x` counts as `x`.
+    expect(citedLinePastEnd(cites({ [f.file]: `./${CITED}` }), new Map([[CITED.toLowerCase(), 20]]))).toEqual({ line: 39, count: 20 });
+  });
+
+  test("#1357 / L-8: main() takes the counts from its caller and prints how they were read", () => {
+    const payloadPath = scratchFile(payloadOf("BLOCK", [cites()]), "json");
+    const listPath = scratchFile(`${CITED}\n`);
+
+    const short = runMain([payloadPath, listPath], countsOver([[CITED, 20]]));
+    expect(short.code, short.err).toBe(0);
+    expect(short.out).toContain("past end of file: 1");
+
+    const unread = runMain([payloadPath, listPath], readAiReviewLineCounts(join(SCRATCH, "nowhere.tsv")));
+    expect(unread.code).toBe(AI_REVIEW_REQUIRED_EXIT);
+    expect(unread.err).toContain("LINE_COUNTS_UNREADABLE");
+  });
+
+  test("#1357 / L-9: the wrapper binds the counts from the environment, never as a third positional", () => {
+    // AC-9b's refusal of argv[2] keeps its full width: a changed-file path
+    // with a space, word-split in two, must not be read as a counts path.
+    const wrapper = readFileSync(join(import.meta.dir, "..", "scripts", "ai-review-findings.ts"), "utf-8");
+    expect(wrapper).toContain(`readAiReviewLineCounts(process.env[AI_REVIEW_LINE_COUNTS_PATH_VAR])`);
+    expect(wrapper).toContain("process.exit(main(process.argv.slice(2), jury, suppress, citedLines, lineCounts));");
+    expect(AI_REVIEW_LINE_COUNTS_PATH_VAR.length).toBeGreaterThan(0);
+  });
+
+  test("#1357 / L-10: the check can fail — the decider, zeroed", async () => {
+    const needle = "line > count ? { line, count } : null";
+    expect(source.split(needle).length - 1, "the past-end decider is not spelled once").toBe(1);
+    // Its OWN directory: AC-12 imports a mutant from SCRATCH first, Bun caches
+    // that directory's listing, and a second file written there afterwards is
+    // "Cannot find module" — measured, in this suite.
+    const path = join(mkdtempSync(join(SCRATCH, "lc-mutant-")), "mutant-ai-review-findings.ts");
+    writeFileSync(
+      path,
+      source.replace(needle, "null").replace(/from "\.\/ai-review-step"/g, `from "${STEP_PATH}"`),
+    );
+    const mutant = (await import(path)) as typeof import("../lib/scaffold/ai-review-findings");
+    const counts = mutant.readAiReviewLineCounts(scratchFile(`20\t${CITED}\n`, "tsv"));
+    expect(counts.status, "the mutant's counts did not read, so it witnesses nothing").toBe("MEASURED");
+    const scope = mutant.readAiReviewChangedFiles(scratchFile(`${CITED}\n`));
+    expect(
+      mutant.readAiReviewFindings(payloadOf("BLOCK", [cites()]), scope, null, null, counts).outcome,
+      "zeroing the decider changed nothing, so L-2 witnesses nothing",
     ).toBe("BLOCKED");
   });
 });

@@ -93,8 +93,13 @@
  */
 import { aiReviewJuryGate } from "../lib/ai-review-jury";
 import { productionSuppression } from "../lib/ai-review-suppression";
-import { main } from "../lib/scaffold/ai-review-findings";
-import { AI_REVIEW_BALLOT_DIR_ENV, AI_REVIEW_CHECKOUT_ROOT_VAR, AI_REVIEW_THREADS_PATH_VAR } from "../lib/scaffold/ai-review-step";
+import { main, readAiReviewLineCounts } from "../lib/scaffold/ai-review-findings";
+import {
+  AI_REVIEW_BALLOT_DIR_ENV,
+  AI_REVIEW_CHECKOUT_ROOT_VAR,
+  AI_REVIEW_LINE_COUNTS_PATH_VAR,
+  AI_REVIEW_THREADS_PATH_VAR,
+} from "../lib/scaffold/ai-review-step";
 
 const ballotDir = process.env[AI_REVIEW_BALLOT_DIR_ENV];
 const jury =
@@ -118,4 +123,10 @@ const { gate: suppress, linesOf: citedLines } = productionSuppression(process.en
 // declares no exit code of its own. Wrapping the call across lines makes
 // that case red for a formatting reason, which is worth knowing before
 // reformatting it.
-process.exit(main(process.argv.slice(2), jury, suppress, citedLines));
+// #1357: the changed files' line counts, written before the reviewer ran. Bound
+// here out of the environment for the ballot's reason: a third positional would
+// turn AC-9b's refusal of a word-split path into an accepted argv. Unset, it is
+// NOT_SUPPLIED and nothing is judged on its line.
+const lineCounts = readAiReviewLineCounts(process.env[AI_REVIEW_LINE_COUNTS_PATH_VAR]);
+
+process.exit(main(process.argv.slice(2), jury, suppress, citedLines, lineCounts));
