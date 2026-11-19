@@ -968,7 +968,7 @@ export async function main(
   const { values } = parsed;
   if (values.families) {
     // A listing, not a plan: alone, so nothing it prints is mistaken for a write.
-    if (values.place || values.repair || values.decompose || values["accepted-since"] !== undefined || values["milestone-prefix"] !== undefined || values.spec !== undefined || values.write || values.json) {
+    if (values.place || values.repair || values.decompose || values["accepted-since"] !== undefined || values["accepted-since-last-run"] !== undefined || values["milestone-prefix"] !== undefined || values.spec !== undefined || values.write || values.json) {
       console.error(`plan-issues: --families lists the opted-in families and applies nothing — pass it alone, with --project-root at most\n\n${USAGE}`);
       return REFUSAL_EXIT;
     }
@@ -984,7 +984,7 @@ export async function main(
   }
   if (values.place) {
     // A third plan, read from the specs rather than from a file: one at a time.
-    if (values.repair || values.decompose || values["accepted-since"] !== undefined || values["milestone-prefix"] !== undefined || values.spec !== undefined) {
+    if (values.repair || values.decompose || values["accepted-since"] !== undefined || values["accepted-since-last-run"] !== undefined || values["milestone-prefix"] !== undefined || values.spec !== undefined) {
       console.error(`plan-issues: --place reads every opted-in spec itself — pass it with --repo, --write, --json and --project-root only\n\n${USAGE}`);
       return REFUSAL_EXIT;
     }

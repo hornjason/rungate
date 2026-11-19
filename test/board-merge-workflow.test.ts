@@ -165,6 +165,28 @@ describe("SC-2787: the range starts at the newest successful run whose head is o
     }
   });
 
+  test("SC-2787: combined with --families, --place or --accepted-since it is refused, never silently dropped", async () => {
+    // Review of #2509: --families and --place each refuse every flag they do
+    // not read, and this one was missing from both lists.
+    const asked = { runs: async () => { throw new Error("the API was asked"); } };
+    const errs: string[] = [];
+    const real = { log: console.log, error: console.error };
+    console.log = () => {};
+    console.error = (...a: unknown[]) => void errs.push(a.join(" "));
+    try {
+      for (const other of [["--families"], ["--place", "--repo", "fixture/fixture"], ["--accepted-since", "HEAD"]]) {
+        errs.length = 0;
+        const code = await planIssuesMain(["--accepted-since-last-run", ADR_ACCEPTED_WORKFLOW_FILE, ...other], undefined, undefined, undefined, asked);
+        expect(code, other.join(" ")).toBe(REFUSAL_EXIT);
+        expect(errs.join("\n"), other.join(" ")).toMatch(/pass it alone|pass it with --repo/);
+        expect(errs.join("\n"), other.join(" ")).not.toContain("the API was asked");
+      }
+    } finally {
+      console.log = real.log;
+      console.error = real.error;
+    }
+  });
+
   test("SC-2787: end to end, the range read lists exactly what was accepted after the qualifying run", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rg-merge-wf-git-"));
     const git = (...args: string[]) => {
