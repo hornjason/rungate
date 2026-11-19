@@ -117,6 +117,12 @@ case "$MODE" in
   top-up | unassigned | opened | reopened | milestoned | demilestoned | labeled | unlabeled)
     args+=(--top-up)
     ;;
+  # SC-2741 (#2434): a milestone added, removed, or given a new due date
+  # re-ranks the whole lane. Prefixed by the step, so a milestone's own
+  # \`closed\` can never reach the issue-close branch above.
+  milestone-created | milestone-edited | milestone-deleted)
+    args+=(--top-up)
+    ;;
   *)
     echo "::warning::UNMEASURED — unrecognised mode \\"$MODE\\", so no candidate source was chosen. Nothing was read."
     exit 1
@@ -188,6 +194,9 @@ name: Board — keep Ready full from the events the repo already emits
 on:
   issues:
     types: [closed, assigned, unassigned, opened, reopened, milestoned, demilestoned, labeled, unlabeled]
+  # SC-2741: focus is a milestone's due date, so changing one refills Ready.
+  milestone:
+    types: [created, edited, deleted]
   workflow_dispatch:
     inputs:
       mode:
@@ -239,8 +248,8 @@ ${opts.setupBunEnv}
         env:
           BOARD_PROJECT_TOKEN: \${{ secrets.RUNGATE_PROJECT_TOKEN }}
           ISSUE: \${{ github.event.issue.number || inputs.issue }}
-          WRITE: \${{ (github.event_name == 'issues' || inputs.write) && '--write' || '' }}
-          MODE: \${{ github.event.action || inputs.mode }}
+          WRITE: \${{ (github.event_name == 'issues' || github.event_name == 'milestone' || inputs.write) && '--write' || '' }}
+          MODE: \${{ github.event_name == 'milestone' && format('milestone-{0}', github.event.action) || github.event.action || inputs.mode }}
           ACTOR: \${{ github.actor }}
         run: |
 ${indent(buildBoardReadyScript(opts.version), "          ")}
