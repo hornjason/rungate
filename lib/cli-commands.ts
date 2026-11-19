@@ -264,6 +264,15 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     usage: "rungate consumer-triage --repo <owner/name> [--write] [--json]",
     projectRootFlag: true,
   },
+  // #2020, published by #2470 so #2467 can scaffold the workflow into
+  // consumers: `needs-criterion` on an open issue that names no criterion and
+  // does not say it serves none, and off again when it does. Reads the
+  // tracker and the working directory's specs, so it takes no root flag.
+  "criterion-label": {
+    script: "scripts/criterion-label.ts",
+    summary: "Label open issues that name no criterion",
+    usage: "rungate criterion-label --repo <owner/name> [--issue <n>] [--comment] [--write]",
+  },
   // #2275, onboarding existing specs. Read-only: what each spec holds, its
   // `board:` setting, and a looks-done hint per unticked criterion. It never
   // ticks. Reads the working directory, so it takes no root flag.
