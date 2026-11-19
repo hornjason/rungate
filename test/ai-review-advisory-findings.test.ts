@@ -60,6 +60,7 @@ import {
   AI_REVIEW_OUTCOME_LINE,
   AI_REVIEW_SCOPE_LINE,
   AI_REVIEW_RESTORED_LINE,
+  AI_REVIEW_SUMMARY_TITLE,
   AI_REVIEW_SEVERITIES,
   advisoryNotice,
   advisoryReported,
@@ -165,11 +166,15 @@ describe("AD-1: a CLEAN reading carrying advisory findings says so", () => {
         l.startsWith(AI_REVIEW_OUTCOME_LINE) ||
         l.startsWith(AI_REVIEW_SCOPE_LINE) ||
         // #1887: which changed files the reviewer read from base, printed on every run.
-        l.startsWith(AI_REVIEW_RESTORED_LINE),
+        l.startsWith(AI_REVIEW_RESTORED_LINE) ||
+        // #1653: the summary reading, printed on every run that read a payload —
+        // here ABSENT, because this payload writes no summary.
+        l.startsWith(`::notice title=${AI_REVIEW_SUMMARY_TITLE}::ABSENT`),
     );
     expect(fromTheRun, "the empty payload emitted a line that is not the run's own").toEqual(lines);
-    // Outcome, scope, and #1887's restored-from-base line: three run lines.
-    expect(lines).toHaveLength(3);
+    // Outcome, scope, #1887's restored-from-base line and #1653's summary
+    // reading: four run lines.
+    expect(lines).toHaveLength(4);
   });
 
   test("AD-1: three advisory findings produce output the empty payload does not", () => {

@@ -217,11 +217,18 @@ import {
   AI_REVIEW_FINDINGS_PATH_VAR,
   AI_REVIEW_OUTCOME_LINE,
   AI_REVIEW_REQUIRED_EXIT,
+  AI_REVIEW_SUMMARY_KEY,
   AI_REVIEW_UNMEASURED_TITLE,
   AI_REVIEW_UNTRUSTED_PATHS,
   buildReviewPrompt,
   buildReviewRunScript,
 } from "../lib/scaffold/ai-review-step";
+import {
+  readAiReviewChangedFiles,
+  readAiReviewFindings,
+  summaryNotice,
+  summaryReading,
+} from "../lib/scaffold/ai-review-findings";
 import { stubBunx } from "./helpers/stub-bunx";
 
 /**
@@ -876,5 +883,145 @@ describe("AC-C: the reviewer's load of the conventions is read, not assumed (#11
         `the prompt tells the reviewer this document covers "${subject}" and it does not`,
       ).toContain(subject);
     }
+  });
+});
+
+/**
+ * #1653 / CRC-A7: `REVIEW.md` caps the nits, lists paths to skip, demands
+ * file-and-line evidence, and requires a summary that opens with a count and
+ * says plainly when there is nothing to fix.
+ *
+ * Covers CRC-A7 (CODE-REVIEW-CONVERGENCE-SPEC.md).
+ *
+ * Each clause is its own case, so dropping one section reddens one line
+ * rather than a total. The fourth clause had no slot to be written into:
+ * the payload carried `findings` and `verdict` and nothing else, so an
+ * instruction to open a summary with a count was addressed to a channel the
+ * contract did not have. `AI_REVIEW_SUMMARY_KEY` is that slot, and A7-5
+ * holds REVIEW.md and the prompt to one spelling of it. The read-back is a
+ * notice: a summary that miscounts is a thing to see, never a reason to
+ * block.
+ */
+describe("#1653 / CRC-A7: REVIEW.md states the four things the criterion asks of it", () => {
+  const review = readFileSync(join(import.meta.dir, "..", AI_REVIEW_CONVENTIONS_FILE), "utf8");
+
+  /** One `## ` section's body, or a failure naming the heading that is gone. */
+  function section(heading: string): string {
+    const lines = review.split("\n");
+    const at = lines.findIndex(l => l === `## ${heading}`);
+    expect(at, `REVIEW.md has no "## ${heading}" section`).toBeGreaterThan(-1);
+    const end = lines.findIndex((l, i) => i > at && l.startsWith("## "));
+    // Joined on spaces: REVIEW.md is prose a person wraps, and a phrase split
+    // across two lines is still the phrase.
+    return lines.slice(at + 1, end === -1 ? undefined : end).join(" ").replace(/\s+/g, " ");
+  }
+
+  test("A7-1: it caps the non-blocking findings at a stated number", () => {
+    expect(section("Cap the nits")).toMatch(/at most \*\*\w+\*\* non-blocking/i);
+  });
+
+  test("A7-2: it lists the paths not to flag", () => {
+    // A bullet opening with a backticked path, counted in the joined text.
+    const paths = section("Do not flag").match(/(?:^|\s)- `[^`]+`/g) ?? [];
+    expect(paths.length, "the skip list names fewer than three paths").toBeGreaterThanOrEqual(3);
+  });
+
+  test("A7-3: it demands a file and a line read, not a guess from a name", () => {
+    const s = section("Evidence, not inference");
+    expect(s).toMatch(/file and a line you read/i);
+    expect(s).toMatch(/inferred from a symbol's name/i);
+  });
+
+  test("A7-4: it requires a summary that opens with the count and says plainly when there is nothing to fix", () => {
+    const s = section("Open the summary with the count");
+    expect(s).toContain(`\`${AI_REVIEW_SUMMARY_KEY}\``);
+    expect(s).toMatch(/opens with the number of findings/i);
+    expect(s).toMatch(/nothing to fix/i);
+  });
+
+  test("A7-5: the key REVIEW.md asks for is the key the payload contract carries", () => {
+    // Two spellings of one slot are a reviewer told to write a key nothing
+    // reads. Renaming the constant moves the prompt; this keeps REVIEW.md
+    // from being left behind (A7-4 reads the same constant).
+    expect(buildReviewPrompt(), "the payload shape in the prompt has no summary slot").toContain(
+      `"${AI_REVIEW_SUMMARY_KEY}":`,
+    );
+  });
+});
+
+describe("#1653: the summary is read back against the findings it counts", () => {
+  test("A7-6: a summary opening with the listed count reads OPENS_WITH_COUNT, zero included", () => {
+    expect(summaryReading({ text: "2 findings: both in the parser.", listed: 2 })).toEqual({
+      kind: "OPENS_WITH_COUNT",
+      says: 2,
+      listed: 2,
+    });
+    expect(summaryReading({ text: "0 findings: nothing to fix.", listed: 0 }).kind).toBe("OPENS_WITH_COUNT");
+  });
+
+  test("A7-7: a wrong count, no count and no summary are three different readings", () => {
+    expect(summaryReading({ text: "3 findings.", listed: 2 })).toEqual({ kind: "WRONG_COUNT", says: 3, listed: 2 });
+    // A zero said in words is not a count, and "looks fine" is the softened
+    // zero REVIEW.md tells the reviewer not to write.
+    expect(summaryReading({ text: "No findings, looks fine.", listed: 0 }).kind).toBe("NO_COUNT");
+    // "20" is not "2": the count is the whole leading numeral.
+    expect(summaryReading({ text: "20 findings.", listed: 2 }).kind).toBe("WRONG_COUNT");
+    expect(summaryReading({ text: null, listed: 1 })).toEqual({ kind: "ABSENT", says: null, listed: 1 });
+  });
+
+  test("A7-8: the adjudicator carries the summary, and it never moves the outcome", () => {
+    const withSummary = readAiReviewFindings(
+      JSON.stringify({ findings: [], verdict: "PASS", [AI_REVIEW_SUMMARY_KEY]: "7 findings, all bad." }),
+    );
+    const without = readAiReviewFindings(PAYLOAD);
+    // A miscounting summary over an empty list: the notice says so, and the
+    // outcome is the one the severities decided.
+    expect(withSummary.outcome).toBe("CLEAN");
+    expect(without.outcome).toBe("CLEAN");
+    expect(summaryNotice(withSummary)).toStartWith("WRONG_COUNT");
+    expect(summaryNotice(withSummary)).toContain("7 findings, all bad.");
+    expect(summaryNotice(without)).toStartWith("ABSENT");
+    // An unreadable payload has no summary reading at all — not ABSENT, which
+    // would say the reviewer wrote a payload and left the key out.
+    expect(summaryNotice(readAiReviewFindings(null))).toBeNull();
+  });
+
+  test("A7-9: a payload read beside an unreadable scope keeps its summary reading", () => {
+    // withScope rebuilds the reading as UNMEASURED when the changed-file list
+    // cannot be read. The payload WAS read, so its summary reading must
+    // survive the rebuild rather than vanish as if no payload existed (review
+    // of #2465).
+    const scope = readAiReviewChangedFiles(join(tmpdir(), "rg-1653-no-such-changed-files.txt"));
+    expect(scope.status, "the planted scope must be UNMEASURED or this case reads nothing").toBe("UNMEASURED");
+    const reading = readAiReviewFindings(
+      JSON.stringify({ findings: [], verdict: "PASS", [AI_REVIEW_SUMMARY_KEY]: "0 findings: nothing to fix." }),
+      scope,
+    );
+    expect(reading.outcome).toBe("UNMEASURED");
+    expect(summaryNotice(reading)).toStartWith("OPENS_WITH_COUNT");
+  });
+
+  test("A7-10: a payload refused for another reason still reports its summary, once its list was read", () => {
+    // readPayload has two exits after the findings list is read: CLEAN or
+    // BLOCKED, and UNMEASURED for a bad severity, a missing verdict and the
+    // rest. Both carry the summary (second review of #2465). Before the list
+    // is read there is no count to compare, so there is no reading.
+    const badSeverity = readAiReviewFindings(
+      JSON.stringify({
+        findings: [{ severity: "bogus", file: "a.ts", line: 1, summary: "x", failure_scenario: "y" }],
+        verdict: "PASS",
+        [AI_REVIEW_SUMMARY_KEY]: "1 finding: a bad severity.",
+      }),
+    );
+    expect(badSeverity.outcome).toBe("UNMEASURED");
+    expect(summaryNotice(badSeverity)).toStartWith("OPENS_WITH_COUNT");
+
+    const noVerdict = readAiReviewFindings(JSON.stringify({ findings: [], [AI_REVIEW_SUMMARY_KEY]: "2 findings." }));
+    expect(noVerdict.outcome).toBe("UNMEASURED");
+    expect(summaryNotice(noVerdict)).toStartWith("WRONG_COUNT");
+
+    const noList = readAiReviewFindings(JSON.stringify({ verdict: "PASS", [AI_REVIEW_SUMMARY_KEY]: "0 findings." }));
+    expect(noList.outcome).toBe("UNMEASURED");
+    expect(summaryNotice(noList), "with no findings list there is no count to read the summary against").toBeNull();
   });
 });

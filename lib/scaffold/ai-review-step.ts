@@ -3866,6 +3866,14 @@ export const AI_REVIEW_FINDINGS_KEY = "findings";
 /** The key the agent records its own verdict word under. */
 export const AI_REVIEW_VERDICT_KEY = "verdict";
 
+/**
+ * #1653 / CRC-A7: the key the reviewer writes its summary under, beside the
+ * verdict. OPTIONAL, and it decides nothing: the adjudicator reads its
+ * leading number back against the findings it counts and says whether the
+ * two agree. `REVIEW.md` asks for it by this name.
+ */
+export const AI_REVIEW_SUMMARY_KEY = "review_summary";
+
 /** The key each finding carries its severity under. */
 export const AI_REVIEW_SEVERITY_KEY = "severity";
 
@@ -5952,7 +5960,8 @@ The payload is a single JSON object shaped exactly like this:
       "${f.populationSearch}": ["literal text you searched the cited file for"]
     }
   ],
-  "${AI_REVIEW_VERDICT_KEY}": "${AI_REVIEW_VERDICTS.join(" or ")}"
+  "${AI_REVIEW_VERDICT_KEY}": "${AI_REVIEW_VERDICTS.join(" or ")}",
+  "${AI_REVIEW_SUMMARY_KEY}": "the number of findings above, as a numeral, then one plain sentence"
 }
 
 Every member name above except \`${f.population}\` and
@@ -5998,6 +6007,10 @@ Rules for the payload, each of which a later step enforces:
   other word.
 - Found nothing: write an empty ${AI_REVIEW_FINDINGS_KEY} list and the verdict
   ${AI_REVIEW_VERDICTS[0]}. An empty payload is a result; a missing file is not.
+- \`${AI_REVIEW_SUMMARY_KEY}\` opens with the number of findings in your
+  ${AI_REVIEW_FINDINGS_KEY} list, as a numeral, and when that number is 0 it
+  says plainly that there is nothing to fix. It decides nothing: a later step
+  reads the number back against the list and reports whether they agree.
 - Your verdict does not decide whether the run blocks. A later step computes
   that from the severities and refuses a verdict that disagrees with them, so
   a ${AI_REVIEW_VERDICTS[0]} over a blocking finding fails the job rather than

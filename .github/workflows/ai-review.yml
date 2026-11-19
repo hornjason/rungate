@@ -1,4 +1,4 @@
-# generated-sha: cb4e38142de4593c
+# generated-sha: 6a6b84b9817ced04
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -2519,7 +2519,8 @@ jobs:
                   "populationSearch": ["literal text you searched the cited file for"]
                 }
               ],
-              "verdict": "PASS or BLOCK"
+              "verdict": "PASS or BLOCK",
+              "review_summary": "the number of findings above, as a numeral, then one plain sentence"
             }
 
             Every member name above except `population` and
@@ -2565,6 +2566,10 @@ jobs:
               other word.
             - Found nothing: write an empty findings list and the verdict
               PASS. An empty payload is a result; a missing file is not.
+            - `review_summary` opens with the number of findings in your
+              findings list, as a numeral, and when that number is 0 it
+              says plainly that there is nothing to fix. It decides nothing: a later step
+              reads the number back against the list and reports whether they agree.
             - Your verdict does not decide whether the run blocks. A later step computes
               that from the severities and refuses a verdict that disagrees with them, so
               a PASS over a blocking finding fails the job rather than

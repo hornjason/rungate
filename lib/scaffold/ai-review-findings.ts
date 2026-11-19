@@ -131,6 +131,7 @@ import {
   AI_REVIEW_REQUIRED_EXIT,
   AI_REVIEW_SEVERITIES,
   AI_REVIEW_SEVERITY_KEY,
+  AI_REVIEW_SUMMARY_KEY,
   AI_REVIEW_THREAD_KEY_MARKER,
   AI_REVIEW_VERDICT_KEY,
   SEVERITY_RANK,
@@ -561,6 +562,70 @@ export const AI_REVIEW_SUPPRESSED_UNMEASURED_TITLE = "AI review repeat check UNM
  * which, before this, nothing anywhere computed.
  */
 export const AI_REVIEW_POPULATION_TITLE = "AI review class sizes declared";
+
+/**
+ * #1653 / CRC-A7. The reviewer's summary, beside the number of findings its
+ * payload listed. `REVIEW.md` asks the summary to open with that number, as
+ * a numeral, and to say plainly when it is 0.
+ */
+export interface AiReviewSummary {
+  /** The summary as written, or `null` when the payload carried none usable. */
+  text: string | null;
+  /** How many findings the payload listed, before any repeat was suppressed. */
+  listed: number;
+}
+
+export type AiReviewSummaryKind = "OPENS_WITH_COUNT" | "WRONG_COUNT" | "NO_COUNT" | "ABSENT";
+
+/** Its own title, for `AI_REVIEW_POPULATION_TITLE`'s reason: it decides nothing. */
+export const AI_REVIEW_SUMMARY_TITLE = "AI review summary";
+
+/** A summary as the payload carried it: a non-blank string, or nothing. */
+function summaryText(value: unknown): string | null {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
+
+/**
+ * Whether the summary opens with the count it should. The count is the WHOLE
+ * leading numeral, so "20 findings" over a list of 2 is a wrong count and
+ * not a match on its first digit, and a zero said in words is no count.
+ */
+export function summaryReading(s: AiReviewSummary): {
+  kind: AiReviewSummaryKind;
+  says: number | null;
+  listed: number;
+} {
+  if (s.text === null) return { kind: "ABSENT", says: null, listed: s.listed };
+  const m = /^(\d+)/.exec(s.text);
+  if (m === null) return { kind: "NO_COUNT", says: null, listed: s.listed };
+  const says = Number(m[1]);
+  return { kind: says === s.listed ? "OPENS_WITH_COUNT" : "WRONG_COUNT", says, listed: s.listed };
+}
+
+/**
+ * The summary reading as one notice line, opening with its kind, or `null`
+ * when no findings list was read: with no count there is nothing to judge
+ * the summary against, and ABSENT would say the reviewer wrote a list and
+ * left the key out.
+ */
+export function summaryNotice(reading: AiReviewFindingsReading): string | null {
+  if (reading.summary === undefined) return null;
+  const r = summaryReading(reading.summary);
+  const text = reading.summary.text;
+  if (r.kind === "OPENS_WITH_COUNT") {
+    return `OPENS_WITH_COUNT — the summary opens with ${r.listed}, the number of findings the payload lists: ${text}`;
+  }
+  if (r.kind === "WRONG_COUNT") {
+    return `WRONG_COUNT — the summary opens with ${r.says}, but the payload lists ${r.listed} finding(s): ${text}`;
+  }
+  if (r.kind === "NO_COUNT") {
+    return `NO_COUNT — the summary does not open with a number; the payload lists ${r.listed} finding(s): ${text}`;
+  }
+  return (
+    `ABSENT — the payload carries no '${AI_REVIEW_SUMMARY_KEY}'. REVIEW.md asks for one that opens ` +
+    `with the number of findings (${r.listed} here) and says plainly when there is nothing to fix.`
+  );
+}
 
 /**
  * A stable identity for one finding, so an answer can name it.
@@ -1294,6 +1359,14 @@ export interface AiReviewFindingsReading {
    */
   findingTags: (Severity | null)[] | null;
   /**
+   * #1653 / CRC-A7: the reviewer's summary beside the number of findings its
+   * payload listed, read together so the count can be checked. Absent when
+   * no findings list was read, so there is no count to check against; `text`
+   * is `null` when one was read and carried no usable summary. Nothing reads
+   * it to decide the outcome.
+   */
+  summary?: AiReviewSummary;
+  /**
    * Findings an earlier round already raised, DROPPED from this round's
    * report (CRC-N4, #1586) — raw, named, in payload order.
    *
@@ -1842,7 +1915,10 @@ function withScope(
     reasons.length > reading.unmeasuredReasons.length
       ? unmeasured(reasons, detail, reading.reported, reading.findingTags)
       : reading;
-  return { ...merged, scope, unlocatableReported, scopeDropped, lineCounts, pastEndReported };
+  // #1653: the payload WAS read even when the scope or line counts were not,
+  // so its summary reading survives the rebuild above (review of #2465).
+  // `undefined` still means no payload was read, and stays undefined.
+  return { ...merged, summary: reading.summary, scope, unlocatableReported, scopeDropped, lineCounts, pastEndReported };
 }
 
 /**
@@ -2040,6 +2116,12 @@ function readPayload(
       [`'${AI_REVIEW_FINDINGS_KEY}' is ${typeof list}, not a list`],
     );
   }
+
+  // #1653: read ONCE, here, where the list it counts is first known to be a
+  // list, and attached to both exits below — the UNMEASURED one as well as
+  // CLEAN/BLOCKED. A summary dropped on one exit and kept on the other is the
+  // defect two review rounds of #2465 found one site at a time.
+  const summary: AiReviewSummary = { text: summaryText(obj[AI_REVIEW_SUMMARY_KEY]), listed: list.length };
 
   const reasons: AiReviewUnmeasuredReason[] = [];
   const detail: string[] = [];
@@ -2287,7 +2369,7 @@ function readPayload(
   // against an `Important`. The two have to be derived from one array.
   const tags = tagsForPayload(kept, touched);
 
-  if (reasons.length > 0) return unmeasured(reasons, detail, kept, tags);
+  if (reasons.length > 0) return { ...unmeasured(reasons, detail, kept, tags), summary };
 
   // The decision, and the only place it is made. `verdict` is compared to it
   // afterwards; it never contributes to it.
@@ -2330,6 +2412,8 @@ function readPayload(
     lineCounts: lineCountsNotSupplied(),
     pastEndReported: null,
     findingTags: tags,
+    // #1653: the payload's own count, not the post-suppression `kept`.
+    summary,
   };
 }
 
@@ -3005,6 +3089,14 @@ export function main(
   const population = populationNotice(reading.reported ?? [], citedLines);
   if (population !== null) {
     console.log(`::notice title=${AI_REVIEW_POPULATION_TITLE}::${escapeAnnotation(population)}`);
+  }
+
+  // #1653 / CRC-A7's read-back, on its own title. A `::notice` for the
+  // population reading's reason: whether the summary opens with the right
+  // count is a series to watch, and `aiReviewExitCode` never sees it.
+  const summaryLine = summaryNotice(reading);
+  if (summaryLine !== null) {
+    console.log(`::notice title=${AI_REVIEW_SUMMARY_TITLE}::${escapeAnnotation(summaryLine)}`);
   }
 
   // CRC-N4's reading, on its own title (#1586). A `::notice`, because a
