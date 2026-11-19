@@ -46,6 +46,7 @@
     "scripts/intake.ts",
     "scripts/board-intake-move.ts",
     "scripts/audit-closing-references.ts",
+    "scripts/close-merged-references.ts",
     "scripts/create-spec.ts",
     "scripts/create-success.ts",
     "scripts/create-sc.ts",
