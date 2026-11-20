@@ -136,6 +136,10 @@ describe("#1934 review round 1: names and counts that cannot drift from the diff
     // A rename has two different paths; the new one is the name.
     const renamed = "diff --git a/old b/x.ts b/new b/y.ts\nsimilarity index 100%\nrename from old b/x.ts\nrename to new b/y.ts\n";
     expect(splitDiff(renamed).files.map(f => f.path)).toEqual(["new b/y.ts"]);
+    // A deletion has no `+++ b/` line to fall back on, so only the exact
+    // split names it: the header is the one place the path is spelled.
+    const deleted = "diff --git a/old b/gone.txt b/old b/gone.txt\ndeleted file mode 100644\n--- a/old b/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n";
+    expect(splitDiff(deleted).files.map(f => f.path)).toEqual(["old b/gone.txt"]);
   });
 
   test("a non-empty diff with no file header is one section, so its byte cut is a truncation the counts carry", () => {
