@@ -206,6 +206,8 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
    * the scope stated, is a reading; a review of NO file whole is not. Before,
    * every over-budget diff was DIFF_TRUNCATED, which made the job red on every
    * DA state-record pull request (#1932: 2 files, 168 KB).
+   *
+   * Covers CRC-M18 (CODE-REVIEW-CONVERGENCE-SPEC.md).
    */
   test("AC-15: some files reviewed whole is MEASURED, and the report states the scope", () => {
     const r = reviewExecutionReading({
