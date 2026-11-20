@@ -1,4 +1,4 @@
-# generated-sha: 1dc453604644be97
+# generated-sha: a5edc2d5a05d0220
 # Managed by rungate — do not edit. The board is board.id in .claude/rungate/config.json.
 #
 # Keeps the board's Ready lane full from the events the repository already
@@ -138,7 +138,7 @@ jobs:
           # (.claude/rules/config-access.md). Only that refusal is: every other exit stands.
           err="$RUNNER_TEMP/board-ready.stderr"
           code=0
-          bunx rungate@0.8.41 board-ready "${args[@]}" 2>"$err" || code=$?
+          bunx rungate@0.8.42 board-ready "${args[@]}" 2>"$err" || code=$?
           cat "$err" >&2
           if [ "$code" -eq 2 ] && grep -q '^UNMEASURED: no board' "$err"; then
             echo "::warning::UNMEASURED — no board.id in the rungate config, so there is no board to read. Set board.id and this runs."

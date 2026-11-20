@@ -1,4 +1,4 @@
-# generated-sha: 29c4b16cd1d1729c
+# generated-sha: 870b7cd6859831e4
 # Managed by rungate — do not edit the generated job.
 #
 # SC-2784 (ADR-020 Decision 2): a consumer's issue is triaged when it is filed
@@ -83,7 +83,7 @@ jobs:
           set -euo pipefail
           out="$RUNNER_TEMP/consumer-triage.out"
           code=0
-          bunx rungate@0.8.41 consumer-triage --repo "$GITHUB_REPOSITORY" --write | tee "$out" || code=$?
+          bunx rungate@0.8.42 consumer-triage --repo "$GITHUB_REPOSITORY" --write | tee "$out" || code=$?
           if grep -q '^      milestone "' "$out"; then echo "wrote=true" >> "$GITHUB_OUTPUT"; fi
           exit "$code"
 
@@ -102,7 +102,7 @@ jobs:
           if [ -z "$project" ]; then
             err="$RUNNER_TEMP/board-id.stderr"
             code=0
-            project=$(bunx rungate@0.8.41 board-id 2>"$err") || code=$?
+            project=$(bunx rungate@0.8.42 board-id 2>"$err") || code=$?
             cat "$err" >&2
             if [ "$code" -ne 0 ] && grep -q '^UNMEASURED: no board' "$err"; then
               echo "::warning title=Criteria column::UNMEASURED — no board is configured (board.id in the rungate config, or the RUNGATE_PROJECT_ID variable), so there is no board to write. Set board.id and this runs."
@@ -110,4 +110,4 @@ jobs:
             fi
             [ "$code" -eq 0 ] || exit "$code"
           fi
-          bunx rungate@0.8.41 board-mirror --project "$project" --write
+          bunx rungate@0.8.42 board-mirror --project "$project" --write
