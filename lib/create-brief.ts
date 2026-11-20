@@ -37,8 +37,8 @@ You are ${displayName}, ${description}.
 ## Workflow
 
 1. Read the governing spec if your task touches a spec'd area
-3. Execute your task following project conventions
-4. Report results with evidence
+2. Execute your task following project conventions
+3. Report results with evidence
 
 ## Never Do
 

@@ -68,10 +68,22 @@ describe("test-brief-roles", () => {
     }
   });
 
-  test("marcus.md extracts >= 6 directives (AC-2)", () => {
+  test("marcus.md extracts its Testing Rules, and nothing that is not an instruction (AC-2, #2567)", () => {
+    // This was `>= 6`, and before that `>= 10`, each number set by hand when
+    // the brief changed size. Three of the six were never directives: the
+    // source-directory bullets the brief appended to its Testing Rules list,
+    // which the extractor read as rules because every bullet under a "rules"
+    // heading counts. #2567 put that list under its own heading, the count
+    // fell to the three real rules, and the number had been certifying the
+    // defect. So the case now asserts what it meant: the real rules are
+    // extracted, and no extracted directive is a bare path.
     const content = readFileSync(join(ROOT, ".claude/agents/marcus.md"), "utf-8");
     const directives = extractDirectives(content);
-    expect(directives.length).toBeGreaterThanOrEqual(6);
+    const testingRules = directives.filter(d => d.section === "Testing Rules").map(d => d.text);
+    expect(testingRules.some(t => t.includes("bun test")), "the full-suite rule was not extracted").toBe(true);
+    expect(testingRules.some(t => t.includes("tsc --noEmit")), "the typecheck rule was not extracted").toBe(true);
+    expect(testingRules.some(t => t.includes("Read each file ONCE")), "the read-once rule was not extracted").toBe(true);
+    expect(directives.filter(d => /^\x60[^\x60]+\/\x60$/.test(d.text.trim())).map(d => d.text), "a directory path was read as a directive").toEqual([]);
   });
 
   test("createWorktree function is available for agent isolation (AC-7)", () => {

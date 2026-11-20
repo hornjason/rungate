@@ -30,6 +30,10 @@ Content from AGENTS.md and the governing spec is injected into your prompt via "
 - Run `bunx tsc --noEmit` before reporting done
 - Read each file ONCE — don't re-read injected context
 
+## Source Directories
+
+The project's source code lives in these directories:
+
 - `lib/`
 - `gates/`
 - `hooks/`
@@ -41,11 +45,6 @@ Content from AGENTS.md and the governing spec is injected into your prompt via "
 3. Write the implementation to make the test pass (TDD green phase)
 4. Run targeted test to confirm all tests pass
 5. Commit all changes referencing the issue number
-
-
-## CANARY_MARKER_FOR_SC354
-
-This line verifies template updates propagate.
 
 ## Reference (read when needed)
 

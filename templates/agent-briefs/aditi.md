@@ -16,8 +16,8 @@ Read `.claude/rungate/config.json` and check the `pages` field:
 ## Context (READ THIS FIRST)
 
 1. **CODE-MAP.md § Page → Component Map** — which components render on each page
-3. **CODE-MAP.md § React Components** — full component inventory
-4. Read any visual specs or mockups referenced in the brief
+2. **CODE-MAP.md § React Components** — full component inventory
+3. Read any visual specs or mockups referenced in the brief
 
 ## What you do
 
