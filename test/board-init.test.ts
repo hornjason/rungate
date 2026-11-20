@@ -166,6 +166,22 @@ describe("SC-2789: board-init makes a board and wires it", () => {
     expect(half.projects.size).toBe(1);
   });
 
+  // Review of #2513: the link to the repository is the first write after the
+  // project is made. A run that stopped there left a project no search of the
+  // repository's linked projects could find, so every retry made another.
+  test("SC-2789: a run that stopped before the repository link is resumed, never a second board", async () => {
+    const half = memoryBoard([], { failOn: "link" });
+    const first = await boardInit({ repo: REPO, owner: "acme", boardId: null, write: true, api: half.api });
+    expect(first.kind).toBe("UNMEASURED");
+    expect(half.projects.size).toBe(1);
+    expect([...half.projects.values()][0].linkedRepositories).toEqual([]);
+    half.faults.failOn = undefined;
+    const resumed = await boardInit({ repo: REPO, owner: "acme", boardId: null, write: true, api: half.api });
+    expect(resumed.kind, "why" in resumed ? resumed.why : "").toBe("DONE");
+    expect(half.writes.filter(w => w.startsWith("create-project"))).toHaveLength(1);
+    expect(half.projects.size).toBe(1);
+  });
+
   test("SC-2789: a dry run lists what it would do and writes nothing", async () => {
     const { api, writes } = memoryBoard();
     const r = await boardInit({ repo: REPO, owner: "acme", boardId: null, write: false, api });
