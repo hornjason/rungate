@@ -230,13 +230,17 @@ export function distinctRoundsTaken(
   if ("refusal" in attempts) return attempts;
   // roundsTaken refuses every ledger that is not READ, so this is one.
   const ledger = pr.ledger as Extract<typeof pr.ledger, { rounds: unknown }>;
-  const numbered = ledger.rounds.map(r => r.round).filter((n): n is number => typeof n === "number" && Number.isInteger(n) && n > 0);
-  if (numbered.length === 0) {
+  const isRound = (n: unknown): n is number => typeof n === "number" && Number.isInteger(n) && n > 0;
+  const numbered = ledger.rounds.map(r => r.round).filter(isRound);
+  // The NEWEST entry is the count. When it lost its number, an older entry's
+  // would understate the history, so refuse rather than read one (review of
+  // #2551). An older unnumbered entry is only a retry whose number was lost.
+  if (numbered.length === 0 || !isRound(ledger.rounds[ledger.rounds.length - 1]?.round)) {
     return {
       refusal: "ROUNDS_NOT_NUMBERED",
       detail:
-        `The ledger holds ${ledger.rounds.length} entr${ledger.rounds.length === 1 ? "y" : "ies"} and none recorded a round ` +
-        `number, so it can say how many times the review ran (${attempts.rounds}) but not how many ` +
+        `The ledger holds ${ledger.rounds.length} entr${ledger.rounds.length === 1 ? "y" : "ies"} and its newest recorded no ` +
+        `round number, so it can say how many times the review ran (${attempts.rounds}) but not how many ` +
         `rounds that was. A retry is an attempt and not a round.`,
     };
   }
@@ -354,6 +358,13 @@ export function formatRoundsToPass(reading: RoundsToPassReading): string[] {
   }
   for (const u of reading.unmeasured) {
     lines.push(`  #${u.number} UNMEASURED ${u.refusal}: ${u.detail}`);
+  }
+  // A pull request the round reading refused and the attempt reading counted
+  // is named too: a count of unmeasured pull requests lists each one (review
+  // of #2551). One refused by both is already named above.
+  const named = new Set(reading.unmeasured.map(u => u.number));
+  for (const u of reading.distinct.unmeasured) {
+    if (!named.has(u.number)) lines.push(`  #${u.number} UNMEASURED ${u.refusal} (distinct rounds only): ${u.detail}`);
   }
   return lines;
 }
