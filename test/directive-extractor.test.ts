@@ -6,12 +6,20 @@ import { extractDirectives, extractDirectivesWithRules, type Directive } from ".
 const ROOT = join(import.meta.dir, "..");
 
 describe("directive-extractor", () => {
-  test("extracts >= 10 directives from marcus.md (AC-2)", () => {
+  test("extracts marcus.md's Testing Rules, and no directory path (AC-2, #2567)", () => {
+    // Was a count \u2014 titled ">= 10", asserting ">= 6" \u2014 that three source-
+    // directory bullets under the Testing Rules heading were satisfying.
+    // #2567 moved them under their own heading; test/test-brief-roles.test.ts
+    // carries the same case for the same reason.
     const briefPath = join(ROOT, ".claude/agents/marcus.md");
     const content = readFileSync(briefPath, "utf-8");
     const directives = extractDirectives(content);
 
-    expect(directives.length).toBeGreaterThanOrEqual(6);
+    const rules = directives.filter(d => d.section === "Testing Rules").map(d => d.text);
+    expect(rules.some(t => t.includes("bun test"))).toBe(true);
+    expect(rules.some(t => t.includes("tsc --noEmit"))).toBe(true);
+    expect(rules.some(t => t.includes("Read each file ONCE"))).toBe(true);
+    expect(directives.filter(d => /^\x60[^\x60]+\/\x60$/.test(d.text.trim())).map(d => d.text)).toEqual([]);
   });
 
   test("extracts read directives with file targets", () => {
