@@ -13,13 +13,21 @@
  *    the default branch — a check nobody requires blocks nothing.
  *
  * Each is read where the API allows it. A reading that could not be taken is
- * printed `UNMEASURED` with why, never folded into "nothing owed", and the
- * all-clear names what it measured rather than saying "done".
+ * printed `UNMEASURED` with why, never folded into "nothing owed".
+ *
+ * #2485, ADR-023, SC-2793: the report ends with one line about the project
+ * board — `board.id` not set is an OWED `board-init`, and with a board set it
+ * says whether the project token can write it. That row is never "done":
+ * GitHub never returns a secret's value, so no scaffold run can try the token,
+ * and the line gives the read-only check a person holding the token can run.
+ * So the report has no all-clear any more; it ended in "none owed — measured:
+ * …", which a board row that is always present would have contradicted.
  */
 import { spawnSync } from "child_process";
 import { readFileSync, statSync } from "fs";
 import { join } from "path";
 
+import { readBoardProjectId } from "../config-readers";
 import { createGitHubClient, parseOwnerRepo } from "../github";
 import { githubProtectionProbe, jobContextNames, type ProtectionFacts, type ProtectionProbe } from "../branch-protection";
 import { parseRemoteSlug } from "../verified-push";
@@ -46,9 +54,14 @@ export const MERGE_GATE_CHECKS = [
   { workflow: "ai-review.yml", context: "ai-review" },
 ] as const;
 
+/** The command that makes a consumer's board and writes `board.id` (SC-2789). It writes nothing without `--write`. */
+export const BOARD_INIT_COMMAND = 'env -u GH_TOKEN GITHUB_TOKEN="$(env -u GH_TOKEN gh auth token)" bunx rungate board-init --write';
+
 export interface HumanStepReadings {
   /** `owner/name`; null when the origin remote names no GitHub repository; UNMEASURED when it could not be read (#2169). */
   slug: Reading<string | null>;
+  /** `board.id` from the rungate config; null when none is set (SC-2793). */
+  boardId: Reading<string | null>;
   secretPresent: Reading<boolean>;
   /** The variable's value, or null when it is not set. */
   requireClosingRef: Reading<string | null>;
@@ -60,7 +73,32 @@ export interface HumanStepReadings {
   unreadableWorkflows: string[];
 }
 
-/** One line per step owed or unread, then a line saying what was measured. Pure. */
+/**
+ * The project board's row (SC-2793): whether `board.id` is set, and whether
+ * the project token can write that board. Always exactly one line, never done.
+ */
+function boardRow(boardId: Reading<string | null>, secretPresent: Reading<boolean>): string {
+  if (boardId.kind === "UNMEASURED") {
+    return `UNMEASURED: the project board — board.id could not be read (${boardId.why}), so whether ${PROJECT_TOKEN_SECRET} can write it was not asked`;
+  }
+  if (boardId.value === null) {
+    return (
+      `OWED: ${BOARD_INIT_COMMAND}   # board.id is not set: this makes the project board and writes board.id, ` +
+      `and the next scaffold asks whether ${PROJECT_TOKEN_SECRET} can write it`
+    );
+  }
+  const id = boardId.value;
+  const head = `UNMEASURED: whether ${PROJECT_TOKEN_SECRET} can write board ${id}`;
+  if (secretPresent.kind === "UNMEASURED") return `${head} — the secret could not be read, so it is not known that there is a token to ask about`;
+  if (!secretPresent.value) return `${head} — no ${PROJECT_TOKEN_SECRET} is set, so there is no token to ask about`;
+  return (
+    `${head} — GitHub never returns a secret's value, so scaffold cannot try it. With the token in hand: ` +
+    `GH_TOKEN=<the token> gh api graphql -f query='query($id: ID!) { node(id: $id) { ... on ProjectV2 { viewerCanUpdate } } }' -f id=${id}` +
+    `   # true means it can write the board; a board an organisation owns needs a token with that organisation's project scope`
+  );
+}
+
+/** One line per step owed or unread, ending with the project board's row. Pure. */
 export function humanSteps(r: HumanStepReadings): string[] {
   const unreadWorkflows = r.unreadableWorkflows.map(why => `UNMEASURED: process checks — ${why}`);
   if (r.slug.kind === "UNMEASURED" || r.slug.value === null) {
@@ -69,7 +107,7 @@ export function humanSteps(r: HumanStepReadings): string[] {
         ? `the origin remote could not be read (${r.slug.why})`
         : "the origin remote names no GitHub repository";
     return [
-      `UNMEASURED: human steps — ${why}, so the project token, ` +
+      `UNMEASURED: human steps — ${why}, so the project token, the project board, ` +
         `${REQUIRE_CLOSING_REF_VARIABLE} and the required checks were not read.`,
       // Read from the tree, not from GitHub, so it is owed whatever the remote is.
       ...unreadWorkflows,
@@ -77,13 +115,12 @@ export function humanSteps(r: HumanStepReadings): string[] {
   }
   const slug = r.slug.value;
   const out: string[] = [];
-  const measured: string[] = [];
   if (r.secretPresent.kind === "UNMEASURED") out.push(`UNMEASURED: ${PROJECT_TOKEN_SECRET} — ${r.secretPresent.why}`);
   else if (!r.secretPresent.value) {
     out.push(
       `OWED: gh secret set ${PROJECT_TOKEN_SECRET} -R ${slug}   # a token that can write the project board; every board step refuses without it`,
     );
-  } else measured.push(`${PROJECT_TOKEN_SECRET} is set`);
+  }
 
   if (r.requireClosingRef.kind === "UNMEASURED") {
     out.push(`UNMEASURED: ${REQUIRE_CLOSING_REF_VARIABLE} — ${r.requireClosingRef.why}`);
@@ -91,7 +128,7 @@ export function humanSteps(r: HumanStepReadings): string[] {
     out.push(
       `OWED: gh variable set ${REQUIRE_CLOSING_REF_VARIABLE} -R ${slug} --body true   # closing-references refuses instead of warning`,
     );
-  } else measured.push(`${REQUIRE_CLOSING_REF_VARIABLE} is true`);
+  }
 
   out.push(...unreadWorkflows);
 
@@ -130,12 +167,10 @@ export function humanSteps(r: HumanStepReadings): string[] {
             `   # no single API call adds a check here without replacing the rest of the rule`,
         );
       }
-      const required = r.processChecks.filter(c => contexts.includes(c));
-      if (required.length > 0) measured.push(`${required.join(", ")} required on ${branch}`);
     }
   }
 
-  if (out.length === 0) out.push(`Human steps: none owed — measured: ${measured.join("; ")}.`);
+  out.push(boardRow(r.boardId, r.secretPresent));
   return out;
 }
 
@@ -290,8 +325,26 @@ export function readOrigin(root: string, run: Run = runLive): Reading<string> {
   return { kind: "UNMEASURED", why };
 }
 
+/**
+ * `board.id` for `root`, decided by `readBoardProjectId` (the reader
+ * work-status and board-ready use). A config that cannot be read is
+ * UNMEASURED with why, never "no board". An id that is not a node id's shape
+ * is refused rather than printed into a command a person will paste.
+ */
+export function readBoardId(root: string): Reading<string | null> {
+  let id: string | null;
+  try {
+    id = readBoardProjectId(root);
+  } catch (e) {
+    return { kind: "UNMEASURED", why: `the rungate config could not be read (${(e as Error).message})` };
+  }
+  if (id !== null && !/^[A-Za-z0-9_-]+$/.test(id)) return { kind: "UNMEASURED", why: `board.id ${JSON.stringify(id)} is not a project node id` };
+  return { kind: "READ", value: id };
+}
+
 export interface HumanStepProbes {
   slug: (root: string) => Reading<string | null>;
+  boardId: (root: string) => Reading<string | null>;
   secret: (slug: string) => Promise<Reading<boolean>>;
   variable: (slug: string) => Promise<Reading<string | null>>;
   protection: ProtectionProbe;
@@ -315,6 +368,7 @@ const why = (e: unknown) => `${typeof status(e) === "number" ? `HTTP ${status(e)
 
 /** The live reads: two GETs here, three in the protection probe. No writes. */
 export const LIVE_PROBES: HumanStepProbes = {
+  boardId: readBoardId,
   slug: root => {
     const origin = readOrigin(root);
     return origin.kind === "READ" ? githubSlugOf(origin.value) : origin;
@@ -351,11 +405,12 @@ export const LIVE_PROBES: HumanStepProbes = {
 /** Read everything {@link humanSteps} needs for `root`. */
 export async function readHumanSteps(root: string, probes: HumanStepProbes = LIVE_PROBES): Promise<HumanStepReadings> {
   const origin = probes.slug(root);
+  const boardId = probes.boardId(root);
   const { checks: processChecks, unreadable: unreadableWorkflows } = processChecksIn(root);
   const slug = origin.kind === "READ" ? origin.value : null;
   if (slug === null) {
     const none = { kind: "UNMEASURED", why: "no repository" } as const;
-    return { slug: origin, secretPresent: none, requireClosingRef: none, protection: none, processChecks, unreadableWorkflows };
+    return { slug: origin, boardId, secretPresent: none, requireClosingRef: none, protection: none, processChecks, unreadableWorkflows };
   }
   const [secretPresent, requireClosingRef, facts] = await Promise.all([
     probes.secret(slug),
@@ -368,5 +423,5 @@ export async function readHumanSteps(root: string, probes: HumanStepProbes = LIV
       : facts.statusChecks === undefined
         ? { kind: "UNMEASURED", why: "the protection probe did not say whether the branch is protected" }
         : { kind: "READ", value: { branch: facts.branch, contexts: facts.contexts, statusChecks: facts.statusChecks } };
-  return { slug: origin, secretPresent, requireClosingRef, protection, processChecks, unreadableWorkflows };
+  return { slug: origin, boardId, secretPresent, requireClosingRef, protection, processChecks, unreadableWorkflows };
 }

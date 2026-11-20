@@ -303,9 +303,11 @@ take.
       needs: test
       proved-by: test/verify-merge-ref.test.ts "SC-2792: verify-merge-ref reads the repository it is in, and runs as rungate verify-merge-ref"
       fingerprint: 71bb8945
-- [ ] SC-2793: `rungate scaffold`'s report of human steps owed says whether `board.id` is set and whether the project token can write that board, each as one OWED command or UNMEASURED with its reason, never "done" (Jason, 2026-11-19, ADR-023)
+- [x] SC-2793: `rungate scaffold`'s report of human steps owed says whether `board.id` is set and whether the project token can write that board, each as one OWED command or UNMEASURED with its reason, never "done" (Jason, 2026-11-19, ADR-023)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
+      proved-by: test/human-steps.test.ts "SC-2793: the human-steps report says whether board.id is set and whether the token can write that board"
+      fingerprint: ecebbf14
 - [x] SC-2794: `rungate scaffold` installs the work loop as `.claude/commands/work-loop.md` (pick from Ready with `rungate work-status`, claim, work in a worktree off the default branch, test first with the project's own test command, open a pull request with `Fixes #N`, merge pinned with `rungate verify-merge-ref`), naming only commands a consumer has (Jason, 2026-11-19, ADR-023)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test

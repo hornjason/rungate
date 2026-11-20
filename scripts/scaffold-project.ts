@@ -138,7 +138,8 @@ for (const line of docRules) console.log(`  ${line}`);
 
 // #2051, SC-2749: what the scaffold cannot do. Read, never written, and
 // printed after the report so it is the last thing a reader sees. Each line is
-// one command, or UNMEASURED with why — never "done".
+// one command, or UNMEASURED with why — never "done". It ends with the project
+// board's row: board.id, and whether the project token can write it (#2485).
 console.log("\nHuman steps owed on GitHub:");
 for (const line of humanSteps(await readHumanSteps(projectPath))) console.log(`  ${line}`);
 
