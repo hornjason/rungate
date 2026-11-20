@@ -155,6 +155,26 @@ describe("#2366: an accepted ADR's Decomposition can grow, and only its new rows
     expect(p.kind).toBe("grew");
     expect(p.rows).toEqual([]);
   });
+
+  test("GR-8: a row without its leading pipe is a table row, so growth and placement read the same table", () => {
+    // GFM renders a row that omits its leading `|`, and parseDecompositionPlan
+    // reads it; the growth check used to stop at it. An appended pipe-less row
+    // was then no growth at all, and one already in the table hid every row
+    // added after it. Found by the AI review of #2582.
+    const appended = adrPlacement(
+      adrRows("accepted", [["CRC-C2", "a first planned row"]]),
+      adrRows("accepted", [["CRC-C2", "a first planned row"], "CRC-C2 | a row with no leading pipe | lib/b.ts | — | — |"]),
+    );
+    expect(appended.kind).toBe("grew");
+    expect(outcomes(appended)).toEqual(["a row with no leading pipe"]);
+
+    const hidden = adrPlacement(
+      adrRows("accepted", [["CRC-C2", "a first planned row"], "CRC-C2 | a row with no leading pipe | lib/b.ts | — | — |"]),
+      adrRows("accepted", [["CRC-C2", "a first planned row"], "CRC-C2 | a row with no leading pipe | lib/b.ts | — | — |", ["CRC-C2", "a row added after the pipe-less one"]]),
+    );
+    expect(hidden.kind).toBe("grew");
+    expect(outcomes(hidden)).toEqual(["a row added after the pipe-less one"]);
+  });
 });
 
 describe("SC-2738: plan-issues --accepted-since lists what a push accepted", () => {
