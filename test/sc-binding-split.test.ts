@@ -427,7 +427,12 @@ const UNCLAIMED_RATCHET = 150;
 // the CLI registry and the repository resolution no registered pattern
 // expresses; the `SC-2792` describes in test/verify-merge-ref.test.ts name it
 // (2026-11-19).
-const CLAIMED_UNBINDABLE = 188;
+// 188 -> 189: SC-2794 (#2486) ticked by `sync-sc-status --only SC-2794`:
+// scaffold installs a work-loop command naming only commands a consumer has
+// and the project's own test command, a reading of a rendered command file no
+// registered pattern expresses; the `SC-2794` describe in
+// test/work-loop-command.test.ts names it (2026-11-19).
+const CLAIMED_UNBINDABLE = 189;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
