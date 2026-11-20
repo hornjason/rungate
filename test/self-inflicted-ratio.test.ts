@@ -240,7 +240,9 @@ describe("#1652: line age is read from git, tree to tree", () => {
     expect(age(first, second, "lib/a.ts", 6)).toBe("added"); // "FIVE", changed
     expect(age(first, second, "lib/a.ts", 7)).toBe("kept"); // "six"
     expect(age(first, second, "lib/b.ts", 1)).toBe("added");
-    // A pure deletion adds no line: "gamma" is line 2 now, and was there.
+    // A pure deletion adds no line. git labels its hunk `+1,0`, naming the
+    // line BEFORE the gap, so "alpha" is the line a careless parse marks.
+    expect(age(first, second, "lib/c.ts", 1)).toBe("kept");
     expect(age(first, second, "lib/c.ts", 2)).toBe("kept");
   });
 
