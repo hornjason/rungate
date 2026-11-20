@@ -271,6 +271,11 @@ describe("SC-2780: it never writes while an earlier ADR placement is running", (
     expect(otherPush.calls.filter(c => c.startsWith("sleep"))).toStrictEqual([]);
   });
 
+  // #2528: this case runs the wait step over a 100-run page through stubbed gh
+  // and jq, and took 4.26s on a quiet laptop. Under bun's 5s default it timed
+  // out under load and failed stage F's retro command at a release's step 2b,
+  // and release.yml runs the same suite before it publishes. So the case sets
+  // its own budget; the rest of the file keeps the default.
   test("an earlier unfinished run past the first page of runs still holds it", () => {
     // The list endpoint is newest-first, 100 a page. The stub serves page 2
     // only when the step asks for every page, so a single-page query never
@@ -296,7 +301,7 @@ describe("SC-2780: it never writes while an earlier ADR placement is running", (
     expect(r.code, r.out).not.toBe(0);
     expect(r.out).toContain("Waiting for adr-accepted.yml run(s) 9 to finish");
     expect(r.out).not.toContain("going ahead");
-  });
+  }, 60_000);
 
   test("a runs list it cannot read is red, never a go-ahead", () => {
     const failing = ['case "$*" in', '  *"actions/runs/77"*) echo "2026-11-17T12:00:00Z";;', "  *) exit 1;;", "esac"].join("\n");
