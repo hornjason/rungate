@@ -94,12 +94,21 @@ export function planSuccessors(
   specText: (path: string) => string | null,
   milestones: readonly SuccessorMilestone[],
 ): SuccessorPlan {
-  const owedById = new Map(owed.map(o => [o.id, o]));
+  // Every spec that owes an id, never only the last: an id two specs both
+  // state is a collision the spec sweep reports and never merges, and which
+  // phase its successor belongs in cannot be decided (review of #2534).
+  const owedById = new Map<string, OwedCriterion[]>();
+  for (const o of owed) owedById.set(o.id, [...(owedById.get(o.id) ?? []), o]);
   const file: Successor[] = [];
   const leave: { id: string; why: string }[] = [];
   const refusals: string[] = [];
   for (const id of closed.names) {
-    const o = owedById.get(id);
+    const owners = owedById.get(id) ?? [];
+    if (owners.length > 1) {
+      refusals.push(`${id}: ${owners.map(o => o.source).join(" and ")} both state it, so which phase its successor belongs in cannot be decided`);
+      continue;
+    }
+    const o = owners[0];
     if (o === undefined) {
       leave.push({ id, why: "declared-work does not read it as owed: it is ticked, another open issue names it, or no opted-in spec places it in a phase" });
       continue;

@@ -87,6 +87,14 @@ describe("#2490: planSuccessors decides which criteria a closed issue leaves owe
     expect("why" in plan && plan.why).toContain("phase 2 of the Fixture family");
   });
 
+  // Review of #2534: indexing by id alone kept only the last spec, so the
+  // other's owed criterion vanished from the plan without a word.
+  test("an owed id two specs both state refuses, naming both, rather than keep one and drop the other", () => {
+    const both = (path: string) => (path === "specs/FIX.md" || path === "specs/FIX2.md" ? SPEC : null);
+    const plan = planSuccessors({ number: 5, names: ["TST-1"] }, [{ id: "TST-1", source: "specs/FIX.md" }, { id: "TST-1", source: "specs/FIX2.md" }], both, MILESTONES);
+    expect("why" in plan && plan.why).toContain("specs/FIX.md and specs/FIX2.md both state it");
+  });
+
   test("a spec that cannot be read refuses rather than file a successor with no phase", () => {
     const plan = planSuccessors({ number: 5, names: ["TST-1"] }, [{ id: "TST-1", source: "specs/GONE.md" }], spec, MILESTONES);
     expect("why" in plan && plan.why).toContain("specs/GONE.md");
