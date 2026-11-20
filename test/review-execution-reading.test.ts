@@ -79,12 +79,15 @@ function executionFile(toolNames: string[]): string {
   ]);
 }
 
+/** The diff the agent saw was the whole of a one-file diff. */
+const WHOLE = { filesRead: 1, filesSeen: 1 };
+
 describe("a review that produced no output is UNMEASURED, not success (#732)", () => {
   test("AC-1: zero reviews on the pull request is UNMEASURED and says so by name", () => {
     const r = reviewExecutionReading({
       executionFileRaw: executionFile(["mcp__github__create_pending_pull_request_review"]),
       reviewsPosted: 0,
-      diffTruncated: false,
+      diffScope: WHOLE,
     });
     expect(r.reading).toBe("UNMEASURED");
     expect(r.reasons).toContain("NO_REVIEW_POSTED");
@@ -95,7 +98,7 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
     const r = reviewExecutionReading({
       executionFileRaw: executionFile([]),
       reviewsPosted: 3,
-      diffTruncated: false,
+      diffScope: WHOLE,
     });
     expect(r.reading).toBe("UNMEASURED");
     expect(r.reasons).toEqual(["NO_TOOL_CALLS"]);
@@ -112,12 +115,12 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
     const tried = reviewExecutionReading({
       executionFileRaw: executionFile(["mcp__github__submit_pending_pull_request_review"]),
       reviewsPosted: 0,
-      diffTruncated: false,
+      diffScope: WHOLE,
     });
     const neverTried = reviewExecutionReading({
       executionFileRaw: executionFile([]),
       reviewsPosted: 0,
-      diffTruncated: false,
+      diffScope: WHOLE,
     });
     expect(tried.reasons).toEqual(["NO_REVIEW_POSTED"]);
     expect(neverTried.reasons).toEqual(["NO_TOOL_CALLS", "NO_REVIEW_POSTED"]);
@@ -128,7 +131,7 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
     const absent = reviewExecutionReading({
       executionFileRaw: null,
       reviewsPosted: 2,
-      diffTruncated: false,
+      diffScope: WHOLE,
     });
     expect(absent.reasons).toEqual(["EXECUTION_FILE_ABSENT"]);
     expect(absent.toolCalls).toBeNull();
@@ -137,7 +140,7 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
     const garbage = reviewExecutionReading({
       executionFileRaw: "Running Claude Code via SDK (full output hidden for security)",
       reviewsPosted: 2,
-      diffTruncated: false,
+      diffScope: WHOLE,
     });
     expect(garbage.reasons).toEqual(["EXECUTION_FILE_UNREADABLE"]);
     expect(garbage.toolCalls).toBeNull();
@@ -147,17 +150,17 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
     const r = reviewExecutionReading({
       executionFileRaw: executionFile(["mcp__github__add_comment_to_pending_review"]),
       reviewsPosted: null,
-      diffTruncated: false,
+      diffScope: WHOLE,
     });
     expect(r.reasons).toEqual(["REVIEW_COUNT_UNAVAILABLE"]);
     expect(r.reasons).not.toContain("NO_REVIEW_POSTED");
   });
 
-  test("AC-6: a truncated diff is UNMEASURED — a partial review is not a clean one", () => {
+  test("AC-6: a diff with no file reviewed whole is UNMEASURED — a review of nothing whole is not a review", () => {
     const r = reviewExecutionReading({
       executionFileRaw: executionFile(["mcp__github__submit_pending_pull_request_review"]),
       reviewsPosted: 1,
-      diffTruncated: true,
+      diffScope: { filesRead: 0, filesSeen: 1 },
     });
     expect(r.reasons).toEqual(["DIFF_TRUNCATED"]);
   });
@@ -175,7 +178,7 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
         "mcp__github__submit_pending_pull_request_review",
       ]),
       reviewsPosted: 1,
-      diffTruncated: false,
+      diffScope: WHOLE,
     });
     expect(r.reading).toBe("MEASURED");
     expect(r.reasons).toEqual([]);
@@ -187,13 +190,61 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
     const r = reviewExecutionReading({
       executionFileRaw: executionFile([]),
       reviewsPosted: 0,
-      diffTruncated: true,
+      diffScope: { filesRead: 0, filesSeen: 1 },
     });
     const report = reviewReadingReport(r);
     for (const reason of r.reasons) expect(report).toContain(reason);
     expect(report).toContain("tool calls: 0");
     expect(report).toContain("reviews added by this run: 0");
     expect(reviewReadingReport(r).startsWith("UNMEASURED")).toBe(true);
+  });
+
+  /**
+   * #1934: a diff over the budget is reviewed whole files at a time
+   * (`scripts/review-diff-subject.ts`). A review of SOME files whole, with
+   * the scope stated, is a reading; a review of NO file whole is not. Before,
+   * every over-budget diff was DIFF_TRUNCATED, which made the job red on every
+   * DA state-record pull request (#1932: 2 files, 168 KB).
+   */
+  test("AC-15: some files reviewed whole is MEASURED, and the report states the scope", () => {
+    const r = reviewExecutionReading({
+      executionFileRaw: executionFile(["mcp__github__submit_pending_pull_request_review"]),
+      reviewsPosted: 1,
+      diffScope: { filesRead: 1, filesSeen: 2 },
+    });
+    expect(r.reading).toBe("MEASURED");
+    expect(r.reasons).toEqual([]);
+    expect(r.diffScope).toEqual({ filesRead: 1, filesSeen: 2 });
+    expect(reviewReadingReport(r)).toContain("files reviewed whole: 1 of 2");
+    // The whole-diff control says so too, so a partial report is not just
+    // "a report with a scope in it".
+    const whole = reviewExecutionReading({
+      executionFileRaw: executionFile(["mcp__github__submit_pending_pull_request_review"]),
+      reviewsPosted: 1,
+      diffScope: { filesRead: 2, filesSeen: 2 },
+    });
+    expect(reviewReadingReport(whole)).toContain("files reviewed whole: 2 of 2");
+  });
+
+  test("AC-16: a scope nobody reported, or one that cannot be true, is UNMEASURED by name — not zero, not whole", () => {
+    for (const diffScope of [null, { filesRead: 3, filesSeen: 2 }]) {
+      const r = reviewExecutionReading({
+        executionFileRaw: executionFile(["mcp__github__submit_pending_pull_request_review"]),
+        reviewsPosted: 1,
+        diffScope,
+      });
+      expect(r.reasons, JSON.stringify(diffScope)).toEqual(["DIFF_SCOPE_UNAVAILABLE"]);
+      expect(reviewReadingReport(r)).toContain("files reviewed whole: UNREPORTED");
+    }
+  });
+
+  test("AC-17: an empty diff has nothing to leave out, so it is not a truncation", () => {
+    const r = reviewExecutionReading({
+      executionFileRaw: executionFile(["mcp__github__submit_pending_pull_request_review"]),
+      reviewsPosted: 1,
+      diffScope: { filesRead: 0, filesSeen: 0 },
+    });
+    expect(r.reading).toBe("MEASURED");
   });
 });
 
@@ -257,6 +308,8 @@ describe("the script's refusal is load-bearing (#732)", () => {
   const workingRun = join(dir, "worked.json");
   writeFileSync(workingRun, executionFile(["mcp__github__submit_pending_pull_request_review"]));
 
+  const SCOPE = ["--files-read", "1", "--files-seen", "1"];
+
   test("AC-10: a run with zero tool calls refuses, and the mutant does not", () => {
     const real = run(build(false), ["--execution-file", emptyRun, "--reviews-before", "0", "--reviews-after", "0"]);
     expect(real.out).toContain("UNMEASURED");
@@ -287,7 +340,7 @@ describe("the script's refusal is load-bearing (#732)", () => {
    * resolve its imports exits non-zero and looks exactly like a refusal.
    */
   test("AC-12: a run that worked exits zero and says MEASURED", () => {
-    const real = run(build(false), ["--execution-file", workingRun, "--reviews-before", "2", "--reviews-after", "3"]);
+    const real = run(build(false), ["--execution-file", workingRun, "--reviews-before", "2", "--reviews-after", "3", ...SCOPE]);
     expect(real.out).toContain("MEASURED");
     expect(real.out).not.toContain("UNMEASURED");
     expect(real.code).toBe(0);
@@ -326,9 +379,42 @@ describe("the script's refusal is load-bearing (#732)", () => {
       "0",
       "--reviews-after",
       "1",
+      ...SCOPE,
     ]);
     expect(addedOne.out).toContain("MEASURED");
     expect(addedOne.code).toBe(0);
+  });
+
+  /**
+   * #1934, through the script the workflow runs. A partial review exits zero
+   * and says so in a warning annotation, so the scope is on the run page; a
+   * workflow that passed no scope refuses, because what the agent saw is then
+   * unestablished.
+   */
+  test("AC-18: part of the diff reviewed whole exits zero with a warning naming the scope", () => {
+    const partial = run(build(false), [
+      "--execution-file", workingRun, "--reviews-before", "0", "--reviews-after", "1",
+      "--files-read", "1", "--files-seen", "2",
+    ]);
+    expect(partial.code).toBe(0);
+    expect(partial.out).toContain("::warning title=Claude review covered part of the diff::");
+    expect(partial.out).toContain("1 of 2");
+
+    const whole = run(build(false), ["--execution-file", workingRun, "--reviews-before", "0", "--reviews-after", "1", ...SCOPE]);
+    expect(whole.out).not.toContain("::warning");
+  });
+
+  test("AC-19: no scope, or no file reviewed whole, refuses", () => {
+    const unscoped = run(build(false), ["--execution-file", workingRun, "--reviews-before", "0", "--reviews-after", "1"]);
+    expect(unscoped.out).toContain("DIFF_SCOPE_UNAVAILABLE");
+    expect(unscoped.code).not.toBe(0);
+
+    const nothingWhole = run(build(false), [
+      "--execution-file", workingRun, "--reviews-before", "0", "--reviews-after", "1",
+      "--files-read", "0", "--files-seen", "2",
+    ]);
+    expect(nothingWhole.out).toContain("DIFF_TRUNCATED");
+    expect(nothingWhole.code).not.toBe(0);
   });
 
   test("AC-13: an uncountable review total refuses rather than reading as zero reviews", () => {
