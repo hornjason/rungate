@@ -345,6 +345,31 @@ describe("SC-2789: board.id and board.fields are written into the config, and no
     }
   });
 
+  // #2514, from #2513's fourth review round: writeBoardConfig refuses a
+  // hand-edited `board` that is not a block, and that refusal escaped main()
+  // as a throw after the board was already whole on GitHub.
+  test("#2514: a config board-init will not write into is refused as UNMEASURED, never thrown", async () => {
+    const d = project({ project: "w", board: "hand-edited" });
+    const { api } = memoryBoard();
+    const errs: string[] = [];
+    const real = { log: console.log, error: console.error };
+    console.log = () => {};
+    console.error = (...a: unknown[]) => void errs.push(a.join(" "));
+    let code: number | undefined;
+    try {
+      code = await boardInitMain(["--repo", REPO, "--project-root", d, "--write"], d, api);
+    } finally {
+      console.log = real.log;
+      console.error = real.error;
+    }
+    expect(code).toBe(REFUSAL_EXIT);
+    const said = errs.join("\n");
+    expect(said).toContain("board-init: UNMEASURED");
+    expect(said).toContain("board is not a block");
+    expect(said).toContain("Nothing was written to config.");
+    expect(read(d)).toEqual({ project: "w", board: "hand-edited" });
+  });
+
   test("SC-2789: it is a rungate command, and the script it runs ships", () => {
     expect(CLI_COMMANDS["board-init"]?.script).toBe("scripts/board-init.ts");
     const files = (JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { files: string[] }).files;
