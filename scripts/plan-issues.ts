@@ -46,7 +46,7 @@ import type { IssueMove, PlacingFamily, RepairRow } from "../lib/issue-repair";
 import {
   closedIssueCounts,
   hasDecompositionTable,
-  newlyAccepted,
+  adrPlacement,
   parseDecompositionPlan,
   planDecomposition,
 } from "../lib/issue-decomposition";
@@ -497,7 +497,9 @@ function acceptedSince(root: string, since: string): number {
       console.error(`plan-issues: UNMEASURED — could not read ${path} at ${since}: ${was.stderr.trim()}`);
       return REFUSAL_EXIT;
     }
-    if (!newlyAccepted(was === null ? null : was.stdout, after)) continue;
+    // Accepted by this push, or accepted already with rows added (#2366):
+    // decompose files only the rows that have no issue yet.
+    if (adrPlacement(was === null ? null : was.stdout, after).kind === "none") continue;
     if (hasDecompositionTable(after)) console.log(path);
     else console.error(`plan-issues: ${path} was accepted, and carries no Decomposition table — nothing to place.`);
   }

@@ -2678,6 +2678,19 @@ describe("#2323 / SC-2752: a criterion an ADR this change accepts plans is plann
     }
   });
 
+  test("#2366: an accepted ADR whose table grew in this tree plans only the added row's criterion", () => {
+    const grown = adr("accepted").replace(
+      "| SC-9601 | A planned criterion gets its issue on merge | lib/a.ts | — | — |",
+      "| SC-9601 | A planned criterion gets its issue on merge | lib/a.ts | — | — |\n| SC-9602 | A row added after acceptance gets its issue on merge | lib/b.ts | — | — |",
+    );
+    const dir = repo(adr("accepted"), grown);
+    try {
+      expect(planned(dir)).toStrictEqual([["SC-9602", PATH]]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("#2323: still proposed in this tree plans nothing — nothing would be filed on merge", () => {
     const dir = repo(null, adr("proposed"));
     try {

@@ -71,7 +71,7 @@ import { declaredDependencies, dependencyPlan, readDeclaredPlans, unreadPlansTha
 import type { ConsumerIntake, DeclaredWork, FamilyIssue, PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
 import { CONSUMER_LABEL, trustedBodies, verdictIn, type IssueComment } from "../lib/consumer-triage";
 import { parseCriteria } from "../lib/spec-evidence";
-import { hasDecompositionTable, newlyAccepted, parseDecompositionPlan } from "../lib/issue-decomposition";
+import { adrPlacement, hasDecompositionTable, parseDecompositionPlan } from "../lib/issue-decomposition";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -389,7 +389,7 @@ export function readDeclaredWork(
 export const PLANNED_ADR_REF = "origin/main";
 
 /**
- * Criteria planned by an ADR whose acceptance this tree introduces — #2323.
+ * Criteria planned by an ADR this tree accepts, or grows — #2323, #2366.
  *
  * An ADR that adds criteria to an opted-in spec states them before their
  * issues exist, because merging the ADR is what files them (AGENTS.md rule 9
@@ -397,11 +397,13 @@ export const PLANNED_ADR_REF = "origin/main";
  * read each as "names no open issue", and the live stage ladder would refuse
  * the merge that is the only way to file them.
  *
- * So a criterion a Decomposition row names is planned when that ADR is
- * accepted in this tree and was not accepted at {@link PLANNED_ADR_REF}:
- * `newlyAccepted`, the same decider `plan-issues --accepted-since` uses.
- * An ADR already accepted on main is not this change's plan, and its missing
- * issue is a real gap: `adr-accepted.yml` did not place it.
+ * So a criterion a Decomposition row names is planned when `adrPlacement`,
+ * the same decider `plan-issues --accepted-since` uses, places that row
+ * against {@link PLANNED_ADR_REF}: every row of an ADR this tree accepts, and
+ * only the added rows of one already accepted there whose table this tree
+ * grows (#2366). Any other row of an ADR already accepted on main is not this
+ * change's plan, and its missing issue is a real gap: `adr-accepted.yml` did
+ * not place it.
  *
  * Fails closed: a ref that does not resolve, a git that does not run, or an
  * answer this cannot read exempts NOTHING, so every criterion reads as missing.
@@ -429,10 +431,12 @@ export function plannedByUnmergedAdr(root: string, git: GitRunner): Map<string, 
       // rev-parse probe would be a second decider for the same question.
       return new Map();
     }
-    if (!newlyAccepted(before, text)) continue;
-    const plan = parseDecompositionPlan(text);
-    if (plan.reading !== "MEASURED") continue;
-    for (const row of plan.rows) if (!planned.has(row.criterion)) planned.set(row.criterion, rel);
+    // The same decider plan-issues --accepted-since lists by (#2366): an ADR
+    // this change accepts plans every row, an accepted one whose table grew
+    // plans only its new rows, and nothing else plans anything. An unreadable
+    // table exempts nothing, as before.
+    if (parseDecompositionPlan(text).reading !== "MEASURED") continue;
+    for (const row of adrPlacement(before, text).rows) if (!planned.has(row.criterion)) planned.set(row.criterion, rel);
   }
   return planned;
 }

@@ -24,7 +24,7 @@ import { spawnSync } from "child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { adrStatus, closedIssueCounts, newlyAccepted } from "../lib/issue-decomposition";
+import { adrPlacement, adrStatus, closedIssueCounts, newlyAccepted } from "../lib/issue-decomposition";
 import { REFUSAL_EXIT, main as planIssuesMain } from "../scripts/plan-issues";
 import { CLI_COMMANDS } from "../lib/cli-commands";
 import { actionRef } from "../lib/workflow-actions";
@@ -92,6 +92,106 @@ describe("SC-2738: newlyAccepted reads the frontmatter status at both ends", () 
     expect(adrStatus("status: accepted\n")).toBeNull();
     // Frontmatter with no status, and the body says accepted: still none.
     expect(adrStatus("---\ndoc-type: adr\n---\n\nstatus: accepted\n")).toBeNull();
+  });
+});
+
+/** An ADR whose Decomposition holds exactly these rows, each `[criterion, outcome]` or a raw line. */
+const adrRows = (status: string, rows: Array<[string, string] | string>, prose = "") =>
+  [
+    "---",
+    "doc-type: adr",
+    `status: ${status}`,
+    "---",
+    "",
+    "# ADR-099 — a decision",
+    "",
+    prose,
+    "| Criterion | Outcome | Files | Milestone | Blocked by |",
+    "|---|---|---|---|---|",
+    ...rows.map(r => (typeof r === "string" ? r : `| ${r[0]} | ${r[1]} | lib/a.ts | — | — |`)),
+    "",
+  ].join("\n");
+
+describe("#2366: an accepted ADR's Decomposition can grow, and only its new rows are placed", () => {
+  const outcomes = (p: ReturnType<typeof adrPlacement>) => p.rows.map(r => r.outcome);
+
+  test("GR-1: newly accepted places every row, as SC-2738 already reads it", () => {
+    const p = adrPlacement(adrRows("proposed", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]]), adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]]));
+    expect(p.kind).toBe("accepted");
+    expect(outcomes(p)).toEqual(["a first planned row", "a second planned row"]);
+    expect(adrPlacement(null, adrRows("accepted", [["CRC-C2", "a first planned row"]])).kind).toBe("accepted");
+  });
+
+  test("GR-2: accepted before and after with a row added places only that row", () => {
+    const p = adrPlacement(
+      adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]]),
+      adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"], ["CRC-C2", "a third row added after acceptance"]]),
+    );
+    expect(p.kind).toBe("grew");
+    expect(outcomes(p)).toEqual(["a third row added after acceptance"]);
+  });
+
+  test("GR-3: an edit to an accepted ADR that adds no row places nothing — SC-2738's case is unchanged", () => {
+    const p = adrPlacement(adrRows("accepted", [["CRC-C2", "a first planned row"]]), adrRows("accepted", [["CRC-C2", "a first planned row"]], "A paragraph added later."));
+    expect(p.kind).toBe("none");
+    expect(p.rows).toEqual([]);
+  });
+
+  test("GR-4: rows added while it is not accepted, or as it stops being accepted, place nothing", () => {
+    expect(adrPlacement(adrRows("proposed", [["CRC-C2", "a first planned row"]]), adrRows("proposed", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]])).kind).toBe("none");
+    expect(adrPlacement(adrRows("accepted", [["CRC-C2", "a first planned row"]]), adrRows("superseded", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]])).kind).toBe("none");
+  });
+
+  test("GR-5: a row's identity is its outcome, the title decompose files and dedupes by", () => {
+    const p = adrPlacement(adrRows("accepted", [["CRC-C2", "a first planned row"]]), adrRows("accepted", [["CRC-C2", "a first planned row reworded later"]]));
+    expect(p.kind).toBe("grew");
+    expect(outcomes(p)).toEqual(["a first planned row reworded later"]);
+  });
+
+  test("GR-6: an added row the parser rejects still counts as growth, so decompose refuses it out loud", () => {
+    // Judged on the table's lines, not its parsed rows: a rejected row is not
+    // in `rows`, and growth read from rows alone would skip it in silence.
+    const p = adrPlacement(adrRows("accepted", [["CRC-C2", "a first planned row"]]), adrRows("accepted", [["CRC-C2", "a first planned row"], "| CRC-C2 | no files named |  | — | — |"]));
+    expect(p.kind).toBe("grew");
+    expect(p.rows).toEqual([]);
+  });
+
+  test("GR-8: a row without its leading pipe is a table row, so growth and placement read the same table", () => {
+    // GFM renders a row that omits its leading `|`, and parseDecompositionPlan
+    // reads it; the growth check used to stop at it. An appended pipe-less row
+    // was then no growth at all, and one already in the table hid every row
+    // added after it. Found by the AI review of #2582.
+    const appended = adrPlacement(
+      adrRows("accepted", [["CRC-C2", "a first planned row"]]),
+      adrRows("accepted", [["CRC-C2", "a first planned row"], "CRC-C2 | a row with no leading pipe | lib/b.ts | — | — |"]),
+    );
+    expect(appended.kind).toBe("grew");
+    expect(outcomes(appended)).toEqual(["a row with no leading pipe"]);
+
+    const hidden = adrPlacement(
+      adrRows("accepted", [["CRC-C2", "a first planned row"], "CRC-C2 | a row with no leading pipe | lib/b.ts | — | — |"]),
+      adrRows("accepted", [["CRC-C2", "a first planned row"], "CRC-C2 | a row with no leading pipe | lib/b.ts | — | — |", ["CRC-C2", "a row added after the pipe-less one"]]),
+    );
+    expect(hidden.kind).toBe("grew");
+    expect(outcomes(hidden)).toEqual(["a row added after the pipe-less one"]);
+  });
+
+  test("GR-9: a row pasted twice is growth, so decompose refuses the duplicate out loud", () => {
+    // The table's lines are counted, not collected into a set: a second,
+    // byte-identical copy of a row is a line the earlier table had once, not
+    // a line it already had. As a set it read as no growth, and the parser's
+    // "appears twice" refusal never ran. Found by the AI review of #2582.
+    const p = adrPlacement(
+      adrRows("accepted", [["CRC-C2", "a first planned row"]]),
+      adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a first planned row"]]),
+    );
+    expect(p.kind).toBe("grew");
+    expect(p.rows).toEqual([]);
+    // Moving rows around adds none.
+    expect(adrPlacement(
+      adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]]),
+      adrRows("accepted", [["CRC-C2", "a second planned row"], ["CRC-C2", "a first planned row"]]),
+    ).kind).toBe("none");
   });
 });
 
@@ -166,6 +266,27 @@ describe("SC-2738: plan-issues --accepted-since lists what a push accepted", () 
       expect(r.code).toBe(REFUSAL_EXIT);
       expect(r.out).toBe("");
       expect(r.err).toMatch(/UNMEASURED/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2366 GR-7: an accepted ADR whose table grew is listed; one whose prose changed is not", async () => {
+    const { dir, git } = repo();
+    try {
+      writeFileSync(join(dir, "docs/adr/ADR-097-grows.md"), adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]]));
+      writeFileSync(join(dir, "docs/adr/ADR-098-prose.md"), adrRows("accepted", [["CRC-C2", "a first planned row"]]));
+      git("add", "-A");
+      git("commit", "-q", "-m", "before");
+      const before = git("rev-parse", "HEAD");
+      writeFileSync(join(dir, "docs/adr/ADR-097-grows.md"), adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"], ["CRC-C2", "a third row added after acceptance"]]));
+      writeFileSync(join(dir, "docs/adr/ADR-098-prose.md"), adrRows("accepted", [["CRC-C2", "a first planned row"]], "A paragraph added later."));
+      git("add", "-A");
+      git("commit", "-q", "-m", "grow");
+
+      const r = await since(dir, before);
+      expect(r.code).toBe(0);
+      expect(r.out.split("\n").filter(Boolean)).toEqual(["docs/adr/ADR-097-grows.md"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
