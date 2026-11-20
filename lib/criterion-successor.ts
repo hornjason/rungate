@@ -176,10 +176,10 @@ export function planSuccessors(
 
 /**
  * Every owed criterion's successor, for a run with no single close to ask
- * about (#2541). `lastNamer` maps an owed id to the most recent closed issue
- * that named it, read by the caller. An owed id with no entry was never
- * named by any issue: there is nothing to succeed, and declared-work already
- * reports it as a gap, so it is left rather than filed. One refusal refuses
+ * about (#2541). `lastNamer` maps an owed id to the most recent issue that
+ * named it and was closed as completed, read by the caller. An owed id with
+ * no entry has nothing to succeed, and declared-work already reports it as a
+ * gap, so it is left rather than filed. One refusal refuses
  * the whole sweep, the per-issue path's rule.
  */
 export function sweepSuccessors(
@@ -193,7 +193,10 @@ export function sweepSuccessors(
   for (const id of [...new Set(owed.map(o => o.id))]) {
     const n = lastNamer.get(id);
     if (n === undefined) {
-      leave.push({ id, why: "no closed issue names it, so there is nothing to succeed; declared-work reports it as a gap" });
+      leave.push({
+        id,
+        why: "no issue closed as completed names it (one closed as not planned or a duplicate may), so there is nothing to succeed; declared-work reports it as a gap",
+      });
       continue;
     }
     byIssue.set(n, [...(byIssue.get(n) ?? []), id]);

@@ -263,6 +263,9 @@ describe("#2541: planSuccessors over every owed criterion, citing the issue that
     const plan = sweepSuccessors(owed, new Map([["TST-1", 7]]), spec, MILESTONES);
     expect("file" in plan && plan.file.map(f => f.id)).toEqual(["TST-1"]);
     expect("leave" in plan && plan.leave).toEqual([expect.objectContaining({ id: "TST-3" })]);
+    // Review of #2545: an issue closed as not planned may well name it, so the
+    // reason says what was looked for, not that nobody ever named it.
+    expect("leave" in plan && plan.leave[0]!.why).toMatch(/closed as completed/);
   });
 
   test("one refusal refuses the whole sweep, the per-issue path's rule", () => {
