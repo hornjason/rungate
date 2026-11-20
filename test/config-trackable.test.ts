@@ -38,7 +38,7 @@ import {
   reportIgnoredOwnedFiles,
 } from "../lib/config-trackable";
 import { DIRECTORY_CONFIG_FILES, RUNGATE_CONFIG_IGNORE_PATHS } from "../lib/config-loader";
-import { runScaffoldWriteSteps } from "../lib/scaffold/write-steps";
+import { ScaffoldConfigUnreadable, runScaffoldWriteSteps } from "../lib/scaffold/write-steps";
 import type { ProjectType } from "../lib/generators/types";
 
 const scratch: string[] = [];
@@ -529,13 +529,19 @@ describe("#505: a config in an ignored directory is deleted by an ordinary branc
     // The order is the claim — `createGitignore` APPENDS, and a negation
     // that is not the last matching rule does nothing — so a test that
     // called the two functions itself would prove the order it chose.
-    const root = repo({ ".gitignore": ".claude/\n", "README.md": "# p", [DIR_CONFIG]: CONFIG_BODY });
+    // A config the loader accepts: since #2520 the scaffold refuses an
+    // unreadable one before Phase 0, and `CONFIG_BODY`'s `project` object
+    // fails the schema, so it would never reach the step this case is about.
+    const valid = JSON.stringify({ project: "p", pages: { a: "/a" } }, null, 2) + "\n";
+    const root = repo({ ".gitignore": ".claude/\n", "README.md": "# p", [DIR_CONFIG]: valid });
     const actions: string[] = [];
     try {
       runScaffoldWriteSteps(root, "content" as ProjectType, actions, { profile: "minimal" });
-    } catch {
+    } catch (e) {
       // Later phases need more of a project than this fixture is. The
-      // claim is about Phase 0, and an action list that reached it.
+      // claim is about Phase 0, and an action list that reached it. A
+      // refusal of the fixture's own config is not a later phase (#2520).
+      if (e instanceof ScaffoldConfigUnreadable) throw e;
     }
     const ours = actions.filter(a => a.includes(".gitignore"));
     expect(ours.join("\n"), "the scaffold never ran the trackability step")
