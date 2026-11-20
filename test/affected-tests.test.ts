@@ -507,3 +507,40 @@ describe("#2576: a reader that builds the path from a directory literal and a te
     expect(r.tests).toContain("test/test-brief-roles.test.ts");
   });
 });
+
+describe("#2576: the directory-template rule only widens a measured selection", () => {
+  const TEMPLATE_BASENAME = "`" + "$" + "{name}.md" + "`";
+
+  test("DT-4: a file nothing names outright stays UNMEASURED, even with a directory-template reader", () => {
+    // A first draft added these edges inline, so they counted as "something
+    // names this file" and switched the refusal off: a research doc went from
+    // UNMEASURED to a MEASURED selection built on the heuristic.
+    const root = chainProject();
+    put(root, "templates/briefs/alpha.md", "# alpha\n");
+    put(
+      root,
+      "test/computed.test.ts",
+      'import { readFileSync } from "fs";\nimport { join } from "path";\n' +
+        'const ROOT = join(import.meta.dir, "..");\n' +
+        `export const read = (name: string) => readFileSync(join(ROOT, "templates/briefs", ${TEMPLATE_BASENAME}), "utf-8");\n`,
+    );
+    const r = affectedTests(root, ["templates/briefs/alpha.md"]);
+    expect(r.reading, "the heuristic edge made an unnamed file read as measured").toBe("UNMEASURED");
+  });
+
+  test("DT-5: the directory literal and an unrelated template in different expressions are not an edge", () => {
+    const root = chainProject();
+    put(root, "templates/briefs/alpha.md", "# alpha\n");
+    put(root, "test/named.test.ts", 'import { readFileSync } from "fs";\nexport const n = readFileSync("templates/briefs/alpha.md", "utf-8").length;\n');
+    put(
+      root,
+      "test/apart.test.ts",
+      'export const where = "templates/briefs";\n' +
+        `export const label = (name: string) => ${TEMPLATE_BASENAME};\n`,
+    );
+    const r = affectedTests(root, ["templates/briefs/alpha.md"]);
+    expect(r.reading).toBe("MEASURED");
+    expect(r.tests).toContain("test/named.test.ts");
+    expect(r.tests, "a file that mentions the directory and builds some other .md name is not a reader").not.toContain("test/apart.test.ts");
+  });
+});
