@@ -39,8 +39,10 @@
  * `board-mirror` for a triaged issue and its Criteria cell stays empty. That
  * reddened stage items B4 and E4 on every pull request on 2026-11-20, for an
  * issue that declared `serves no criterion` correctly. So the job runs the
- * Criteria-column mirror itself, only when the triage step reports it wrote,
- * as `criterion-label.yml` does after a filing (#2542).
+ * Criteria-column mirror itself: after a triage that set a milestone (the
+ * triage step's `wrote` output), as `criterion-label.yml` does after a filing
+ * (#2542), and on every daily run whatever that output says, so a triage that
+ * set a milestone and died before printing it is mirrored within a day.
  *
  * ## It calls the published CLI
  *
