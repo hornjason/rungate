@@ -128,7 +128,15 @@ export function planSuccessors(
       );
       continue;
     }
-    const milestone = milestones.find(m => phaseInFamily(m.title, prefix) === Number(phase));
+    // Every match, never the first (#2535): two open milestones that read as
+    // one phase make the placement a guess, the shape a doubled placement or
+    // a doubled owner already refuses on.
+    const matches = milestones.filter(m => phaseInFamily(m.title, prefix) === Number(phase));
+    if (matches.length > 1) {
+      refusals.push(`${id}: ${matches.length} open milestones read as phase ${phase} of the ${prefix} family (${matches.map(m => JSON.stringify(m.title)).join(", ")}), so which one it belongs in cannot be decided`);
+      continue;
+    }
+    const milestone = matches[0];
     if (milestone === undefined) {
       refusals.push(`${id}: no open milestone is phase ${phase} of the ${prefix} family, so it has nowhere to be placed (rungate plan-spec makes the family's milestones)`);
       continue;
