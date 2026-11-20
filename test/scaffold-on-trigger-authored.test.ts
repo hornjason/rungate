@@ -422,6 +422,7 @@ describe("#2292 / SC-2781: re-scaffold writes the current value of an authored p
     expect(Object.fromEntries(HARNESS_AUTHORED_PATHS)).toEqual({
       "on.pull_request.branches": "withdrawn-when-absent",
       "on.pull_request.types": "asserted-when-emitted",
+      "on.issues.types": "asserted-when-emitted",
     });
   });
 
@@ -464,5 +465,38 @@ describe("#2292 / SC-2781: re-scaffold writes the current value of an authored p
     const again: string[] = [];
     writeManagedFile(file, generated, "ai-review.yml", again, {}, PROV);
     expect(again.filter(a => a.startsWith("REWRITTEN:")), "the rewrite is re-reported on a file already current").toEqual([]);
+  });
+});
+
+/**
+ * #2532: the same claim one trigger over. criterion-label.yml gained the
+ * `closed` activity type so a closed issue's owed criterion gets a successor,
+ * and a re-scaffold kept the consumer's `[opened, edited, reopened]`: the new
+ * step was in the file and its event never fired. Measured on this repository
+ * before the fix — the regenerated workflow carried the step and not the type.
+ */
+describe("#2532: re-scaffold writes the current `on.issues.types`", () => {
+  const committed = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "criterion-label.yml"), "utf-8");
+  const CURRENT = "types: [opened, edited, reopened, closed]";
+  const BEFORE = "types: [opened, edited, reopened]";
+
+  test("the committed criterion-label.yml listens for `closed`", () => {
+    expect(committed, "the committed workflow has no `closed` type, so the successor step never runs").toContain(CURRENT);
+  });
+
+  test("a consumer on the pre-#2532 types gains `closed`, and the rewrite is recorded", () => {
+    const consumer = committed.replace(CURRENT, BEFORE);
+    expect(consumer, "the fixture did not take the consumer back to the old types").not.toBe(committed);
+    const { content, revoked } = merge(consumer, committed);
+    expect(onBlock(content), "the consumer kept its old issue types through the re-scaffold").toContain(CURRENT);
+    expect(revoked.map(r => `${r.section}.${r.key}:${r.reason}`)).toEqual(["on.issues.types:asserted"]);
+  });
+
+  test("a generator that emits `issues` bare does not take a consumer's types away", () => {
+    const generated = GENERATED.replace("  pull_request:\n", "  pull_request:\n  issues:\n");
+    const consumer = CONSUMER.replace("  pull_request:\n", "  issues:\n    types: [opened]\n  pull_request:\n");
+    const { content, revoked } = merge(consumer, generated);
+    expect(onBlock(content)).toContain("types: [opened]");
+    expect(revoked.filter(r => r.key === "issues")).toEqual([]);
   });
 });

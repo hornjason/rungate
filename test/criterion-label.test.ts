@@ -262,8 +262,9 @@ describe("#2020: the workflow", () => {
   const wf = readFileSync(join(ROOT, ".github/workflows/criterion-label.yml"), "utf8");
   const code = wf.replace(/^\s*#.*$/gm, "");
 
-  test("fires on filing, on edits, daily, and by hand", () => {
-    expect(code).toMatch(/issues:\s*\n\s*types:\s*\[opened, edited, reopened\]/);
+  test("fires on filing, on edits, on close, daily, and by hand", () => {
+    // #2532: `closed` runs the successor step, never the labelling one.
+    expect(code).toMatch(/issues:\s*\n\s*types:\s*\[opened, edited, reopened, closed\]/);
     expect(code).toMatch(/schedule:\s*\n\s*- cron:/);
     expect(code).toContain("workflow_dispatch:");
     // #2467: generated, so it runs the published command, not a script path.

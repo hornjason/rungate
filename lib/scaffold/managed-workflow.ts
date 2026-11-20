@@ -323,10 +323,22 @@ function revokedSubKeys(
  * its claim (`AuthoredClaim`): an asserted leaf the generator emits is
  * written at the generator's value, replacing the consumer's, and the
  * replacement is recorded so the write can name it.
+ *
+ * ## The issue trigger too (#2532)
+ *
+ * The same defect one trigger over. criterion-label.yml gained `closed` under
+ * `on.issues.types` so a closed issue's owed criterion gets a successor, and
+ * a re-scaffold kept every existing copy's `[opened, edited, reopened]`: the
+ * step was written and its event never fired. Every generated workflow that
+ * listens to `issues` names its activity types because a job runs on exactly
+ * those, so the list is the harness's in the same way `pull_request.types`
+ * is, and the same emission gate keeps a generator that says nothing about
+ * `issues` from touching a consumer's own.
  */
 export const HARNESS_AUTHORED_PATHS: ReadonlyMap<string, AuthoredClaim> = new Map([
   ["on.pull_request.branches", "withdrawn-when-absent"],
   ["on.pull_request.types", "asserted-when-emitted"],
+  ["on.issues.types", "asserted-when-emitted"],
 ]);
 
 /**
