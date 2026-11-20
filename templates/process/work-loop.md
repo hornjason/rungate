@@ -44,7 +44,11 @@ remote.
    `gh pr merge <PR> --squash --auto --match-head-commit <sha>`.
    A review thread blocks the merge: push the fix, arm again, then reply and
    resolve.
-7. **Check after the merge:** `env -u GH_TOKEN GITHUB_TOKEN="$(env -u GH_TOKEN gh auth token)" {{CLI}} verify-merge-ref --pr <PR> --after-merge`.
+7. **Wait for it:** `--auto` only arms the merge; it happens when CI passes.
+   `gh pr checks <PR> --watch --fail-fast` waits, and the first red check
+   ends the wait: fix it, push, and pin again from step 6. Go on only once
+   `gh pr view <PR> --json state` says `MERGED`.
+8. **Check after the merge:** `env -u GH_TOKEN GITHUB_TOKEN="$(env -u GH_TOKEN gh auth token)" {{CLI}} verify-merge-ref --pr <PR> --after-merge`.
    Only when it passes, remove the worktree with `git worktree remove ../<worktree>`.
 
 ## Done means
