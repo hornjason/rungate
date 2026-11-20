@@ -1,15 +1,16 @@
-# generated-sha: 10639c64e51e13a4
+# generated-sha: 3fe806b88012c2a5
 # Managed by rungate — do not edit the generated job.
 #
 # #2020, generated since #2467: an issue that names no criterion and does not
 # say it serves none is labelled needs-criterion when it is filed, told why
 # once, and unlabelled when an edit answers it. The daily run re-reads every
-# open issue, and a run by hand with no issue is the backfill.
+# open issue, and a run by hand with no issue is the backfill. When an issue
+# closes, a criterion it leaves owed by nobody gets a successor (#2532).
 name: Criterion label
 
 on:
   issues:
-    types: [opened, edited, reopened]
+    types: [opened, edited, reopened, closed]
   schedule:
     - cron: "41 6 * * *"
   workflow_dispatch:
@@ -43,6 +44,7 @@ jobs:
       # script text. The title and body are written by whoever opened the
       # issue, so they are read through the API and never interpolated here.
       - name: Label issues that name no criterion
+        if: github.event.action != 'closed'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE: ${{ github.event.issue.number }}
@@ -55,3 +57,12 @@ jobs:
             if [ "$ACTION" = "opened" ]; then args+=(--comment); fi
           fi
           bunx rungate@0.8.40 criterion-label "${args[@]}"
+
+      # #2532: a criterion this close left unticked and named by no open issue
+      # gets one successor, in its phase milestone. A second run files none.
+      - name: File a successor for each criterion the closed issue left owed
+        if: github.event_name == 'issues' && github.event.action == 'closed'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: bunx rungate@0.8.40 criterion-successor --issue "$ISSUE" --repo "$GITHUB_REPOSITORY" --write
