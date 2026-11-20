@@ -29,7 +29,22 @@
  * unticked gets a successor filed in its phase milestone, and nobody touches a
  * label, milestone or body by hand. The label step does not run on a close.
  * The command shipped in 0.8.40 (#2490, #2536).
+ *
+ * ## The daily run sweeps, and a filing reaches the board (#2542)
+ *
+ * The schedule and a by-hand run also run `criterion-successor --sweep`
+ * (#2541), so a close whose event this workflow missed still gets its
+ * successor within a day.
+ *
+ * A successor filed with the job's own GITHUB_TOKEN starts no workflow, so
+ * `phase-order.yml` never writes its Criteria column or queue label. #2544,
+ * the first live successor, got both only because `specs-placed.yml` happened
+ * to run seconds later. So a run that files anything runs the same two
+ * board-mirror steps itself, as `specs-placed.yml` and `adr-accepted.yml` do
+ * after their own filings. A run that files nothing runs neither.
  */
+
+import { boardProjectRun } from "./board-project-step";
 
 /** The file this module generates, under `.github/workflows/`. */
 export const CRITERION_LABEL_WORKFLOW_FILE = "criterion-label.yml";
@@ -38,7 +53,27 @@ export const CRITERION_LABEL_WORKFLOW_FILE = "criterion-label.yml";
 export const CRITERION_LABEL_JOB = "criterion-label";
 
 /** Every command the job calls. Each must be registered in `lib/cli-commands.ts`. */
-export const CRITERION_LABEL_COMMANDS = ["criterion-label", "criterion-successor"] as const;
+export const CRITERION_LABEL_COMMANDS = ["criterion-label", "criterion-successor", "board-mirror", "board-id"] as const;
+
+/** The successor steps' ids; the mirror steps read each one's `filed` output. */
+export const CRITERION_SUCCESSOR_STEP_ID = "successor";
+export const CRITERION_SWEEP_STEP_ID = "sweep";
+
+/**
+ * One successor step's script. It keeps the command's own exit code and
+ * records `filed=true` when any successor was filed, even if a later one
+ * failed: the board then needs its mirror, and the run is still red.
+ */
+function successorRun(cli: string, args: string): string {
+  return [
+    "set -euo pipefail",
+    'out="$RUNNER_TEMP/criterion-successor.out"',
+    "code=0",
+    `${cli} criterion-successor ${args} | tee "$out" || code=$?`,
+    "if grep -q '^filed #' \"$out\"; then echo \"filed=true\" >> \"$GITHUB_OUTPUT\"; fi",
+    'exit "$code"',
+  ].join("\n");
+}
 
 /** Once a day, off the hour so it does not queue behind every other scheduled job. */
 export const CRITERION_LABEL_CRON = "41 6 * * *";
@@ -61,13 +96,17 @@ export interface CriterionLabelWorkflowOptions {
 /** The whole `criterion-label.yml` body. */
 export function buildCriterionLabelWorkflow(opts: CriterionLabelWorkflowOptions): string {
   const cli = `bunx rungate@${opts.version}`;
+  const indent = (script: string) => script.split("\n").map(l => (l === "" ? "" : `          ${l}`)).join("\n");
+  const filed = `steps.${CRITERION_SUCCESSOR_STEP_ID}.outputs.filed == 'true' || steps.${CRITERION_SWEEP_STEP_ID}.outputs.filed == 'true'`;
   return `# Managed by rungate — do not edit the generated job.
 #
 # #2020, generated since #2467: an issue that names no criterion and does not
 # say it serves none is labelled needs-criterion when it is filed, told why
 # once, and unlabelled when an edit answers it. The daily run re-reads every
 # open issue, and a run by hand with no issue is the backfill. When an issue
-# closes, a criterion it leaves owed by nobody gets a successor (#2532).
+# closes, a criterion it leaves owed by nobody gets a successor (#2532); the
+# daily run sweeps for any a missed event left, and a run that files one
+# writes the board's Criteria column and queue label itself (#2542).
 name: Criterion label
 
 on:
@@ -79,7 +118,7 @@ on:
 
 permissions:
   contents: read
-  # The label and the one comment, and a successor issue on a close.
+  # The label and the one comment, a successor issue, and its queue label.
   issues: write
 
 # One run per issue at a time; the daily sweep has its own group.
@@ -117,10 +156,39 @@ ${opts.setupBunEnv}
       # #2532: a criterion this close left unticked and named by no open issue
       # gets one successor, in its phase milestone. A second run files none.
       - name: File a successor for each criterion the closed issue left owed
+        id: ${CRITERION_SUCCESSOR_STEP_ID}
         if: github.event_name == 'issues' && github.event.action == 'closed'
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
           ISSUE: \${{ github.event.issue.number }}
-        run: ${cli} criterion-successor --issue "$ISSUE" --repo "$GITHUB_REPOSITORY" --write
+        run: |
+${indent(successorRun(cli, '--issue "$ISSUE" --repo "$GITHUB_REPOSITORY" --write'))}
+
+      # #2542: a close whose event this workflow missed still gets its
+      # successor, on the next daily run or a run by hand (#2541).
+      - name: File a successor for every criterion a missed close left owed
+        id: ${CRITERION_SWEEP_STEP_ID}
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        run: |
+${indent(successorRun(cli, '--sweep --repo "$GITHUB_REPOSITORY" --write'))}
+
+      # #2542: an issue the job's own token filed starts no workflow, so
+      # phase-order.yml never sees it. The two board-mirror steps it would
+      # have run, run here, only after a filing.
+      - name: Queue label on the filed successors
+        if: \${{ !cancelled() && (${filed}) }}
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        run: ${cli} board-mirror --queue-label --repo "$GITHUB_REPOSITORY" --write
+
+      - name: Criteria column on the board
+        if: \${{ !cancelled() && (${filed}) }}
+        env:
+          GITHUB_TOKEN: \${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          PROJECT_ID: \${{ vars.RUNGATE_PROJECT_ID }}
+        run: |
+${indent(boardProjectRun(cli, "Criteria column", `${cli} board-mirror --project "$project" --write`))}
 `;
 }
