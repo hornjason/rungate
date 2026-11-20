@@ -173,6 +173,7 @@ describe("#765: a merge queue cannot hang on a check that never reports", () => 
       "adr-accepted.yml",
       "ai-review-unmeasured.yml",
       "ai-review.yml",
+      "board-flow.yml",
       "board-intake.yml",
       "board-ready.yml",
       "ci.yml",
@@ -203,7 +204,8 @@ describe("#765: a merge queue cannot hang on a check that never reports", () => 
       // since #2305 (SC-2780): it runs on a push to main that changes specs/. consumer-intake.yml
       // since #2342 (SC-2784): it runs on issue events and a schedule, never on a pull request.
       // criterion-label.yml since #2467: issue events, a schedule and dispatch, never a pull request.
-    ).toEqual(["adr-accepted.yml", "ai-review-unmeasured.yml", "board-intake.yml", "board-ready.yml", "consumer-intake.yml", "criterion-label.yml", "intake.yml", "specs-placed.yml"]);
+      // board-flow.yml since #2481: issue events and pull_request_target, which reports no status a queue waits for.
+    ).toEqual(["adr-accepted.yml", "ai-review-unmeasured.yml", "board-flow.yml", "board-intake.yml", "board-ready.yml", "consumer-intake.yml", "criterion-label.yml", "intake.yml", "specs-placed.yml"]);
 
     // The two bodies must actually differ, or this file is testing one thing
     // twice and the sharded/unsharded distinction is unmeasured.

@@ -62,10 +62,12 @@ const UNPINNED = "UNPINNED";
 // #2233 added intake.yml, which runs the published `intake` on a push to main.
 // #2305 added specs-placed.yml, which runs the published engine commands on a push that changes specs/.
 // #2342 added consumer-intake.yml, which runs the published consumer-triage on issue events and daily.
+// #2481 added board-flow.yml, which runs the published board-flow on issue and pull request events.
 const GENERATED = [
   "adr-accepted.yml",
   "ai-review-unmeasured.yml",
   "ai-review.yml",
+  "board-flow.yml",
   "board-intake.yml",
   "board-ready.yml",
   "closing-references.yml",
