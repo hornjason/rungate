@@ -269,8 +269,8 @@ export const OWNED_FILES: OwnedFile[] = [
     path: ".claude/commands/dry-run.md",
     strategy: "provenance",
     servedBy: "writeProcessFiles (lib/scaffold/write-steps.ts) via decideRuleWrite — the rule-provenance decision",
-    customize: "Edit freely — a hand-edited command is preserved and reported",
-    avoid: "Don't delete its `generated-sha` marker, or edits stop surviving",
+    customize: "Edit freely; a hand edit is kept and reported",
+    avoid: "Keep its `generated-sha` marker",
   },
   {
     // #2484, ADR-023 row 5, SC-2791: `/board`, reading the repository it
@@ -278,8 +278,8 @@ export const OWNED_FILES: OwnedFile[] = [
     path: ".claude/commands/board.md",
     strategy: "provenance",
     servedBy: "writeProcessFiles (lib/scaffold/write-steps.ts) via decideRuleWrite — the rule-provenance decision",
-    customize: "Edit freely — a hand-edited command is preserved and reported",
-    avoid: "Don't delete its `generated-sha` marker, or edits stop surviving",
+    customize: "Edit freely; a hand edit is kept and reported",
+    avoid: "Keep its `generated-sha` marker",
   },
   {
     // #2486, ADR-023 row 8, SC-2794: the work loop, naming only commands a
@@ -287,8 +287,8 @@ export const OWNED_FILES: OwnedFile[] = [
     path: ".claude/commands/work-loop.md",
     strategy: "provenance",
     servedBy: "writeProcessFiles (lib/scaffold/write-steps.ts) via decideRuleWrite — the rule-provenance decision",
-    customize: "Edit freely — a hand-edited command is preserved and reported",
-    avoid: "Don't delete its `generated-sha` marker, or edits stop surviving",
+    customize: "Edit freely; a hand edit is kept and reported",
+    avoid: "Keep its `generated-sha` marker",
   },
   {
     // #2048, ADR-014 row 5: step 2's template. Regenerated with no marker,
