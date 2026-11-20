@@ -12,10 +12,10 @@
  * the named instance seven times.
  *
  * What separates pass from fail: the same CLEAN payload exits 0 or refuses
- * depending only on whether the class thread has a stating reply. A mutant
- * whose `populationDeclared` always answers true passes the owing case, which
- * is the case that catches it; one that never answers true reds the declared
- * case.
+ * depending only on whether the class thread has a stating reply (PD-11,
+ * PD-12). A mutant whose `populationDeclared` always answers true clears
+ * PD-6, whose only reply says "fixed"; one that never answers true reds PD-7.
+ * Dropping the outcome override reds PD-11.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
