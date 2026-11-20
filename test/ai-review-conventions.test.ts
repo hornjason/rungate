@@ -218,6 +218,7 @@ import {
   AI_REVIEW_OUTCOME_LINE,
   AI_REVIEW_REQUIRED_EXIT,
   AI_REVIEW_ROOT_CAUSE_HEADING,
+  AI_REVIEW_ROOT_CAUSE_SECTION,
   AI_REVIEW_SUMMARY_KEY,
   AI_REVIEW_UNMEASURED_TITLE,
   AI_REVIEW_UNTRUSTED_PATHS,
@@ -1044,20 +1045,19 @@ describe("#1653: the summary is read back against the findings it counts", () =>
 describe("#1654: on a bug fix the prompt asks what the cause was", () => {
   const prompt = buildReviewPrompt();
 
+  /** Whitespace collapsed, because a phrase the prompt wraps is still the phrase. */
+  const flat = (s: string): string => s.replace(/\s+/g, " ").trim();
+
   /**
-   * The paragraphs the heading opens, up to the next one that opens with an
-   * all-capitals run, which is how every section of the prompt starts.
-   * Joined on spaces, because a phrase the prompt wraps is still the phrase.
+   * The section exactly as the generator holds it, after checking the prompt
+   * prints it whole. Bounded by its own text, not by where the next section
+   * seems to start: the paragraph after it opens with "If", which an
+   * all-capitals boundary read straight past (review of #2543).
    */
   function rootCauseSection(): string {
-    const paragraphs = prompt.split(/\n\s*\n/);
-    const at = paragraphs.findIndex(p => p.startsWith(AI_REVIEW_ROOT_CAUSE_HEADING));
-    expect(at, "the prompt has no paragraph opening with the root-cause heading").toBeGreaterThan(-1);
-    const end = paragraphs.findIndex((p, i) => i > at && /^[A-Z][A-Z ,'()`.-]{12,}/.test(p));
-    return paragraphs
-      .slice(at, end === -1 ? undefined : end)
-      .join(" ")
-      .replace(/\s+/g, " ");
+    expect(AI_REVIEW_ROOT_CAUSE_SECTION.startsWith(AI_REVIEW_ROOT_CAUSE_HEADING)).toBe(true);
+    expect(prompt, "the prompt does not print the root-cause section whole").toContain(AI_REVIEW_ROOT_CAUSE_SECTION);
+    return flat(AI_REVIEW_ROOT_CAUSE_SECTION);
   }
 
   test("R-1: it asks what produced the reported state, named in the code", () => {
@@ -1089,6 +1089,11 @@ describe("#1654: on a bug fix the prompt asks what the cause was", () => {
     // AC-C7's reason, for this section: a generator change nobody scaffolded
     // ships inert, and a byte diff elsewhere is harder to read than this.
     const committed = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "ai-review.yml"), "utf8");
-    expect(committed, "the committed prompt has no root-cause section").toContain(AI_REVIEW_ROOT_CAUSE_HEADING);
+    // The whole section, not the heading: a body edit nobody scaffolded
+    // leaves the heading in place (review of #2543). Flattened, because the
+    // YAML block indents every line the generator does not.
+    expect(flat(committed), "the committed prompt does not carry the whole root-cause section").toContain(
+      flat(AI_REVIEW_ROOT_CAUSE_SECTION),
+    );
   });
 });
