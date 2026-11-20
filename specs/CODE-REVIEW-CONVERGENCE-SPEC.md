@@ -1752,7 +1752,6 @@ instance of it.
 - **CRC-H2** Risky code requires a human. There is no `CODEOWNERS` and no required approval, so nothing does.
 - **CRC-M16** Added 2026-11-12 (ADR-015, #1816). `AI_REVIEW_ROUND_CAP` in `lib/ai-review-rounds.ts` counts the reviewer's rounds; nothing reads what the author does after the round-three step-back.
 - **CRC-N7** Added 2026-11-12 (ADR-015, #1818). The author-side half of the population rule: a class finding can be resolved by fixing the one named instance, which happened seven times on one pull request.
-- **CRC-M18** Added 2026-11-12 (ADR-015, #1934). CRC-M12 records `diff_truncated`, and every pull request over the budget — session records among them — is then never reviewed at all.
 
 ### Shipped since this audit was taken
 
@@ -1762,6 +1761,8 @@ and why the shape it shipped in is the right one, and the six states above are
 states of an UNTICKED box, so a ticked one belongs in none of them.
 
 - **CRC-F6** — **shipped in #2286 (#1571)**, and the open-item line is kept here as the record. It read: *Added 2026-11-12 (ADR-015, #1495, #1571). The waiver's auto-merge disarm has never succeeded (0 of 65 on #1571) and re-arming after a waiver is not caught; nothing yet reports either.* What changed: the Actions token cannot disable auto-merge at all (live test, 2026-11-16), so Jason reworded the criterion and the refusal moved to arming time. `scripts/verify-merge-ref.ts` reads `WAIVED_REVIEW` for an open pull request labelled `ai-review-override` and prints no SHA (`--by-hand` pins it for a person merging without `--auto`). The review job's last step reads auto-merge and never acts on it: an armed waived review fails it under `AI_REVIEW_WAIVER_ARMED_TITLE`, and that red required check is what stops it landing unread.
+
+- **CRC-M18** — **shipped in #2585 (#1934)**, and the open-item line is kept here as the record. It read: *Added 2026-11-12 (ADR-015, #1934). CRC-M12 records `diff_truncated`, and every pull request over the budget — session records among them — is then never reviewed at all.* What changed: `scripts/review-diff-subject.ts` hands the agent the files whose whole diff fits, under a first line naming the rest, and only a diff with no file that fits whole is still cut and still `DIFF_TRUNCATED`. `reviewCoverage` in `lib/review-execution-reading.ts` states the result as "n of m files read". The live reading is in the criterion's `proved-by:` — #1932 itself, reviewed 1 of 2 files.
 
 - **CRC-M17** — **shipped in #2215 and #2218**, and the open-item line is kept here as the record. It read: *Added 2026-11-12 (ADR-015, #1887). Files restored from base are reviewed at their base version and a clean verdict over them reads like any other clean; no count is printed.* What changed: `restoredFromBaseLine` in `lib/scaffold/ai-review-findings.ts` prints, after the scope line, how many changed files were restored from base and names them — `0 of N` when none were, UNMEASURED when there is no changed-file list to compare, and an entry that could not be read as a repository path is named as possibly restored rather than dropped (#2218). The criterion now states the behaviour rather than a file and function, because the line is printed by the findings step and not by `lib/review-execution-reading.ts`, which the original wording named.
 
@@ -2999,5 +3000,7 @@ Recorded because each one invalidates a naive reading of the criteria above.
       needs: test
       proved-by: test/ai-review-finding-scope.test.ts (#1887 / CRC-M17) — 22 pass, 0 fail, 2026-11-15
       fingerprint: 959482a1
-- [ ] CRC-M18: lib/review-execution-reading.ts contains [reviewCoverage] — a diff over the reviewer's budget is still reviewed, and the reading states coverage as n of m files read rather than a standing DIFF_TRUNCATED
+- [x] CRC-M18: lib/review-execution-reading.ts contains [reviewCoverage] — a diff over the reviewer's budget is still reviewed, and the reading states coverage as n of m files read rather than a standing DIFF_TRUNCATED
       needs: measurement
+      proved-by: the live reading — claude-review run 44833194200, dispatched on #1932 (2 files, 168,434-byte diff, which read DIFF_TRUNCATED before #2585), 2026-11-20, printed "MEASURED — …; reviews added by this run: 1; coverage: 1 of 2 files read" and handed the agent a first line naming PROJECT-STATE.md as left out, which its posted review repeated. Its tests: test/review-execution-reading.test.ts AC-15..AC-19 and test/review-diff-subject.test.ts, 0 fail. Ticked by `sync-sc-status --only CRC-M18` (#2587).
+      fingerprint: 0eea1bb6
