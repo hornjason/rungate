@@ -116,42 +116,42 @@ describe("#2366: an accepted ADR's Decomposition can grow, and only its new rows
   const outcomes = (p: ReturnType<typeof adrPlacement>) => p.rows.map(r => r.outcome);
 
   test("GR-1: newly accepted places every row, as SC-2738 already reads it", () => {
-    const p = adrPlacement(adrRows("proposed", [["CRC-C2", "one"], ["CRC-C2", "two"]]), adrRows("accepted", [["CRC-C2", "one"], ["CRC-C2", "two"]]));
+    const p = adrPlacement(adrRows("proposed", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]]), adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]]));
     expect(p.kind).toBe("accepted");
-    expect(outcomes(p)).toEqual(["one", "two"]);
-    expect(adrPlacement(null, adrRows("accepted", [["CRC-C2", "one"]])).kind).toBe("accepted");
+    expect(outcomes(p)).toEqual(["a first planned row", "a second planned row"]);
+    expect(adrPlacement(null, adrRows("accepted", [["CRC-C2", "a first planned row"]])).kind).toBe("accepted");
   });
 
   test("GR-2: accepted before and after with a row added places only that row", () => {
     const p = adrPlacement(
-      adrRows("accepted", [["CRC-C2", "one"], ["CRC-C2", "two"]]),
-      adrRows("accepted", [["CRC-C2", "one"], ["CRC-C2", "two"], ["CRC-C2", "three"]]),
+      adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]]),
+      adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"], ["CRC-C2", "a third row added after acceptance"]]),
     );
     expect(p.kind).toBe("grew");
-    expect(outcomes(p)).toEqual(["three"]);
+    expect(outcomes(p)).toEqual(["a third row added after acceptance"]);
   });
 
   test("GR-3: an edit to an accepted ADR that adds no row places nothing — SC-2738's case is unchanged", () => {
-    const p = adrPlacement(adrRows("accepted", [["CRC-C2", "one"]]), adrRows("accepted", [["CRC-C2", "one"]], "A paragraph added later."));
+    const p = adrPlacement(adrRows("accepted", [["CRC-C2", "a first planned row"]]), adrRows("accepted", [["CRC-C2", "a first planned row"]], "A paragraph added later."));
     expect(p.kind).toBe("none");
     expect(p.rows).toEqual([]);
   });
 
   test("GR-4: rows added while it is not accepted, or as it stops being accepted, place nothing", () => {
-    expect(adrPlacement(adrRows("proposed", [["CRC-C2", "one"]]), adrRows("proposed", [["CRC-C2", "one"], ["CRC-C2", "two"]])).kind).toBe("none");
-    expect(adrPlacement(adrRows("accepted", [["CRC-C2", "one"]]), adrRows("superseded", [["CRC-C2", "one"], ["CRC-C2", "two"]])).kind).toBe("none");
+    expect(adrPlacement(adrRows("proposed", [["CRC-C2", "a first planned row"]]), adrRows("proposed", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]])).kind).toBe("none");
+    expect(adrPlacement(adrRows("accepted", [["CRC-C2", "a first planned row"]]), adrRows("superseded", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]])).kind).toBe("none");
   });
 
   test("GR-5: a row's identity is its outcome, the title decompose files and dedupes by", () => {
-    const p = adrPlacement(adrRows("accepted", [["CRC-C2", "one"]]), adrRows("accepted", [["CRC-C2", "one, reworded"]]));
+    const p = adrPlacement(adrRows("accepted", [["CRC-C2", "a first planned row"]]), adrRows("accepted", [["CRC-C2", "a first planned row reworded later"]]));
     expect(p.kind).toBe("grew");
-    expect(outcomes(p)).toEqual(["one, reworded"]);
+    expect(outcomes(p)).toEqual(["a first planned row reworded later"]);
   });
 
   test("GR-6: an added row the parser rejects still counts as growth, so decompose refuses it out loud", () => {
     // Judged on the table's lines, not its parsed rows: a rejected row is not
     // in `rows`, and growth read from rows alone would skip it in silence.
-    const p = adrPlacement(adrRows("accepted", [["CRC-C2", "one"]]), adrRows("accepted", [["CRC-C2", "one"], "| CRC-C2 | no files named |  | — | — |"]));
+    const p = adrPlacement(adrRows("accepted", [["CRC-C2", "a first planned row"]]), adrRows("accepted", [["CRC-C2", "a first planned row"], "| CRC-C2 | no files named |  | — | — |"]));
     expect(p.kind).toBe("grew");
     expect(p.rows).toEqual([]);
   });
@@ -236,13 +236,13 @@ describe("SC-2738: plan-issues --accepted-since lists what a push accepted", () 
   test("#2366 GR-7: an accepted ADR whose table grew is listed; one whose prose changed is not", async () => {
     const { dir, git } = repo();
     try {
-      writeFileSync(join(dir, "docs/adr/ADR-097-grows.md"), adrRows("accepted", [["CRC-C2", "one"], ["CRC-C2", "two"]]));
-      writeFileSync(join(dir, "docs/adr/ADR-098-prose.md"), adrRows("accepted", [["CRC-C2", "one"]]));
+      writeFileSync(join(dir, "docs/adr/ADR-097-grows.md"), adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]]));
+      writeFileSync(join(dir, "docs/adr/ADR-098-prose.md"), adrRows("accepted", [["CRC-C2", "a first planned row"]]));
       git("add", "-A");
       git("commit", "-q", "-m", "before");
       const before = git("rev-parse", "HEAD");
-      writeFileSync(join(dir, "docs/adr/ADR-097-grows.md"), adrRows("accepted", [["CRC-C2", "one"], ["CRC-C2", "two"], ["CRC-C2", "three"]]));
-      writeFileSync(join(dir, "docs/adr/ADR-098-prose.md"), adrRows("accepted", [["CRC-C2", "one"]], "A paragraph added later."));
+      writeFileSync(join(dir, "docs/adr/ADR-097-grows.md"), adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"], ["CRC-C2", "a third row added after acceptance"]]));
+      writeFileSync(join(dir, "docs/adr/ADR-098-prose.md"), adrRows("accepted", [["CRC-C2", "a first planned row"]], "A paragraph added later."));
       git("add", "-A");
       git("commit", "-q", "-m", "grow");
 
