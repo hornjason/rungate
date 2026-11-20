@@ -306,6 +306,24 @@ describe("#1592: run attempts and distinct rounds are two readings, both reporte
     expect(r.distinct.unmeasured.map(u => [u.number, u.refusal])).toEqual([[1, "ROUNDS_NOT_NUMBERED"]]);
   });
 
+  // Review of #2551: the newest entry IS the count, so when it lost its number
+  // an older entry's must not stand in for it. An older unnumbered entry is
+  // only a retry whose number was lost, and the newest still says the count.
+  test("R-8: a newest entry with no round number refuses rather than reading an older one's", () => {
+    expect(distinctRoundsTaken(pr(1, numbered([1, 2, null]), true))).toHaveProperty("refusal", "ROUNDS_NOT_NUMBERED");
+    expect(distinctRoundsTaken(pr(1, numbered([null, 1, 2]), true))).toEqual({ rounds: 2 });
+  });
+
+  // Review of #2551: a count of unmeasured pull requests names each one.
+  test("R-9: a pull request unmeasured only in rounds is named in the report, once", () => {
+    const lines = formatRoundsToPass(
+      summariseRoundsToPass([pr(7, numbered([null]), true), pr(8, { status: AI_REVIEW_LEDGER_ABSENT }, true)]),
+    );
+    expect(lines.filter(l => l.includes("#7 UNMEASURED ROUNDS_NOT_NUMBERED"))).toHaveLength(1);
+    // #8 is unmeasured in both units and is named once, not twice.
+    expect(lines.filter(l => l.includes("#8 UNMEASURED"))).toHaveLength(1);
+  });
+
   test("R-7: the report prints both units, each labelled, each beside the target", () => {
     const lines = formatRoundsToPass(summariseRoundsToPass([pr(1, numbered([1, 1]), true)]));
     const attempts = lines.filter(l => l.includes("(run attempts)"));
