@@ -450,3 +450,60 @@ describe("#676: the reading reports its own coverage", () => {
     expect(r.selected).toBeLessThan(r.testFilesSeen);
   });
 });
+
+describe("#2576: a reader that builds the path from a directory literal and a template basename", () => {
+  // On #2575 a change to .claude/agents/discovery.md left test/test-brief-roles.test.ts
+  // out of the selection, and CI went red on exactly that suite. It reads
+  // join(ROOT, ".claude/agents", `${role}.md`): the directory is a literal and
+  // the basename a template. Neither the full-path rule nor the basename rule
+  // sees that, and the UNMEASURED refusal stays quiet because another test
+  // names the file outright, so the reading was MEASURED and incomplete.
+  const TEMPLATE_BASENAME = "`" + "$" + "{name}.md" + "`";
+
+  function briefProject(): string {
+    const root = chainProject();
+    put(root, "templates/briefs/alpha.md", "# alpha\n");
+    put(root, "other/briefs/alpha.md", "# a same-named file in another directory\n");
+    // Names the file outright, so the change is MEASURED before any fix.
+    put(
+      root,
+      "test/named.test.ts",
+      'import { readFileSync } from "fs";\nexport const n = readFileSync("templates/briefs/alpha.md", "utf-8").length;\n',
+    );
+    put(
+      root,
+      "test/computed.test.ts",
+      'import { readFileSync } from "fs";\nimport { join } from "path";\n' +
+        'const ROOT = join(import.meta.dir, "..");\n' +
+        `export const read = (name: string) => readFileSync(join(ROOT, "templates/briefs", ${TEMPLATE_BASENAME}), "utf-8");\n`,
+    );
+    put(
+      root,
+      "test/segments.test.ts",
+      'import { readFileSync } from "fs";\nimport { join } from "path";\n' +
+        'const ROOT = join(import.meta.dir, "..");\n' +
+        `export const read = (name: string) => readFileSync(join(ROOT, "templates", "briefs", ${TEMPLATE_BASENAME}), "utf-8");\n`,
+    );
+    return root;
+  }
+
+  test("DT-1: the directory-plus-template reader is selected, written as one literal or as segments", () => {
+    const r = affectedTests(briefProject(), ["templates/briefs/alpha.md"]);
+    expect(r.reading).toBe("MEASURED");
+    expect(r.tests).toContain("test/named.test.ts");
+    expect(r.tests, "the reader that builds the basename from a template was left out (#2576)").toContain("test/computed.test.ts");
+    expect(r.tests, "the same read with the directory split into segments was left out").toContain("test/segments.test.ts");
+  });
+
+  test("DT-2: a same-named file in another directory does not select it", () => {
+    const r = affectedTests(briefProject(), ["other/briefs/alpha.md"]);
+    expect(r.tests).not.toContain("test/computed.test.ts");
+    expect(r.tests).not.toContain("test/segments.test.ts");
+  });
+
+  test("DT-3: on this tree, a change to the discovery brief selects the suite that scores it", () => {
+    const r = affectedTests(join(import.meta.dir, ".."), [".claude/agents/discovery.md"]);
+    expect(r.reading).toBe("MEASURED");
+    expect(r.tests).toContain("test/test-brief-roles.test.ts");
+  });
+});
