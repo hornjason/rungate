@@ -83,11 +83,13 @@ function boardRow(boardId: Reading<string | null>, secretPresent: Reading<boolea
   }
   // board.id is read from the local config, so it is reported even with no
   // GitHub repository; only the parts that need one say why they are not read
-  // (review of #2529).
+  // (review of #2529). `noRepository` is either a confirmed absence or an
+  // origin that could not be read, so these lines never assert there is no
+  // repository: they say what was not done, and its reason says why.
   if (noRepository !== undefined) {
     return boardId.value === null
-      ? `UNMEASURED: the project board — board.id is not set, and ${noRepository}, so there is no repository for board-init to make one for`
-      : `UNMEASURED: whether ${PROJECT_TOKEN_SECRET} can write board ${boardId.value} — ${noRepository}, so there is no repository to read the secret from`;
+      ? `UNMEASURED: the project board — board.id is not set, and ${noRepository}, so no board-init command is given: it makes the board for the origin's GitHub repository`
+      : `UNMEASURED: whether ${PROJECT_TOKEN_SECRET} can write board ${boardId.value} — ${noRepository}, so the secret was not read`;
   }
   if (boardId.value === null) {
     return (

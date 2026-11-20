@@ -563,10 +563,18 @@ describe("SC-2793: the human-steps report says whether board.id is set and wheth
     const why = "the origin remote names no GitHub repository";
     const set = humanSteps({ ...allSet, slug: read(null) });
     expect(set[0], "the board is not among what was not read").not.toContain("the project board");
-    expect(set.at(-1)).toBe(`${tokenRow} — ${why}, so there is no repository to read the secret from`);
+    expect(set.at(-1)).toBe(`${tokenRow} — ${why}, so the secret was not read`);
     expect(humanSteps({ ...allSet, slug: read(null), boardId: read(null) }).at(-1)).toBe(
-      `UNMEASURED: the project board — board.id is not set, and ${why}, so there is no repository for board-init to make one for`,
+      `UNMEASURED: the project board — board.id is not set, and ${why}, so no board-init command is given: it makes the board for the origin's GitHub repository`,
     );
+    // Review of #2529, round 2: an origin that could not be read is not one
+    // that names no repository, so no board line may assert an absence.
+    const unread = "the origin remote could not be read (git exited 128)";
+    for (const boardId of [read(BOARD), read(null)]) {
+      const line = humanSteps({ ...allSet, slug: unmeasured("git exited 128"), boardId }).at(-1)!;
+      expect(line, JSON.stringify(boardId)).toContain(unread);
+      expect(line, "a reading not taken was reported as an absence").not.toMatch(/there is no repository|names no GitHub repository/);
+    }
     expect(humanSteps({ ...allSet, slug: unmeasured("git exited 128"), boardId: unmeasured("the rungate config could not be read (x)") }).at(-1)).toStartWith(
       "UNMEASURED: the project board — board.id could not be read (the rungate config could not be read (x))",
     );
