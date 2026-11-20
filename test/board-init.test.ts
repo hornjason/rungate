@@ -204,6 +204,20 @@ describe("SC-2789: board-init makes a board and wires it", () => {
     if (r.kind === "PLANNED") expect(r.steps.join("\n")).toContain(`create a project "${boardTitle(REPO)}" owned by acme`);
     expect(writes).toEqual([]);
   });
+
+  // Review of #2513, round 3: GitHub gives a new project a Status field, so the
+  // preview's "create the Status field" was not what the write then did. The
+  // preview of a board that does not exist yet is the write's own list of
+  // what it changed, line for line.
+  test("SC-2789: the preview of a new board lists exactly what the write then reports changing", async () => {
+    const planned = await boardInit({ repo: REPO, owner: "acme", boardId: null, write: false, api: memoryBoard().api });
+    const done = await boardInit({ repo: REPO, owner: "acme", boardId: null, write: true, api: memoryBoard().api });
+    expect(planned.kind).toBe("PLANNED");
+    expect(done.kind, "why" in done ? done.why : "").toBe("DONE");
+    if (planned.kind !== "PLANNED" || done.kind !== "DONE") return;
+    expect(planned.steps.slice(1)).toEqual(done.changed.slice(1));
+    expect(planned.steps.join("\n")).not.toContain("create the Status field");
+  });
 });
 
 describe("SC-2789: what cannot be created or read is UNMEASURED, and no config follows", () => {
