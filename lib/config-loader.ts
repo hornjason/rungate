@@ -522,6 +522,15 @@ export function tryLoadRungateConfig(projectRoot: string): ResolvedConfig | null
 function loadFromDirectory(files: ConfigFileAccess): ResolvedConfig {
   const json = (file: string) => JSON.parse(files.read(`${DIR_REL}/${file}`));
   const config = json("config.json");
+  // Spread below, and spreading a number, null, an array or a string yields
+  // `{}`, which the schema accepts — so a corrupt config.json read as an
+  // empty one. The monolith passes the value to the schema whole, which
+  // refuses it; this makes the directory layout refuse it too (review round 3,
+  // PR #2553).
+  if (config === null || typeof config !== "object" || Array.isArray(config)) {
+    const kind = config === null ? "null" : Array.isArray(config) ? "an array" : `a ${typeof config}`;
+    throw new Error(`${files.locate(`${DIR_REL}/config.json`)} is valid JSON but not an object (it is ${kind})`);
+  }
   const roles = files.exists(`${DIR_REL}/roles.json`) ? json("roles.json") : {};
   const hooks = files.exists(`${DIR_REL}/hooks.json`) ? json("hooks.json") : [];
   const compliance = files.exists(`${DIR_REL}/compliance.json`) ? json("compliance.json") : undefined;
