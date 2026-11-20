@@ -96,10 +96,10 @@ export function testCommandDecision(root: string): TestCommandDecision {
  *
  * Exactly one caller, and it is not a convenience: `generateOrAuditProjectHarness`
  * chooses the value to WRITE into `dev.testCmd`, so asking the loader for
- * `dev.testCmd` first is circular, and it runs against trees whose config is
- * malformed — that is what it exists to repair. Routing it through the
- * throwing loader killed the repair with `SyntaxError: JSON Parse error` in
- * the step whose job is to fix that file.
+ * `dev.testCmd` first is circular. It was also kept off the throwing loader
+ * so a malformed config could reach the step and be repaired; no run ever got
+ * that far, and since #2520 the scaffold refuses an unreadable config by name
+ * before writing anything, so the circularity is the reason that remains.
  *
  * Split rather than flagged, because a boolean parameter makes the two
  * behaviours one call site's argument rather than two named things, and the
