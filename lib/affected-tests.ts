@@ -278,6 +278,7 @@ export function affectedTests(root: string, changed: string[]): AffectedTestsRea
   const dependents = new Map<string, Set<string>>();
   const sweeps: string[] = [];
   const opaque: string[] = [];
+  const templateEdges: Array<[string, string]> = [];
 
   const addEdge = (from: string, to: string): void => {
     let s = dependents.get(to);
@@ -365,6 +366,32 @@ export function affectedTests(root: string, changed: string[]): AffectedTestsRea
       }
     }
 
+    // The same question in a fourth syntax (#2576): the directory written as
+    // a literal and the basename built from a template, as
+    // `test/test-brief-roles.test.ts` reads every committed brief:
+    //
+    //   readFileSync(join(ROOT, ".claude/agents", `${role}.md`), "utf-8")
+    //
+    // Neither the full-path rule nor the basename rule sees it, and the
+    // UNMEASURED refusal below stays quiet whenever any other file names the
+    // changed path outright, so the reading was MEASURED and missing a
+    // reader: on #2575 a change to `.claude/agents/discovery.md` went to CI
+    // without the suite that scores it, and CI went red on that suite. The
+    // directory is matched whole — one literal, or its segments as
+    // consecutive literals — so a same-named file under another directory
+    // is not an edge. Like the basename rule this only widens: an extra
+    // selection is the direction this is allowed to be wrong in.
+    //
+    // **Collected here, added after the UNMEASURED check, never before it.**
+    // Added inline, these edges counted as "something names this file", and
+    // a change to a research doc that nothing names outright went from
+    // UNMEASURED — the caller runs everything — to a MEASURED selection of
+    // 217 built on a heuristic. This rule may add tests to a measured
+    // selection; it must not be what makes a selection measured.
+    for (const c of wanted) {
+      if (directoryTemplateRead(code, c)) templateEdges.push([f, c]);
+    }
+
     // A module-relative join whose segments are not all literals reads a
     // path nobody can name statically. `runtimeReads` drops those; dropping
     // them here would be the fail-open `lib/package-closure.ts` built
@@ -401,6 +428,7 @@ export function affectedTests(root: string, changed: string[]): AffectedTestsRea
       sweeps: [],
     };
   }
+  for (const [from, to] of templateEdges) addEdge(from, to);
 
   // Breadth-first over dependents, seeded with the change set and with every
   // module whose own reads could not be resolved.
@@ -424,4 +452,43 @@ export function affectedTests(root: string, changed: string[]): AffectedTestsRea
     selected: tests.length,
     sweeps: sweeps.sort(),
   };
+}
+
+/**
+ * Does `code` read `changed` with its directory written as a literal and its
+ * basename built from a template ending in the same extension, both in ONE
+ * path expression (#2576)?
+ *
+ *   join(ROOT, ".claude/agents", `${role}.md`)        // directory literal, then template
+ *   join(ROOT, ".claude", "agents", `${role}.md`)     // its segments, then template
+ *   `${ROOT}/.claude/agents/${role}.md`               // inside the template itself
+ *
+ * Adjacency is the point. A first draft accepted the directory literal and
+ * any such template ANYWHERE in the file, and a change to `lib/scanner.ts`
+ * gained 26 suites that merely mention `"lib"` and build some unrelated
+ * `${x}.ts`. The directory also has to match whole, so `other/briefs/a.md`
+ * does not select a reader of `templates/briefs`. In the template form the
+ * text before the directory may only be an interpolation (`${ROOT}/`), `./`
+ * or nothing, so `vendor/lib/${name}.ts` is not a reader of `lib/`; and the
+ * basename may hold no `/` in any form, so a subdirectory read is not one
+ * either (review of #2578). `code` is expected
+ * comment-stripped, as every other text rule in `affectedTests` reads it.
+ */
+export function directoryTemplateRead(code: string, changed: string): boolean {
+  const slash = changed.lastIndexOf("/");
+  const dot = changed.lastIndexOf(".");
+  if (slash <= 0 || dot <= slash) return false;
+  const dir = changed.slice(0, slash);
+  const ext = changed.slice(dot);
+  const esc = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const quote = "[\"'`]";
+  const template = "`[^`/]*\\$\\{[^}`]*\\}[^`/]*" + esc(ext) + "`";
+  const asArg = new RegExp(`${quote}(?:\\./)?${esc(dir)}/?${quote}\\s*,\\s*${template}`);
+  const asSegments = new RegExp(
+    dir.split("/").map(s => `${quote}${esc(s)}${quote}`).join("\\s*,\\s*") + `\\s*,\\s*${template}`,
+  );
+  const inside = new RegExp(
+    "`(?:\\$\\{[^}`]*\\}/)?(?:\\./)?" + esc(dir) + "/[^`/]*\\$\\{[^}`]*\\}[^`/]*" + esc(ext) + "`",
+  );
+  return asArg.test(code) || asSegments.test(code) || inside.test(code);
 }
