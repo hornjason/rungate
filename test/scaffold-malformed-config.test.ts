@@ -42,6 +42,13 @@ function written(dir: string): string[] {
 const SHAPES = [
   { name: "not JSON", body: "{ not json", reason: /JSON/ },
   { name: "fails the schema", body: '{"dev": 5, "test": "x"}', reason: /dev/ },
+  // Review round 3, PR #2553: the directory layout spread config.json into an
+  // object, and spreading a number, null, an array or a string yields `{}`,
+  // which the schema accepts. The monolith layout already refused these.
+  { name: "is a number, not an object", body: "5", reason: /not an object/ },
+  { name: "is null, not an object", body: "null", reason: /not an object/ },
+  { name: "is an array, not an object", body: "[]", reason: /not an object/ },
+  { name: "is a string, not an object", body: '"oops"', reason: /not an object/ },
 ];
 
 describe("#2520: runScaffoldWriteSteps refuses a config it cannot read, before writing anything", () => {
