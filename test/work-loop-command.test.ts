@@ -109,6 +109,37 @@ describe("SC-2794: rungate scaffold installs the work loop, naming only commands
     expect(rendered).toContain("`" + declared + "`");
   });
 
+  // #2519: a backtick inside the command closed a one-backtick code span
+  // early, so the step showed a truncated command. The fence is a run longer
+  // than any inside, padded with a space when the command starts or ends with
+  // a backtick (CommonMark strips one space from each side of such a span).
+  test("a test command holding backticks renders as one code span, exactly", () => {
+    const render = (declared: string) => processFiles(false, undefined, declared).find(f => f.path === WORK_LOOP_COMMAND_PATH)?.content ?? "";
+    expect(render("FOO=`date` bun test")).toContain("run ``FOO=`date` bun test``, and see it fail");
+    expect(render("`which bun` test")).toContain("run `` `which bun` test ``, and see it fail");
+    expect(render("echo ``x`` && bun test")).toContain("run ```echo ``x`` && bun test```, and see it fail");
+  });
+
+  // #2519: the unread config's reason replaced whatever processFiles refused
+  // the work loop for, so a missing template was reported as a config problem.
+  test("a missing template with an unreadable config names the missing template", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-work-loop-bad-config-no-template-"));
+    const empty = mkdtempSync(join(tmpdir(), "rg-work-loop-no-templates-"));
+    try {
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: "consumer", version: "0.0.0" }));
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(join(root, ".claude", "rungate", "config.json"), "{ not json");
+      const actions: string[] = [];
+      writeProcessFiles(root, actions, empty);
+      const refusal = actions.find(a => a.startsWith(`REFUSED: ${WORK_LOOP_COMMAND_PATH}`)) ?? "";
+      expect(refusal).toContain("templates/process/work-loop.md is missing from this rungate installation");
+      expect(refusal).not.toContain("the rungate config could not be read");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
   // Review of #2518: the work loop's test command comes from the config, and a
   // malformed config made the process-file step throw before dry-run.md, the
   // ADR template and board.md were written. It refuses the work loop by name.
