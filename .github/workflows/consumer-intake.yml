@@ -1,4 +1,4 @@
-# generated-sha: 4a8dfa1f64e76fa3
+# generated-sha: 41835b538a558e1d
 # Managed by rungate — do not edit the generated job.
 #
 # SC-2784 (ADR-020 Decision 2): a consumer's issue is triaged when it is filed
@@ -84,7 +84,7 @@ jobs:
           out="$RUNNER_TEMP/consumer-triage.out"
           code=0
           bunx rungate@0.8.41 consumer-triage --repo "$GITHUB_REPOSITORY" --write | tee "$out" || code=$?
-          if grep -Eq ', [1-9][0-9]* with no verdict$' "$out"; then echo "wrote=true" >> "$GITHUB_OUTPUT"; fi
+          if grep -q '^      milestone "' "$out"; then echo "wrote=true" >> "$GITHUB_OUTPUT"; fi
           exit "$code"
 
       # #2571: the triage writes its milestones with the job's own token, which
