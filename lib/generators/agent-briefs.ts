@@ -51,9 +51,12 @@ export function generateAgentBriefs(scan: ProjectScan): Record<string, string> {
     ? `## Project\n\n${scan.identity}\n`
     : "";
 
-  // Build source dirs list
+  // Build source dirs list, under a heading that says what it is (#2567):
+  // the bare bullets used to land at the end of the Testing Rules list. No
+  // directories, no heading, so nothing sits over an empty list.
   const dirList = scan.sourceDirs.length > 0
-    ? scan.sourceDirs.map(d => `- \`${d}/\``).join("\n")
+    ? "## Source Directories\n\nThe project's source code lives in these directories:\n\n" +
+      scan.sourceDirs.map(d => `- \`${d}/\``).join("\n")
     : "";
 
   // Build consumer note

@@ -32,8 +32,3 @@ ${SOURCE_DIRS}
 3. Write the implementation to make the test pass (TDD green phase)
 4. Run targeted test to confirm all tests pass
 5. Commit all changes referencing the issue number
-
-
-## CANARY_MARKER_FOR_SC354
-
-This line verifies template updates propagate.
