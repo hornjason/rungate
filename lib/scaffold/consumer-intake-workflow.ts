@@ -217,9 +217,11 @@ ${indent(triageRun(cli))}
 
       # #2571: the triage writes its milestones with the job's own token, which
       # starts no workflow, so phase-order.yml never mirrors them. The
-      # Criteria-column write it would have run, runs here, after a triage.
+      # Criteria-column write it would have run, runs here, after a triage that
+      # set a milestone, and on every daily run, so a triage that set one and
+      # died before printing it is mirrored within a day (review of #2572).
       - name: Criteria column on the board
-        if: \${{ !cancelled() && steps.${CONSUMER_TRIAGE_STEP_ID}.outputs.wrote == 'true' }}
+        if: \${{ !cancelled() && (steps.${CONSUMER_TRIAGE_STEP_ID}.outputs.wrote == 'true' || github.event_name == 'schedule') }}
         env:
           GITHUB_TOKEN: \${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: \${{ vars.RUNGATE_PROJECT_ID }}
