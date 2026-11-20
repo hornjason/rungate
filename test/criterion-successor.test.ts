@@ -14,7 +14,7 @@
  * name no criterion of this repository.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -161,6 +161,26 @@ describe("#2490: rungate criterion-successor, end to end over a real spec", () =
     const r = await run(["--issue", "5", "--repo", "o/n", "--write"], tree(), api);
     expect(r.code, r.out).toBe(0);
     expect(created).toEqual([]);
+  });
+
+  // Review of #2534: a criterion an accepted, unmerged ADR plans is filed by
+  // that ADR's merge, so it is not owed here either — the argument
+  // board-snapshot passes to readDeclaredWork, passed the same way.
+  test("a criterion an unmerged ADR already plans gets no successor, and the default reads that plan", async () => {
+    const { api, created } = gh();
+    const out: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    try {
+      const code = await main(["--issue", "5", "--repo", "o/n", "--write"], tree(), api, { GITHUB_TOKEN: "t" }, () => new Map([["TST-1", "docs/adr/ADR-099.md"]]));
+      expect(code, out.join("\n")).toBe(0);
+    } finally {
+      console.log = log;
+    }
+    expect(created).toEqual([]);
+    const src = readFileSync(join(import.meta.dir, "..", "scripts", "criterion-successor.ts"), "utf-8");
+    expect(src).toContain("r => plannedByUnmergedAdr(r, LIVE_GIT(r))");
+    expect(src).toContain("readDeclaredWork(projectRoot, coverage.specs.map(placementRow), planned(projectRoot))");
   });
 
   test("an issue that is still open, a missing or malformed --issue, or no credential is refused before anything is filed", async () => {

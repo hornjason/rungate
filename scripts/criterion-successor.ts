@@ -33,7 +33,7 @@ import { parseOwnerRepo, resolveGitHubToken } from "../lib/github";
 import { readLiveIssues } from "../lib/live-issues";
 import { placementCoverage } from "../lib/spec-placement";
 import { declaredWorkUnaccounted, type BoardSnapshot } from "./board-conformance";
-import { placementRow, readDeclaredWork } from "./board-snapshot";
+import { LIVE_GIT, placementRow, plannedByUnmergedAdr, readDeclaredWork } from "./board-snapshot";
 import { resolveRepo } from "./status-view";
 
 /** A reading that could not be taken, or a run that was asked for wrongly. Nothing was filed. */
@@ -97,6 +97,10 @@ export async function main(
   root = process.cwd(),
   api: SuccessorGitHub = LIVE_GITHUB,
   env: Record<string, string | undefined> = process.env,
+  // The criteria an ADR this tree accepts already plans (#2323): owed, but
+  // filed by that ADR's merge. The same argument board-snapshot passes, so the
+  // two readings of "owed" cannot disagree (review of #2534).
+  planned: (root: string) => ReadonlyMap<string, string> = r => plannedByUnmergedAdr(r, LIVE_GIT(r)),
 ): Promise<number> {
   const issueArg = flag(argv, "--issue");
   const write = argv.includes("--write");
@@ -126,7 +130,7 @@ export async function main(
   if (coverage.specs.length === 0 && coverage.reading === "UNMEASURED") {
     return refuse(`the specs' placement could not be read (${coverage.unmeasuredReasons.join("; ")})`);
   }
-  const declared = readDeclaredWork(projectRoot, coverage.specs.map(placementRow));
+  const declared = readDeclaredWork(projectRoot, coverage.specs.map(placementRow), planned(projectRoot));
   if (declared.declaredWork === undefined) return refuse("the declared work could not be read: an in-scope spec or project-state.json is unreadable");
 
   try {
