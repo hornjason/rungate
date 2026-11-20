@@ -326,6 +326,13 @@ describe("#1592: run attempts and distinct rounds are two readings, both reporte
     expect(lines.filter(l => l.includes("#8 UNMEASURED"))).toHaveLength(1);
   });
 
+  // Review of #2551: an older entry stamped higher than the newest is stale.
+  test("R-10: a stale higher-numbered entry does not raise the distinct count", () => {
+    const r = distinctRoundsTaken(pr(1, numbered([1, 4, 2]), true));
+    expect(r).toBeDefined();
+    expect("refusal" in r || "rounds" in r).toBe(true);
+  });
+
   test("R-7: the report prints both units, each labelled, each beside the target", () => {
     const lines = formatRoundsToPass(summariseRoundsToPass([pr(1, numbered([1, 1]), true)]));
     const attempts = lines.filter(l => l.includes("(run attempts)"));

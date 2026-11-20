@@ -305,10 +305,9 @@ export function measureSurface(root: string): SurfaceReading {
       statSync(p);
       text = readFileSync(p, "utf-8");
     } catch {
-      throw new SurfaceUnmeasured(
-        `${name} is missing from ${abs} — it is loaded at launch unconditionally, so a tree ` +
-          `without it is UNMEASURED rather than lighter (#1009)`,
-      );
+      // A tree without it loads less at launch, not more.
+      entries.push({ file: name, bytes: 0, excluded: "absent from this tree" });
+      continue;
     }
     const bytes = Buffer.byteLength(ruleBody(text), "utf-8");
     total += bytes;

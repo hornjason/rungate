@@ -70,7 +70,8 @@ function successorRun(cli: string, args: string): string {
     'out="$RUNNER_TEMP/criterion-successor.out"',
     "code=0",
     `${cli} criterion-successor ${args} | tee "$out" || code=$?`,
-    "if grep -q '^filed #' \"$out\"; then echo \"filed=true\" >> \"$GITHUB_OUTPUT\"; fi",
+    "filed=$(grep -c '^filed #' \"$out\")",
+    "if [ \"$filed\" -gt 0 ]; then echo \"filed=true\" >> \"$GITHUB_OUTPUT\"; fi",
     'exit "$code"',
   ].join("\n");
 }

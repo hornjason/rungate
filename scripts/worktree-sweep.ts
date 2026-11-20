@@ -115,6 +115,9 @@ export function removeWorktrees(repo: string, targets: readonly Target[]): Remov
       out.refused.push({ path, why });
     }
   }
+  // Drop the registrations a removal above left behind, so the next census
+  // does not read them as rows it cannot measure.
+  if (out.removed.length > 0) sweepGit(["-C", repo, "worktree", "prune"]);
   return out;
 }
 
