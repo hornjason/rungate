@@ -47,18 +47,49 @@ export interface DiffFile {
 
 const HEADER = /^diff --git a\/(.*) b\/(.*)$/;
 
-/** Split a unified diff at each `diff --git` header line. Rejoined, the parts are the diff. */
+/** The section's name for a non-empty diff that carries no file header at all. */
+export const NO_FILE_HEADER = "(no file header)";
+
+/**
+ * The path a section is about. The header `diff --git a/P b/Q` alone is
+ * ambiguous when a path contains ` b/`, so: when old and new are the same
+ * path (every add, modify and delete) the header splits exactly in half;
+ * otherwise the section's own `rename to` or `+++ b/` line names the new
+ * path; only failing both is the header's last ` b/` taken (#2585 review).
+ */
+function sectionPath(text: string): string {
+  const header = text.slice(0, text.indexOf("\n") === -1 ? text.length : text.indexOf("\n"));
+  const rest = header.slice("diff --git ".length);
+  if (rest.length % 2 === 1) {
+    const half = (rest.length - 1) / 2;
+    const left = rest.slice(0, half);
+    const right = rest.slice(half + 1);
+    if (rest[half] === " " && left.startsWith("a/") && right.startsWith("b/") && left.slice(2) === right.slice(2)) {
+      return right.slice(2);
+    }
+  }
+  const named = /^(?:rename to |\+\+\+ b\/)(.*)$/m.exec(text);
+  if (named) return named[1]!;
+  return HEADER.exec(header)?.[2] ?? rest;
+}
+
+/**
+ * Split a unified diff at each `diff --git` header line. Rejoined, the parts
+ * are the diff. A non-empty diff with no header at all is one section, so a
+ * count of files is never zero for text that exists — the reading derives
+ * DIFF_TRUNCATED from that count (#2585 review).
+ */
 export function splitDiff(diff: string): { preamble: string; files: DiffFile[] } {
   const lines = diff.split(/(?<=\n)/);
   let preamble = "";
-  const files: DiffFile[] = [];
+  const texts: string[] = [];
   for (const line of lines) {
-    const m = HEADER.exec(line.replace(/\n$/, ""));
-    if (m) files.push({ path: m[2]!, text: line });
-    else if (files.length === 0) preamble += line;
-    else files[files.length - 1]!.text += line;
+    if (HEADER.test(line.replace(/\n$/, ""))) texts.push(line);
+    else if (texts.length === 0) preamble += line;
+    else texts[texts.length - 1] += line;
   }
-  return { preamble, files };
+  if (texts.length === 0 && preamble !== "") return { preamble: "", files: [{ path: NO_FILE_HEADER, text: preamble }] };
+  return { preamble, files: texts.map(text => ({ path: sectionPath(text), text })) };
 }
 
 export interface DiffSubject {
