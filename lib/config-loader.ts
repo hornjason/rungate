@@ -585,23 +585,23 @@ export function writeBoardConfig(
   if (resolution.status === "absent") {
     throw new Error(`No rungate config found under ${join(projectRoot, ".claude")} — scaffold the project before board-init writes its board`);
   }
-  const target = resolution.source === "directory" ? join(resolution.path, "config.json") : resolution.path;
-  const before = readFileSync(target, "utf-8");
+  const configPath = resolution.source === "directory" ? join(resolution.path, "config.json") : resolution.path;
+  const before = readFileSync(configPath, "utf-8");
   const existing = JSON.parse(before) as Record<string, unknown>;
   const current = existing.board ?? {};
   if (typeof current !== "object" || current === null || Array.isArray(current)) {
-    throw new Error(`${target}: board is not a block, so board-init will not write into it`);
+    throw new Error(`${configPath}: board is not a block, so board-init will not write into it`);
   }
   const block = current as Record<string, unknown>;
   const fields = block.fields ?? {};
   if (typeof fields !== "object" || fields === null || Array.isArray(fields)) {
-    throw new Error(`${target}: board.fields is not a block, so board-init will not write into it`);
+    throw new Error(`${configPath}: board.fields is not a block, so board-init will not write into it`);
   }
   existing.board = { ...block, id: board.id, fields: { ...(fields as Record<string, unknown>), ...board.fields } };
   const after = JSON.stringify(existing, null, 2) + "\n";
-  if (JSON.stringify(JSON.parse(before)) === JSON.stringify(existing)) return { path: target, changed: false };
-  writeFileSync(target, after);
-  return { path: target, changed: true };
+  if (JSON.stringify(JSON.parse(before)) === JSON.stringify(existing)) return { path: configPath, changed: false };
+  writeFileSync(configPath, after);
+  return { path: configPath, changed: true };
 }
 
 /** Whether a scaffold wrote, or stepped aside because something was there. */
