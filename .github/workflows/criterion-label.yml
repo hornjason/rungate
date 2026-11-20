@@ -1,11 +1,13 @@
-# generated-sha: 063aaea970d695bb
+# generated-sha: e032f0a160473ad0
 # Managed by rungate — do not edit the generated job.
 #
 # #2020, generated since #2467: an issue that names no criterion and does not
 # say it serves none is labelled needs-criterion when it is filed, told why
 # once, and unlabelled when an edit answers it. The daily run re-reads every
 # open issue, and a run by hand with no issue is the backfill. When an issue
-# closes, a criterion it leaves owed by nobody gets a successor (#2532).
+# closes, a criterion it leaves owed by nobody gets a successor (#2532); the
+# daily run sweeps for any a missed event left, and a run that files one
+# writes the board's Criteria column and queue label itself (#2542).
 name: Criterion label
 
 on:
@@ -61,8 +63,59 @@ jobs:
       # #2532: a criterion this close left unticked and named by no open issue
       # gets one successor, in its phase milestone. A second run files none.
       - name: File a successor for each criterion the closed issue left owed
+        id: successor
         if: github.event_name == 'issues' && github.event.action == 'closed'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE: ${{ github.event.issue.number }}
-        run: bunx rungate@0.8.41 criterion-successor --issue "$ISSUE" --repo "$GITHUB_REPOSITORY" --write
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/criterion-successor.out"
+          code=0
+          bunx rungate@0.8.41 criterion-successor --issue "$ISSUE" --repo "$GITHUB_REPOSITORY" --write | tee "$out" || code=$?
+          if grep -q '^filed #' "$out"; then echo "filed=true" >> "$GITHUB_OUTPUT"; fi
+          exit "$code"
+
+      # #2542: a close whose event this workflow missed still gets its
+      # successor, on the next daily run or a run by hand (#2541).
+      - name: File a successor for every criterion a missed close left owed
+        id: sweep
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/criterion-successor.out"
+          code=0
+          bunx rungate@0.8.41 criterion-successor --sweep --repo "$GITHUB_REPOSITORY" --write | tee "$out" || code=$?
+          if grep -q '^filed #' "$out"; then echo "filed=true" >> "$GITHUB_OUTPUT"; fi
+          exit "$code"
+
+      # #2542: an issue the job's own token filed starts no workflow, so
+      # phase-order.yml never sees it. The two board-mirror steps it would
+      # have run, run here, only after a filing.
+      - name: Queue label on the filed successors
+        if: ${{ !cancelled() && (steps.successor.outputs.filed == 'true' || steps.sweep.outputs.filed == 'true') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bunx rungate@0.8.41 board-mirror --queue-label --repo "$GITHUB_REPOSITORY" --write
+
+      - name: Criteria column on the board
+        if: ${{ !cancelled() && (steps.successor.outputs.filed == 'true' || steps.sweep.outputs.filed == 'true') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
+        run: |
+          project="$PROJECT_ID"
+          if [ -z "$project" ]; then
+            err="$RUNNER_TEMP/board-id.stderr"
+            code=0
+            project=$(bunx rungate@0.8.41 board-id 2>"$err") || code=$?
+            cat "$err" >&2
+            if [ "$code" -ne 0 ] && grep -q '^UNMEASURED: no board' "$err"; then
+              echo "::warning title=Criteria column::UNMEASURED — no board is configured (board.id in the rungate config, or the RUNGATE_PROJECT_ID variable), so there is no board to write. Set board.id and this runs."
+              exit 0
+            fi
+            [ "$code" -eq 0 ] || exit "$code"
+          fi
+          bunx rungate@0.8.41 board-mirror --project "$project" --write
