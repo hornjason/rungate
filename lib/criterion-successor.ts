@@ -61,10 +61,17 @@ export interface Successor {
 
 export type SuccessorPlan = { file: Successor[]; leave: { id: string; why: string }[] } | { why: string };
 
-/** A title a person can scan: the id, then the criterion's own words, cut at a word. */
+/**
+ * A title a person can scan: the id, then the criterion's own words, cut at a
+ * word. A title is plain text, so the spec's bold markers go (#2544 printed
+ * them); code spans stay, because a backticked name reads as a name either way.
+ */
 export function successorTitle(id: string, text: string): string {
   const MAX = 100;
-  const flat = text.replace(/\s+/g, " ").trim();
+  const flat = text
+    .replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_m, a: string | undefined, b: string | undefined) => a ?? b ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (flat.length <= MAX) return `${id}: ${flat}`;
   const cut = flat.slice(0, MAX);
   const at = cut.lastIndexOf(" ");
