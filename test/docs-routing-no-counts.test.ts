@@ -56,9 +56,14 @@ describe("#2566: the scaffold's docs-routing rule", () => {
     expect(rows.filter(r => COUNT.test(r))).toEqual([]);
   });
 
-  test("DR-2: a category directory the project does not have gets no routing row", () => {
-    const rows = routingRows(rule());
+  test("DR-2: a category directory the project does not have gets no routing row, and the report says so", () => {
+    const actions: string[] = [];
+    generateAgentsMdContent(dir, "code", actions, "full");
+    const rows = routingRows(readFileSync(join(dir, ".claude", "rules", "docs-routing.md"), "utf-8"));
     expect(rows.filter(r => r.includes("`docs/council/`") || r.includes("`docs/adr/`"))).toEqual([]);
+    // Named, not silent (review of #2573): a skipped category is a line in the report.
+    expect(actions).toContain("SKIP: docs/council/ is not routed — the directory does not exist");
+    expect(actions.filter(a => a.includes("specs/") && a.startsWith("SKIP:"))).toEqual([]);
   });
 
   test("DR-3: a nested-only category and an uncategorised docs folder are still routed", () => {
