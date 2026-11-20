@@ -20,7 +20,7 @@ import { join } from "path";
 
 import { mergedPullRequestFrom, mergedReferencesToClose } from "../lib/closing-reference-audit";
 import { CLI_COMMANDS } from "../lib/cli-commands";
-import { closeAll, mergedPullRequestNodes, plan } from "../scripts/close-merged-references";
+import { closeAll, mergedPullRequestNodes, plan, resolveSince } from "../scripts/close-merged-references";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "close-merged-references.ts");
@@ -260,5 +260,97 @@ describe("#2496: close-merged-references reads merged pull requests and writes o
     expect(CLI_COMMANDS["close-merged-references"]?.script).toBe("scripts/close-merged-references.ts");
     const files = (JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as { files: string[] }).files;
     expect(files).toContain("scripts/close-merged-references.ts");
+  });
+});
+
+/**
+ * #2522: the range for the run a merge workflow starts. A `workflow_run` event
+ * carries no `before` sha, so the command reads it the way
+ * `plan-issues --accepted-since-last-run` does: the head of the workflow's
+ * newest successful run whose head is on this branch, through the one function
+ * both commands import (ADR-022 decision 3).
+ */
+describe("#2522: --since-last-run reads the range from the workflow's last successful run", () => {
+  const made: string[] = [];
+  afterAll(() => {
+    for (const d of made) rmSync(d, { recursive: true, force: true });
+  });
+  const git = (cwd: string, ...args: string[]) => {
+    const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+    if (r.status !== 0) throw new Error(r.stderr);
+    return r.stdout.trim();
+  };
+  // Three commits on the branch, and one that is on no branch here.
+  const history = () => {
+    const d = mkdtempSync(join(tmpdir(), "close-since-last-run-"));
+    made.push(d);
+    git(d, "init", "-q", "-b", "main");
+    git(d, "config", "user.email", "t@example.com");
+    git(d, "config", "user.name", "t");
+    const shas: string[] = [];
+    for (const n of ["a", "b", "c"]) {
+      writeFileSync(join(d, n), n);
+      git(d, "add", n);
+      git(d, "commit", "-q", "-m", n);
+      shas.push(git(d, "rev-parse", "HEAD"));
+    }
+    return { root: d, shas, offBranch: "f".repeat(40) };
+  };
+  const runsOf = (list: unknown[] | Error) => ({
+    runs: async () => {
+      if (list instanceof Error) throw list;
+      return list;
+    },
+  });
+
+  test("the newest successful run whose head is on this branch starts the range", async () => {
+    const h = history();
+    const r = await resolveSince({ sinceLastRun: "adr-accepted.yml", root: h.root, repo: REPO, runs: runsOf([{ id: 9, head_sha: h.offBranch }, { id: 8, head_sha: h.shas[1] }]) });
+    expect(r).toEqual({ sha: h.shas[1]!, said: expect.stringContaining("run 8") });
+    expect("said" in r && r.said).toContain("1 newer run(s) had a head not on it");
+  });
+
+  test("no successful run, or runs that could not be read, refuse by name rather than guess a range", async () => {
+    const h = history();
+    const none = await resolveSince({ sinceLastRun: "adr-accepted.yml", root: h.root, repo: REPO, runs: runsOf([]) });
+    expect("why" in none && none.why).toContain("no successful run");
+    const unread = await resolveSince({ sinceLastRun: "adr-accepted.yml", root: h.root, repo: REPO, runs: runsOf(new Error("HTTP 502")) });
+    expect("why" in unread && unread.why).toContain("HTTP 502");
+  });
+
+  test("--since passes straight through, as before", async () => {
+    const h = history();
+    expect(await resolveSince({ since: h.shas[0]!, root: h.root, repo: REPO, runs: runsOf(new Error("never read")) })).toEqual({ sha: h.shas[0]! });
+  });
+
+  test("--since-last-run beside --since or --fixture, or naming no workflow file, is refused before anything is read", () => {
+    const env: Record<string, string | undefined> = { ...process.env };
+    delete env.GITHUB_TOKEN;
+    delete env.GH_TOKEN;
+    const run = (args: string[]) => {
+      const r = spawnSync("bun", [SCRIPT, ...args], { encoding: "utf8", env, timeout: 30_000 });
+      return { code: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+    };
+    const both = run(["--since-last-run", "adr-accepted.yml", "--since", "HEAD~1", "--repo", REPO]);
+    expect(both.code, both.out).toBe(2);
+    expect(both.out).toContain("--since-last-run");
+    const fixture = run(["--since-last-run", "adr-accepted.yml", "--fixture", "x.json", "--repo", REPO]);
+    expect(fixture.code, fixture.out).toBe(2);
+    const bad = run(["--since-last-run", "not a workflow", "--repo", REPO]);
+    expect(bad.code, bad.out).toBe(2);
+    expect(bad.out).toContain("workflow file");
+    // No credential: refused before the runs are read, never read as "no runs".
+    const cred = run(["--since-last-run", "adr-accepted.yml", "--repo", REPO]);
+    expect(cred.code, cred.out).toBe(2);
+    expect(cred.out).toMatch(/credential|GITHUB_TOKEN/);
+  });
+
+  test("one decider: both commands import sinceLastSuccessfulRun from one module and neither defines its own", () => {
+    const src = (p: string) => readFileSync(join(ROOT, p), "utf8");
+    expect(src("lib/last-successful-run.ts")).toContain("export function sinceLastSuccessfulRun(");
+    for (const p of ["scripts/plan-issues.ts", "scripts/close-merged-references.ts"]) {
+      expect(src(p), `${p} defines its own copy`).not.toContain("function sinceLastSuccessfulRun(");
+      expect(src(p), `${p} does not import the shared one`).toMatch(/from "\.\.\/lib\/last-successful-run"/);
+    }
   });
 });
