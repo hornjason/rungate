@@ -4,6 +4,13 @@
  *
  * Usage:
  *   rungate criterion-successor --issue <N> [--repo owner/name] [--project-root <dir>] [--write]
+ *   rungate criterion-successor --sweep [--repo owner/name] [--project-root <dir>] [--write]
+ *
+ * `--sweep` (#2541) asks about every owed criterion instead of one close's:
+ * for the closes whose `closed` event the workflow missed. Each owed
+ * criterion cites the most recent closed issue that names it, by the same
+ * `criterionAnswer` the per-issue path reads, never by the search match
+ * alone. One that no closed issue names is left: there is nothing to succeed.
  *
  * Reads issue <N>, which must be closed, and the criteria it names. For each
  * one that `declared-work` now reads as owed by nobody — unticked in an
@@ -28,7 +35,7 @@ import { readFileSync } from "fs";
 import { join, resolve } from "path";
 
 import { answerableIds, criterionAnswer, specCriteriaIn, specPathSweep } from "../lib/board-mirror";
-import { planSuccessors, type SuccessorMilestone } from "../lib/criterion-successor";
+import { planSuccessors, sweepSuccessors, type SuccessorMilestone, type SuccessorPlan } from "../lib/criterion-successor";
 import { parseOwnerRepo, resolveGitHubToken } from "../lib/github";
 import { readLiveIssues } from "../lib/live-issues";
 import { placementCoverage } from "../lib/spec-placement";
@@ -47,6 +54,15 @@ export interface SuccessorGitHub {
   openIssues: (repo: string) => Promise<{ number: number; title: string; body: string | null }[]>;
   /** The open milestones. */
   milestones: (repo: string) => Promise<SuccessorMilestone[]>;
+  /**
+   * Closed issues whose text matches the id. A search match, not a claim: the
+   * caller reads what each one names. `stateReason` is GitHub's `state_reason`,
+   * null for an issue closed before GitHub recorded one.
+   */
+  closedIssuesNaming: (
+    repo: string,
+    id: string,
+  ) => Promise<{ number: number; title: string; body: string | null; closedAt: string; stateReason: string | null }[]>;
   /** Files the issue and returns its number. */
   createIssue: (repo: string, issue: { title: string; body: string; milestone: number }) => Promise<number>;
 }
@@ -76,6 +92,23 @@ export const LIVE_GITHUB: SuccessorGitHub = {
       .split("\n")
       .filter(l => l.trim() !== "")
       .map(l => JSON.parse(l) as SuccessorMilestone),
+  closedIssuesNaming: async (repo, id) =>
+    gh([
+      "api",
+      "--paginate",
+      "-X",
+      "GET",
+      "search/issues",
+      "-f",
+      `q=repo:${repo} is:issue is:closed "${id}"`,
+      "-f",
+      "per_page=100",
+      "--jq",
+      ".items[] | {number, title, body, closedAt: .closed_at, stateReason: .state_reason} | @json",
+    ])
+      .split("\n")
+      .filter(l => l.trim() !== "")
+      .map(l => JSON.parse(l) as { number: number; title: string; body: string | null; closedAt: string; stateReason: string | null }),
   createIssue: async (repo, i) =>
     Number(
       gh(["api", "-X", "POST", `repos/${repo}/issues`, "-f", `title=${i.title}`, "-f", `body=${i.body}`, "-F", `milestone=${i.milestone}`, "--jq", ".number"]).trim(),
@@ -103,10 +136,12 @@ export async function main(
   planned: (root: string) => ReadonlyMap<string, string> = r => plannedByUnmergedAdr(r, LIVE_GIT(r)),
 ): Promise<number> {
   const issueArg = flag(argv, "--issue");
+  const sweep = argv.includes("--sweep");
   const write = argv.includes("--write");
   const rootFlag = flag(argv, "--project-root");
-  if (issueArg === null || !/^[1-9]\d*$/.test(issueArg)) {
-    return refuse(`--issue needs the number of the closed issue, not ${JSON.stringify(issueArg ?? "nothing")}`);
+  if (sweep && issueArg !== null) return refuse("--sweep reads every owed criterion and takes no --issue");
+  if (!sweep && (issueArg === null || !/^[1-9]\d*$/.test(issueArg))) {
+    return refuse(`--issue needs the number of the closed issue, not ${JSON.stringify(issueArg ?? "nothing")}, or pass --sweep`);
   }
   if (rootFlag === "") return refuse("--project-root needs a directory after it");
   const projectRoot = rootFlag === null ? root : resolve(rootFlag);
@@ -123,9 +158,9 @@ export async function main(
   if (!resolveGitHubToken(env)) return refuse("no GitHub credential; set GITHUB_TOKEN or GH_TOKEN");
 
   // The specs first: a tree whose criteria cannot be read has nothing to ask GitHub about.
-  const sweep = specCriteriaIn(projectRoot);
-  if (sweep.reading === "UNMEASURED") return refuse(`the specs' criteria could not be read (${sweep.unmeasuredReasons.join("; ")})`);
-  const ids = answerableIds(sweep);
+  const criteria = specCriteriaIn(projectRoot);
+  if (criteria.reading === "UNMEASURED") return refuse(`the specs' criteria could not be read (${criteria.unmeasuredReasons.join("; ")})`);
+  const ids = answerableIds(criteria);
   const coverage = placementCoverage(projectRoot, specPathSweep, (base, path) => readFileSync(join(base, path), "utf-8"));
   if (coverage.specs.length === 0 && coverage.reading === "UNMEASURED") {
     return refuse(`the specs' placement could not be read (${coverage.unmeasuredReasons.join("; ")})`);
@@ -133,30 +168,53 @@ export async function main(
   const declared = readDeclaredWork(projectRoot, coverage.specs.map(placementRow), planned(projectRoot));
   if (declared.declaredWork === undefined) return refuse("the declared work could not be read: an in-scope spec or project-state.json is unreadable");
 
-  try {
-    const closed = await api.issue(repo, Number(issueArg));
-    if (closed.state !== "CLOSED") return refuse(`#${closed.number} is ${closed.state.toLowerCase()}, not closed`);
-    const names = criterionAnswer({ title: closed.title, body: closed.body }, ids).names;
-    if (names.length === 0) {
-      console.log(`criterion-successor: #${closed.number} names no criterion, so it left none owed. Nothing to file.`);
-      return 0;
+  const specText = (path: string): string | null => {
+    try {
+      return readFileSync(join(projectRoot, path), "utf-8");
+    } catch {
+      return null;
     }
+  };
+  const owedNow = async () => {
     const open = await api.openIssues(repo);
     const repoIssues = open.map(i => {
       const { names: n, servesNone } = criterionAnswer({ title: i.title, body: i.body }, ids);
       return { number: i.number, names: n, servesNone };
     });
-    const owed = declaredWorkUnaccounted({ declaredWork: declared.declaredWork, repoIssues } as BoardSnapshot)
+    return declaredWorkUnaccounted({ declaredWork: declared.declaredWork, repoIssues } as BoardSnapshot)
       .filter(w => w.kind === "criterion")
       .map(w => ({ id: w.id, source: w.source }));
-    const milestones = await api.milestones(repo);
-    const plan = planSuccessors({ number: closed.number, names }, owed, path => {
-      try {
-        return readFileSync(join(projectRoot, path), "utf-8");
-      } catch {
-        return null;
+  };
+
+  try {
+    let plan: SuccessorPlan;
+    if (sweep) {
+      const owed = await owedNow();
+      // Every search is read before anything is planned: a sweep that could
+      // read some criteria and not others files nothing.
+      const lastNamer = new Map<string, number>();
+      for (const id of [...new Set(owed.map(o => o.id))]) {
+        const naming = (await api.closedIssuesNaming(repo, id))
+          // Done work only. Anyone can file an issue naming a criterion, and
+          // one a maintainer closed as not planned (or as a duplicate) is not
+          // the work a successor should send the next reader to.
+          .filter(i => i.stateReason === "completed" || i.stateReason === null)
+          .filter(i => criterionAnswer({ title: i.title, body: i.body }, ids).names.includes(id))
+          .sort((a, b) => b.closedAt.localeCompare(a.closedAt));
+        if (naming[0] !== undefined) lastNamer.set(id, naming[0].number);
       }
-    }, milestones);
+      plan = sweepSuccessors(owed, lastNamer, specText, await api.milestones(repo));
+    } else {
+      const closed = await api.issue(repo, Number(issueArg));
+      if (closed.state !== "CLOSED") return refuse(`#${closed.number} is ${closed.state.toLowerCase()}, not closed`);
+      const names = criterionAnswer({ title: closed.title, body: closed.body }, ids).names;
+      if (names.length === 0) {
+        console.log(`criterion-successor: #${closed.number} names no criterion, so it left none owed. Nothing to file.`);
+        return 0;
+      }
+      const owed = await owedNow();
+      plan = planSuccessors({ number: closed.number, names }, owed, specText, await api.milestones(repo));
+    }
     if ("why" in plan) return refuse(plan.why);
 
     for (const l of plan.leave) console.log(`leave ${l.id}: ${l.why}`);
