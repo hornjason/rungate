@@ -312,6 +312,8 @@ describe("#1592: run attempts and distinct rounds are two readings, both reporte
   test("R-8: a newest entry with no round number refuses rather than reading an older one's", () => {
     expect(distinctRoundsTaken(pr(1, numbered([1, 2, null]), true))).toHaveProperty("refusal", "ROUNDS_NOT_NUMBERED");
     expect(distinctRoundsTaken(pr(1, numbered([null, 1, 2]), true))).toEqual({ rounds: 2 });
+    // The newest entry's own number, never the largest anywhere (review of #2551).
+    expect(distinctRoundsTaken(pr(1, numbered([1, 3, 2]), true))).toEqual({ rounds: 2 });
   });
 
   // Review of #2551: a count of unmeasured pull requests names each one.
