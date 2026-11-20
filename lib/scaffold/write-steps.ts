@@ -16,7 +16,7 @@
 
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { ADR_TEMPLATE_PATH, processFiles, WORK_LOOP_COMMAND_PATH } from "./process-files";
+import { ADR_TEMPLATE_PATH, NO_TEST_COMMAND_WHY, processFiles, WORK_LOOP_COMMAND_PATH } from "./process-files";
 import { decideRuleWrite } from "../rule-provenance";
 import { isHarnessItself } from "../harness-identity";
 import { testCommandDecision } from "../test-command";
@@ -233,7 +233,7 @@ What does this workflow produce?
  * command is a provenance file like a rule — a consumer may tailor it, and a
  * hand edit is preserved and reported rather than overwritten.
  */
-export function writeProcessFiles(projectPath: string, actions: string[]): void {
+export function writeProcessFiles(projectPath: string, actions: string[], templatesDir?: string): void {
   // #2486: the work loop's test step is the command the generated CI runs.
   // A config that cannot be read refuses the work loop BY NAME, the reason
   // carried into its REFUSED line, and the other process files are written as
@@ -247,9 +247,11 @@ export function writeProcessFiles(projectPath: string, actions: string[]): void 
   } catch (e) {
     unread = `the rungate config could not be read (${(e as Error).message}), so the work loop's test command is unknown`;
   }
-  for (const file of processFiles(isHarnessItself(projectPath), undefined, testCommand)) {
+  for (const file of processFiles(isHarnessItself(projectPath), templatesDir, testCommand)) {
     if (file.content === null) {
-      const why = file.path === WORK_LOOP_COMMAND_PATH && unread !== undefined ? unread : file.why;
+      // The unread config explains only the missing test command; any other
+      // refusal, such as a missing template, is named as processFiles gave it (#2519).
+      const why = file.path === WORK_LOOP_COMMAND_PATH && unread !== undefined && file.why === NO_TEST_COMMAND_WHY ? unread : file.why;
       actions.push(`REFUSED: ${file.path} (${why}) — nothing was written`);
       continue;
     }

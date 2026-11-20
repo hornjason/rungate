@@ -32,8 +32,8 @@ remote.
    inside that worktree. If `origin/HEAD` is not set,
    `git remote set-head origin --auto` sets it once.
 4. **Test first:** write the test the issue's "How we will know" asks for,
-   run `{{TEST_COMMAND}}`, and see it fail for the right reason. Commit it.
-   Then make the change and run `{{TEST_COMMAND}}` until it passes. This is
+   run {{TEST_COMMAND}}, and see it fail for the right reason. Commit it.
+   Then make the change and run {{TEST_COMMAND}} until it passes. This is
    the command CI runs (`dev.testCmd` in the rungate config, or what scaffold
    found in the project); if it is wrong, set `dev.testCmd` and re-scaffold.
 5. **Pull request:** push the branch, then
