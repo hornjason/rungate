@@ -106,6 +106,15 @@ describe("#2490: planSuccessors decides which criteria a closed issue leaves owe
     expect("why" in plan && plan.why).toContain("Fixture Phase 1 — a stray duplicate");
   });
 
+  // The first live successor, #2544, was titled "CRC-N3: **Flag the class of
+  // bug**, so …": a title is plain text, and GitHub prints the asterisks.
+  test("a title drops the criterion's bold markers, and keeps its words and code spans", () => {
+    expect(successorTitle("TST-1", "**Flag the class of bug**, so the author fixes `every` instance")).toBe(
+      "TST-1: Flag the class of bug, so the author fixes `every` instance",
+    );
+    expect(successorTitle("TST-1", "__also__ this")).toBe("TST-1: also this");
+  });
+
   test("a spec that cannot be read refuses rather than file a successor with no phase", () => {
     const plan = planSuccessors({ number: 5, names: ["TST-1"] }, [{ id: "TST-1", source: "specs/GONE.md" }], spec, MILESTONES);
     expect("why" in plan && plan.why).toContain("specs/GONE.md");
