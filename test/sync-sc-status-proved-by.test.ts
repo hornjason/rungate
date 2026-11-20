@@ -17,7 +17,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { parseCriteria } from "../lib/spec-evidence";
+import { criterionFingerprint, evidenceViolations, parseCriteria } from "../lib/spec-evidence";
 import { flipCheckboxes, proofsFor, testTitleAt, withProofLine } from "../scripts/sync-sc-status";
 
 const ROOT = join(import.meta.dir, "..");
@@ -146,6 +146,99 @@ describe("#2487: flipCheckboxes writes the proof beside the tick", () => {
     const dir = specDir();
     flipCheckboxes("FIXTURE-SPEC.md", ["SC-9862"], dir, false);
     expect(readFileSync(join(dir, "FIXTURE-SPEC.md"), "utf8")).toBe(SPEC.replace("- [ ] SC-9862:", "- [x] SC-9862:"));
+  });
+});
+
+/**
+ * #2508: in a spec that declares `evidence: required`, a ticked criterion
+ * also needs `fingerprint:`, or `test/spec-evidence.test.ts` refuses it.
+ * The tick wrote `proved-by:` and stopped, so every tick in a bound spec was
+ * red until somebody ran `audit-spec-evidence --record-fingerprints` too.
+ */
+describe("#2508: a tick in a spec that declares evidence also writes its fingerprint", () => {
+  const BOUND = SPEC.replace("testable: true\n", "testable: true\nevidence: required\n");
+  const boundDir = () => {
+    const d = scratch();
+    writeFileSync(join(d, "FIXTURE-SPEC.md"), BOUND);
+    return d;
+  };
+  const criterion = (content: string, id: string) => parseCriteria(content).find(c => c.id === id)!;
+
+  test("the tick gains both lines, and the audit's own checker has nothing left to refuse", () => {
+    const dir = boundDir();
+    flipCheckboxes("FIXTURE-SPEC.md", ["SC-9861", "SC-9862"], dir, false, new Map([
+      ["SC-9861", 'test/a.test.ts "SC-9861: the first thing"'],
+      ["SC-9862", "test/b.test.ts"],
+    ]));
+    const after = readFileSync(join(dir, "FIXTURE-SPEC.md"), "utf8");
+    for (const id of ["SC-9861", "SC-9862"]) {
+      const c = criterion(after, id);
+      expect(c.recordedFingerprint, id).toBe(criterionFingerprint(c.text));
+    }
+    // The checker CI runs. SC-9861's block is complete, so nothing about it is
+    // refused; SC-9862's fixture lacks a `needs:` line, which is not this
+    // change's to write, so for it only the proof and fingerprint codes count.
+    const violations = evidenceViolations(after, "2026-11-19");
+    expect(violations.filter(v => v.id === "SC-9861")).toEqual([]);
+    const evidenceCodes = ["FINGERPRINT_MISSING", "TICKED_WITHOUT_EVIDENCE", "EVIDENCE_BLANK", "EVIDENCE_STALE"];
+    expect(violations.filter(v => v.id === "SC-9862" && evidenceCodes.includes(v.code))).toEqual([]);
+  });
+
+  test("a spec that does not declare evidence gets proved-by only, as before", () => {
+    const dir = specDir();
+    flipCheckboxes("FIXTURE-SPEC.md", ["SC-9861"], dir, false, new Map([["SC-9861", "test/a.test.ts"]]));
+    const after = readFileSync(join(dir, "FIXTURE-SPEC.md"), "utf8");
+    expect(criterion(after, "SC-9861").provedBy).toBe("test/a.test.ts");
+    expect(criterion(after, "SC-9861").recordedFingerprint).toBeNull();
+    expect(after).not.toContain("fingerprint:");
+  });
+
+  test("a criterion that already has its proof gets no fingerprint from the tick: recording one is the audit's call", () => {
+    const dir = boundDir();
+    flipCheckboxes("FIXTURE-SPEC.md", ["SC-9863"], dir, false, new Map([["SC-9863", "test/c.test.ts"]]));
+    const after = readFileSync(join(dir, "FIXTURE-SPEC.md"), "utf8");
+    expect(criterion(after, "SC-9863").recordedFingerprint).toBeNull();
+  });
+
+  // Review of #2512: a block holding a `fingerprint:` and no `proved-by:` (a
+  // hand revert that removed only the proof) got a second fingerprint. The
+  // existing one is kept, as `--record-fingerprints` keeps it: if it is stale,
+  // the audit's staleness check is what says so, and a second line would hide it.
+  test("a block that already carries a fingerprint gets the proof and no second fingerprint", () => {
+    const dir = scratch();
+    const leftover = BOUND.replace(
+      "- [ ] SC-9861: the first thing is true\n      needs: test\n",
+      "- [ ] SC-9861: the first thing is true\n      needs: test\n      fingerprint: deadbeef\n",
+    );
+    expect(leftover).not.toBe(BOUND);
+    writeFileSync(join(dir, "FIXTURE-SPEC.md"), leftover);
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    let said = "";
+    try {
+      flipCheckboxes("FIXTURE-SPEC.md", ["SC-9861"], dir, false, new Map([["SC-9861", "test/a.test.ts"]]));
+      said = log.mock.calls.map(c => String(c[0])).join("\n");
+    } finally {
+      log.mockRestore();
+    }
+    const after = readFileSync(join(dir, "FIXTURE-SPEC.md"), "utf8");
+    const block = after.slice(after.indexOf("- [x] SC-9861:"), after.indexOf("- [ ] SC-9862:"));
+    expect(block.match(/^\s+fingerprint:/gm)?.length, block).toBe(1);
+    expect(block).toContain("fingerprint: deadbeef");
+    expect(criterion(after, "SC-9861").provedBy).toBe("test/a.test.ts");
+    expect(said).not.toContain("SC-9861: wrote fingerprint");
+  });
+
+  test("--dry-run says which fingerprint it would write, and writes nothing", () => {
+    const dir = boundDir();
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      flipCheckboxes("FIXTURE-SPEC.md", ["SC-9861"], dir, true, new Map([["SC-9861", "test/a.test.ts"]]));
+      const said = log.mock.calls.map(c => String(c[0])).join("\n");
+      expect(said).toContain(`SC-9861: would write fingerprint: ${criterionFingerprint("the first thing is true")}`);
+    } finally {
+      log.mockRestore();
+    }
+    expect(readFileSync(join(dir, "FIXTURE-SPEC.md"), "utf8")).toBe(BOUND);
   });
 });
 

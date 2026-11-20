@@ -27,6 +27,7 @@ import { matchPattern, isBehavioralSC, type ParsedSC } from "../lib/conformity";
 import { behavioralCachePath, readFreshCache } from "../lib/behavioral-cache";
 import { readDerivedDeclaration, skipLine } from "../lib/derived-spec";
 import { maySpecBeWritten, writeSpec } from "../lib/write-spec";
+import { criterionFingerprint, parseCriteria, specDeclaresEvidence } from "../lib/spec-evidence";
 import { detectDrift } from "./detect-sc-drift";
 import {
   ambiguityOf,
@@ -919,6 +920,15 @@ export function proofsFor(
 }
 
 const PROOF_OR_WAIVER = /^\s{2,}(?:proved-by|waived-reason|waived-by|waived-until):/;
+/**
+ * Review of #2512: a block can hold a `fingerprint:` with no proof, after a
+ * hand revert that removed only the `proved-by:` line. The tick then writes
+ * the proof and keeps that fingerprint, never a second one. That is
+ * `audit-spec-evidence --record-fingerprints`'s rule too: a recorded
+ * fingerprint is never rewritten, because if it is stale the audit's
+ * staleness check is what reports it, and a second line would hide that.
+ */
+const FINGERPRINT_LINE = /^\s{2,}fingerprint:/;
 
 /**
  * `content` with a `proved-by:` line written under ticked criterion `id`
@@ -927,18 +937,26 @@ const PROOF_OR_WAIVER = /^\s{2,}(?:proved-by|waived-reason|waived-by|waived-unti
  * same run `parseCriteria` in lib/spec-evidence.ts reads, and the line goes
  * at its end, at the indent of the block's first annotation, or six spaces.
  */
-export function withProofLine(content: string, id: string, proof: string): { content: string; wrote: boolean } {
+export function withProofLine(
+  content: string,
+  id: string,
+  proof: string,
+  /** #2508: written beneath the proof when the spec declares `evidence: required`. */
+  fingerprint?: string,
+): { content: string; wrote: boolean; wroteFingerprint: boolean } {
   const lines = content.split("\n");
   const at = lines.findIndex(l => l.startsWith(`- [x] ${id}:`) || l.startsWith(`- [X] ${id}:`));
-  if (at === -1) return { content, wrote: false };
+  if (at === -1) return { content, wrote: false, wroteFingerprint: false };
   let end = at + 1;
   let indent = "      ";
   let sawAnnotation = false;
+  let hasFingerprint = false;
   // An unindented `<!-- REVIEW: … -->` marker from `audit-specs --fix` sits
   // inside the block, as parseCriteria reads it; stopping there would miss a
   // proof or waiver below it and write a second one (review of #2492).
   while (end < lines.length && (/^\s{2,}\S/.test(lines[end]) || /^\s*<!--/.test(lines[end]))) {
-    if (PROOF_OR_WAIVER.test(lines[end])) return { content, wrote: false };
+    if (PROOF_OR_WAIVER.test(lines[end])) return { content, wrote: false, wroteFingerprint: false };
+    if (FINGERPRINT_LINE.test(lines[end])) hasFingerprint = true;
     const kv = lines[end].match(/^(\s{2,})[a-z-]+:/);
     if (kv && !sawAnnotation) {
       indent = kv[1];
@@ -946,8 +964,9 @@ export function withProofLine(content: string, id: string, proof: string): { con
     }
     end++;
   }
-  lines.splice(end, 0, `${indent}proved-by: ${proof}`);
-  return { content: lines.join("\n"), wrote: true };
+  const wroteFingerprint = fingerprint !== undefined && !hasFingerprint;
+  lines.splice(end, 0, `${indent}proved-by: ${proof}`, ...(wroteFingerprint ? [`${indent}fingerprint: ${fingerprint}`] : []));
+  return { content: lines.join("\n"), wrote: true, wroteFingerprint };
 }
 
 export function flipCheckboxes(
@@ -985,10 +1004,17 @@ export function flipCheckboxes(
       // person wrote this line by hand.
       const proof = proofs?.get(id);
       if (proof) {
-        const r = withProofLine(content, id, proof);
+        // #2508: a spec that declares `evidence: required` also refuses a
+        // tick with no `fingerprint:`, so it is written in the same edit, by
+        // the one function audit-spec-evidence records it with.
+        const text = specDeclaresEvidence(content) ? parseCriteria(content).find(c => c.id === id)?.text : undefined;
+        const fingerprint = text === undefined ? undefined : criterionFingerprint(text);
+        const r = withProofLine(content, id, proof, fingerprint);
         if (r.wrote) {
           content = r.content;
-          console.log(`  ${id}: ${shouldSkipWrite ? "would write" : "wrote"} proved-by: ${proof}`);
+          const verb = shouldSkipWrite ? "would write" : "wrote";
+          console.log(`  ${id}: ${verb} proved-by: ${proof}`);
+          if (r.wroteFingerprint) console.log(`  ${id}: ${verb} fingerprint: ${fingerprint}`);
         }
       }
     }
