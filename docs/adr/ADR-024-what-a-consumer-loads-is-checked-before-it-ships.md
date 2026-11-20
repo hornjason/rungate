@@ -34,10 +34,10 @@ bun check-instruction-surface.ts --root $W/ddb
 
 | Defect | Where | Why no current check sees it |
 |---|---|---|
-| key-files states two sources of truth for project status (#2564) | `lib/scaffold/steps.ts:440` | each row is valid alone; the contradiction exists only between rows |
-| the discovery brief points at an AGENTS.md "Specs table" that does not exist (#2565) | `templates/agent-briefs/discovery.md:22,27,31` | the brief is valid alone; the reference is wrong relative to the rendered AGENTS.md |
-| docs-routing bakes `(N files)` into an always-loaded rule (#2566) | `lib/scaffold/steps.ts:549`, `lib/scanner.ts:352`, `lib/doc-routing.ts:152` | correct at render time; wrong one commit later |
-| `CANARY_MARKER_FOR_SC354`, a bare `${SOURCE_DIRS}`, and lists numbered 1, 3 (#2567) | `templates/agent-briefs/marcus.md:26,37`, and aditi, rook, serena, discovery | SC-354 writes the canary into the real template (`test/agent-brief-template.test.ts:286`); it leaked in ba7a00ff0, and the test still passes because it asserts that the canary appears |
+| key-files states two sources of truth for project status (#2564) | `lib/scaffold/steps.ts` | each row is valid alone; the contradiction exists only between rows |
+| the discovery brief points at an AGENTS.md "Specs table" that does not exist (#2565) | `templates/agent-briefs/discovery.md` | the brief is valid alone; the reference is wrong relative to the rendered AGENTS.md |
+| docs-routing bakes `(N files)` into an always-loaded rule (#2566) | `lib/scaffold/steps.ts`, `lib/scanner.ts`, `lib/doc-routing.ts` | correct at render time; wrong one commit later |
+| `CANARY_MARKER_FOR_SC354`, a bare `${SOURCE_DIRS}`, and lists numbered 1, 3 (#2567) | `templates/agent-briefs/marcus.md`, and aditi, rook, serena, discovery | SC-354 writes the canary into the real template (`test/agent-brief-template.test.ts`); it leaked in ba7a00ff0, and the test still passes because it asserts that the canary appears |
 
 **3. Pressure language and model names are not rungate's problem today.** A count of MANDATORY, NEVER, CRITICAL, MUST, IMPORTANT and ZERO EXCEPTIONS gives at most 1 per brief in `templates/agent-briefs/`. A search for a model name in `templates/` finds none. The consumer's surface does have them: about 19 pressure markers in its CLAUDE.md, and its rules point at retired files. That text belongs to the consumer, so a lint for it belongs on the consumer side (row SC-2804). A rungate-side lint would have nothing to fail on.
 
@@ -75,6 +75,7 @@ On the consumer side, the same surface check runs inside the conformity test run
 - **Whether contradiction between rows (the key-files case) can be checked deterministically.** Until there is a detector that fails on that case and passes a negative control, it stays with the model lens.
 - **The fixture set.** `test/fixtures/golden-project` is one fixture. Whether to add a legacy-monolith config consumer (as SUCCESS.md "Done, for a consumer" describes) belongs to SC-2798's issue.
 - **Milestones.** Every row below says `—` until the phase placement table in `specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md` gives them one (ADR-021).
+- **Which spec governs these criteria.** `specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md` declares `board-scope: deferred`, so SC-2795 to SC-2804 are banked as deferred (`.claude/spec-deferral-ratchet.json`, 28 to 38) and are not placed in board phases. ADR-022 and ADR-023 put theirs in the active `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`. `specs/CODE-REVIEW-CONVERGENCE-SPEC.md` is active and already names this check (CRC-A3). Jason decides before merge whether to move them there.
 
 ## Decomposition
 
