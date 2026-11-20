@@ -172,6 +172,29 @@ describe("#1818: which class threads still owe a population", () => {
     expect(r.status).toBe("UNMEASURED");
   });
 
+  /**
+   * #2570 review: a thread with no replies makes only ITSELF unknown. Read
+   * thread by thread, so a known owed population still refuses whatever
+   * order the list is in. Aborting the whole reading at the first unread
+   * thread downgraded every owed one to a warning, and named the list as
+   * carrying no replies when most of it did.
+   */
+  test("PD-9b: one thread without replies does not hide another that owes", () => {
+    const unread = { body: classBody, replies: undefined };
+    const owing = { body: threadBody({ ...CLASS_FINDING, summary: "Three reads skip the cursor" }, "k2"), replies: [] };
+    const answered = { body: threadBody({ ...CLASS_FINDING, summary: "Two loops stop at 100" }, "k3"), replies: [{ body: STATED, bot: false }] };
+
+    for (const list of [[unread, owing], [owing, unread]]) {
+      const r = populationOwed(list);
+      expect(r.status).toBe("MEASURED");
+      expect(r.status === "MEASURED" ? r.owed.map(o => o.includes("Three reads skip the cursor")) : []).toEqual([true]);
+    }
+    // Nothing known to be owed, one thread unknown: that one is named.
+    const mixed = populationOwed([answered, unread]);
+    expect(mixed.status).toBe("UNMEASURED");
+    expect(mixed.status === "UNMEASURED" ? mixed.reason : "").toContain("1 of 2");
+  });
+
   test("PD-10: read from the bytes the carry step writes", () => {
     const owing = JSON.stringify([{ isResolved: true, body: classBody, replies: [{ body: "done", bot: false }] }]);
     const declared = JSON.stringify([{ isResolved: true, body: classBody, replies: [{ body: STATED, bot: false }] }]);
