@@ -1681,26 +1681,38 @@ export interface PopulationThread {
  * Which earlier class threads still owe a population, one sentence each.
  *
  * Resolved threads count: resolving is the step the criterion says cannot
- * come first. A list with no replies is UNMEASURED rather than owing
- * everything, so a consumer on an older carry step is warned, not blocked.
+ * come first. Read thread by thread: a thread whose replies were not read is
+ * unknown, and only it. Any thread known to owe refuses, whatever else the
+ * list holds; only when none is known to owe does an unread one make the
+ * reading UNMEASURED, so a consumer on an older carry step is warned, not
+ * blocked (#2570 review).
  */
 export type PopulationOwedReading =
   | { status: "MEASURED"; owed: string[] }
   | { status: "UNMEASURED"; reason: string };
 
 export const POPULATION_REPLIES_NOT_READ =
-  "the review-thread list carries no replies — it was written by a carry step older than CRC-N7 — " +
-  "so whether each class finding's population was stated cannot be read";
+  "carried no replies — a carry step older than CRC-N7 writes none — " +
+  "so whether their population was stated cannot be read";
 
 export function populationOwed(threads: readonly PopulationThread[]): PopulationOwedReading {
   const owed: string[] = [];
+  let classes = 0;
+  let unread = 0;
   for (const t of threads) {
     const population = threadPopulationFrom(t.body);
     if (population === null) continue;
-    if (t.replies === undefined) return { status: "UNMEASURED", reason: POPULATION_REPLIES_NOT_READ };
+    classes++;
+    if (t.replies === undefined) {
+      unread++;
+      continue;
+    }
     if (t.replies.some(r => !r.bot && populationDeclared(r.body))) continue;
     const first = String(t.body).split("\n")[0]!.replace(/^\*\*[^*]+\*\* — /, "");
     owed.push(`"${first.length > 160 ? `${first.slice(0, 157)}...` : first}" (declared population ${population})`);
+  }
+  if (owed.length === 0 && unread > 0) {
+    return { status: "UNMEASURED", reason: `${unread} of ${classes} class thread(s): ${POPULATION_REPLIES_NOT_READ}` };
   }
   return { status: "MEASURED", owed };
 }
