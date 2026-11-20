@@ -95,6 +95,17 @@ describe("#2490: planSuccessors decides which criteria a closed issue leaves owe
     expect("why" in plan && plan.why).toContain("specs/FIX.md and specs/FIX2.md both state it");
   });
 
+  // #2535 (round 4 of #2534's review): two open milestones that both read as
+  // the criterion's phase made `.find` pick the first, with no sign the
+  // placement was a guess.
+  test("two open milestones that read as one phase refuse, naming both, rather than file into the first", () => {
+    const twice = [...MILESTONES, { number: 21, title: "Fixture Phase 1 — a stray duplicate" }];
+    const plan = planSuccessors({ number: 5, names: ["TST-1"] }, [{ id: "TST-1", source: "specs/FIX.md" }], spec, twice);
+    expect("file" in plan, "filed into one of two matching milestones").toBe(false);
+    expect("why" in plan && plan.why).toContain("Fixture Phase 1 — the first");
+    expect("why" in plan && plan.why).toContain("Fixture Phase 1 — a stray duplicate");
+  });
+
   test("a spec that cannot be read refuses rather than file a successor with no phase", () => {
     const plan = planSuccessors({ number: 5, names: ["TST-1"] }, [{ id: "TST-1", source: "specs/GONE.md" }], spec, MILESTONES);
     expect("why" in plan && plan.why).toContain("specs/GONE.md");
