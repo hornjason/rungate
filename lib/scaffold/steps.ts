@@ -546,6 +546,9 @@ export function generateAgentsMdContent(
   // to nothing. The same decision is made in scanner.ts.
   for (const cat of categories) {
     if (existsSync(join(projectPath, cat.dir))) docRouting.push({ need: cat.label, file: `${cat.dir}/` });
+    // Named, not silent (review of #2573): a missing category is a line in the
+    // report rather than nothing, so it is not mistaken for one never declared.
+    else actions.push(`SKIP: ${cat.dir}/ is not routed — the directory does not exist`);
   }
   // Through the one binding (#617, #619). This was a complete second copy of
   // `scanDocRouting`, with its own inline `governs:` regex — and it is the copy
