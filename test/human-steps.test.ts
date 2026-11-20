@@ -138,15 +138,16 @@ describe("SC-2749: every human step still owed is one command", () => {
     expect(lines).toEqual([
       `UNMEASURED: ${PROJECT_TOKEN_SECRET} — HTTP 403: Resource not accessible`,
       "UNMEASURED: required checks (closing-references) — GET …/protection returned 403",
-      `${tokenRow} — the secret could not be read, so it is not known that there is a token to ask about`,
+      `${tokenRow} — the secret could not be read (HTTP 403: Resource not accessible), so it is not known that there is a token to ask about`,
     ]);
     expect(lines.join("\n")).not.toMatch(/none owed|done/i);
   });
 
-  test("no GitHub repository at all is one UNMEASURED line, not a clean report", () => {
+  test("no GitHub repository at all is one UNMEASURED line, then the board row, not a clean report", () => {
     const lines = humanSteps({ ...allSet, slug: read(null) });
-    expect(lines).toHaveLength(1);
+    expect(lines).toHaveLength(2);
     expect(lines[0]).toStartWith("UNMEASURED: human steps");
+    expect(lines[1]).toStartWith(tokenRow);
   });
 
   // SC-2793 made the token row UNMEASURED whenever a board is set: GitHub never
@@ -551,14 +552,24 @@ describe("SC-2793: the human-steps report says whether board.id is set and wheth
   test("board.id set and no secret, or one that could not be read: the token row says there is no token to ask about", () => {
     expect(humanSteps({ ...allSet, secretPresent: read(false) }).at(-1)).toBe(`${tokenRow} — no ${PROJECT_TOKEN_SECRET} is set, so there is no token to ask about`);
     expect(humanSteps({ ...allSet, secretPresent: unmeasured("HTTP 403") }).at(-1)).toBe(
-      `${tokenRow} — the secret could not be read, so it is not known that there is a token to ask about`,
+      `${tokenRow} — the secret could not be read (HTTP 403), so it is not known that there is a token to ask about`,
     );
   });
 
-  test("no GitHub repository: the one UNMEASURED line names the project board among what was not read", () => {
-    const lines = humanSteps({ ...allSet, slug: read(null) });
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("the project board");
+  // Review of #2529: board.id is read from the local config, so a project
+  // with no GitHub remote still has its board reported as read, and only what
+  // needs a repository says why it was not.
+  test("no GitHub repository: board.id is still reported as read, and only what needs a repository says why it is not", () => {
+    const why = "the origin remote names no GitHub repository";
+    const set = humanSteps({ ...allSet, slug: read(null) });
+    expect(set[0], "the board is not among what was not read").not.toContain("the project board");
+    expect(set.at(-1)).toBe(`${tokenRow} — ${why}, so there is no repository to read the secret from`);
+    expect(humanSteps({ ...allSet, slug: read(null), boardId: read(null) }).at(-1)).toBe(
+      `UNMEASURED: the project board — board.id is not set, and ${why}, so there is no repository for board-init to make one for`,
+    );
+    expect(humanSteps({ ...allSet, slug: unmeasured("git exited 128"), boardId: unmeasured("the rungate config could not be read (x)") }).at(-1)).toStartWith(
+      "UNMEASURED: the project board — board.id could not be read (the rungate config could not be read (x))",
+    );
   });
 
   test("readBoardId: no config is no board; a board.id is read; a malformed config or an id no project has is UNMEASURED", () => {

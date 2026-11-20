@@ -77,9 +77,17 @@ export interface HumanStepReadings {
  * The project board's row (SC-2793): whether `board.id` is set, and whether
  * the project token can write that board. Always exactly one line, never done.
  */
-function boardRow(boardId: Reading<string | null>, secretPresent: Reading<boolean>): string {
+function boardRow(boardId: Reading<string | null>, secretPresent: Reading<boolean>, noRepository?: string): string {
   if (boardId.kind === "UNMEASURED") {
     return `UNMEASURED: the project board — board.id could not be read (${boardId.why}), so whether ${PROJECT_TOKEN_SECRET} can write it was not asked`;
+  }
+  // board.id is read from the local config, so it is reported even with no
+  // GitHub repository; only the parts that need one say why they are not read
+  // (review of #2529).
+  if (noRepository !== undefined) {
+    return boardId.value === null
+      ? `UNMEASURED: the project board — board.id is not set, and ${noRepository}, so there is no repository for board-init to make one for`
+      : `UNMEASURED: whether ${PROJECT_TOKEN_SECRET} can write board ${boardId.value} — ${noRepository}, so there is no repository to read the secret from`;
   }
   if (boardId.value === null) {
     return (
@@ -89,7 +97,7 @@ function boardRow(boardId: Reading<string | null>, secretPresent: Reading<boolea
   }
   const id = boardId.value;
   const head = `UNMEASURED: whether ${PROJECT_TOKEN_SECRET} can write board ${id}`;
-  if (secretPresent.kind === "UNMEASURED") return `${head} — the secret could not be read, so it is not known that there is a token to ask about`;
+  if (secretPresent.kind === "UNMEASURED") return `${head} — the secret could not be read (${secretPresent.why}), so it is not known that there is a token to ask about`;
   if (!secretPresent.value) return `${head} — no ${PROJECT_TOKEN_SECRET} is set, so there is no token to ask about`;
   return (
     `${head} — GitHub never returns a secret's value, so scaffold cannot try it. With the token in hand: ` +
@@ -107,10 +115,11 @@ export function humanSteps(r: HumanStepReadings): string[] {
         ? `the origin remote could not be read (${r.slug.why})`
         : "the origin remote names no GitHub repository";
     return [
-      `UNMEASURED: human steps — ${why}, so the project token, the project board, ` +
+      `UNMEASURED: human steps — ${why}, so the project token, ` +
         `${REQUIRE_CLOSING_REF_VARIABLE} and the required checks were not read.`,
       // Read from the tree, not from GitHub, so it is owed whatever the remote is.
       ...unreadWorkflows,
+      boardRow(r.boardId, r.secretPresent, why),
     ];
   }
   const slug = r.slug.value;
