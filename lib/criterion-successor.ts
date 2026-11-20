@@ -68,8 +68,15 @@ export type SuccessorPlan = { file: Successor[]; leave: { id: string; why: strin
  */
 export function successorTitle(id: string, text: string): string {
   const MAX = 100;
+  // Odd pieces of the split are code spans (a run of backticks, its body, the
+  // same run again) and pass through untouched: `__init__` is a name, not
+  // emphasis (review of #2545). Only the prose between them loses its markers.
   const flat = text
-    .replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_m, a: string | undefined, b: string | undefined) => a ?? b ?? "")
+    .split(/(`+[^`]*?`+)/)
+    .map((piece, i) =>
+      i % 2 === 1 ? piece : piece.replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_m, a: string | undefined, b: string | undefined) => a ?? b ?? ""),
+    )
+    .join("")
     .replace(/\s+/g, " ")
     .trim();
   if (flat.length <= MAX) return `${id}: ${flat}`;
