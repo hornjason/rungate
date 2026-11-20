@@ -65,12 +65,13 @@ export const CONSUMER_INTAKE_COMMANDS = ["consumer-triage", "board-mirror", "boa
 export const CONSUMER_TRIAGE_STEP_ID = "triage";
 
 /**
- * The triage step's shell. It reports `wrote=true` when consumer-triage's
- * header counts one or more issues with no verdict, because with `--write`
- * those are the ones it just wrote. The header is the line
- * `scripts/consumer-triage.ts` prints, and test/intake-triage-workflow.test.ts
- * holds the two to the same words. A triage that fails part-way still reports
- * what it wrote, and the step stays red.
+ * The triage step's shell. It reports `wrote=true` only when consumer-triage
+ * printed a milestone it SET this run: the indented `milestone "<name>"`
+ * result line, which it prints after `setMilestone` returns. Not the header's
+ * pending count, which also counts issues the triage refused or left and wrote
+ * nothing for (review of #2572). test/intake-triage-workflow.test.ts holds the
+ * pattern to what `scripts/consumer-triage.ts` prints. A triage that fails
+ * part-way still reports what it wrote, and the step stays red.
  */
 export function triageRun(cli: string): string {
   return [
@@ -78,7 +79,7 @@ export function triageRun(cli: string): string {
     'out="$RUNNER_TEMP/consumer-triage.out"',
     "code=0",
     `${cli} consumer-triage --repo "$GITHUB_REPOSITORY" --write | tee "$out" || code=$?`,
-    `if grep -Eq ', [1-9][0-9]* with no verdict$' "$out"; then echo "wrote=true" >> "$GITHUB_OUTPUT"; fi`,
+    `if grep -q '^      milestone "' "$out"; then echo "wrote=true" >> "$GITHUB_OUTPUT"; fi`,
     'exit "$code"',
   ].join("\n");
 }

@@ -259,26 +259,32 @@ describe("#2571: the board's Criteria column is mirrored after a triage writes",
     return { code: r.status, output: text };
   }
 
-  test("MT-3: a run that triaged something says wrote=true; one with nothing pending says nothing", () => {
-    expect(runTriage("consumer-triage — o/r: 5 open from-consumer issue(s), 2 with no verdict", 0)).toEqual({
-      code: 0,
-      output: "wrote=true\n",
-    });
+  const HEADER = "consumer-triage — o/r: 5 open from-consumer issue(s), 2 with no verdict";
+  const SET = `${HEADER}\n  #12  ACTIVE → "Engine Phase 10" — lowest open phase\n      milestone "Engine Phase 10"\n      verdict comment`;
+
+  test("MT-3: a run that set a milestone says wrote=true; one that set none says nothing", () => {
+    expect(runTriage(SET, 0)).toEqual({ code: 0, output: "wrote=true\n" });
     expect(runTriage("consumer-triage — o/r: 5 open from-consumer issue(s), 0 with no verdict", 0)).toEqual({
       code: 0,
       output: "",
     });
   });
 
+  test("MT-3b: pending issues the triage refused or left wrote nothing, so the mirror does not run (review of #2572)", () => {
+    const refused = `${HEADER}\n  #12  REFUSED — ambiguous\n  #13  LEFT — not a consumer report`;
+    expect(runTriage(refused, 1)).toEqual({ code: 1, output: "" });
+  });
+
   test("MT-4: a triage that failed part-way still reports what it wrote, and the step stays red", () => {
-    expect(runTriage("consumer-triage — o/r: 3 open from-consumer issue(s), 1 with no verdict", 1)).toEqual({
+    expect(runTriage(`${SET}\n  #14  ACTIVE → "Engine Phase 10" — x\n      FAILED: 502 — no verdict comment`, 1)).toEqual({
       code: 1,
       output: "wrote=true\n",
     });
   });
 
-  test("MT-5: the line the step reads is the line consumer-triage prints", () => {
+  test("MT-5: the line the step reads is the line consumer-triage prints after setting a milestone", () => {
     const script = readFileSync(join(import.meta.dir, "..", "scripts", "consumer-triage.ts"), "utf-8");
-    expect(script).toContain("${pending.length} with no verdict`");
+    expect(script).toContain("await gh.setMilestone(repo, issue.number, triage.milestone);\n        row.results.push(`milestone \"${triage.milestone}\"`);");
+    expect(script).toContain("for (const x of r.results) console.log(`      ${x}`);");
   });
 });
