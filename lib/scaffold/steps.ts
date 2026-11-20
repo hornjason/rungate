@@ -539,18 +539,13 @@ export function generateAgentsMdContent(
       docRouting.push({ need: intent, file: f });
     }
   }
+  // #2566: a row per category that EXISTS, and no file count. The rule loads in
+  // every session, and a count taken at scaffold time is wrong after the next
+  // commit that adds a doc; one consumer's table said `specs/ (1 files)` over
+  // five. A directory the project never had gets no row, rather than a route
+  // to nothing. The same decision is made in scanner.ts.
   for (const cat of categories) {
-    const catPath = join(projectPath, cat.dir);
-    if (existsSync(catPath)) {
-      // Recursive — see the same fix in scanner.ts. This is a second copy of
-      // scanDocRouting and it is the one the scaffold actually calls, so the
-      // scanner fix alone changed no generated output at all (#91).
-      const files = readdirSorted(catPath, { recursive: true }).filter(f => f.endsWith(".md"));
-      docRouting.push({ need: `${cat.label} (${files.length} files)`, file: `${cat.dir}/` });
-    } else {
-      docRouting.push({ need: cat.label, file: `${cat.dir}/` });
-      actions.push(`WARN: ${cat.dir}/ listed in routing but directory does not exist`);
-    }
+    if (existsSync(join(projectPath, cat.dir))) docRouting.push({ need: cat.label, file: `${cat.dir}/` });
   }
   // Through the one binding (#617, #619). This was a complete second copy of
   // `scanDocRouting`, with its own inline `governs:` regex — and it is the copy

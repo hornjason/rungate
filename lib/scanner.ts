@@ -341,21 +341,11 @@ function scanDocRouting(root: string, categories: Category[]): DocRoute[] {
   }
 
   // Categories
+  // #2566: a row per category that EXISTS, and no file count — a count goes
+  // stale on the next commit, and a row "(0 files)" read as an instruction not
+  // to look (#91). Same decision as the scaffold's copy in lib/scaffold/steps.ts.
   for (const cat of categories) {
-    const catPath = join(root, cat.dir);
-    if (existsSync(catPath)) {
-      try {
-        // Recursive: reference/ held 19 markdown files, every one of them in a
-        // subdirectory, and a shallow count advertised it as "(0 files)" (#91).
-        // A row saying a directory is empty reads as an instruction not to look.
-        const files = readdirSorted(catPath, { recursive: true }).filter(f => f.endsWith(".md"));
-        docRouting.push({ need: `${cat.label} (${files.length} files)`, file: `${cat.dir}/` });
-      } catch {
-        docRouting.push({ need: cat.label, file: `${cat.dir}/` });
-      }
-    } else {
-      docRouting.push({ need: cat.label, file: `${cat.dir}/` });
-    }
+    if (existsSync(join(root, cat.dir))) docRouting.push({ need: cat.label, file: `${cat.dir}/` });
   }
 
   // Docs top-level files and subdirectories, through the one binding (#617,

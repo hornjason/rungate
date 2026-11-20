@@ -149,7 +149,8 @@ export function scanDocsDirectory(docsDir: string, categoryDirs: readonly string
   for (const sub of subDirs) {
     const subFiles = readdirSync(join(docsDir, sub)).filter(f => f.endsWith(".md"));
     if (subFiles.length > 0) {
-      rows.push({ need: `${sub} (${subFiles.length} files)`, file: `docs/${sub}/` });
+      // #2566: no count — it is stale after the next commit that adds a doc.
+      rows.push({ need: sub, file: `docs/${sub}/` });
     }
   }
 
