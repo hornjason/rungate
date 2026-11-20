@@ -153,11 +153,23 @@ describe("#1652: the self-inflicted ratio — later-round findings on lines writ
     expect(renderSelfInflicted(row).join("\n")).toContain("ratio: none");
   });
 
-  test("a ledger that dropped its first rounds, or may have, makes its findings a named lower bound", () => {
+  test("a ledger that dropped its first rounds, or may have, makes its pre-existing findings a named lower bound", () => {
     const rounds = [round(4, H1, "", []), round(5, H2, "", [finding("lib/a.ts", 1)])];
     const stated = selfInflictedRatio([entry(1, ledgerBody(rounds, 3))], headsOnly);
     expect(stated.judged).toBe(1);
     expect(stated.fromCutLedgers).toBe(1);
+
+    // Only a PRE-EXISTING reading can hide a line written for a dropped
+    // round. A finding already read as self-inflicted is not understated, so
+    // it is not part of the lower bound. Found by the AI review of #2583.
+    const mixed = selfInflictedRatio(
+      [entry(1, ledgerBody([round(4, H1, "", []), round(5, H2, "", [finding("lib/a.ts", 3), finding("lib/a.ts", 1)])], 3))],
+      headsOnly,
+    );
+    expect(mixed.selfInflicted).toBe(1);
+    expect(mixed.preExisting).toBe(1);
+    expect(mixed.fromCutLedgers).toBe(1);
+    expect(renderSelfInflicted(mixed).join("\n")).toContain("lower bound: 1 of the 1 pre-existing");
 
     // A bare-array ledger states no drop count. One at the 12-round cap it
     // was written under may have been cut; one below the cap never was.
@@ -186,6 +198,24 @@ describe("#1652: the self-inflicted ratio — later-round findings on lines writ
     const none = selfInflictedRatio([entry(7, broken)], headsOnly);
     expect(none.status).toBe("UNMEASURED");
     expect(none.ratio).toBeNull();
+  });
+
+  test("a re-run of the earliest round, recorded at the same round number, is still the earliest round", () => {
+    // #1592: a re-run appends another ledger entry at the round it re-runs.
+    // Its findings are round-one findings, with nothing before them, so they
+    // are left out of the ratio rather than judged against their own tree.
+    // Found by the AI review of #2583.
+    const body = ledgerBody([
+      round(1, H1, "", []),
+      round(1, H1, "", [finding("lib/a.ts", 1)]),
+      round(2, H2, "", [finding("lib/a.ts", 3)]),
+    ]);
+    const row = selfInflictedRatio([entry(1, body)], headsOnly);
+    expect(row.firstRoundFindings).toBe(1);
+    expect(row.laterRounds).toBe(1);
+    expect(row.laterFindings).toBe(1);
+    expect(row.preExisting).toBe(0);
+    expect(row.selfInflicted).toBe(1);
   });
 
   test("a round with findings: null is not a later round with a review", () => {
@@ -272,6 +302,19 @@ describe("#1652: line age is read from git, tree to tree", () => {
     expect(out).toContain("MEASURED");
     expect(out).toContain("self-inflicted 2, pre-existing 1");
     expect(out).toContain("2 of 3");
+
+    // An entry that is not {number, body} is refused with the tool's own
+    // message, not a stack trace from inside the reading. Found by the AI
+    // review of #2583.
+    for (const bad of [[null], [{ number: 9 }], [{ number: "9", body: null }], [{ number: 9, body: 5 }]]) {
+      const malformed = join(root, "malformed.json");
+      writeFileSync(malformed, JSON.stringify(bad));
+      const m = Bun.spawnSync(["bun", cli, "--from", malformed, "--repo-dir", repo], { env });
+      const err = new TextDecoder().decode(m.stderr);
+      expect(m.exitCode, JSON.stringify(bad)).toBe(1);
+      expect(err).toContain("self-inflicted-ratio: could not read");
+      expect(err).toContain("entry 0");
+    }
 
     const unknown = Bun.spawnSync(["bun", cli, "--from", entries, "--bogus"], { env });
     expect(unknown.exitCode).toBe(2);
