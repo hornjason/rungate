@@ -64,6 +64,31 @@ describe("#2520: runScaffoldWriteSteps refuses a config it cannot read, before w
   }
 });
 
+describe("#2520: a refusal raised inside a rehearsal clone names the project, not the clone", () => {
+  // Review, PR #2553: the CLI checks the real project before an audit clones
+  // it, but a config that changes between that check and the clone is still
+  // refused inside the clone, and the clone is deleted before the message
+  // prints. `relocated` is what the audit branch maps that refusal through.
+  const from = join(tmpdir(), "rungate-rehearsal-x", "tree");
+  const to = join(tmpdir(), "the-project");
+
+  test("a location under the clone is named under the project, with the reason kept", () => {
+    const err = new ScaffoldConfigUnreadable(join(from, ".claude", "rungate"), "JSON Parse error");
+    const moved = err.relocated(from, to);
+    expect(moved).toBeInstanceOf(ScaffoldConfigUnreadable);
+    expect(moved.location).toBe(join(to, ".claude", "rungate"));
+    expect(moved.message).toContain(`${join(to, ".claude", "rungate")} could not be read (JSON Parse error)`);
+    expect(moved.message).not.toContain("rungate-rehearsal-");
+  });
+
+  test("a location outside the clone, or no path at all, is left as it was", () => {
+    const outside = new ScaffoldConfigUnreadable(join(tmpdir(), "elsewhere", ".claude", "rungate"), "r");
+    expect(outside.relocated(from, to).location).toBe(join(tmpdir(), "elsewhere", ".claude", "rungate"));
+    const unnamed = new ScaffoldConfigUnreadable("the rungate config", "r");
+    expect(unnamed.relocated(from, to).location).toBe("the rungate config");
+  });
+});
+
 describe("#2520: the CLI prints the refusal, not a stack trace, in both modes", () => {
   const run = (dir: string, fix: boolean) => {
     const proc = Bun.spawnSync(["bun", join(ROOT, "scripts", "scaffold-project.ts"), dir, ...(fix ? ["--fix"] : [])], {
