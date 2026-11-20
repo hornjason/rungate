@@ -101,6 +101,14 @@ describe("SC-2794: rungate scaffold installs the work loop, naming only commands
     }
   });
 
+  // Review of #2518: a string replacement reads `$$`, `$&` and `$'` as
+  // patterns, so a test command holding one was rendered as a different command.
+  test("a test command holding $ patterns is written exactly as the project declares it", () => {
+    const declared = "server & PID=$$; jest $& $' $1; kill $PID";
+    const rendered = processFiles(false, undefined, declared).find(f => f.path === WORK_LOOP_COMMAND_PATH)?.content ?? "";
+    expect(rendered).toContain("`" + declared + "`");
+  });
+
   test("this repository's copy is the rendered one", () => {
     const ours = processFiles(true, undefined, testCommandDecision(ROOT).command).find(f => f.path === WORK_LOOP_COMMAND_PATH);
     expect(ours?.content, "processFiles renders no work loop").toBeTruthy();
