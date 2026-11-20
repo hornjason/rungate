@@ -389,7 +389,7 @@ export function readDeclaredWork(
 export const PLANNED_ADR_REF = "origin/main";
 
 /**
- * Criteria planned by an ADR whose acceptance this tree introduces — #2323.
+ * Criteria planned by an ADR this tree accepts, or grows — #2323, #2366.
  *
  * An ADR that adds criteria to an opted-in spec states them before their
  * issues exist, because merging the ADR is what files them (AGENTS.md rule 9
@@ -397,11 +397,13 @@ export const PLANNED_ADR_REF = "origin/main";
  * read each as "names no open issue", and the live stage ladder would refuse
  * the merge that is the only way to file them.
  *
- * So a criterion a Decomposition row names is planned when that ADR is
- * accepted in this tree and was not accepted at {@link PLANNED_ADR_REF}:
- * `newlyAccepted`, the same decider `plan-issues --accepted-since` uses.
- * An ADR already accepted on main is not this change's plan, and its missing
- * issue is a real gap: `adr-accepted.yml` did not place it.
+ * So a criterion a Decomposition row names is planned when `adrPlacement`,
+ * the same decider `plan-issues --accepted-since` uses, places that row
+ * against {@link PLANNED_ADR_REF}: every row of an ADR this tree accepts, and
+ * only the added rows of one already accepted there whose table this tree
+ * grows (#2366). Any other row of an ADR already accepted on main is not this
+ * change's plan, and its missing issue is a real gap: `adr-accepted.yml` did
+ * not place it.
  *
  * Fails closed: a ref that does not resolve, a git that does not run, or an
  * answer this cannot read exempts NOTHING, so every criterion reads as missing.
