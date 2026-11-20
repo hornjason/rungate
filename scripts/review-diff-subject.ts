@@ -54,7 +54,7 @@ export const NO_FILE_HEADER = "(no file header)";
  * The path a section is about. The header `diff --git a/P b/Q` alone is
  * ambiguous when a path contains ` b/`, so: when old and new are the same
  * path (every add, modify and delete) the header splits exactly in half;
- * otherwise the section's own `rename to` or `+++ b/` line names the new
+ * otherwise the section's own `rename to`, `copy to` or `+++ b/` line names the new
  * path; only failing both is the header's last ` b/` taken (#2585 review).
  */
 function sectionPath(text: string): string {
@@ -68,7 +68,7 @@ function sectionPath(text: string): string {
       return right.slice(2);
     }
   }
-  const named = /^(?:rename to |\+\+\+ b\/)(.*)$/m.exec(text);
+  const named = /^(?:rename to |copy to |\+\+\+ b\/)(.*)$/m.exec(text);
   if (named) return named[1]!;
   return HEADER.exec(header)?.[2] ?? rest;
 }
