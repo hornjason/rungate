@@ -48,10 +48,13 @@
  * A ledger that dropped its first rounds, or may have (a bare-array ledger
  * states nothing), has an earliest recorded round that is not round one.
  * Lines written in response to the dropped rounds then read as pre-existing,
- * so those findings make the ratio a LOWER BOUND, and the reading says how
- * many of them there are.
+ * so those ledgers' PRE-EXISTING findings make the ratio a LOWER BOUND, and
+ * the reading says how many of them there are. A self-inflicted reading is
+ * not understated, so it is not counted there.
  *
  * Round-one findings have no earlier round, so they are counted and left out.
+ * A re-run of the earliest round, recorded at the same round number, is part
+ * of it.
  *
  * Usage (the window is `scripts/crc-reading.ts --save`'s output):
  *
@@ -96,7 +99,7 @@ export interface SelfInflictedRow {
   unjudged: { noLine: number; unread: number };
   /** Which pair of trees each judged finding was read from. */
   treeAt: { merge: number; head: number };
-  /** Judged findings from ledgers whose first rounds were dropped, or may have been. */
+  /** Pre-existing findings from ledgers whose first rounds were dropped, or may have been. */
   fromCutLedgers: number;
   /** `selfInflicted + preExisting`: the denominator. */
   judged: number;
@@ -131,12 +134,19 @@ export function selfInflictedRatio(entries: readonly CrcEntry[], ageOf: LineAge 
     }
     prs++;
     const whole = ledger.truncation.status === AI_REVIEW_TRUNCATION_STATED && ledger.truncation.dropped === 0;
-    const [first, ...later] = ledger.rounds;
+    const first = ledger.rounds[0];
     if (first === undefined) continue;
-    if (first.measured) firstRoundFindings += first.findings.length;
+    // A re-run appends another entry at the round it re-runs (#1592), so
+    // every entry carrying the earliest entry's round number IS the earliest
+    // round: its findings have nothing before them either.
+    const earliest = (r: typeof first) => r === first || (first.round !== null && r.round === first.round);
 
-    for (const round of later) {
+    for (const round of ledger.rounds) {
       if (!round.measured) continue;
+      if (earliest(round)) {
+        firstRoundFindings += round.findings.length;
+        continue;
+      }
       laterRounds++;
       for (const item of round.findings) {
         laterFindings++;
@@ -162,8 +172,11 @@ export function selfInflictedRatio(entries: readonly CrcEntry[], ageOf: LineAge 
           continue;
         }
         if (age === "added") selfInflicted++;
-        else preExisting++;
-        if (!whole) fromCutLedgers++;
+        else {
+          preExisting++;
+          // Only this reading can hide a line written for a dropped round.
+          if (!whole) fromCutLedgers++;
+        }
       }
     }
   }
@@ -205,8 +218,8 @@ export function renderSelfInflicted(row: SelfInflictedRow): string[] {
   ];
   if (row.fromCutLedgers > 0) {
     lines.push(
-      `  lower bound: ${row.fromCutLedgers} of the ${row.judged} come from ledgers whose first rounds were dropped, ` +
-        `or may have been — lines written in response to those rounds read as pre-existing`,
+      `  lower bound: ${row.fromCutLedgers} of the ${row.preExisting} pre-existing finding(s) come from ledgers whose ` +
+        `first rounds were dropped, or may have been — a line written in response to those rounds reads as pre-existing`,
     );
   }
   if (row.unreadable.length > 0) {
@@ -269,6 +282,12 @@ export function main(argv: readonly string[]): number {
   try {
     const parsed: unknown = JSON.parse(readFileSync(from, "utf-8"));
     if (!Array.isArray(parsed)) throw new Error("not a JSON array of entries");
+    parsed.forEach((e, i) => {
+      const o = e as { number?: unknown; body?: unknown } | null;
+      if (o === null || typeof o !== "object" || !Number.isInteger(o.number) || !(o.body === null || typeof o.body === "string")) {
+        throw new Error(`entry ${i} is not {number, body} — number an integer, body a string or null`);
+      }
+    });
     entries = parsed as CrcEntry[];
   } catch (e) {
     process.stderr.write(`self-inflicted-ratio: could not read ${from}: ${(e as Error).message}\n`);
