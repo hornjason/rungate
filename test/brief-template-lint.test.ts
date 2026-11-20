@@ -31,6 +31,10 @@ const templates = readdirSync(TEMPLATES)
 /**
  * Each run of ordered-list lines (blank lines allowed between items) must
  * count 1, 2, 3 … with no gap. Returns one line per run that does not.
+ *
+ * A `1.` starts a new run (review of #2577): two short lists separated by a
+ * blank line are two lists, not one list that skipped from 2 back to 1. Any
+ * other number continues the run, so `1. 2. (blank) 4.` is still a gap.
  */
 export function skippedNumbering(text: string): string[] {
   const out: string[] = [];
@@ -43,6 +47,7 @@ export function skippedNumbering(text: string): string[] {
   for (const line of text.split("\n")) {
     const m = line.match(/^(\d+)\.\s/);
     if (m) {
+      if (Number(m[1]) === 1) close();
       if (run.length === 0) firstLine = line.slice(0, 60);
       run.push(Number(m[1]));
     } else if (line.trim() !== "") close();
@@ -72,6 +77,10 @@ describe("#2567: the shipped brief templates", () => {
     expect(skippedNumbering("1. **A** — x\n3. **B** — y\n").length).toBe(1);
     expect(skippedNumbering("1. a\n\n2. b\n3. c\n")).toEqual([]);
     expect(skippedNumbering("1. a\n2. b\n\nprose\n\n1. c\n2. d\n")).toEqual([]);
+    // Two lists separated only by a blank line are two lists (review of #2577) …
+    expect(skippedNumbering("1. a\n2. b\n\n1. c\n2. d\n")).toEqual([]);
+    // … and a list that continues across a blank line still has to count on.
+    expect(skippedNumbering("1. a\n2. b\n\n4. c\n").length).toBe(1);
   });
 });
 
