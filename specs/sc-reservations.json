@@ -53,6 +53,12 @@
       "from": 2789,
       "to": 2794,
       "note": "ADR-023 criteria (#2344); above ADR-022's 2787-2788, reserved on rg/2337-adr-bot-merges"
+    },
+    {
+      "owner": "rg/2568-adr-consumer-surface",
+      "from": 2795,
+      "to": 2804,
+      "note": "ADR-024 criteria (#2568); above ADR-023's 2789-2794, reserved on rg/2344-adr-consumer-board"
     }
   ]
 }
