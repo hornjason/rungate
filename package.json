@@ -43,6 +43,7 @@
     "scripts/board-ready.ts",
     "scripts/board-flow.ts",
     "scripts/board-id.ts",
+    "scripts/owned-jobs.ts",
     "scripts/board-init.ts",
     "scripts/ci-reading.ts",
     "scripts/unaccounted-work.ts",
