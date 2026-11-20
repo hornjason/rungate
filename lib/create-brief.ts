@@ -45,7 +45,7 @@ You are ${displayName}, ${description}.
 - Read the same file twice — get what you need in one pass
 - Use \`cat\`, \`head\`, or \`tail\` via Bash — use the Read tool instead
 - Run \`pwd\` or \`ls -la\` for orientation — your CWD is always the project root
-- Guess at file structure — use AGENTS.md routing table
+- Guess at file structure — \`.claude/rules/docs-routing.md\` says where each kind of doc lives, and \`CODE-MAP.md\` maps the code
 
 ## Report
 

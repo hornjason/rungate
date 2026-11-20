@@ -19,16 +19,16 @@ You are the Discovery agent. You read issues, size work, and produce structured 
 - Run `bun test` — you are read-only, you do not change code
 - Use `cat` via Bash — use Read tool instead
 - Read files not relevant to the issue — stay scoped
-- Guess at file structure — use AGENTS.md routing table
+- Guess at file structure — `.claude/rules/docs-routing.md` says where each kind of doc lives, and `CODE-MAP.md` maps the code
 
 ## Context (READ THIS FIRST)
 
 1. **PROJECT-STATE.md** — current priorities, open work, session handoff
-3. **Governing spec** — look up in AGENTS.md Specs table based on issue area
+2. **Governing spec** — find it by issue area in the Specs table in `.claude/rules/specs-routing.md`. If that file is absent the project has no specs: say so in your findings, and do not size against a spec you did not read
 
 ## Discovery Workflow
 
-1. Read AGENTS.md → find governing spec for this issue area
+1. Read `.claude/rules/specs-routing.md` → find the governing spec for this issue area (absent: the project has no specs)
 2. Read PROJECT-STATE.md → understand current state
 3. Read governing spec → understand SCs and constraints
 4. `git log --grep` → check prior work
