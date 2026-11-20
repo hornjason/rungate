@@ -1,0 +1,123 @@
+/**
+ * #2520: scaffold meets a rungate config it cannot use, and refuses by name.
+ *
+ * Measured on main before this change: a config that is not JSON threw
+ * `SyntaxError: JSON Parse error` out of `testCommandDecision`, and one that
+ * fails the schema threw a raw `ZodError`. Both came out as a stack trace with
+ * exit code 1, named no file, and reached nothing that could repair them.
+ * The repair the scaffold's comments describe sat behind a reader that threw
+ * first.
+ *
+ * `.claude/rules/config-access.md` decides the direction: a corrupt config is
+ * never a missing one, and a default is never substituted for it. So the run
+ * refuses at the start, names the file and the reason, and writes nothing.
+ */
+import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+import { ScaffoldConfigUnreadable, runScaffoldWriteSteps } from "../lib/scaffold/write-steps";
+
+const ROOT = join(import.meta.dir, "..");
+const made: string[] = [];
+afterAll(() => {
+  for (const d of made) rmSync(d, { recursive: true, force: true });
+});
+
+/** A fresh tree holding only `.claude/rungate/config.json` with `body`. */
+function tree(body: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "rg-scaffold-bad-config-"));
+  made.push(dir);
+  mkdirSync(join(dir, ".claude", "rungate"), { recursive: true });
+  writeFileSync(join(dir, ".claude", "rungate", "config.json"), body);
+  return dir;
+}
+
+/** Everything in the tree except the config the case planted. */
+function written(dir: string): string[] {
+  return readdirSync(dir).filter(name => name !== ".claude");
+}
+
+const SHAPES = [
+  { name: "not JSON", body: "{ not json", reason: /JSON/ },
+  { name: "fails the schema", body: '{"dev": 5, "test": "x"}', reason: /dev/ },
+  // Review round 3, PR #2553: the directory layout spread config.json into an
+  // object, and spreading a number, null, an array or a string yields `{}`,
+  // which the schema accepts. The monolith layout already refused these.
+  { name: "is a number, not an object", body: "5", reason: /not an object/ },
+  { name: "is null, not an object", body: "null", reason: /not an object/ },
+  { name: "is an array, not an object", body: "[]", reason: /not an object/ },
+  { name: "is a string, not an object", body: '"oops"', reason: /not an object/ },
+];
+
+describe("#2520: runScaffoldWriteSteps refuses a config it cannot read, before writing anything", () => {
+  for (const shape of SHAPES) {
+    test(`a config that ${shape.name} refuses by name, with the reason, and leaves the tree as it was`, () => {
+      const dir = tree(shape.body);
+      let caught: unknown;
+      try {
+        runScaffoldWriteSteps(dir, "code", []);
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught, "the run threw nothing, or threw something other than the refusal").toBeInstanceOf(ScaffoldConfigUnreadable);
+      const message = (caught as Error).message;
+      expect(message).toStartWith("scaffold: UNMEASURED —");
+      expect(message).toContain(join(".claude", "rungate"));
+      expect(message).toMatch(shape.reason);
+      expect(written(dir), "the refusal came after something was written").toEqual([]);
+    });
+  }
+});
+
+describe("#2520: a refusal raised inside a rehearsal clone names the project, not the clone", () => {
+  // Review, PR #2553: the CLI checks the real project before an audit clones
+  // it, but a config that changes between that check and the clone is still
+  // refused inside the clone, and the clone is deleted before the message
+  // prints. `relocated` is what the audit branch maps that refusal through.
+  const from = join(tmpdir(), "rungate-rehearsal-x", "tree");
+  const to = join(tmpdir(), "the-project");
+
+  test("a location under the clone is named under the project, with the reason kept", () => {
+    const err = new ScaffoldConfigUnreadable(join(from, ".claude", "rungate"), "JSON Parse error");
+    const moved = err.relocated(from, to);
+    expect(moved).toBeInstanceOf(ScaffoldConfigUnreadable);
+    expect(moved.location).toBe(join(to, ".claude", "rungate"));
+    expect(moved.message).toContain(`${join(to, ".claude", "rungate")} could not be read (JSON Parse error)`);
+    expect(moved.message).not.toContain("rungate-rehearsal-");
+  });
+
+  test("a location outside the clone, or no path at all, is left as it was", () => {
+    const outside = new ScaffoldConfigUnreadable(join(tmpdir(), "elsewhere", ".claude", "rungate"), "r");
+    expect(outside.relocated(from, to).location).toBe(join(tmpdir(), "elsewhere", ".claude", "rungate"));
+    const unnamed = new ScaffoldConfigUnreadable("the rungate config", "r");
+    expect(unnamed.relocated(from, to).location).toBe("the rungate config");
+  });
+});
+
+describe("#2520: the CLI prints the refusal, not a stack trace, in both modes", () => {
+  const run = (dir: string, fix: boolean) => {
+    const proc = Bun.spawnSync(["bun", join(ROOT, "scripts", "scaffold-project.ts"), dir, ...(fix ? ["--fix"] : [])], {
+      cwd: ROOT,
+    });
+    return { code: proc.exitCode, err: new TextDecoder().decode(proc.stderr) };
+  };
+
+  for (const fix of [true, false]) {
+    test(`${fix ? "--fix" : "audit"}: exits non-zero with one named refusal and no stack frames`, () => {
+      const dir = tree("{ not json");
+      const r = run(dir, fix);
+      expect(r.code, r.err).not.toBe(0);
+      expect(r.err).toContain("scaffold: UNMEASURED —");
+      // The file named is the project's own, not a rehearsal clone's: audit
+      // runs the steps against a temp copy and deletes it before the message
+      // prints, so a clone path names a file that no longer exists (review, PR #2553).
+      expect(r.err, "the refusal named some other tree's config").toContain(`${join(dir, ".claude", "rungate")} could not be read`);
+      expect(r.err, "the refusal named the rehearsal clone").not.toContain("rungate-rehearsal-");
+      expect(r.err, "a stack frame reached the consumer").not.toMatch(/^\s+at .+\.ts:\d+/m);
+      expect(written(dir)).toEqual([]);
+      expect(existsSync(join(dir, ".gitignore"))).toBe(false);
+    }, 60_000);
+  }
+});

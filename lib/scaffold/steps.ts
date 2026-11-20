@@ -1047,8 +1047,8 @@ export function generateOrAuditProjectHarness(root: string, actions: string[], o
 
   // `inferredTestCommand`, not the full decision (#488). This value is what
   // gets WRITTEN into `dev.testCmd`, so reading `dev.testCmd` to choose it
-  // is circular — and this step runs against trees whose config is
-  // malformed, which is what it exists to repair.
+  // is circular. A config that cannot be read never reaches this step: the
+  // scaffold refuses it by name before writing anything (#2520).
   const testCmd = inferredTestCommand(root).command;
   const pkgPath = join(root, "package.json");
   // #87 — this defaulted to `bunx tsc --noEmit` for every project, including

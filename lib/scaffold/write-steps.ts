@@ -15,11 +15,12 @@
  */
 
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, isAbsolute, join, relative, sep } from "path";
 import { ADR_TEMPLATE_PATH, NO_TEST_COMMAND_WHY, processFiles, WORK_LOOP_COMMAND_PATH } from "./process-files";
 import { decideRuleWrite } from "../rule-provenance";
 import { isHarnessItself } from "../harness-identity";
 import { testCommandDecision } from "../test-command";
+import { configLocation, resolveConfig } from "../config-loader";
 
 import {
   safeDir,
@@ -90,6 +91,65 @@ export interface WriteStepOptions {
   pruneConsumers?: boolean;
 }
 
+/**
+ * The project's rungate config exists and cannot be read (#2520). Thrown
+ * before the scaffold writes anything, so the tree is left as it was.
+ *
+ * Refuse, never repair: `.claude/rules/config-access.md` holds that a corrupt
+ * config is never a missing one and that no default is substituted for it, and
+ * a "repair" of a hand-edited config is a default substituted for someone's
+ * deliberate setting. Measured before this: both a non-JSON config and one
+ * failing the schema escaped as a raw stack trace, naming no file.
+ */
+export class ScaffoldConfigUnreadable extends Error {
+  constructor(
+    readonly location: string,
+    readonly reason: string,
+  ) {
+    super(`scaffold: UNMEASURED — ${location} could not be read (${reason}). Nothing was written; fix it and run the scaffold again.`);
+    this.name = "ScaffoldConfigUnreadable";
+  }
+
+  /**
+   * The same refusal, naming the path under `to` that this one names under
+   * `from`. For a refusal raised inside a rehearsal clone, which is deleted
+   * before the refusal prints (review, PR #2553). A location outside `from`,
+   * or one that is not a path, is returned as it was.
+   */
+  relocated(from: string, to: string): ScaffoldConfigUnreadable {
+    if (!isAbsolute(this.location)) return this;
+    const rel = relative(from, this.location);
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return this;
+    return new ScaffoldConfigUnreadable(join(to, rel), this.reason);
+  }
+}
+
+/** One readable line for why the config did not load: a schema's issues by path, else the error's first line. */
+function configFailureReason(err: unknown): string {
+  const issues = (err as { issues?: { path?: unknown[]; message?: string }[] })?.issues;
+  if (Array.isArray(issues) && issues.length > 0) {
+    return issues.map(i => `${(i.path ?? []).join(".") || "(root)"}: ${i.message ?? "invalid"}`).join("; ");
+  }
+  return String((err as Error)?.message ?? err).split("\n")[0]!;
+}
+
+/**
+ * Refuse, by name, a project whose rungate config exists and cannot be read.
+ * A tree with no config is normal here — scaffolding one is the run's job —
+ * and passes.
+ *
+ * Exported for the CLI, which calls it on the REAL project before an audit
+ * clones it: the clone is deleted before the refusal prints, so a refusal
+ * raised inside it would name a file that no longer exists (review, PR #2553).
+ */
+export function assertScaffoldConfigReadable(projectPath: string): void {
+  try {
+    resolveConfig(projectPath);
+  } catch (err) {
+    throw new ScaffoldConfigUnreadable(configLocation(projectPath) ?? "the rungate config", configFailureReason(err));
+  }
+}
+
 export function runScaffoldWriteSteps(
   projectPath: string,
   projectType: ProjectType,
@@ -97,6 +157,9 @@ export function runScaffoldWriteSteps(
   opts: WriteStepOptions = {},
 ): void {
   const { force = false, commit = false, rehearsing = false, profile = DEFAULT_PROFILE, autoFix = true, pruneConsumers = false } = opts;
+
+  // #2520: read the config once, before anything is written.
+  assertScaffoldConfigReadable(projectPath);
 
   // Phase 0: Security and directory setup
   createGitignore(projectPath, actions);

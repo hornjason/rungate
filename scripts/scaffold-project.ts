@@ -11,7 +11,7 @@ import { existsSync, statSync } from "fs";
 import { basename } from "path";
 import { detectProjectType } from "../lib/scanner";
 import { reportDocRules, reportScaffoldActions } from "../lib/scaffold/steps";
-import { runScaffoldWriteSteps } from "../lib/scaffold/write-steps";
+import { assertScaffoldConfigReadable, runScaffoldWriteSteps, ScaffoldConfigUnreadable } from "../lib/scaffold/write-steps";
 import { humanSteps, readHumanSteps } from "../lib/scaffold/human-steps";
 import { cloneForRehearsal, discardRehearsal, rehearsalNotice } from "../lib/scaffold/rehearsal";
 import type { ProjectType } from "../lib/generators/types";
@@ -80,6 +80,12 @@ console.log(`Path: ${projectPath}`);
 console.log(`Profile: ${profile}${profile === "minimal" ? ` — not written: ${[...STEPS_NOT_MINIMAL.keys()].join(", ")}` : ""}`);
 console.log("---");
 
+// #2520: a config the scaffold cannot read is a refusal with a message, not
+// a stack trace. Checked here, on the real project, before either branch: an
+// audit runs the steps against a clone it deletes before this catch prints,
+// so the refusal raised inside the clone would name a path that is gone.
+try {
+assertScaffoldConfigReadable(projectPath);
 if (fix) {
   runScaffoldWriteSteps(projectPath, projectType, actions, { force, commit, profile, autoFix, pruneConsumers });
 } else {
@@ -104,12 +110,22 @@ if (fix) {
     // The rehearsal gets the same flags, so an audit reports what --fix would
     // actually do rather than what it would do with different settings (#398).
     runScaffoldWriteSteps(rehearsal.dir, projectType, actions, { force, commit: false, rehearsing: true, profile, autoFix, pruneConsumers });
+  } catch (err) {
+    // A config that changed after the check above is refused inside the
+    // clone, and the `finally` deletes the clone before the refusal prints,
+    // so it is renamed onto the project first (review, PR #2553).
+    throw err instanceof ScaffoldConfigUnreadable ? err.relocated(rehearsal.dir, rehearsal.source) : err;
   } finally {
     // #549: a cleanup failure is a sentence, not an exception. The report
     // has already printed by now, and throwing here threw it away.
     const leaked = discardRehearsal(rehearsal);
     if (leaked) console.error(`WARNING: ${leaked}`);
   }
+}
+} catch (err) {
+  if (!(err instanceof ScaffoldConfigUnreadable)) throw err;
+  console.error(err.message);
+  process.exit(1);
 }
 
 // #2274 / SC-1947: the doc-rule scan, report mode only, in both branches.
