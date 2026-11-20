@@ -2994,8 +2994,10 @@ Recorded because each one invalidates a naive reading of the criteria above.
       fingerprint: e1fa585f
 - [ ] CRC-M16: lib/ai-review-rounds.ts contains [repairedPastStepBack] — a pull request repaired a fourth time after the round-three step-back is reported, distinguishable from one whose author re-scoped
       needs: measurement
-- [ ] CRC-N7: lib/scaffold/ai-review-findings.ts contains [populationDeclared] — a review finding tagged as a class cannot be resolved until the author states the population — N sites, M defective — and the search that found them
+- [x] CRC-N7: lib/scaffold/ai-review-findings.ts contains [populationDeclared] — a review finding tagged as a class cannot be resolved until the author states the population — N sites, M defective — and the search that found them
       needs: test
+      proved-by: test/ai-review-population-declared.test.ts
+      fingerprint: dd5e26d5
 - [x] CRC-M17: every AI review prints which changed files it saw only at their base version — count and list, explicit zero included (shipped, #2215, #2218)
       needs: test
       proved-by: test/ai-review-finding-scope.test.ts (#1887 / CRC-M17) — 22 pass, 0 fail, 2026-11-15
