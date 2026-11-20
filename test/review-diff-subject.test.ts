@@ -19,6 +19,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { reviewExecutionReading } from "../lib/review-execution-reading";
 import { chooseSubject, splitDiff } from "../scripts/review-diff-subject";
 
 const SCRATCH: string[] = [];
@@ -125,6 +126,45 @@ describe("#1934: the subject is whole files, and says what it left out", () => {
     const s = chooseSubject(wide + section("narrow.md", 100), 4_096);
     expect(s.omitted).toEqual(["wide.md"]);
     expect(s.filesRead).toBe(1);
+  });
+});
+
+describe("#1934 review round 1: names and counts that cannot drift from the diff", () => {
+  test("a path containing ` b/` is named whole, not split at the last ` b/`", () => {
+    const diff = section("notes b/draft.txt", 50) + section("a.ts", 50);
+    expect(splitDiff(diff).files.map(f => f.path)).toEqual(["notes b/draft.txt", "a.ts"]);
+    // A rename has two different paths; the new one is the name.
+    const renamed = "diff --git a/old b/x.ts b/new b/y.ts\nsimilarity index 100%\nrename from old b/x.ts\nrename to new b/y.ts\n";
+    expect(splitDiff(renamed).files.map(f => f.path)).toEqual(["new b/y.ts"]);
+  });
+
+  test("a non-empty diff with no file header is one section, so its byte cut is a truncation the counts carry", () => {
+    const headerless = "x".repeat(5_000);
+    const cut = chooseSubject(headerless, 4_096);
+    expect(cut).toMatchObject({ filesRead: 0, filesSeen: 1, truncated: true });
+    const fits = chooseSubject("just some text\n", 4_096);
+    expect(fits).toMatchObject({ filesRead: 1, filesSeen: 1, truncated: false });
+  });
+
+  test("the reading says DIFF_TRUNCATED exactly when the subject was byte-cut — the counts are the one channel", () => {
+    const cases: Array<[string, number]> = [
+      ["", 4_096],
+      ["x".repeat(5_000), 4_096],
+      ["just some text\n", 4_096],
+      [section("only.json", 20_000), 4_096],
+      [section("a.ts", 100), 4_096],
+      [section("project-state.json", 20_000) + section("PROJECT-STATE.md", 500), 8_192],
+      ["preamble\n".repeat(600) + section("a.ts", 100), 4_096],
+    ];
+    for (const [diff, budget] of cases) {
+      const s = chooseSubject(diff, budget);
+      const r = reviewExecutionReading({
+        executionFileRaw: JSON.stringify([{ type: "assistant", message: { content: [{ type: "tool_use", name: "t" }] } }]),
+        reviewsPosted: 1,
+        diffScope: { filesRead: s.filesRead, filesSeen: s.filesSeen },
+      });
+      expect(r.reasons.includes("DIFF_TRUNCATED"), `${diff.length}-char diff at ${budget}`).toBe(s.truncated);
+    }
   });
 });
 
