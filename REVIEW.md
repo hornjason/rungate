@@ -48,6 +48,16 @@ you start, exactly as this file is. So the conventions you read are the ones
 the branch is measured against, and a branch cannot legalise its own change
 by editing them in the same diff. Hold the code to what you read.
 
+## Work through the table, row by row
+
+Before you write the payload, take the six rows above in order. For each row,
+name the files in the diff that fall in that area, and look in each of them
+for **that row's** failure — not for whatever caught your eye first. A row the
+diff does not touch is skipped by saying so. Do not stop at the first defect:
+the search ends after the last row, not after the first finding, and a review
+that reports one defect of five has described a fifth of the change. End
+`review_summary` with the rows you checked and what each one produced.
+
 ## On a bug fix, say what the cause was
 
 A pull request that says it fixes a bug is the one case where *the symptom is
