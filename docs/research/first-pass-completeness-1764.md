@@ -64,10 +64,10 @@ its head is `948d765cb`.
 | #2561 | B | 2, 3, 5 | 3 | 35 |
 | #2562 | B | 2, 3, 5 | 3 | 33 |
 
-Arm A's union over draws in order: 3, 3, 4, 4, 6. Rows 2, 3 and 5 were found by
-every draw in both arms. Rows 1 and 6 were found by one draw of eight, and
-row 4 by two. Arm B spent more turns (mean 37 against 32) and found none of
-rows 1, 4 or 6.
+Arm A's union over draws in order: 3, 3, 4, 4, 6. Rows 2 and 5 were found by
+every draw in both arms, and row 3 by seven of eight. Rows 1 and 6 were found
+by one draw of eight, and row 4 by two. Arm B spent more turns (mean 37 against
+32) and found none of rows 1, 4 or 6.
 
 The findings come from each pull request's ledger comment, and the row-by-row
 summary from the `AI review summary` annotation on #2560's run.
