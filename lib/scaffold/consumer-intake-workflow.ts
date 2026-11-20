@@ -32,6 +32,18 @@
  * self-hosted runner (review of #2380). gh carries its own jq, so the filter
  * runs wherever gh does.
  *
+ * ## The board is mirrored after a triage writes (#2571)
+ *
+ * The triage milestones an issue with the job's own token, and an event that
+ * token writes starts no workflow, so `phase-order.yml` never runs
+ * `board-mirror` for a triaged issue and its Criteria cell stays empty. That
+ * reddened stage items B4 and E4 on every pull request on 2026-11-20, for an
+ * issue that declared `serves no criterion` correctly. So the job runs the
+ * Criteria-column mirror itself: after a triage that set a milestone (the
+ * triage step's `wrote` output), as `criterion-label.yml` does after a filing
+ * (#2542), and on every daily run whatever that output says, so a triage that
+ * set a milestone and died before printing it is mirrored within a day.
+ *
  * ## It calls the published CLI
  *
  * Like every generated workflow it runs `bunx rungate@<version>`, so
@@ -40,6 +52,7 @@
  */
 
 import { CONSUMER_LABEL, TRUSTED_ASSOCIATIONS } from "../consumer-triage";
+import { boardProjectRun } from "./board-project-step";
 
 /** The file this module generates, under `.github/workflows/`. */
 export const CONSUMER_INTAKE_WORKFLOW_FILE = "consumer-intake.yml";
@@ -48,7 +61,30 @@ export const CONSUMER_INTAKE_WORKFLOW_FILE = "consumer-intake.yml";
 export const CONSUMER_INTAKE_JOB = "triage";
 
 /** Every command the job calls. Each must be registered in `lib/cli-commands.ts`. */
-export const CONSUMER_INTAKE_COMMANDS = ["consumer-triage"] as const;
+export const CONSUMER_INTAKE_COMMANDS = ["consumer-triage", "board-mirror", "board-id"] as const;
+
+/** The triage step's id, which the mirror step reads `outputs.wrote` from (#2571). */
+export const CONSUMER_TRIAGE_STEP_ID = "triage";
+
+/**
+ * The triage step's shell. It reports `wrote=true` only when consumer-triage
+ * printed a milestone it SET this run: the indented `milestone "<name>"`
+ * result line, which it prints after `setMilestone` returns. Not the header's
+ * pending count, which also counts issues the triage refused or left and wrote
+ * nothing for (review of #2572). test/intake-triage-workflow.test.ts holds the
+ * pattern to what `scripts/consumer-triage.ts` prints. A triage that fails
+ * part-way still reports what it wrote, and the step stays red.
+ */
+export function triageRun(cli: string): string {
+  return [
+    "set -euo pipefail",
+    'out="$RUNNER_TEMP/consumer-triage.out"',
+    "code=0",
+    `${cli} consumer-triage --repo "$GITHUB_REPOSITORY" --write | tee "$out" || code=$?`,
+    `if grep -q '^      milestone "' "$out"; then echo "wrote=true" >> "$GITHUB_OUTPUT"; fi`,
+    'exit "$code"',
+  ].join("\n");
+}
 
 /** Its own group, never cancelling: each run re-reads the whole tracker. */
 export const CONSUMER_INTAKE_GROUP = "consumer-intake";
@@ -102,6 +138,7 @@ export const REMOVED_FILTER = `.[] | select(.event == "unlabeled" and .label.nam
 /** The whole `consumer-intake.yml` body. */
 export function buildConsumerIntakeWorkflow(opts: ConsumerIntakeWorkflowOptions): string {
   const cli = `bunx rungate@${opts.version}`;
+  const indent = (script: string) => script.split("\n").map(l => (l === "" ? "" : `          ${l}`)).join("\n");
   const trusted = JSON.stringify(TRUSTED_ASSOCIATIONS);
   return `# Managed by rungate — do not edit the generated job.
 #
@@ -174,8 +211,23 @@ jobs:
 ${opts.setupBunWith}
 ${opts.setupBunEnv}
       - name: Triage every consumer issue that has no verdict
+        id: ${CONSUMER_TRIAGE_STEP_ID}
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-        run: ${cli} consumer-triage --repo "$GITHUB_REPOSITORY" --write
+        run: |
+${indent(triageRun(cli))}
+
+      # #2571: the triage writes its milestones with the job's own token, which
+      # starts no workflow, so phase-order.yml never mirrors them. The
+      # Criteria-column write it would have run, runs here, after a triage that
+      # set a milestone, and on every daily run, so a triage that set one and
+      # died before printing it is mirrored within a day (review of #2572).
+      - name: Criteria column on the board
+        if: \${{ !cancelled() && (steps.${CONSUMER_TRIAGE_STEP_ID}.outputs.wrote == 'true' || github.event_name == 'schedule') }}
+        env:
+          GITHUB_TOKEN: \${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          PROJECT_ID: \${{ vars.RUNGATE_PROJECT_ID }}
+        run: |
+${indent(boardProjectRun(cli, "Criteria column", `${cli} board-mirror --project "$project" --write`))}
 `;
 }

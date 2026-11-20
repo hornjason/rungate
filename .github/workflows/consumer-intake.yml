@@ -1,4 +1,4 @@
-# generated-sha: 6b0d6c71eb1bddd2
+# generated-sha: 29c4b16cd1d1729c
 # Managed by rungate — do not edit the generated job.
 #
 # SC-2784 (ADR-020 Decision 2): a consumer's issue is triaged when it is filed
@@ -76,6 +76,38 @@ jobs:
           HOME: ${{ runner.tool_cache }}/bun-home
           USERPROFILE: ${{ runner.tool_cache }}/bun-home
       - name: Triage every consumer issue that has no verdict
+        id: triage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bunx rungate@0.8.41 consumer-triage --repo "$GITHUB_REPOSITORY" --write
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/consumer-triage.out"
+          code=0
+          bunx rungate@0.8.41 consumer-triage --repo "$GITHUB_REPOSITORY" --write | tee "$out" || code=$?
+          if grep -q '^      milestone "' "$out"; then echo "wrote=true" >> "$GITHUB_OUTPUT"; fi
+          exit "$code"
+
+      # #2571: the triage writes its milestones with the job's own token, which
+      # starts no workflow, so phase-order.yml never mirrors them. The
+      # Criteria-column write it would have run, runs here, after a triage that
+      # set a milestone, and on every daily run, so a triage that set one and
+      # died before printing it is mirrored within a day (review of #2572).
+      - name: Criteria column on the board
+        if: ${{ !cancelled() && (steps.triage.outputs.wrote == 'true' || github.event_name == 'schedule') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
+        run: |
+          project="$PROJECT_ID"
+          if [ -z "$project" ]; then
+            err="$RUNNER_TEMP/board-id.stderr"
+            code=0
+            project=$(bunx rungate@0.8.41 board-id 2>"$err") || code=$?
+            cat "$err" >&2
+            if [ "$code" -ne 0 ] && grep -q '^UNMEASURED: no board' "$err"; then
+              echo "::warning title=Criteria column::UNMEASURED — no board is configured (board.id in the rungate config, or the RUNGATE_PROJECT_ID variable), so there is no board to write. Set board.id and this runs."
+              exit 0
+            fi
+            [ "$code" -eq 0 ] || exit "$code"
+          fi
+          bunx rungate@0.8.41 board-mirror --project "$project" --write
