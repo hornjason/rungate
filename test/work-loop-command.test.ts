@@ -12,13 +12,13 @@
  * ADR-023 decided `census-routing` does not ship at all.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 import { bunxInvocations, CLI_COMMANDS } from "../lib/cli-commands";
-import { processFiles, WORK_LOOP_COMMAND_PATH } from "../lib/scaffold/process-files";
-import { runScaffoldWriteSteps } from "../lib/scaffold/write-steps";
+import { ADR_TEMPLATE_PATH, BOARD_COMMAND_PATH, DRY_RUN_COMMAND_PATH, processFiles, WORK_LOOP_COMMAND_PATH } from "../lib/scaffold/process-files";
+import { runScaffoldWriteSteps, writeProcessFiles } from "../lib/scaffold/write-steps";
 import { testCommandDecision } from "../lib/test-command";
 
 const ROOT = join(import.meta.dir, "..");
@@ -107,6 +107,28 @@ describe("SC-2794: rungate scaffold installs the work loop, naming only commands
     const declared = "server & PID=$$; jest $& $' $1; kill $PID";
     const rendered = processFiles(false, undefined, declared).find(f => f.path === WORK_LOOP_COMMAND_PATH)?.content ?? "";
     expect(rendered).toContain("`" + declared + "`");
+  });
+
+  // Review of #2518: the work loop's test command comes from the config, and a
+  // malformed config made the process-file step throw before dry-run.md, the
+  // ADR template and board.md were written. It refuses the work loop by name.
+  test("a config that cannot be read refuses the work loop by name, and the other process files are still written", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-work-loop-bad-config-"));
+    try {
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: "consumer", version: "0.0.0" }));
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(join(root, ".claude", "rungate", "config.json"), "{ not json");
+      const actions: string[] = [];
+      expect(() => writeProcessFiles(root, actions)).not.toThrow();
+      for (const path of [DRY_RUN_COMMAND_PATH, ADR_TEMPLATE_PATH, BOARD_COMMAND_PATH]) {
+        expect(existsSync(join(root, path)), `${path} was not written`).toBe(true);
+      }
+      expect(existsSync(join(root, WORK_LOOP_COMMAND_PATH))).toBe(false);
+      const refusal = actions.find(a => a.startsWith(`REFUSED: ${WORK_LOOP_COMMAND_PATH}`)) ?? "";
+      expect(refusal).toContain("the rungate config could not be read");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("this repository's copy is the rendered one", () => {
