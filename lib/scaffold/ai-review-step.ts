@@ -2133,6 +2133,41 @@ export const AI_REVIEW_PR_BODY_VAR = "AI_REVIEW_PR_BODY";
  */
 export const AI_REVIEW_INTENT_UNMEASURED = "AI_REVIEW_INTENT_UNMEASURED";
 
+/**
+ * Opens the prompt's section asking for the cause on a bug fix (#1654).
+ *
+ * `REVIEW.md` has asked this of this repository's reviewer since #1507, but
+ * that file is this repository's own and a consumer's reviewer never reads it.
+ * The prompt is the one text every consumer's reviewer is handed, so the
+ * question lives here too. Exported so a test finds the section by the string
+ * the prompt prints rather than by a copy of it.
+ */
+export const AI_REVIEW_ROOT_CAUSE_HEADING = "ON A BUG FIX, SAY WHAT THE CAUSE WAS (#1654).";
+
+/**
+ * The whole section, heading to last sentence, as the prompt prints it.
+ * Exported so a test bounds the section by the text itself rather than by a
+ * guess at where the next one starts (review of #2543: the next paragraph
+ * opens with "If", so an all-capitals boundary read past it).
+ */
+export const AI_REVIEW_ROOT_CAUSE_SECTION = `${AI_REVIEW_ROOT_CAUSE_HEADING} This applies whenever the change fixes a
+defect: the author's text says it does, or the diff repairs a wrong result,
+a crash or a refusal. When you cannot tell, treat it as a fix. On a fix the
+symptom being gone is not evidence. The cheapest repair is the one that makes
+the report stop — a widened threshold, a deleted entry, an absent value let
+through — and it certifies the defect at the moment the defect comes back.
+So answer two questions, and say which one you could not:
+
+  - What produced the reported state? Name it in the code — the line that
+    computed the wrong value — not in the narrative.
+  - Does the diff reach that line, or only the place where it surfaced? A
+    guard added at the point of observation while the producer is untouched
+    is a finding, and a \`high\` one when another caller still reaches the
+    producer.
+
+A cause that is out of scope is a legitimate answer, and the pull request
+should say so. A fix that is silent about its own cause is the finding.`;
+
 /** The reviewer read the intent file before it concluded. */
 export const AI_REVIEW_INTENT_TITLE = "AI review intent read";
 
@@ -5768,6 +5803,8 @@ If the file is absent or unreadable, or its only content is
 \`merge_group\` run has no pull request to carry one. Review normally. Do not
 infer an intent from the branch name or the commit subjects and then check
 the diff against something you made up.
+
+${AI_REVIEW_ROOT_CAUSE_SECTION}
 
 If \`round_budget_spent\` is 1, THE ROUND BUDGET IS SPENT. This pull request
 has already had \`round_budget\` rounds of review and has not settled, so do
