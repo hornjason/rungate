@@ -78,6 +78,11 @@ describe("#2520: the CLI prints the refusal, not a stack trace, in both modes", 
       const r = run(dir, fix);
       expect(r.code, r.err).not.toBe(0);
       expect(r.err).toContain("scaffold: UNMEASURED —");
+      // The file named is the project's own, not a rehearsal clone's: audit
+      // runs the steps against a temp copy and deletes it before the message
+      // prints, so a clone path names a file that no longer exists (review, PR #2553).
+      expect(r.err, "the refusal named some other tree's config").toContain(`${join(dir, ".claude", "rungate")} could not be read`);
+      expect(r.err, "the refusal named the rehearsal clone").not.toContain("rungate-rehearsal-");
       expect(r.err, "a stack frame reached the consumer").not.toMatch(/^\s+at .+\.ts:\d+/m);
       expect(written(dir)).toEqual([]);
       expect(existsSync(join(dir, ".gitignore"))).toBe(false);
