@@ -244,7 +244,9 @@ export function distinctRoundsTaken(
         `rounds that was. A retry is an attempt and not a round.`,
     };
   }
-  return { rounds: Math.max(...numbered) };
+  // The newest entry's own number, never the largest anywhere: an older entry
+  // stamped higher is a stale write, not the count (review of #2551).
+  return { rounds: ledger.rounds[ledger.rounds.length - 1]!.round as number };
 }
 
 /** The three target statistics over one unit's counts. Nulls, never zeros, over nothing. */
