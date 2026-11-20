@@ -1605,11 +1605,16 @@ export function reviewThreadRequests(
  */
 export function threadBody(finding: Record<string, unknown>, key?: string | null): string {
   const f = AI_REVIEW_FINDING_FIELDS;
-  const severity = finding[f.severity] !== undefined ? String(finding[f.severity]) : null;
+  // The model's text is written from a diff anyone can author, so an HTML
+  // comment opener in it is shown, not hidden: a marker spelled there must
+  // never read back as one this function wrote (#2570 review). `&lt;!--`
+  // renders as the same characters a reader would have seen.
+  const shown = (t: string): string => t.split("<!--").join("&lt;!--");
+  const severity = finding[f.severity] !== undefined ? shown(String(finding[f.severity])) : null;
   const summary =
-    finding[f.summary] !== undefined ? String(finding[f.summary]) : "(no summary recorded)";
+    finding[f.summary] !== undefined ? shown(String(finding[f.summary])) : "(no summary recorded)";
   const scenario =
-    finding[f.failureScenario] !== undefined ? String(finding[f.failureScenario]) : null;
+    finding[f.failureScenario] !== undefined ? shown(String(finding[f.failureScenario])) : null;
 
   const head = severity === null ? summary : `**${severity}** — ${summary}`;
   const said = scenario === null ? head : `${head}\n\n${scenario}`;
