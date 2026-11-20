@@ -113,6 +113,10 @@ describe("#2490: planSuccessors decides which criteria a closed issue leaves owe
       "TST-1: Flag the class of bug, so the author fixes `every` instance",
     );
     expect(successorTitle("TST-1", "__also__ this")).toBe("TST-1: also this");
+    // Review of #2545: markers inside a code span are the code, not emphasis.
+    expect(successorTitle("TST-1", "the module's `__init__` validates **input**")).toBe(
+      "TST-1: the module's `__init__` validates input",
+    );
   });
 
   test("a spec that cannot be read refuses rather than file a successor with no phase", () => {
