@@ -23,6 +23,12 @@
  * phase, or whose phase has no milestone refuses the WHOLE plan, by name.
  * Filing it unplaced would trade one hand edit for another, and filing the
  * others alone would read like a complete run.
+ *
+ * `sweepSuccessors` (#2541) asks the same question of every owed criterion
+ * rather than one close's, for the closes whose event the workflow missed. It
+ * cites the most recent closed issue that named each one, and groups by that
+ * issue so each group is a `planSuccessors` call: one planner, so the two
+ * modes cannot disagree about what a successor is or where it goes.
  */
 import { parseCriteria } from "./spec-evidence";
 import { boardDeclaration, PHASE_VALUE, phaseInFamily, placementsById } from "./spec-placement";
@@ -65,9 +71,16 @@ export function successorTitle(id: string, text: string): string {
   return `${id}: ${(at > 40 ? cut.slice(0, at) : cut).replace(/[,;:]$/, "")}…`;
 }
 
-export function successorBody(id: string, source: string, text: string, closed: number): string {
+/** Which run filed the successor: on the close's own event, or a later sweep (#2541). */
+export type SuccessorMode = "close" | "sweep";
+
+export function successorBody(id: string, source: string, text: string, closed: number, mode: SuccessorMode = "close"): string {
+  const how =
+    mode === "sweep"
+      ? `Filed by \`rungate criterion-successor --sweep\`. #${closed} was the last issue to name ${id}, and it is closed.`
+      : `Filed by \`rungate criterion-successor\` when #${closed} closed.`;
   return [
-    `Filed by \`rungate criterion-successor\` when #${closed} closed. ${id} is still unticked in \`${source}\`, and no open issue names it any more, so \`declared-work\` would read it as owed by nobody. This issue succeeds #${closed} as ${id}'s open issue.`,
+    `${how} ${id} is still unticked in \`${source}\`, and no open issue names it any more, so \`declared-work\` would read it as owed by nobody. This issue succeeds #${closed} as ${id}'s open issue.`,
     "",
     "## What must become true",
     "",
@@ -93,6 +106,7 @@ export function planSuccessors(
   owed: readonly OwedCriterion[],
   specText: (path: string) => string | null,
   milestones: readonly SuccessorMilestone[],
+  mode: SuccessorMode = "close",
 ): SuccessorPlan {
   // Every spec that owes an id, never only the last: an id two specs both
   // state is a collision the spec sweep reports and never merges, and which
@@ -145,10 +159,52 @@ export function planSuccessors(
       id,
       source: o.source,
       title: successorTitle(id, criterion.text),
-      body: successorBody(id, o.source, criterion.text, closed.number),
+      body: successorBody(id, o.source, criterion.text, closed.number, mode),
       milestone: { number: milestone.number, title: milestone.title },
     });
   }
   if (refusals.length > 0) return { why: refusals.join("; ") };
+  return { file, leave };
+}
+
+/**
+ * Every owed criterion's successor, for a run with no single close to ask
+ * about (#2541). `lastNamer` maps an owed id to the most recent closed issue
+ * that named it, read by the caller. An owed id with no entry was never
+ * named by any issue: there is nothing to succeed, and declared-work already
+ * reports it as a gap, so it is left rather than filed. One refusal refuses
+ * the whole sweep, the per-issue path's rule.
+ */
+export function sweepSuccessors(
+  owed: readonly OwedCriterion[],
+  lastNamer: ReadonlyMap<string, number>,
+  specText: (path: string) => string | null,
+  milestones: readonly SuccessorMilestone[],
+): SuccessorPlan {
+  const byIssue = new Map<number, string[]>();
+  const leave: { id: string; why: string }[] = [];
+  for (const id of [...new Set(owed.map(o => o.id))]) {
+    const n = lastNamer.get(id);
+    if (n === undefined) {
+      leave.push({ id, why: "no closed issue names it, so there is nothing to succeed; declared-work reports it as a gap" });
+      continue;
+    }
+    byIssue.set(n, [...(byIssue.get(n) ?? []), id]);
+  }
+  const file: Successor[] = [];
+  const refusals: string[] = [];
+  for (const [number, names] of byIssue) {
+    const plan = planSuccessors({ number, names }, owed, specText, milestones, "sweep");
+    if ("why" in plan) {
+      refusals.push(plan.why);
+      continue;
+    }
+    file.push(...plan.file);
+    leave.push(...plan.leave);
+  }
+  if (refusals.length > 0) return { why: refusals.join("; ") };
+  // Spec order, not the order the closed issues happened to group them in.
+  const order = new Map(owed.map((o, i) => [o.id, i] as const));
+  file.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
   return { file, leave };
 }

@@ -281,7 +281,7 @@ describe("#2541: rungate criterion-successor --sweep, end to end over a real spe
       { number: 5, title: "older", body: "## Criteria this serves\n\nTST-1", closedAt: "2026-11-01T00:00:00Z" },
       { number: 7, title: "newer", body: "## Criteria this serves\n\nTST-1", closedAt: "2026-11-10T00:00:00Z" },
       // The search matched text, not a claim: this one names TST-3 only.
-      { number: 9, title: "newest, but not about TST-1", body: "## Criteria this serves\n\nTST-3", closedAt: "2026-11-15T00:00:00Z" },
+      { number: 9, title: "newest, about the third thing", body: "## Criteria this serves\n\nTST-3", closedAt: "2026-11-15T00:00:00Z" },
     ],
     "TST-3": [{ number: 6, title: "third", body: "## Criteria this serves\n\nTST-3", closedAt: "2026-11-05T00:00:00Z" }],
   };
