@@ -16,9 +16,10 @@
 
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
-import { ADR_TEMPLATE_PATH, processFiles } from "./process-files";
+import { ADR_TEMPLATE_PATH, processFiles, WORK_LOOP_COMMAND_PATH } from "./process-files";
 import { decideRuleWrite } from "../rule-provenance";
 import { isHarnessItself } from "../harness-identity";
+import { testCommandDecision } from "../test-command";
 
 import {
   safeDir,
@@ -233,9 +234,23 @@ What does this workflow produce?
  * hand edit is preserved and reported rather than overwritten.
  */
 export function writeProcessFiles(projectPath: string, actions: string[]): void {
-  for (const file of processFiles(isHarnessItself(projectPath))) {
+  // #2486: the work loop's test step is the command the generated CI runs.
+  // A config that cannot be read refuses the work loop BY NAME, the reason
+  // carried into its REFUSED line, and the other process files are written as
+  // they were before the work loop existed (review of #2518). Not absence: the
+  // corruption is reported, and the scaffold step that next reads the config
+  // still throws on it.
+  let testCommand: string | undefined;
+  let unread: string | undefined;
+  try {
+    testCommand = testCommandDecision(projectPath).command;
+  } catch (e) {
+    unread = `the rungate config could not be read (${(e as Error).message}), so the work loop's test command is unknown`;
+  }
+  for (const file of processFiles(isHarnessItself(projectPath), undefined, testCommand)) {
     if (file.content === null) {
-      actions.push(`REFUSED: ${file.path} (${file.why}) — nothing was written`);
+      const why = file.path === WORK_LOOP_COMMAND_PATH && unread !== undefined ? unread : file.why;
+      actions.push(`REFUSED: ${file.path} (${why}) — nothing was written`);
       continue;
     }
     const target = join(projectPath, file.path);

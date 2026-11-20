@@ -20,6 +20,14 @@
  * #2484, ADR-023 row 5, SC-2791: `/board` is the third. It runs the CLI
  * from the repository it sits in and names no repository, so the one
  * difference between the two renderings is the CLI.
+ *
+ * #2486, ADR-023 row 8, SC-2794: the work loop is the fourth. Its test step
+ * names the project's own test command, the one the generated CI runs
+ * (`testCommandDecision`), passed in by the caller so this file reads no
+ * config. With none passed, the work loop is refused by name rather than
+ * rendered with a guessed command. It is put in with a function replacer: a
+ * string replacement reads `$$`, `$&` and `$'` in the project's own
+ * command as patterns and renders a different one (review of #2518).
  */
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
@@ -27,6 +35,7 @@ import { join } from "path";
 export const DRY_RUN_COMMAND_PATH = ".claude/commands/dry-run.md";
 export const ADR_TEMPLATE_PATH = "docs/adr/TEMPLATE.md";
 export const BOARD_COMMAND_PATH = ".claude/commands/board.md";
+export const WORK_LOOP_COMMAND_PATH = ".claude/commands/work-loop.md";
 
 /** Where the two sources ship. `templates/` is in `package.json` `files[]`. */
 export const PROCESS_TEMPLATES_DIR = join(import.meta.dir, "..", "..", "templates", "process");
@@ -50,7 +59,7 @@ function source(name: string, dir: string): string | null {
 }
 
 /** Every process file, rendered for this repository (`harness`) or a consumer. */
-export function processFiles(harness: boolean, dir: string = PROCESS_TEMPLATES_DIR): ProcessFile[] {
+export function processFiles(harness: boolean, dir: string = PROCESS_TEMPLATES_DIR, testCommand?: string): ProcessFile[] {
   const missing = (path: string, name: string): ProcessFile => ({
     path,
     content: null,
@@ -59,6 +68,7 @@ export function processFiles(harness: boolean, dir: string = PROCESS_TEMPLATES_D
   const command = source("dry-run.md", dir);
   const template = source("adr-template.md", dir);
   const board = source("board.md", dir);
+  const workLoop = source("work-loop.md", dir);
   const cli = harness ? "bun bin/rungate.ts" : "bunx rungate";
   return [
     command === null
@@ -73,5 +83,10 @@ export function processFiles(harness: boolean, dir: string = PROCESS_TEMPLATES_D
     board === null
       ? missing(BOARD_COMMAND_PATH, "board.md")
       : { path: BOARD_COMMAND_PATH, content: board.replaceAll("{{CLI}}", cli) },
+    workLoop === null
+      ? missing(WORK_LOOP_COMMAND_PATH, "work-loop.md")
+      : testCommand === undefined || testCommand.trim() === ""
+        ? { path: WORK_LOOP_COMMAND_PATH, content: null, why: "no test command was given, so the work loop's test step would name a guess" }
+        : { path: WORK_LOOP_COMMAND_PATH, content: workLoop.replaceAll("{{CLI}}", cli).replaceAll("{{TEST_COMMAND}}", () => testCommand) },
   ];
 }
