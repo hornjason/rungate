@@ -54,8 +54,15 @@ export interface SuccessorGitHub {
   openIssues: (repo: string) => Promise<{ number: number; title: string; body: string | null }[]>;
   /** The open milestones. */
   milestones: (repo: string) => Promise<SuccessorMilestone[]>;
-  /** Closed issues whose text matches the id. A search match, not a claim: the caller reads what each one names. */
-  closedIssuesNaming: (repo: string, id: string) => Promise<{ number: number; title: string; body: string | null; closedAt: string }[]>;
+  /**
+   * Closed issues whose text matches the id. A search match, not a claim: the
+   * caller reads what each one names. `stateReason` is GitHub's `state_reason`,
+   * null for an issue closed before GitHub recorded one.
+   */
+  closedIssuesNaming: (
+    repo: string,
+    id: string,
+  ) => Promise<{ number: number; title: string; body: string | null; closedAt: string; stateReason: string | null }[]>;
   /** Files the issue and returns its number. */
   createIssue: (repo: string, issue: { title: string; body: string; milestone: number }) => Promise<number>;
 }
@@ -97,11 +104,11 @@ export const LIVE_GITHUB: SuccessorGitHub = {
       "-f",
       "per_page=100",
       "--jq",
-      ".items[] | {number, title, body, closedAt: .closed_at} | @json",
+      ".items[] | {number, title, body, closedAt: .closed_at, stateReason: .state_reason} | @json",
     ])
       .split("\n")
       .filter(l => l.trim() !== "")
-      .map(l => JSON.parse(l) as { number: number; title: string; body: string | null; closedAt: string }),
+      .map(l => JSON.parse(l) as { number: number; title: string; body: string | null; closedAt: string; stateReason: string | null }),
   createIssue: async (repo, i) =>
     Number(
       gh(["api", "-X", "POST", `repos/${repo}/issues`, "-f", `title=${i.title}`, "-f", `body=${i.body}`, "-F", `milestone=${i.milestone}`, "--jq", ".number"]).trim(),
@@ -188,6 +195,10 @@ export async function main(
       const lastNamer = new Map<string, number>();
       for (const id of [...new Set(owed.map(o => o.id))]) {
         const naming = (await api.closedIssuesNaming(repo, id))
+          // Done work only. Anyone can file an issue naming a criterion, and
+          // one a maintainer closed as not planned (or as a duplicate) is not
+          // the work a successor should send the next reader to.
+          .filter(i => i.stateReason === "completed" || i.stateReason === null)
           .filter(i => criterionAnswer({ title: i.title, body: i.body }, ids).names.includes(id))
           .sort((a, b) => b.closedAt.localeCompare(a.closedAt));
         if (naming[0] !== undefined) lastNamer.set(id, naming[0].number);
