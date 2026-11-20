@@ -217,6 +217,18 @@ export function reviewExecutionReading(input: ReviewExecutionInput): ReviewExecu
   };
 }
 
+/**
+ * The coverage a review had, as "n of m files read": files whose whole diff
+ * reached the agent, of the files in the pull request (#1934). The spec's
+ * criterion for over-budget diffs is worded in exactly these terms.
+ * `UNREPORTED` when the gather step gave no usable count.
+ */
+export function reviewCoverage(r: ReviewExecutionReading): string {
+  return r.diffScope === null || r.reasons.includes("DIFF_SCOPE_UNAVAILABLE")
+    ? "UNREPORTED"
+    : `${r.diffScope.filesRead} of ${r.diffScope.filesSeen} files read`;
+}
+
 /** The annotation body. Named reasons, named counts — a warning that does not
  * say what was missing is a warning nobody can act on. */
 export function reviewReadingReport(r: ReviewExecutionReading): string {
@@ -233,11 +245,7 @@ export function reviewReadingReport(r: ReviewExecutionReading): string {
     r.reviewsPosted === null
       ? "reviews added by this run: UNCOUNTED"
       : `reviews added by this run: ${r.reviewsPosted}`;
-  const scope =
-    r.diffScope === null || r.reasons.includes("DIFF_SCOPE_UNAVAILABLE")
-      ? "files reviewed whole: UNREPORTED"
-      : `files reviewed whole: ${r.diffScope.filesRead} of ${r.diffScope.filesSeen}`;
-  const head = `${r.reading} — ${calls}; ${reviews}; ${scope}`;
+  const head = `${r.reading} — ${calls}; ${reviews}; coverage: ${reviewCoverage(r)}`;
   if (r.reading === "MEASURED") return head;
   return [head, ...r.reasons.map((reason, i) => `  ${reason}: ${r.detail[i]}`)].join("\n");
 }

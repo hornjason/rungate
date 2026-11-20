@@ -34,6 +34,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   REVIEW_UNMEASURED_EXIT,
+  reviewCoverage,
   reviewExecutionReading,
   reviewReadingReport,
 } from "../lib/review-execution-reading";
@@ -72,8 +73,8 @@ console.log(report);
 const scope = reading.diffScope;
 if (reading.reading === "MEASURED" && scope !== null && scope.filesRead < scope.filesSeen) {
   console.log(
-    `::warning title=Claude review covered part of the diff::reviewed ${scope.filesRead} of ${scope.filesSeen} ` +
-      "files whole; the rest were over the diff budget",
+    `::warning title=Claude review covered part of the diff::coverage ${reviewCoverage(reading)} whole; ` +
+      "the rest were over the diff budget",
   );
 }
 

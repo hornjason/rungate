@@ -49,6 +49,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   REVIEW_UNMEASURED_EXIT,
+  reviewCoverage,
   reviewExecutionReading,
   reviewReadingReport,
 } from "../lib/review-execution-reading";
@@ -215,7 +216,8 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
     expect(r.reading).toBe("MEASURED");
     expect(r.reasons).toEqual([]);
     expect(r.diffScope).toEqual({ filesRead: 1, filesSeen: 2 });
-    expect(reviewReadingReport(r)).toContain("files reviewed whole: 1 of 2");
+    expect(reviewReadingReport(r)).toContain("coverage: 1 of 2 files read");
+    expect(reviewCoverage(r)).toBe("1 of 2 files read");
     // The whole-diff control says so too, so a partial report is not just
     // "a report with a scope in it".
     const whole = reviewExecutionReading({
@@ -223,7 +225,7 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
       reviewsPosted: 1,
       diffScope: { filesRead: 2, filesSeen: 2 },
     });
-    expect(reviewReadingReport(whole)).toContain("files reviewed whole: 2 of 2");
+    expect(reviewReadingReport(whole)).toContain("coverage: 2 of 2 files read");
   });
 
   test("AC-16: a scope nobody reported, or one that cannot be true, is UNMEASURED by name — not zero, not whole", () => {
@@ -234,7 +236,8 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
         diffScope,
       });
       expect(r.reasons, JSON.stringify(diffScope)).toEqual(["DIFF_SCOPE_UNAVAILABLE"]);
-      expect(reviewReadingReport(r)).toContain("files reviewed whole: UNREPORTED");
+      expect(reviewReadingReport(r)).toContain("coverage: UNREPORTED");
+      expect(reviewCoverage(r)).toBe("UNREPORTED");
     }
   });
 
@@ -398,7 +401,7 @@ describe("the script's refusal is load-bearing (#732)", () => {
     ]);
     expect(partial.code).toBe(0);
     expect(partial.out).toContain("::warning title=Claude review covered part of the diff::");
-    expect(partial.out).toContain("1 of 2");
+    expect(partial.out).toContain("1 of 2 files read");
 
     const whole = run(build(false), ["--execution-file", workingRun, "--reviews-before", "0", "--reviews-after", "1", ...SCOPE]);
     expect(whole.out).not.toContain("::warning");
