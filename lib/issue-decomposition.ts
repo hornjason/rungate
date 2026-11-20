@@ -692,11 +692,68 @@ export function adrStatus(text: string): string | null {
 /**
  * Did this change ACCEPT the ADR? True only when it is `accepted` now and was
  * not before — `before` is `null` for a file the earlier commit did not have.
- * An edit to an ADR that was already accepted is not an acceptance, so it
- * re-runs nothing (SC-2738).
+ * An edit to an ADR that was already accepted is not an acceptance (SC-2738);
+ * whether such an edit still has rows to place is {@link adrPlacement}'s
+ * question (#2366).
  */
 export function newlyAccepted(before: string | null, after: string): boolean {
   return adrStatus(after) === "accepted" && (before === null || adrStatus(before) !== "accepted");
+}
+
+/**
+ * The body lines of an ADR's Decomposition table, as written: every `|` line
+ * after the header and its separator, up to the first line that is not one.
+ * Raw, not parsed, so a row the parser rejects is still a row here.
+ */
+function decompositionTableLines(text: string): string[] {
+  const lines = text.split("\n");
+  const start = lines.findIndex(l => HEADER.test(l));
+  if (start === -1) return [];
+  const out: string[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i]!.trim();
+    if (!line.startsWith("|")) break;
+    if (/^\|[\s:|-]+\|$/.test(line)) continue;
+    out.push(line);
+  }
+  return out;
+}
+
+/** What a change to one ADR gives its plan to place (#2366). */
+export interface AdrPlacement {
+  /**
+   * `accepted`: this change accepted it, so every row is placed (SC-2738).
+   * `grew`: accepted before and after, and its table gained a line, so the
+   * new rows are placed. `none`: anything else, including an edit to an
+   * accepted ADR that adds no row, which is SC-2738's case unchanged.
+   */
+  kind: "accepted" | "grew" | "none";
+  /**
+   * The parsed rows to place. For `grew`, only rows whose outcome the earlier
+   * text did not have: the outcome becomes the issue title, and `decompose`
+   * already skips a title that is filed, so this is the same identity. A
+   * `grew` with no rows is an added line the parser rejects; it is still
+   * `grew`, so the plan is run and `decompose` refuses that row out loud.
+   */
+  rows: DecompositionRow[];
+}
+
+/**
+ * THE decider for "does this change give the ADR's plan something to place".
+ * `plan-issues --accepted-since` lists an ADR on it and `board-snapshot`
+ * exempts its rows' criteria on it, so the two cannot disagree (#2366).
+ *
+ * Growth is judged on the table's LINES and placement on its ROWS. Judged on
+ * rows alone, an added row the parser rejects would be no growth at all, and
+ * the plan would never run to say why.
+ */
+export function adrPlacement(before: string | null, after: string): AdrPlacement {
+  if (newlyAccepted(before, after)) return { kind: "accepted", rows: parseDecompositionPlan(after).rows };
+  if (before === null || adrStatus(before) !== "accepted" || adrStatus(after) !== "accepted") return { kind: "none", rows: [] };
+  const had = new Set(decompositionTableLines(before));
+  if (!decompositionTableLines(after).some(l => !had.has(l))) return { kind: "none", rows: [] };
+  const titled = new Set(parseDecompositionPlan(before).rows.map(r => r.outcome));
+  return { kind: "grew", rows: parseDecompositionPlan(after).rows.filter(r => !titled.has(r.outcome)) };
 }
 
 /** The author associations whose closed issue may stand for a plan's row. */

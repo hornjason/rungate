@@ -71,7 +71,7 @@ import { declaredDependencies, dependencyPlan, readDeclaredPlans, unreadPlansTha
 import type { ConsumerIntake, DeclaredWork, FamilyIssue, PlannedEdge, RepoIssueCriteria, SpecDeferral, SpecPlacementRow } from "./board-conformance";
 import { CONSUMER_LABEL, trustedBodies, verdictIn, type IssueComment } from "../lib/consumer-triage";
 import { parseCriteria } from "../lib/spec-evidence";
-import { hasDecompositionTable, newlyAccepted, parseDecompositionPlan } from "../lib/issue-decomposition";
+import { adrPlacement, hasDecompositionTable, parseDecompositionPlan } from "../lib/issue-decomposition";
 
 /**
  * THE one non-zero exit, declared once so `test/board-snapshot.test.ts` can
@@ -429,10 +429,12 @@ export function plannedByUnmergedAdr(root: string, git: GitRunner): Map<string, 
       // rev-parse probe would be a second decider for the same question.
       return new Map();
     }
-    if (!newlyAccepted(before, text)) continue;
-    const plan = parseDecompositionPlan(text);
-    if (plan.reading !== "MEASURED") continue;
-    for (const row of plan.rows) if (!planned.has(row.criterion)) planned.set(row.criterion, rel);
+    // The same decider plan-issues --accepted-since lists by (#2366): an ADR
+    // this change accepts plans every row, an accepted one whose table grew
+    // plans only its new rows, and nothing else plans anything. An unreadable
+    // table exempts nothing, as before.
+    if (parseDecompositionPlan(text).reading !== "MEASURED") continue;
+    for (const row of adrPlacement(before, text).rows) if (!planned.has(row.criterion)) planned.set(row.criterion, rel);
   }
   return planned;
 }
