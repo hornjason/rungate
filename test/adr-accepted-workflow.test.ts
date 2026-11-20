@@ -438,3 +438,58 @@ describe("a repository with no board: both board steps warn and pass instead of 
     });
   }
 });
+
+/**
+ * Covers SC-2788 (SPEC-TO-BOARD-PIPELINE-SPEC.md), #2497, ADR-022: a pull
+ * request merged into main by automation closes the issues it declares.
+ *
+ * A merge made with GITHUB_TOKEN runs none of GitHub's closing keywords, so
+ * every issue a bot-merged pull request declared stayed open. With
+ * `board.mergeWorkflow` named, a run that workflow's completion starts now
+ * runs `rungate close-merged-references` over every pull request merged since
+ * this workflow's last successful run. Which issues close, and which are left,
+ * is decided in `lib/closing-reference-audit.ts` and tested in
+ * `test/close-merged-references.test.ts` (#2496, #2522); this file proves the
+ * generated workflow runs it, when, and with what credential.
+ */
+describe("SC-2788: a merge-triggered run closes the issues the merged pull requests declare", () => {
+  const BOARD = { engineSpec: "specs/ENGINE.md", milestonePrefix: "Engine" };
+  const doc = Bun.YAML.parse(generated({ ...BOARD, mergeWorkflow: "approve-on-green" })) as any;
+  const steps: any[] = doc.jobs[ADR_ACCEPTED_JOB].steps;
+  const runOf = (s: any) => String(s?.run ?? "");
+  const close = steps.find(s => runOf(s).includes("close-merged-references"));
+
+  test("SC-2788: the step runs the published command over the range since this workflow's last successful run, and writes", () => {
+    expect(close, "no step runs close-merged-references").toBeDefined();
+    expect(runOf(close)).toMatch(
+      new RegExp(`bunx rungate@\\S+ close-merged-references --since-last-run ${ADR_ACCEPTED_WORKFLOW_FILE.replace(".", "\\.")} --repo "\\$GITHUB_REPOSITORY" --write`),
+    );
+    expect("close-merged-references" in CLI_COMMANDS, "the workflow calls a command the CLI does not register").toBe(true);
+  });
+
+  test("SC-2788: it runs only on a merge-triggered run, whether or not anything was accepted or a planning step refused", () => {
+    // A push run is a person's merge, and GitHub closes its issues itself.
+    expect(close.if).toBe("${{ !cancelled() && github.event_name == 'workflow_run' }}");
+    expect(close.if, "gated on an ADR being accepted, so a bot merge of any other change closed nothing").not.toContain("steps.accepted");
+  });
+
+  test("SC-2788: it holds the job's own token and never the board's, and the package was fetched before any step held one", () => {
+    expect(close.env).toEqual({ GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" });
+    const firstBunx = steps.findIndex(s => runOf(s).includes("bunx rungate@"));
+    expect(firstBunx).toBeLessThan(steps.indexOf(close));
+    expect(JSON.stringify(steps[firstBunx].env ?? {})).not.toContain("secrets.");
+  });
+
+  test("SC-2788: reading the merged pull requests needs pull-requests: read, and nothing else is widened", () => {
+    expect(doc.permissions).toEqual({ contents: "read", issues: "write", actions: "read", "pull-requests": "read" });
+  });
+
+  test("SC-2788: with no merge workflow named, or one refused by name, there is no such step and no wider permission", () => {
+    for (const board of [BOARD, { ...BOARD, mergeWorkflow: "x ${{ secrets.A }}" }]) {
+      const d = Bun.YAML.parse(generated(board)) as any;
+      const s: any[] = d.jobs[ADR_ACCEPTED_JOB].steps;
+      expect(s.some(x => runOf(x).includes("close-merged-references")), JSON.stringify(board)).toBe(false);
+      expect(d.permissions, JSON.stringify(board)).toEqual({ contents: "read", issues: "write" });
+    }
+  });
+});
