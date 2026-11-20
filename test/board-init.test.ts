@@ -180,6 +180,21 @@ describe("SC-2789: board-init makes a board and wires it", () => {
     expect(resumed.kind, "why" in resumed ? resumed.why : "").toBe("DONE");
     expect(half.writes.filter(w => w.startsWith("create-project"))).toHaveLength(1);
     expect(half.projects.size).toBe(1);
+    // Review of #2513, round 3: the resumed project still had GitHub's three
+    // defaults, so it is rungate's own unfinished board and gets exactly the six.
+    expect(statusNames([...half.projects.values()][0])).toEqual([...BOARD_STATUS_OPTIONS]);
+  });
+
+  test("SC-2789: a resumed board whose lanes somebody already changed keeps them", async () => {
+    // Found by rungate's title, but its Status is not GitHub's defaults any
+    // more: lanes a person added are kept, and only the missing ones are added.
+    const seeded = freshProject("P9", boardTitle(REPO));
+    seeded.linkedRepositories = [REPO];
+    seeded.fields[1].options = ["Backlog", "Ready", "In progress", "In review", "Done", "Blocked"].map((name, i) => ({ id: `P9-opt-${i}`, name, color: "GRAY", description: "" }));
+    const { api, projects } = memoryBoard([seeded]);
+    const r = await boardInit({ repo: REPO, owner: "acme", boardId: null, write: true, api });
+    expect(r.kind, "why" in r ? r.why : "").toBe("DONE");
+    expect(statusNames(projects.get("P9")!)).toEqual(["Backlog", "Ready", "In progress", "In review", "Done", "Blocked", "Cancelled"]);
   });
 
   test("SC-2789: a dry run lists what it would do and writes nothing", async () => {
