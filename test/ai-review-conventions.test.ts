@@ -217,6 +217,7 @@ import {
   AI_REVIEW_FINDINGS_PATH_VAR,
   AI_REVIEW_OUTCOME_LINE,
   AI_REVIEW_REQUIRED_EXIT,
+  AI_REVIEW_ROOT_CAUSE_HEADING,
   AI_REVIEW_SUMMARY_KEY,
   AI_REVIEW_UNMEASURED_TITLE,
   AI_REVIEW_UNTRUSTED_PATHS,
@@ -1023,5 +1024,71 @@ describe("#1653: the summary is read back against the findings it counts", () =>
     const noList = readAiReviewFindings(JSON.stringify({ verdict: "PASS", [AI_REVIEW_SUMMARY_KEY]: "0 findings." }));
     expect(noList.outcome).toBe("UNMEASURED");
     expect(summaryNotice(noList), "with no findings list there is no count to read the summary against").toBeNull();
+  });
+});
+
+/**
+ * #1654: on a bug fix, the reviewer is asked for the cause, not only the
+ * symptom.
+ *
+ * `REVIEW.md` has asked this since #1507, but that file is this repository's
+ * own. A consumer's reviewer never reads it, so the question reached one tree.
+ * The generated prompt is what every consumer's reviewer is handed, and until
+ * this change it never asked. Whether the reviewer then looks is behaviour, and
+ * nothing reads that yet, so these cases hold the text and the condition it is
+ * asked under; they do not claim the criterion it serves.
+ *
+ * Proved able to fail: deleting the section from `buildReviewPrompt` reddens
+ * every case below, and dropping only its condition sentence reddens R-2.
+ */
+describe("#1654: on a bug fix the prompt asks what the cause was", () => {
+  const prompt = buildReviewPrompt();
+
+  /**
+   * The paragraphs the heading opens, up to the next one that opens with an
+   * all-capitals run, which is how every section of the prompt starts.
+   * Joined on spaces, because a phrase the prompt wraps is still the phrase.
+   */
+  function rootCauseSection(): string {
+    const paragraphs = prompt.split(/\n\s*\n/);
+    const at = paragraphs.findIndex(p => p.startsWith(AI_REVIEW_ROOT_CAUSE_HEADING));
+    expect(at, "the prompt has no paragraph opening with the root-cause heading").toBeGreaterThan(-1);
+    const end = paragraphs.findIndex((p, i) => i > at && /^[A-Z][A-Z ,'()`.-]{12,}/.test(p));
+    return paragraphs
+      .slice(at, end === -1 ? undefined : end)
+      .join(" ")
+      .replace(/\s+/g, " ");
+  }
+
+  test("R-1: it asks what produced the reported state, named in the code", () => {
+    const s = rootCauseSection();
+    expect(s).toMatch(/what produced the reported state\?/i);
+    expect(s).toMatch(/name it in the code/i);
+  });
+
+  test("R-2: it names the condition it is asked under, and an unclear change counts as a fix", () => {
+    // The issue's own bar: asking on every change is acceptable, asking never
+    // is not. So the condition is stated, and the case the reviewer cannot
+    // classify falls on the asking side rather than the silent one.
+    const s = rootCauseSection();
+    expect(s).toMatch(/applies whenever the change fixes a defect/i);
+    expect(s).toMatch(/when you cannot tell, treat it as a fix/i);
+  });
+
+  test("R-3: it asks whether the diff reaches the cause or only where it surfaced", () => {
+    const s = rootCauseSection();
+    expect(s).toMatch(/does the diff reach that line, or only the place where it surfaced\?/i);
+    expect(s).toMatch(/guard added at the point of observation/i);
+  });
+
+  test("R-4: a fix that is silent about its own cause is a finding", () => {
+    expect(rootCauseSection()).toMatch(/silent about its own cause is (a|the) finding/i);
+  });
+
+  test("R-5: the COMMITTED workflow carries the question, not only the generator", () => {
+    // AC-C7's reason, for this section: a generator change nobody scaffolded
+    // ships inert, and a byte diff elsewhere is harder to read than this.
+    const committed = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "ai-review.yml"), "utf8");
+    expect(committed, "the committed prompt has no root-cause section").toContain(AI_REVIEW_ROOT_CAUSE_HEADING);
   });
 });
