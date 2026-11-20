@@ -52,7 +52,14 @@ export function ownedJobs(root: string): OwnedJobsReading {
     if (existsSync(join(root, "package.json"))) copyFileSync(join(root, "package.json"), join(scratch, "package.json"));
 
     const actions: string[] = [];
-    createCiWorkflows(scratch, actions);
+    // A generator refuses in two ways: a `REFUSED:` action from the per-file
+    // loop, or a throw before it — `ci.trackerTokenSecret` validation is one
+    // (review of #2579). Both are UNMEASURED; a throw must not become a crash.
+    try {
+      createCiWorkflows(scratch, actions);
+    } catch (e) {
+      return { unmeasured: `the workflow generators refused this config: ${(e as Error).message}` };
+    }
     const refused = actions.filter(a => a.startsWith("REFUSED:"));
     if (refused.length > 0) return { unmeasured: `the workflow generators refused: ${refused.join("; ")}` };
 
