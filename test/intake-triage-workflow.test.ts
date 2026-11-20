@@ -229,6 +229,9 @@ describe("#2571: the board's Criteria column is mirrored after a triage writes",
     expect(mirror, "no step writes the Criteria column").toBeGreaterThan(triage);
     expect(all[mirror]!.if).toContain(`steps.${CONSUMER_TRIAGE_STEP_ID}.outputs.wrote == 'true'`);
     expect(all[mirror]!.if).toContain("!cancelled()");
+    // The daily run mirrors whatever a triage wrote, so a run that set a
+    // milestone and died before printing it is healed within a day (review of #2572).
+    expect(all[mirror]!.if).toContain("github.event_name == 'schedule'");
     expect(all[mirror]!.env?.GITHUB_TOKEN).toBe("${{ secrets.RUNGATE_PROJECT_TOKEN }}");
     expect(all[mirror]!.env?.PROJECT_ID).toBe("${{ vars.RUNGATE_PROJECT_ID }}");
   });
