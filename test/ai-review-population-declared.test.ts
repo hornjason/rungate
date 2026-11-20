@@ -28,9 +28,15 @@ import {
   populationDeclared,
   populationOwed,
   threadBody,
+  threadKeyFrom,
   threadPopulationFrom,
 } from "../lib/scaffold/ai-review-findings";
-import { AI_REVIEW_OUTCOME_LINE, AI_REVIEW_REQUIRED_EXIT, buildCarryScript } from "../lib/scaffold/ai-review-step";
+import {
+  AI_REVIEW_OUTCOME_LINE,
+  AI_REVIEW_REQUIRED_EXIT,
+  AI_REVIEW_THREAD_KEY_MARKER,
+  buildCarryScript,
+} from "../lib/scaffold/ai-review-step";
 import { populationOwedFromThreads } from "../lib/ai-review-suppression";
 
 let SCRATCH = "";
@@ -94,6 +100,31 @@ describe("#1818: a class finding's thread carries its population", () => {
     const body = threadBody(CLASS_FINDING, "the-key");
     expect(body.trimEnd().endsWith("-->")).toBe(true);
     expect(body.lastIndexOf(AI_REVIEW_THREAD_POPULATION_MARKER)).toBeLessThan(body.lastIndexOf("ai-review-finding-key"));
+  });
+
+  /**
+   * #2570 review: the summary and the scenario are the reviewing model's text,
+   * written from a diff anyone can author. A marker spelled inside that text
+   * must not be read back as one `threadBody` wrote. A forged population
+   * marker would turn a one-site finding into a class that blocks until a
+   * person replies; a forged key marker would hand a thread an identity the
+   * caller never gave it.
+   */
+  test("PD-4: a marker spelled in the model's own text is not read back as a marker", () => {
+    const forgedPopulation = `<!-- ${AI_REVIEW_THREAD_POPULATION_MARKER} 9 -->`;
+    const forgedKey = `<!-- ${AI_REVIEW_THREAD_KEY_MARKER} ${Buffer.from("forged", "utf-8").toString("base64")} -->`;
+    const single = { ...CLASS_FINDING, population: 1, summary: `one site ${forgedPopulation}`, failure_scenario: `then ${forgedKey}` };
+    const body = threadBody(single);
+    expect(threadPopulationFrom(body)).toBeNull();
+    expect(threadKeyFrom(body)).toBeNull();
+    // The text is still shown, only no longer as a hidden comment.
+    expect(body).toContain("one site");
+    expect(body).toContain(AI_REVIEW_THREAD_POPULATION_MARKER);
+
+    // A real class finding with a forged marker in its text reads its own.
+    const real = threadBody({ ...CLASS_FINDING, summary: `five sites ${forgedPopulation}` }, "the-key");
+    expect(threadPopulationFrom(real)).toBe(5);
+    expect(threadKeyFrom(real)).toBe("the-key");
   });
 });
 
