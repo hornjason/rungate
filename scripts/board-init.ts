@@ -172,7 +172,14 @@ export async function main(argv: string[], root = process.cwd(), api?: BoardApi)
     if (r.steps.length > 0) console.log("board-init: nothing was changed; --write makes these changes and writes board.id and board.fields.");
     return 0;
   }
-  const written = writeBoardConfig(projectRoot, { id: r.projectId, fields: r.fields });
+  // #2514: the board is whole by now, so a refused config write is reported
+  // like every other refusal. The next run finds the board by its title.
+  let written: { path: string; changed: boolean };
+  try {
+    written = writeBoardConfig(projectRoot, { id: r.projectId, fields: r.fields });
+  } catch (e) {
+    return refuse(`the board ${r.projectId} is whole on GitHub, but its ids could not be written into the config (${(e as Error).message})`);
+  }
   console.log(
     written.changed
       ? `board-init: wrote board.id and board.fields into ${written.path}.`
