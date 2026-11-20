@@ -1,4 +1,4 @@
-# generated-sha: 142e7be49c4bea65
+# generated-sha: 49ddb73e2cf7940a
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -2316,6 +2316,24 @@ jobs:
             `merge_group` run has no pull request to carry one. Review normally. Do not
             infer an intent from the branch name or the commit subjects and then check
             the diff against something you made up.
+
+            ON A BUG FIX, SAY WHAT THE CAUSE WAS (#1654). This applies whenever the change fixes a
+            defect: the author's text says it does, or the diff repairs a wrong result,
+            a crash or a refusal. When you cannot tell, treat it as a fix. On a fix the
+            symptom being gone is not evidence. The cheapest repair is the one that makes
+            the report stop — a widened threshold, a deleted entry, an absent value let
+            through — and it certifies the defect at the moment the defect comes back.
+            So answer two questions, and say which one you could not:
+
+              - What produced the reported state? Name it in the code — the line that
+                computed the wrong value — not in the narrative.
+              - Does the diff reach that line, or only the place where it surfaced? A
+                guard added at the point of observation while the producer is untouched
+                is a finding, and a `high` one when another caller still reaches the
+                producer.
+
+            A cause that is out of scope is a legitimate answer, and the pull request
+            should say so. A fix that is silent about its own cause is the finding.
 
             If `round_budget_spent` is 1, THE ROUND BUDGET IS SPENT. This pull request
             has already had `round_budget` rounds of review and has not settled, so do
