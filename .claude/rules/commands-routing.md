@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: ef44d9e8bc228a5c
+generated-sha: 2b77ebfe5e9560b1
 ---
 
 ## Command Routing
@@ -40,6 +40,7 @@ Generated from the CLI's command registry. Run one as
 | `intake` | Run each intake source and print its reading, MEASURED or UNMEASURED |
 | `audit-closing-references` | Refuse a pull request whose closing reference GitHub will not act on, or that closes no issue |
 | `close-merged-references` | Close the issues a pull request merged by automation declares |
+| `criterion-successor` | File a successor for each criterion a closed issue leaves owed by nobody |
 | `sync-spec-tests` | Regenerate the conformity suite from the specs |
 | `generate-code-map` | Regenerate CODE-MAP.md from the source tree |
 | `extract-constraints` | Extract constraints from a project's docs into agent rules |
