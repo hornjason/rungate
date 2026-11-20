@@ -239,6 +239,43 @@ function blockingCycles(
   return found;
 }
 
+/**
+ * The body of the table whose header is at `start`: each line after it, with
+ * its leading whitespace removed and its 1-based line number, separator rows
+ * skipped. THE one place that decides where a Decomposition table ends, so
+ * the parser and the growth check (#2366) cannot read different tables.
+ *
+ * GFM accepts up to THREE leading spaces on a table row and reads four as an
+ * indented code block, which ends the table. MEASURED against POST /markdown
+ * mode=gfm on 2026-10-30: 0, 1, 2 and 3 all render the row; 4 and 5 end the
+ * table.
+ *
+ * A table ends at a blank line or an indented code block — NOT at a row that
+ * omits its leading pipe, which GFM renders as a full row. Measured
+ * 2026-10-30: all three rows render when the middle one has no leading pipe.
+ * A bare `!line.startsWith("|")` ENDED THE SCAN on such a row — silently,
+ * dropping it and every row after it. A plan's reviewer approves three rows
+ * and the tool creates one, which is this module's cardinal failure arriving
+ * through whitespace an editor inserts. Found by the AI review of the parser,
+ * and again by the AI review of #2582, when the growth check had its own copy
+ * of the old stop.
+ */
+function tableBody(lines: string[], start: number): { at: number; line: string }[] {
+  const out: { at: number; line: string }[] = [];
+  for (let i = start + 1; i < lines.length; i++) {
+    let indent = 0;
+    let pos = 0;
+    for (; pos < lines[i].length && (lines[i][pos] === " " || lines[i][pos] === "\t"); pos++) {
+      indent += lines[i][pos] === "\t" ? 4 : 1;
+    }
+    const line = lines[i].slice(pos);
+    if (indent >= 4 || line.trim() === "") break;
+    if (/^\|[\s|:-]+\|$/.test(line)) continue;
+    out.push({ at: i + 1, line });
+  }
+  return out;
+}
+
 export function parseDecompositionPlan(content: string): DecompositionReading {
   const lines = content.split("\n");
   const start = lines.findIndex(l => HEADER.test(l));
@@ -263,35 +300,11 @@ export function parseDecompositionPlan(content: string): DecompositionReading {
 
   const rows: DecompositionRow[] = [];
   const rejected: { line: number; text: string; why: string }[] = [];
-  for (let i = start + 1; i < lines.length; i++) {
-    // GFM accepts up to THREE leading spaces on a table row and reads four
-    // as an indented code block, which ends the table. MEASURED against
-    // POST /markdown mode=gfm on 2026-10-30: 0, 1, 2 and 3 all render the
-    // row; 4 and 5 end the table.
-    //
-    // A bare `!line.startsWith("|")` therefore ENDED THE SCAN on a row the
-    // renderer shows — silently, with no `rejected` entry — dropping that
-    // row and every row after it. A plan's reviewer approves three rows and
-    // the tool creates one, which is this module's cardinal failure arriving
-    // through whitespace an editor inserts. Found by the AI review of this
-    // change.
-    let indent = 0;
-    let pos = 0;
-    for (; pos < lines[i].length && (lines[i][pos] === " " || lines[i][pos] === "\t"); pos++) {
-      indent += lines[i][pos] === "\t" ? 4 : 1;
-    }
-    const line = lines[i].slice(pos);
-    // A table ends at a blank line or an indented code block — NOT at a row
-    // that omits its leading pipe, which GFM renders as a full row and the
-    // old `startsWith("|")` dropped silently along with every row after it.
-    // Measured 2026-10-30: all three rows render when the middle one has no
-    // leading pipe. Anything else non-blank is now READ and refused on its
-    // cell count, because a loud refusal is recoverable and a silent drop is
-    // the failure this module exists to prevent.
-    if (indent >= 4 || line.trim() === "") break;
-    if (/^\|[\s|:-]+\|$/.test(line)) continue;
+  for (const { at, line } of tableBody(lines, start)) {
+    // Anything non-blank in the table is READ and refused on its cell count,
+    // because a loud refusal is recoverable and a silent drop is the failure
+    // this module exists to prevent. Where the table ends is tableBody's.
     const c = rowCells(line);
-    const at = i + 1;
     const reject = (why: string): void => {
       rejected.push({ line: at, text: line.slice(0, 70), why });
     };
@@ -701,22 +714,15 @@ export function newlyAccepted(before: string | null, after: string): boolean {
 }
 
 /**
- * The body lines of an ADR's Decomposition table, as written: every `|` line
- * after the header and its separator, up to the first line that is not one.
- * Raw, not parsed, so a row the parser rejects is still a row here.
+ * The body lines of an ADR's Decomposition table, as written: the same lines
+ * the parser reads ({@link tableBody}), unparsed, so a row the parser rejects
+ * is still a row here.
  */
 function decompositionTableLines(text: string): string[] {
   const lines = text.split("\n");
   const start = lines.findIndex(l => HEADER.test(l));
   if (start === -1) return [];
-  const out: string[] = [];
-  for (let i = start + 1; i < lines.length; i++) {
-    const line = lines[i]!.trim();
-    if (!line.startsWith("|")) break;
-    if (/^\|[\s:|-]+\|$/.test(line)) continue;
-    out.push(line);
-  }
-  return out;
+  return tableBody(lines, start).map(b => b.line.trim());
 }
 
 /** What a change to one ADR gives its plan to place (#2366). */
