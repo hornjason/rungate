@@ -31,9 +31,22 @@
  *
  * Nothing it did not add. An adopted board keeps every field and option, with
  * their ids, and gains only the missing lanes, the Criteria field and a board
- * view. GitHub's default Status options are replaced only on a project this
- * run created, because then they are rungate's own.
+ * view. GitHub's default Status options are replaced only on rungate's own
+ * unfinished board: one this run created, or one found by rungate's title whose
+ * Status still holds exactly GitHub's three defaults, left by a run that
+ * stopped first (review of #2513). A board found by title whose lanes somebody
+ * changed keeps them, like any adopted board.
  */
+
+/** The Status options GitHub gives a new project. */
+export const GITHUB_DEFAULT_STATUS = ["Todo", "In Progress", "Done"] as const;
+
+/** Whether a project's Status field still holds exactly GitHub's defaults. */
+export function hasGitHubDefaultLanes(p: ProjectReading): boolean {
+  const status = p.fields.filter(f => f.name === STATUS_FIELD);
+  if (status.length !== 1) return false;
+  return (status[0].options ?? []).map(o => o.name).join("\n") === GITHUB_DEFAULT_STATUS.join("\n");
+}
 
 /** The six lanes, in board order. `lib/board-flow.ts`'s `Lane` names the same six. */
 export const BOARD_STATUS_OPTIONS = ["Backlog", "Ready", "In progress", "In review", "Done", "Cancelled"] as const;
@@ -216,6 +229,7 @@ export async function boardInit(opts: {
       if (ours.length === 1) {
         reading = await api.project(ours[0].id);
         if (reading === null) return no(`the project "${title}" owned by ${owner} could not be read`);
+        fresh = hasGitHubDefaultLanes(reading);
       } else {
         if (!write) {
           return {
