@@ -272,7 +272,11 @@ describe("README identity extraction edge cases", () => {
   });
 });
 
-describe("#91: docs-routing counts include nested documents", () => {
+// #2566 removed the count these cases used to assert: a count taken at
+// scaffold time is stale after the next commit. What #91 protected — a nested-
+// only category must not read as empty — now holds because no row states a
+// size at all, so these assert the row is there and carries no number.
+describe("#91 / #2566: docs-routing routes nested documents, and states no count", () => {
   let tmpDir: string;
 
   beforeEach(() => {
@@ -297,15 +301,17 @@ describe("#91: docs-routing counts include nested documents", () => {
     writeFileSync(join(tmpDir, "reference", "specs", "a.md"), "# A");
     writeFileSync(join(tmpDir, "reference", "specs", "b.md"), "# B");
 
-    expect(routeFor("reference")).toContain("(2 files)");
+    expect(routeFor("reference")).toBeDefined();
+    expect(routeFor("reference")).not.toMatch(/\(\d+ files?\)/);
   });
 
-  test("counts nested and top-level documents together", () => {
+  test("a category with nested and top-level documents is routed once, with no count", () => {
     mkdirSync(join(tmpDir, "docs", "research", "hill-climb"), { recursive: true });
     writeFileSync(join(tmpDir, "docs", "research", "top.md"), "# Top");
     writeFileSync(join(tmpDir, "docs", "research", "hill-climb", "v1.md"), "# V1");
 
-    expect(routeFor("docs/research")).toContain("(2 files)");
+    expect(routeFor("docs/research")).toBeDefined();
+    expect(routeFor("docs/research")).not.toMatch(/\(\d+ files?\)/);
   });
 
   // The three tests above exercise lib/scanner.ts. The scaffold does not use
@@ -314,29 +320,22 @@ describe("#91: docs-routing counts include nested documents", () => {
   // writes the rule file. Fixing scanner.ts alone changed no generated output
   // at all, and these tests went green anyway — they were covering the copy
   // nobody calls. This one asserts the artifact a reader actually opens.
-  test("the generated rule file agrees with a recursive count on disk", () => {
+  test("the generated rule file states no count for any directory it routes", () => {
     const rulePath = join(ROOT, ".claude", "rules", "docs-routing.md");
-    if (!existsSync(rulePath)) return;
-    const rule = readFileSync(rulePath, "utf-8");
-
-    for (const dir of ["specs", "docs/research", "docs/council", "docs/guides", "reference"]) {
-      const catPath = join(ROOT, dir);
-      if (!existsSync(catPath)) continue;
-      const actual = readdirSync(catPath, { recursive: true }).map(String).filter(f => f.endsWith(".md")).length;
-      const row = rule.split("\n").find(l => l.includes(`\`${dir}/\``));
-      if (!row) continue;
-      const claimed = row.match(/\((\d+) files\)/)?.[1];
-      expect(claimed, `docs-routing.md row for ${dir}/`).toBe(String(actual));
-    }
+    expect(existsSync(rulePath), "this repository has no docs-routing rule to read").toBe(true);
+    const rows = readFileSync(rulePath, "utf-8").split("\n").filter(l => l.startsWith("| ") && l.includes("/`"));
+    expect(rows.length, "no directory rows were read, so the case would hold over nothing").toBeGreaterThan(0);
+    expect(rows.filter(r => /\(\d+ files?\)/.test(r))).toEqual([]);
   });
 
-  test("still counts only markdown", () => {
+  test("a category that exists is routed whatever it holds", () => {
     mkdirSync(join(tmpDir, "reference", "scripts"), { recursive: true });
     writeFileSync(join(tmpDir, "reference", "keep.md"), "# Keep");
     writeFileSync(join(tmpDir, "reference", "scripts", "run.sh"), "echo hi");
     writeFileSync(join(tmpDir, "reference", "manifest.json"), "{}");
 
-    expect(routeFor("reference")).toContain("(1 files)");
+    expect(routeFor("reference")).toBeDefined();
+    expect(routeFor("reference")).not.toMatch(/\(\d+ files?\)/);
   });
 });
 
