@@ -9,8 +9,19 @@
  * `--sweep` (#2541) asks about every owed criterion instead of one close's:
  * for the closes whose `closed` event the workflow missed. Each owed
  * criterion cites the most recent closed issue that names it, by the same
- * `criterionAnswer` the per-issue path reads, never by the search match
- * alone. One that no closed issue names is left: there is nothing to succeed.
+ * `criterionAnswer` the per-issue path reads. One that no such issue names is
+ * left: there is nothing to succeed.
+ *
+ * The closed issues are read ONCE, through the core API, and matched locally
+ * (#2546). A search per criterion tripped GitHub's ~30-a-minute search limit
+ * at the scale a consumer's first spec reaches, and refused every run.
+ *
+ * Only a trusted author's issue is a citation (#2546): OWNER, MEMBER or
+ * COLLABORATOR, or a bot account. An issue's author can close it as completed
+ * themselves, so on a public repository the closed state alone would let an
+ * outsider choose where a successor sends its reader. Bots count because the
+ * workflow's own successors are filed by `github-actions[bot]`, and an app
+ * installation is an admin's grant.
  *
  * Reads issue <N>, which must be closed, and the criteria it names. For each
  * one that `declared-work` now reads as owed by nobody — unticked in an
@@ -43,6 +54,21 @@ import { declaredWorkUnaccounted, type BoardSnapshot } from "./board-conformance
 import { LIVE_GIT, placementRow, plannedByUnmergedAdr, readDeclaredWork } from "./board-snapshot";
 import { resolveRepo } from "./status-view";
 
+/** The author associations whose closed issue a sweep may cite (#2546). */
+export const TRUSTED_ASSOCIATIONS: readonly string[] = ["OWNER", "MEMBER", "COLLABORATOR"];
+
+/** One closed issue, as the sweep reads it. */
+export interface ClosedRecord {
+  number: number;
+  title: string;
+  body: string | null;
+  closedAt: string;
+  /** GitHub's `state_reason`; null for an issue closed before GitHub recorded one. */
+  stateReason: string | null;
+  authorAssociation: string;
+  authorIsBot: boolean;
+}
+
 /** A reading that could not be taken, or a run that was asked for wrongly. Nothing was filed. */
 export const REFUSAL_EXIT = 2;
 /** Everything was read and planned, and at least one successor could not be filed. */
@@ -54,15 +80,8 @@ export interface SuccessorGitHub {
   openIssues: (repo: string) => Promise<{ number: number; title: string; body: string | null }[]>;
   /** The open milestones. */
   milestones: (repo: string) => Promise<SuccessorMilestone[]>;
-  /**
-   * Closed issues whose text matches the id. A search match, not a claim: the
-   * caller reads what each one names. `stateReason` is GitHub's `state_reason`,
-   * null for an issue closed before GitHub recorded one.
-   */
-  closedIssuesNaming: (
-    repo: string,
-    id: string,
-  ) => Promise<{ number: number; title: string; body: string | null; closedAt: string; stateReason: string | null }[]>;
+  /** Every closed issue in the repository, pull requests excluded: one paginated read (#2546). */
+  closedIssues: (repo: string) => Promise<ClosedRecord[]>;
   /** Files the issue and returns its number. */
   createIssue: (repo: string, issue: { title: string; body: string; milestone: number }) => Promise<number>;
 }
@@ -92,23 +111,17 @@ export const LIVE_GITHUB: SuccessorGitHub = {
       .split("\n")
       .filter(l => l.trim() !== "")
       .map(l => JSON.parse(l) as SuccessorMilestone),
-  closedIssuesNaming: async (repo, id) =>
+  closedIssues: async repo =>
     gh([
       "api",
       "--paginate",
-      "-X",
-      "GET",
-      "search/issues",
-      "-f",
-      `q=repo:${repo} is:issue is:closed "${id}"`,
-      "-f",
-      "per_page=100",
+      `repos/${repo}/issues?state=closed&per_page=100`,
       "--jq",
-      ".items[] | {number, title, body, closedAt: .closed_at, stateReason: .state_reason} | @json",
+      '.[] | select(.pull_request == null) | {number, title, body, closedAt: .closed_at, stateReason: .state_reason, authorAssociation: .author_association, authorIsBot: (.user.type == "Bot")} | @json',
     ])
       .split("\n")
       .filter(l => l.trim() !== "")
-      .map(l => JSON.parse(l) as { number: number; title: string; body: string | null; closedAt: string; stateReason: string | null }),
+      .map(l => JSON.parse(l) as ClosedRecord),
   createIssue: async (repo, i) =>
     Number(
       gh(["api", "-X", "POST", `repos/${repo}/issues`, "-f", `title=${i.title}`, "-f", `body=${i.body}`, "-F", `milestone=${i.milestone}`, "--jq", ".number"]).trim(),
@@ -190,18 +203,24 @@ export async function main(
     let plan: SuccessorPlan;
     if (sweep) {
       const owed = await owedNow();
-      // Every search is read before anything is planned: a sweep that could
-      // read some criteria and not others files nothing.
+      // The closed issues are read in full before anything is planned, in one
+      // read, and not at all when nothing is owed (#2546). A read that fails
+      // files nothing.
       const lastNamer = new Map<string, number>();
+      const citable =
+        owed.length === 0
+          ? []
+          : (await api.closedIssues(repo))
+              // A trusted author only: see the header.
+              .filter(i => i.authorIsBot || TRUSTED_ASSOCIATIONS.includes(i.authorAssociation))
+              // Done work only. A maintainer's "not planned" or "duplicate" is
+              // not the work a successor should send the next reader to.
+              .filter(i => i.stateReason === "completed" || i.stateReason === null)
+              .map(i => ({ number: i.number, closedAt: i.closedAt, names: criterionAnswer({ title: i.title, body: i.body }, ids).names }))
+              .sort((a, b) => b.closedAt.localeCompare(a.closedAt));
       for (const id of [...new Set(owed.map(o => o.id))]) {
-        const naming = (await api.closedIssuesNaming(repo, id))
-          // Done work only. Anyone can file an issue naming a criterion, and
-          // one a maintainer closed as not planned (or as a duplicate) is not
-          // the work a successor should send the next reader to.
-          .filter(i => i.stateReason === "completed" || i.stateReason === null)
-          .filter(i => criterionAnswer({ title: i.title, body: i.body }, ids).names.includes(id))
-          .sort((a, b) => b.closedAt.localeCompare(a.closedAt));
-        if (naming[0] !== undefined) lastNamer.set(id, naming[0].number);
+        const newest = citable.find(i => i.names.includes(id));
+        if (newest !== undefined) lastNamer.set(id, newest.number);
       }
       plan = sweepSuccessors(owed, lastNamer, specText, await api.milestones(repo));
     } else {

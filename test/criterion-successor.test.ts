@@ -143,7 +143,7 @@ describe("#2490: rungate criterion-successor, end to end over a real spec", () =
       issue: async () => over.closed ?? { number: 5, state: "CLOSED", title: "the first thing", body: "## Criteria this serves\n\nTST-1, TST-2" },
       openIssues: async () => over.open ?? [],
       milestones: async () => MILESTONES,
-      closedIssuesNaming: async () => [],
+      closedIssues: async () => [],
       createIssue: async (_repo, i) => {
         created.push(i);
         return 100 + created.length;
@@ -291,39 +291,53 @@ describe("#2541: rungate criterion-successor --sweep, end to end over a real spe
     writeFileSync(join(root, "specs", "FIX.md"), SPEC);
     return root;
   };
-  type Closed = { number: number; title: string; body: string | null; closedAt: string; stateReason: string | null };
-  const CLOSED: Record<string, Closed[]> = {
-    "TST-1": [
-      { number: 5, title: "older", body: "## Criteria this serves\n\nTST-1", closedAt: "2026-11-01T00:00:00Z", stateReason: "completed" },
-      { number: 7, title: "newer", body: "## Criteria this serves\n\nTST-1", closedAt: "2026-11-10T00:00:00Z", stateReason: "completed" },
-      // Newer still, and closed as not planned: anyone can file an issue naming
-      // a criterion, and a maintainer's "not planned" is not the work it names.
-      { number: 8, title: "declined", body: "## Criteria this serves\n\nTST-1", closedAt: "2026-11-12T00:00:00Z", stateReason: "not_planned" },
-      // The search matched text, not a claim: this one names TST-3 only.
-      { number: 9, title: "newest, about the third thing", body: "## Criteria this serves\n\nTST-3", closedAt: "2026-11-15T00:00:00Z", stateReason: "completed" },
-    ],
-    // Closed before GitHub recorded a reason: null is not a decline.
-    "TST-3": [{ number: 6, title: "third", body: "## Criteria this serves\n\nTST-3", closedAt: "2026-11-05T00:00:00Z", stateReason: null }],
+  type Closed = {
+    number: number;
+    title: string;
+    body: string | null;
+    closedAt: string;
+    stateReason: string | null;
+    authorAssociation: string;
+    authorIsBot: boolean;
   };
-  const gh = (over: { open?: { number: number; title: string; body: string | null }[]; search?: (id: string) => Promise<Closed[]> } = {}) => {
+  const OWNER = { authorAssociation: "OWNER", authorIsBot: false };
+  const serves = (ids: string) => `## Criteria this serves\n\n${ids}`;
+  const CLOSED: Closed[] = [
+    { number: 5, title: "older", body: serves("TST-1"), closedAt: "2026-11-01T00:00:00Z", stateReason: "completed", ...OWNER },
+    { number: 7, title: "newer", body: serves("TST-1"), closedAt: "2026-11-10T00:00:00Z", stateReason: "completed", ...OWNER },
+    // Newer still, and closed as not planned: a maintainer's "not planned" is
+    // not the work it names.
+    { number: 8, title: "declined", body: serves("TST-1"), closedAt: "2026-11-12T00:00:00Z", stateReason: "not_planned", ...OWNER },
+    // Newest of all, about a criterion that is ticked: never a citation for TST-1.
+    { number: 9, title: "about the second thing", body: serves("TST-2"), closedAt: "2026-11-15T00:00:00Z", stateReason: "completed", ...OWNER },
+    // #2546: an outsider files an issue naming TST-1 and closes it as completed
+    // themselves. Newer than #7, and not a citation.
+    { number: 10, title: "drive-by", body: serves("TST-1"), closedAt: "2026-11-18T00:00:00Z", stateReason: "completed", authorAssociation: "NONE", authorIsBot: false },
+    // A successor filed by the workflow's own bot reads as NONE too, and IS a
+    // citation: excluding bots would break the chain the sweep continues.
+    // Closed before GitHub recorded a reason: null is not a decline.
+    { number: 6, title: "third", body: serves("TST-3"), closedAt: "2026-11-05T00:00:00Z", stateReason: null, authorAssociation: "NONE", authorIsBot: true },
+    { number: 11, title: "drive-by, third", body: serves("TST-3"), closedAt: "2026-11-19T00:00:00Z", stateReason: "completed", authorAssociation: "CONTRIBUTOR", authorIsBot: false },
+  ];
+  const gh = (over: { open?: { number: number; title: string; body: string | null }[]; closed?: () => Promise<Closed[]> } = {}) => {
     const created: { title: string; body: string; milestone: number }[] = [];
-    const searched: string[] = [];
+    let reads = 0;
     const api: SuccessorGitHub = {
       issue: async () => {
         throw new Error("a sweep reads no single issue");
       },
       openIssues: async () => over.open ?? [],
       milestones: async () => MILESTONES,
-      closedIssuesNaming: async (_repo, id) => {
-        searched.push(id);
-        return over.search ? over.search(id) : (CLOSED[id] ?? []);
+      closedIssues: async () => {
+        reads++;
+        return over.closed ? over.closed() : CLOSED;
       },
       createIssue: async (_repo, i) => {
         created.push(i);
         return 200 + created.length;
       },
     };
-    return { api, created, searched };
+    return { api, created, reads: () => reads };
   };
   const run = async (argv: string[], root: string, api: SuccessorGitHub) => {
     const out: string[] = [];
@@ -340,38 +354,47 @@ describe("#2541: rungate criterion-successor --sweep, end to end over a real spe
     }
   };
 
-  test("with --write it files one successor per owed criterion, citing the newest closed issue that NAMES it", async () => {
-    const { api, created, searched } = gh();
+  test("with --write it files one successor per owed criterion, citing the newest trusted issue closed as completed that names it", async () => {
+    const { api, created, reads } = gh();
     const r = await run(["--sweep", "--repo", "o/n", "--write"], tree(), api);
     expect(r.code, r.out).toBe(0);
     expect(created.map(c => c.milestone)).toEqual([11, 12]);
     expect(created[0]!.body).toContain("## Criteria this serves\n\nTST-1");
-    expect(created[0]!.body, "cited #9, which names TST-3 and only matched the search").not.toContain("#9");
+    expect(created[0]!.body, "cited #9, which names TST-2").not.toContain("#9");
     expect(created[0]!.body, "cited #8, which was closed as not planned").not.toContain("#8");
     expect(created[0]!.body).toContain("#7");
     expect(created[1]!.body).toContain("#6");
-    // Ticked TST-2 is not owed, so it is never searched for.
-    expect(searched.sort()).toEqual(["TST-1", "TST-3"]);
+    // One read of the closed issues, however many criteria are owed (#2546).
+    expect(reads()).toBe(1);
   });
 
-  test("a criterion an open issue still names is not owed: not searched, not filed", async () => {
-    const { api, created, searched } = gh({ open: [{ number: 40, title: "x", body: "## Criteria this serves\n\nTST-3" }] });
+  test("#2546: an issue its outsider author closed as completed is never the citation; a bot's successor is", async () => {
+    const { api, created } = gh();
+    const r = await run(["--sweep", "--repo", "o/n", "--write"], tree(), api);
+    expect(r.code, r.out).toBe(0);
+    expect(created[0]!.body, "cited #10, an outsider's self-closed issue").not.toContain("#10");
+    expect(created[1]!.body, "cited #11, a contributor's self-closed issue").not.toContain("#11");
+    expect(created[1]!.body, "skipped #6, the bot-filed successor").toContain("#6");
+  });
+
+  test("a criterion an open issue still names is not owed, and not filed", async () => {
+    const { api, created } = gh({ open: [{ number: 40, title: "x", body: serves("TST-3") }] });
     const r = await run(["--sweep", "--repo", "o/n", "--write"], tree(), api);
     expect(r.code, r.out).toBe(0);
     expect(created.map(c => c.milestone)).toEqual([11]);
-    expect(searched).toEqual(["TST-1"]);
   });
 
-  test("a second run, with the first run's successors open, files nothing", async () => {
-    const { api, created } = gh({
+  test("a second run, with the first run's successors open, files nothing and reads no closed issue", async () => {
+    const { api, created, reads } = gh({
       open: [
-        { number: 201, title: "TST-1: a", body: "## Criteria this serves\n\nTST-1" },
-        { number: 202, title: "TST-3: b", body: "## Criteria this serves\n\nTST-3" },
+        { number: 201, title: "TST-1: a", body: serves("TST-1") },
+        { number: 202, title: "TST-3: b", body: serves("TST-3") },
       ],
     });
     const r = await run(["--sweep", "--repo", "o/n", "--write"], tree(), api);
     expect(r.code, r.out).toBe(0);
     expect(created).toEqual([]);
+    expect(reads(), "nothing owed, so nothing to read").toBe(0);
   });
 
   test("without --write it files nothing and says what it would file", async () => {
@@ -382,16 +405,45 @@ describe("#2541: rungate criterion-successor --sweep, end to end over a real spe
     expect(r.out).toContain("would file");
   });
 
-  test("a search that cannot be read files nothing, even for the criteria it could read", async () => {
+  test("a closed-issue read that fails files nothing, and names why", async () => {
     const { api, created } = gh({
-      search: async id => {
-        if (id === "TST-3") throw new Error("search rate limited");
-        return CLOSED[id] ?? [];
+      closed: async () => {
+        throw new Error("API rate limit exceeded");
       },
     });
     const r = await run(["--sweep", "--repo", "o/n", "--write"], tree(), api);
     expect(r.code, r.out).toBe(REFUSAL_EXIT);
     expect(created).toEqual([]);
+    expect(r.out).toContain("API rate limit exceeded");
+  });
+
+  // #2546: forty owed criteria, more than the search API's ~30 a minute. One
+  // read serves them all, so the sweep completes.
+  test("#2546: a sweep over more owed criteria than the search limit allows completes, from one read", async () => {
+    const MANY = 40;
+    const ids = Array.from({ length: MANY }, (_, i) => `TST-${i + 1}`);
+    const spec = [
+      ...SPEC.split("## Success Criteria")[0]!.split("\n"),
+      "## Success Criteria",
+      "",
+      ...ids.map(id => `- [ ] ${id}: thing ${id} is true`),
+      "",
+      "### Phase placement",
+      "",
+      "| Placement | Criteria |",
+      "|---|---|",
+      `| **Phase 1** | ${ids.join(", ")} |`,
+      "",
+    ].join("\n");
+    const root = tree();
+    writeFileSync(join(root, "specs", "FIX.md"), spec);
+    const { api, created, reads } = gh({
+      closed: async () => [{ number: 50, title: "the lot", body: serves(ids.join(", ")), closedAt: "2026-11-01T00:00:00Z", stateReason: "completed", ...OWNER }],
+    });
+    const r = await run(["--sweep", "--repo", "o/n", "--write"], root, api);
+    expect(r.code, r.out).toBe(0);
+    expect(created).toHaveLength(MANY);
+    expect(reads()).toBe(1);
   });
 
   test("--sweep with --issue is refused: one run asks one question", async () => {
