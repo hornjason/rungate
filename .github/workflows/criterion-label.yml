@@ -1,4 +1,4 @@
-# generated-sha: 3fe806b88012c2a5
+# generated-sha: 063aaea970d695bb
 # Managed by rungate — do not edit the generated job.
 #
 # #2020, generated since #2467: an issue that names no criterion and does not
@@ -56,7 +56,7 @@ jobs:
             args+=(--issue "$ISSUE")
             if [ "$ACTION" = "opened" ]; then args+=(--comment); fi
           fi
-          bunx rungate@0.8.40 criterion-label "${args[@]}"
+          bunx rungate@0.8.41 criterion-label "${args[@]}"
 
       # #2532: a criterion this close left unticked and named by no open issue
       # gets one successor, in its phase milestone. A second run files none.
@@ -65,4 +65,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ISSUE: ${{ github.event.issue.number }}
-        run: bunx rungate@0.8.40 criterion-successor --issue "$ISSUE" --repo "$GITHUB_REPOSITORY" --write
+        run: bunx rungate@0.8.41 criterion-successor --issue "$ISSUE" --repo "$GITHUB_REPOSITORY" --write
