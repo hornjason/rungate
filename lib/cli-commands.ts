@@ -410,6 +410,11 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     usage:
       "rungate close-merged-references --since <sha> | --since-last-run <workflow.yml> [--repo <owner/name>] [--project-root <dir>] [--write]   |   --fixture <prs.json>",
   },
+  "criterion-successor": {
+    script: "scripts/criterion-successor.ts",
+    summary: "File a successor for each criterion a closed issue leaves owed by nobody",
+    usage: "rungate criterion-successor --issue <N> [--repo <owner/name>] [--project-root <dir>] [--write]",
+  },
   "sync-spec-tests": {
     script: "scripts/sync-spec-tests.ts",
     summary: "Regenerate the conformity suite from the specs",
