@@ -1,9 +1,11 @@
 import { test, expect, describe, beforeAll } from "bun:test";
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { cpSync, existsSync, readFileSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { execSync } from "child_process";
 import { join } from "path";
 import { initFixtureRepo, commitFixture } from "./helpers/git-fixture";
 import { loadRoleConfig } from "../lib/config-readers";
+import { generateAgentBriefsStep } from "../lib/scaffold/steps";
 
 const FIXTURE = join(import.meta.dir, "fixtures/golden-project");
 const OUTPUT = "/tmp/rungate-agent-brief-template-test";
@@ -275,32 +277,30 @@ describe("Agent Brief Template Tests", () => {
   });
 
   describe("SC-354: Editing template and re-scaffolding updates brief", () => {
-    test("modify template, re-scaffold, verify update appears", () => {
-      const templatePath = join(TEMPLATES_DIR, "marcus.md");
-      expect(existsSync(templatePath)).toBe(true);
+    // #2567: this case used to append the canary to the SHIPPED template and
+    // restore it in a `finally`. A run killed between the two, or two runs
+    // overlapping, left the canary in templates/agent-briefs/marcus.md, and it
+    // was committed and reached every consumer. It now edits a temporary copy
+    // and points the scaffold's brief step at the copy through its
+    // `templatesDir` seam, so there is nothing in the shipped tree to restore.
+    test("edit a copy of the templates, re-run the brief step against it, and the edit reaches the brief", () => {
+      const shipped = join(TEMPLATES_DIR, "marcus.md");
+      expect(existsSync(shipped)).toBe(true);
+      const before = readFileSync(shipped, "utf-8");
 
-      // Read original template
-      const originalTemplate = readFileSync(templatePath, "utf-8");
-
-      // Add canary marker at end
-      const canary = "\n\n## CANARY_MARKER_FOR_SC354\n\nThis line verifies template updates propagate.\n";
-      const modifiedTemplate = originalTemplate + canary;
-      writeFileSync(templatePath, modifiedTemplate);
-
+      const copy = mkdtempSync(join(tmpdir(), "rg-sc354-templates-"));
       try {
-        // Re-run scaffold on OUTPUT
-        execSync(`bun run ${SCAFFOLD} ${OUTPUT} --fix`, { timeout: 60000, encoding: "utf-8", stdio: "pipe" });
+        cpSync(TEMPLATES_DIR, copy, { recursive: true });
+        const canary = "\n\n## CANARY_MARKER_FOR_SC354\n\nThis line verifies template updates propagate.\n";
+        writeFileSync(join(copy, "marcus.md"), before + canary);
 
-        // Read generated brief
-        const briefPath = join(OUTPUT, ".claude/agents/marcus.md");
-        const generatedContent = readFileSync(briefPath, "utf-8");
+        generateAgentBriefsStep(OUTPUT, [], { templatesDir: copy });
 
-        // Verify canary appears
-        expect(generatedContent).toContain("CANARY_MARKER_FOR_SC354");
-
+        const generated = readFileSync(join(OUTPUT, ".claude/agents/marcus.md"), "utf-8");
+        expect(generated, "the edited template did not reach the generated brief").toContain("CANARY_MARKER_FOR_SC354");
+        expect(readFileSync(shipped, "utf-8"), "the case modified the shipped template").toBe(before);
       } finally {
-        // Restore original template
-        writeFileSync(templatePath, originalTemplate);
+        rmSync(copy, { recursive: true, force: true });
       }
     });
   });
