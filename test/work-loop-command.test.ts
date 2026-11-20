@@ -77,6 +77,9 @@ describe("SC-2794: rungate scaffold installs the work loop, naming only commands
         "Fixes #",
         "bunx rungate verify-merge-ref --pr",
         "--match-head-commit",
+        // Review of #2518: --auto only arms, so the check after the merge
+        // needs a wait for CI between them, or it runs against an open PR.
+        "gh pr checks <PR> --watch --fail-fast",
         "--after-merge",
       ];
       const at = marks.map(m => command.indexOf(m));
