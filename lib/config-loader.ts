@@ -232,40 +232,56 @@ function treeAccess(projectRoot: string): ConfigFileAccess {
   };
 }
 
-function resolveWith(files: ConfigFileAccess): ConfigResolution {
+/**
+ * Which layout a tree is on, read from what exists and nothing parsed. The
+ * one decision both {@link resolveWith} and {@link configLocation} read, so
+ * the location an error names is the location the read used (#2520).
+ */
+type ConfigLayout =
+  | { kind: "directory" | "monolith"; rel: string }
+  | { kind: "orphans"; rel: string; orphans: string[] }
+  | { kind: "absent" };
+
+function layoutOf(files: ConfigFileAccess): ConfigLayout {
   // config.json is the sole marker for the directory form. Treating any
   // fragment as the marker let a stray roles.json shadow a complete monolith
   // and silently drop issueRepo/ci/test — ADR-001 Step E keeps the monolith
   // in place during migration, so that state is on the normal upgrade path.
-  if (files.exists(`${DIR_REL}/config.json`)) {
-    return {
-      status: "resolved",
-      config: loadFromDirectory(files),
-      source: "directory",
-      path: files.locate(DIR_REL),
-    };
-  }
+  if (files.exists(`${DIR_REL}/config.json`)) return { kind: "directory", rel: DIR_REL };
+  if (files.exists(MONOLITH_REL)) return { kind: "monolith", rel: MONOLITH_REL };
+  const orphans = DIRECTORY_CONFIG_FILES.filter(file => files.exists(`${DIR_REL}/${file}`));
+  if (orphans.length > 0) return { kind: "orphans", rel: DIR_REL, orphans };
+  return { kind: "absent" };
+}
 
-  if (files.exists(MONOLITH_REL)) {
-    return {
-      status: "resolved",
-      config: loadFromMonolith(files),
-      source: "monolith",
-      path: files.locate(MONOLITH_REL),
-    };
+function resolveWith(files: ConfigFileAccess): ConfigResolution {
+  const layout = layoutOf(files);
+  if (layout.kind === "directory") {
+    return { status: "resolved", config: loadFromDirectory(files), source: "directory", path: files.locate(layout.rel) };
   }
-
+  if (layout.kind === "monolith") {
+    return { status: "resolved", config: loadFromMonolith(files), source: "monolith", path: files.locate(layout.rel) };
+  }
   // Fragments with no config.json and no monolith is a broken directory
   // config, not an unconfigured project. Fail loudly rather than reporting
   // absent, which the caller would read as "no rungate here".
-  const orphans = DIRECTORY_CONFIG_FILES.filter(file => files.exists(`${DIR_REL}/${file}`));
-  if (orphans.length > 0) {
+  if (layout.kind === "orphans") {
     throw new Error(
-      `Incomplete rungate config at ${files.locate(DIR_REL)}: found ${orphans.join(", ")} but no config.json`
+      `Incomplete rungate config at ${files.locate(layout.rel)}: found ${layout.orphans.join(", ")} but no config.json`
     );
   }
-
   return { status: "absent" };
+}
+
+/**
+ * Where this tree's rungate config lives, or null when it has none — for an
+ * error that has to name the file it could not read (#2520). Parses nothing,
+ * so it answers for a config that does not parse.
+ */
+export function configLocation(projectRoot: string): string | null {
+  const files = treeAccess(projectRoot);
+  const layout = layoutOf(files);
+  return layout.kind === "absent" ? null : files.locate(layout.rel);
 }
 
 /**
