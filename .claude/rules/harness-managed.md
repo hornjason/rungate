@@ -32,6 +32,7 @@ These files are managed by rungate. **Do not edit them directly.** What
 | `.github/workflows/specs-placed.yml` | job-preserving | Opt specs in with a `board:` block; add jobs beside `run-the-engine` | Don't edit `run-the-engine` or share adr-accepted's group |
 | `.github/workflows/consumer-intake.yml` | job-preserving | Add jobs beside `triage` | Don't edit `triage` |
 | `.github/workflows/criterion-label.yml` | job-preserving | Add jobs beside `criterion-label` | Don't edit `criterion-label` |
+| `.github/workflows/board-flow.yml` | job-preserving | Add jobs beside `write-the-lane` | Don't edit `write-the-lane` |
 | `.claude/agents/*.md` | section-preserving | Everything but `## Project Constraints` is generated from `.claude/rungate/roles.json` and the templates; put rules mined from this repo's own history in that section and they carry forward | Don't hand-edit the generated sections — a re-scaffold rewrites them without reporting it |
 | `.claude/commands/dry-run.md` | provenance | Edit freely; a hand edit is kept and reported | Keep its `generated-sha` marker |
 | `.claude/commands/board.md` | provenance | Edit freely; a hand edit is kept and reported | Keep its `generated-sha` marker |
@@ -44,13 +45,5 @@ These files are managed by rungate. **Do not edit them directly.** What
 | `PROJECT-STATE.md` | create-only | DA-owned (#296) ; whether it is derived from the state JSON is reported in .claude/rules/key-files.md | Don't edit directly; don't expect re-scaffold to update it |
 | `SUCCESS.md` | create-only | Seeded as a template (#485) — fill in the claims; `bunx rungate create-success` re-seeds | Don't leave it as the seed; SUCCESS-1 refuses a template, and re-scaffold will not fill it in |
 
-| Strategy | What re-scaffold does |
-|----------|----------------------|
-| regenerate | Rewrites it every run; reports CHANGED only when the bytes differ |
-| provenance | Rewrites it unless you edited it; then it is preserved and reported (#370) |
-| job-preserving | Owns named jobs inside a file you also write to; your jobs are carried forward |
-| section-preserving | Rewrites the file except named sections, carried forward verbatim |
-| create-only | Seeds it once and never touches it again — the content is yours, not the harness's |
-
-Section ownership, CI-job rules and incidents: `reference/harness-managed-worked-instances.md`.
+What each strategy does on a re-scaffold, section ownership, CI-job rules and incidents: `reference/harness-managed-worked-instances.md`.
 This file sets the PEAK instruction surface (#544, #1069).

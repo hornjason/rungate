@@ -432,7 +432,12 @@ const UNCLAIMED_RATCHET = 150;
 // and the project's own test command, a reading of a rendered command file no
 // registered pattern expresses; the `SC-2794` describe in
 // test/work-loop-command.test.ts names it (2026-11-19).
-const CLAIMED_UNBINDABLE = 189;
+// 189 -> 190: SC-2790 (#2481) ticked by `sync-sc-status --only SC-2790`:
+// scaffold emits board-flow.yml calling the published CLI and reading the board
+// from board.id, a reading of a generated workflow no registered pattern
+// expresses; the `SC-2790` describe in test/board-flow-workflow.test.ts names
+// it (2026-11-19).
+const CLAIMED_UNBINDABLE = 190;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

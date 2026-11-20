@@ -251,6 +251,16 @@ export const OWNED_FILES: OwnedFile[] = [
     avoid: "Don't edit `criterion-label`",
   },
   {
+    // #2481, ADR-023 row 4, SC-2790: each issue's card moved to the lane its
+    // event means. A consumer has no scripts/, so the generator writes it and
+    // calls the published CLI; the board is board.id in the config.
+    path: ".github/workflows/board-flow.yml",
+    strategy: "job-preserving",
+    servedBy: "writeManagedFile (lib/scaffold/steps.ts) via mergeManagedWorkflow — the harness owns named jobs, not the file",
+    customize: "Add jobs beside `write-the-lane`",
+    avoid: "Don't edit `write-the-lane`",
+  },
+  {
     // `regenerate` until #655, and the declaration was never consulted:
     // `generateAgentBriefsStep` called `writeFileSync` directly, so the row
     // described behaviour that a bare overwrite happened to coincide with.

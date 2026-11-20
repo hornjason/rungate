@@ -267,23 +267,28 @@ describe("one decider owns every lane transition", () => {
   // non-empty line must be the invocation. If somebody adds a step after
   // this one, the cut would run past the step and feed YAML to bash — this
   // says so by name instead.
+  // #2481: the file is generated and runs the published command, so the cut
+  // ends at the `bunx rungate@<v> board-flow` line. That line is still the
+  // real one, rewritten in place to `echo ARGV`: its argument list is read
+  // from the file, never supplied by the test.
   const runBlock = (): string => {
     const yml = read(".github/workflows/board-flow.yml");
     const at = yml.indexOf("          args=(--repo");
     expect(at, "the workflow's argv-building block moved or was renamed").toBeGreaterThan(-1);
-    const dedented = yml
-      .slice(at)
-      .split("\n")
-      .map(l => l.replace(/^ {10}/, ""))
-      .join("\n");
-    const lines = dedented.split("\n").filter(l => l.trim() !== "");
+    const lines = yml.slice(at).split("\n").map(l => l.replace(/^ {10}/, ""));
+    const invoke = lines.findIndex(l => /^bunx rungate@\S+ board-flow /.test(l));
     expect(
-      lines[lines.length - 1],
-      "the last non-empty line of the cut is not the script invocation, so the cut has run " +
-        "past the end of this step and would feed YAML to bash — or the step no longer ends " +
-        "by invoking the script. Either way these cases are measuring the wrong text.",
-    ).toMatch(/^bun scripts\/board-flow\.ts /);
-    return dedented.replace(/^bun scripts\/board-flow\.ts /m, "echo ARGV ");
+      invoke,
+      "no `bunx rungate@<version> board-flow` line after the argv block, so the step no longer " +
+        "invokes the command, or the cut would feed YAML to bash. Either way these cases are " +
+        "measuring the wrong text.",
+    ).toBeGreaterThan(-1);
+    const call = lines[invoke]!;
+    expect(call, "the invocation's own redirect moved, so the rewrite below would not apply").toMatch(/ 2>"\$err" \|\| code=\$\?$/);
+    return [
+      ...lines.slice(0, invoke),
+      call.replace(/^bunx rungate@\S+ board-flow /, "echo ARGV ").replace(/ 2>"\$err" \|\| code=\$\?$/, ""),
+    ].join("\n");
   };
 
   const runWith = (env: Record<string, string>): string => {
@@ -310,9 +315,8 @@ describe("one decider owns every lane transition", () => {
       PR_AUTHOR: "",
       STATE_REASON: "",
     });
-    expect(out).toBe(
-      "ARGV --repo o/n --project PVT_x --actor someone --event issue_assigned --issue 42 --write",
-    );
+    // No --project since #2481: the board is board.id in the checked-out config.
+    expect(out).toBe("ARGV --repo o/n --actor someone --event issue_assigned --issue 42 --write");
   });
 
   test("SC-2691: a close carries its reason through, and only when the payload had one", () => {

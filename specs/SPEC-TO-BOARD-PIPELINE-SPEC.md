@@ -288,9 +288,11 @@ take.
       needs: test
       proved-by: test/board-init.test.ts "SC-2789: board-init makes a board and wires it"
       fingerprint: d22238ff
-- [ ] SC-2790: `rungate scaffold` emits `.github/workflows/board-flow.yml` as an owned workflow that calls the published CLI and reads the board from `board.id`, so a consumer's card moves to In progress when its issue is assigned, to In review when a pull request for it opens, and to Done or Cancelled when it closes; this repository's copy is the generated one (Jason, 2026-11-19, ADR-023)
+- [x] SC-2790: `rungate scaffold` emits `.github/workflows/board-flow.yml` as an owned workflow that calls the published CLI and reads the board from `board.id`, so a consumer's card moves to In progress when its issue is assigned, to In review when a pull request for it opens, and to Done or Cancelled when it closes; this repository's copy is the generated one (Jason, 2026-11-19, ADR-023)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
+      proved-by: test/board-flow-workflow.test.ts "SC-2790: board-flow.yml is generated, calls the published CLI, and reads the board from board.id"
+      fingerprint: 60c77527
 - [x] SC-2791: `rungate scaffold` installs `.claude/commands/board.md`, a `/board` command that runs the published CLI against the repository it sits in and names no other repository (Jason, 2026-11-19, ADR-023)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
