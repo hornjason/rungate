@@ -556,3 +556,28 @@ describe("#2576: the directory-template rule only widens a measured selection", 
     expect(r.tests, "a file that mentions the directory and builds some other .md name is not a reader").not.toContain("test/apart.test.ts");
   });
 });
+
+describe("#2576: the template form matches the directory whole (review of #2578)", () => {
+  const TB = (prefix: string) => "`" + prefix + "$" + "{name}.md" + "`";
+  function project(readerTemplate: string): string {
+    const root = chainProject();
+    put(root, "templates/briefs/alpha.md", "# alpha\n");
+    put(root, "test/named.test.ts", 'import { readFileSync } from "fs";\nexport const n = readFileSync("templates/briefs/alpha.md", "utf-8").length;\n');
+    put(root, "test/reader.test.ts", `import { readFileSync } from "fs";\nexport const read = (name: string, ROOT: string) => readFileSync(${readerTemplate}, "utf-8");\n`);
+    return root;
+  }
+
+  test("DT-6: a longer path ending in the directory, or a subdirectory of it, is not a reader", () => {
+    for (const t of [TB("vendor/templates/briefs/"), TB("templates/briefs/sub/")]) {
+      const r = affectedTests(project(t), ["templates/briefs/alpha.md"]);
+      expect(r.reading).toBe("MEASURED");
+      expect(r.tests).toContain("test/named.test.ts");
+      expect(r.tests, `${t} is not a read of templates/briefs/*`).not.toContain("test/reader.test.ts");
+    }
+  });
+
+  test("DT-7: the root interpolated in front of the directory is still a reader", () => {
+    const r = affectedTests(project("`" + "$" + "{ROOT}/templates/briefs/" + "$" + "{name}.md`"), ["templates/briefs/alpha.md"]);
+    expect(r.tests).toContain("test/reader.test.ts");
+  });
+});

@@ -467,7 +467,11 @@ export function affectedTests(root: string, changed: string[]): AffectedTestsRea
  * any such template ANYWHERE in the file, and a change to `lib/scanner.ts`
  * gained 26 suites that merely mention `"lib"` and build some unrelated
  * `${x}.ts`. The directory also has to match whole, so `other/briefs/a.md`
- * does not select a reader of `templates/briefs`. `code` is expected
+ * does not select a reader of `templates/briefs`. In the template form the
+ * text before the directory may only be an interpolation (`${ROOT}/`), `./`
+ * or nothing, so `vendor/lib/${name}.ts` is not a reader of `lib/`; and the
+ * basename may hold no `/` in any form, so a subdirectory read is not one
+ * either (review of #2578). `code` is expected
  * comment-stripped, as every other text rule in `affectedTests` reads it.
  */
 export function directoryTemplateRead(code: string, changed: string): boolean {
@@ -478,11 +482,13 @@ export function directoryTemplateRead(code: string, changed: string): boolean {
   const ext = changed.slice(dot);
   const esc = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const quote = "[\"'`]";
-  const template = "`[^`]*\\$\\{[^}`]*\\}[^`]*" + esc(ext) + "`";
+  const template = "`[^`/]*\\$\\{[^}`]*\\}[^`/]*" + esc(ext) + "`";
   const asArg = new RegExp(`${quote}(?:\\./)?${esc(dir)}/?${quote}\\s*,\\s*${template}`);
   const asSegments = new RegExp(
     dir.split("/").map(s => `${quote}${esc(s)}${quote}`).join("\\s*,\\s*") + `\\s*,\\s*${template}`,
   );
-  const inside = new RegExp("`(?:[^`]*[/}])?" + esc(dir) + "/[^`]*\\$\\{[^}`]*\\}[^`]*" + esc(ext) + "`");
+  const inside = new RegExp(
+    "`(?:\\$\\{[^}`]*\\}/)?(?:\\./)?" + esc(dir) + "/[^`/]*\\$\\{[^}`]*\\}[^`/]*" + esc(ext) + "`",
+  );
   return asArg.test(code) || asSegments.test(code) || inside.test(code);
 }
