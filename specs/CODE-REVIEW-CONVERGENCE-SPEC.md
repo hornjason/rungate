@@ -623,6 +623,15 @@ requests on 2026-10-23 — 44 measured, 1 refused for carrying no ledger:
 | five or more rounds | 8.9% | 1.5% | **20.5%** |
 | mean rounds to pass | 2.08 | 1.32 | **2.64** |
 
+> **Unit (#1592).** The `us` column counts run ATTEMPTS: ledger entries,
+> where a re-run of a failed review is a second entry with the same round
+> number. Their two columns count rounds. The figures are kept as measured;
+> they are not the same unit as the targets beside them. Over a later
+> population, #1504–#1590, the five-or-more share read 15.6% in attempts and
+> 8.9% in distinct rounds (4 of 45, which rests on 4 pull requests and is not
+> a match for theirs). `bun evals/ai-review-control/run.ts rounds` now prints
+> both units, labelled.
+
 **We are worse than the state they were improving from, on all three.** That
 is the number this spec exists to move, and it is the argument for ranking
 criteria by rounds-to-pass rather than by how interesting they are to build.
@@ -702,6 +711,11 @@ pre-fix one — that is a question about elapsed time, not about what else
 ships.
 
 #### 41% of our rounds were rounds in which no review happened — read 2026-10-24
+
+> **Unit (#1592).** "Rounds" in this section are ledger entries, and a re-run
+> of a failed round is a second entry. Most of this 41% is retries of the
+> same round: over #1504–#1590, 29.1% of entries were unmeasured, but 12.5% of
+> distinct rounds were (10 of 80). The figures below are kept as measured.
 
 The ledger distinguishes a round that was **read and found nothing**
 (`findings: []`) from one that was **NOT MEASURED** (`findings: null` — the

@@ -23,6 +23,7 @@ import {
 } from "../lib/ai-review-rounds";
 import {
   LONG_REVIEW_ROUNDS,
+  distinctRoundsTaken,
   formatRoundsToPass,
   roundsTaken,
   summariseRoundsToPass,
@@ -240,5 +241,102 @@ describe("CRC-M11: the report a reader actually sees", () => {
     expect(lines.find(l => l.includes("mean rounds to pass"))).toContain("1.32");
     expect(lines.find(l => l.includes("passed after 1 round"))).toContain("78%");
     expect(lines.find(l => l.includes("+ rounds"))).toContain("1.5%");
+  });
+});
+
+/**
+ * #1592: `roundsTaken` counts ledger ENTRIES, and a re-run of a failed review
+ * appends a second entry carrying the same round number. So it reports run
+ * attempts, while the target it is printed beside (1.32, 78%, 1.5%) counts
+ * rounds. Both units are real: attempts are developer cost, rounds are
+ * convergence. These cases hold the two apart, labelled, and neither may stand
+ * in for the other.
+ */
+describe("#1592: run attempts and distinct rounds are two readings, both reported", () => {
+  /** A ledger whose entries recorded exactly these round numbers. */
+  function numbered(rounds: (number | null)[], dropped = 0): LedgerReading {
+    const base = ledger(rounds.length, dropped);
+    if (base.status !== AI_REVIEW_LEDGER_READ) throw new Error("fixture");
+    return { ...base, rounds: base.rounds.map((r, i) => ({ ...r, round: rounds[i]! })) };
+  }
+
+  test("R-1: #1569's ledger, [1,1,2,2,3,4,5,5], is 8 attempts and 5 rounds", () => {
+    const l = pr(1, numbered([1, 1, 2, 2, 3, 4, 5, 5]), true);
+    expect(roundsTaken(l)).toEqual({ rounds: 8 });
+    expect(distinctRoundsTaken(l)).toEqual({ rounds: 5 });
+  });
+
+  test("R-2: an evicted head does not lose the round count, because the newest entry carries it", () => {
+    // Eviction drops the OLDEST entries. The job's round number only rises,
+    // so the newest kept entry still says how many rounds there were.
+    const l = pr(1, numbered([4, 4, 5], 5), true);
+    expect(roundsTaken(l)).toEqual({ rounds: 8 });
+    expect(distinctRoundsTaken(l)).toEqual({ rounds: 5 });
+  });
+
+  test("R-3: a ledger whose entries recorded no round number cannot say its rounds, and says so", () => {
+    const l = pr(1, numbered([null, null]), true);
+    expect(roundsTaken(l)).toEqual({ rounds: 2 });
+    expect(distinctRoundsTaken(l)).toHaveProperty("refusal", "ROUNDS_NOT_NUMBERED");
+  });
+
+  test("R-4: every ledger refusal the attempt reading makes, the round reading makes too", () => {
+    for (const l of [truncatedUnknown(3), { status: AI_REVIEW_LEDGER_ABSENT } as LedgerReading, ledger(0)]) {
+      const attempts = roundsTaken(pr(1, l, true));
+      expect(attempts).toHaveProperty("refusal");
+      expect(distinctRoundsTaken(pr(1, l, true))).toHaveProperty("refusal", (attempts as { refusal: string }).refusal);
+    }
+  });
+
+  test("R-5: the summary carries both units, and they differ on retries", () => {
+    // #10 retried its only round; #11 had one clean run. In attempts the mean
+    // is 1.5 with half passing first time; in rounds both passed in one.
+    const r = summariseRoundsToPass([pr(10, numbered([1, 1]), true), pr(11, numbered([1]), true)]);
+    expect(r.meanRoundsToPass).toBe(1.5);
+    expect(r.passedAfterOneRoundRate).toBe(0.5);
+    expect(r.distinct.meanRoundsToPass).toBe(1);
+    expect(r.distinct.passedAfterOneRoundRate).toBe(1);
+    expect(r.distinct.fiveOrMoreRate).toBe(0);
+  });
+
+  test("R-6: a pull request whose rounds are unnumbered is unmeasured in rounds and still counted in attempts", () => {
+    const r = summariseRoundsToPass([pr(1, numbered([null]), true), pr(2, numbered([1, 2]), true)]);
+    expect(r.passedCount).toBe(2);
+    expect(r.distinct.measured).toBe(1);
+    expect(r.distinct.unmeasured.map(u => [u.number, u.refusal])).toEqual([[1, "ROUNDS_NOT_NUMBERED"]]);
+  });
+
+  // Review of #2551: the newest entry IS the count, so when it lost its number
+  // an older entry's must not stand in for it. An older unnumbered entry is
+  // only a retry whose number was lost, and the newest still says the count.
+  test("R-8: a newest entry with no round number refuses rather than reading an older one's", () => {
+    expect(distinctRoundsTaken(pr(1, numbered([1, 2, null]), true))).toHaveProperty("refusal", "ROUNDS_NOT_NUMBERED");
+    expect(distinctRoundsTaken(pr(1, numbered([null, 1, 2]), true))).toEqual({ rounds: 2 });
+    // The newest entry's own number, never the largest anywhere (review of #2551).
+    expect(distinctRoundsTaken(pr(1, numbered([1, 3, 2]), true))).toEqual({ rounds: 2 });
+  });
+
+  // Review of #2551: a count of unmeasured pull requests names each one.
+  test("R-9: a pull request unmeasured only in rounds is named in the report, once", () => {
+    const lines = formatRoundsToPass(
+      summariseRoundsToPass([pr(7, numbered([null]), true), pr(8, { status: AI_REVIEW_LEDGER_ABSENT }, true)]),
+    );
+    expect(lines.filter(l => l.includes("#7 UNMEASURED ROUNDS_NOT_NUMBERED"))).toHaveLength(1);
+    // #8 is unmeasured in both units and is named once, not twice.
+    expect(lines.filter(l => l.includes("#8 UNMEASURED"))).toHaveLength(1);
+  });
+
+  test("R-7: the report prints both units, each labelled, each beside the target", () => {
+    const lines = formatRoundsToPass(summariseRoundsToPass([pr(1, numbered([1, 1]), true)]));
+    const attempts = lines.filter(l => l.includes("(run attempts)"));
+    const rounds = lines.filter(l => l.includes("(distinct rounds)"));
+    expect(attempts.length, lines.join("\n")).toBe(3);
+    expect(rounds.length, lines.join("\n")).toBe(3);
+    for (const target of ["1.32", "78%", "1.5%"]) {
+      expect(attempts.some(l => l.includes(target)), `no attempts line carries ${target}`).toBe(true);
+      expect(rounds.some(l => l.includes(target)), `no rounds line carries ${target}`).toBe(true);
+    }
+    expect(rounds.find(l => l.includes("mean rounds to pass"))).toContain("1.00");
+    expect(attempts.find(l => l.includes("mean rounds to pass"))).toContain("2.00");
   });
 });
