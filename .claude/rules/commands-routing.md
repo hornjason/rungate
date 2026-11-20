@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: 2b77ebfe5e9560b1
+generated-sha: 9c0b3fdd78a8c7d1
 ---
 
 ## Command Routing
@@ -33,6 +33,7 @@ Generated from the CLI's command registry. Run one as
 | `board-ready` | Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane |
 | `board-flow` | Move an issue's card to the lane an issue or pull request event decides |
 | `board-id` | Print the board's node id from config |
+| `owned-jobs` | Print the workflow jobs the scaffold owns, for this project's config |
 | `board-init` | Make this repository's project board and write its ids into the config |
 | `ci-reading` | Print a merged pull request's CI breakdown — per-check time, queue, critical path, re-runs |
 | `board-intake-move` | Move a board item to a column, verified in the item and in the board's search index |
