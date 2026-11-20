@@ -11,7 +11,7 @@ import { existsSync, statSync } from "fs";
 import { basename } from "path";
 import { detectProjectType } from "../lib/scanner";
 import { reportDocRules, reportScaffoldActions } from "../lib/scaffold/steps";
-import { runScaffoldWriteSteps, ScaffoldConfigUnreadable } from "../lib/scaffold/write-steps";
+import { assertScaffoldConfigReadable, runScaffoldWriteSteps, ScaffoldConfigUnreadable } from "../lib/scaffold/write-steps";
 import { humanSteps, readHumanSteps } from "../lib/scaffold/human-steps";
 import { cloneForRehearsal, discardRehearsal, rehearsalNotice } from "../lib/scaffold/rehearsal";
 import type { ProjectType } from "../lib/generators/types";
@@ -81,8 +81,11 @@ console.log(`Profile: ${profile}${profile === "minimal" ? ` — not written: ${[
 console.log("---");
 
 // #2520: a config the scaffold cannot read is a refusal with a message, not
-// a stack trace. In the audit branch the rehearsal is discarded first.
+// a stack trace. Checked here, on the real project, before either branch: an
+// audit runs the steps against a clone it deletes before this catch prints,
+// so the refusal raised inside the clone would name a path that is gone.
 try {
+assertScaffoldConfigReadable(projectPath);
 if (fix) {
   runScaffoldWriteSteps(projectPath, projectType, actions, { force, commit, profile, autoFix, pruneConsumers });
 } else {

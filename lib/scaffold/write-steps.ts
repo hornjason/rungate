@@ -120,6 +120,23 @@ function configFailureReason(err: unknown): string {
   return String((err as Error)?.message ?? err).split("\n")[0]!;
 }
 
+/**
+ * Refuse, by name, a project whose rungate config exists and cannot be read.
+ * A tree with no config is normal here — scaffolding one is the run's job —
+ * and passes.
+ *
+ * Exported for the CLI, which calls it on the REAL project before an audit
+ * clones it: the clone is deleted before the refusal prints, so a refusal
+ * raised inside it would name a file that no longer exists (review, PR #2553).
+ */
+export function assertScaffoldConfigReadable(projectPath: string): void {
+  try {
+    resolveConfig(projectPath);
+  } catch (err) {
+    throw new ScaffoldConfigUnreadable(configLocation(projectPath) ?? "the rungate config", configFailureReason(err));
+  }
+}
+
 export function runScaffoldWriteSteps(
   projectPath: string,
   projectType: ProjectType,
@@ -128,14 +145,8 @@ export function runScaffoldWriteSteps(
 ): void {
   const { force = false, commit = false, rehearsing = false, profile = DEFAULT_PROFILE, autoFix = true, pruneConsumers = false } = opts;
 
-  // #2520: read the config once, before anything is written. A tree with no
-  // config is normal here — scaffolding one is this run's job — and reads as
-  // absent. One that exists and cannot be read refuses by name.
-  try {
-    resolveConfig(projectPath);
-  } catch (err) {
-    throw new ScaffoldConfigUnreadable(configLocation(projectPath) ?? "the rungate config", configFailureReason(err));
-  }
+  // #2520: read the config once, before anything is written.
+  assertScaffoldConfigReadable(projectPath);
 
   // Phase 0: Security and directory setup
   createGitignore(projectPath, actions);
