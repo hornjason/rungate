@@ -94,14 +94,24 @@ describe("#1934: the subject is whole files, and says what it left out", () => {
     expect(s.filesRead).toBeGreaterThanOrEqual(1);
     expect(s.omitted.length).toBe(s.filesSeen - s.filesRead);
     expect(s.subject.split("\n")[0]).toMatch(/and \d+ more/);
+
+    // Files that nearly fill the budget on their own: the first line is added
+    // ON TOP of them, so the room for it has to be kept before choosing.
+    for (let size = 8_192 - 1_200; size <= 8_192 - 50; size += 50) {
+      const near = chooseSubject(section("near.ts", size) + section("big.ts", 20_000), 8_192);
+      expect(bytes(near.subject), `a ${size}-byte file`).toBeLessThanOrEqual(8_192);
+    }
   });
 
   test("when no file fits whole, the old byte cut is kept and marked — and it is still a truncation", () => {
     const diff = section("only.json", 20_000);
     const s = chooseSubject(diff, 4_096);
     expect(s).toMatchObject({ filesRead: 0, filesSeen: 1, omitted: ["only.json"], truncated: true });
-    expect(s.subject.startsWith(diff.slice(0, 4_096))).toBe(true);
+    expect(s.subject.startsWith(diff.slice(0, 4_000))).toBe(true);
     expect(s.subject).toContain(`*** diff truncated at 4096 of ${bytes(diff)} bytes ***`);
+    // The marker is inside the budget, not appended past it.
+    expect(bytes(s.subject)).toBeLessThanOrEqual(4_096);
+    expect(bytes(s.subject)).toBeGreaterThan(4_096 - 100);
   });
 
   test("an empty diff has nothing to read and nothing left out", () => {

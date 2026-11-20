@@ -125,10 +125,13 @@ export function chooseSubject(diff: string, maxBytes: number): DiffSubject {
   }
 
   // Not one file fits whole: the byte cut the step always made, marked so the
-  // agent knows its subject is incomplete.
-  const cut = Buffer.from(diff, "utf8").subarray(0, maxBytes).toString("utf8");
+  // agent knows its subject is incomplete. The marker is counted INSIDE the
+  // budget; the shell step appended it after cutting at the full cap, so its
+  // subject ran a marker's length over.
+  const marker = `\n*** diff truncated at ${maxBytes} of ${bytes(diff)} bytes ***\n`;
+  const cut = Buffer.from(diff, "utf8").subarray(0, maxBytes - bytes(marker)).toString("utf8");
   return {
-    subject: `${cut}\n*** diff truncated at ${maxBytes} of ${bytes(diff)} bytes ***\n`,
+    subject: cut + marker,
     filesSeen,
     filesRead: 0,
     omitted: files.map(f => f.path),
