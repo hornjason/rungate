@@ -113,7 +113,9 @@ export function buildAdrAcceptedWorkflow(opts: AdrAcceptedWorkflowOptions): stri
     types: [completed]`;
   const mergePermission = mergeName === null ? "" : `
   # The range read lists this workflow's own successful runs (ADR-022).
-  actions: read`;
+  actions: read
+  # The merged pull requests, and the issues each declares closed (SC-2788).
+  pull-requests: read`;
   const fetchStep =
     mergeName === null
       ? ""
@@ -142,6 +144,23 @@ export function buildAdrAcceptedWorkflow(opts: AdrAcceptedWorkflowOptions): stri
           else
             ${cli} plan-issues --accepted-since "$BEFORE" > accepted.txt
           fi`;
+  // ADR-022 (SC-2788, #2497): a merge made with GITHUB_TOKEN runs none of
+  // GitHub's closing keywords, so the issues it declared stay open. A
+  // merge-triggered run closes each one still open, over every pull request
+  // merged since this workflow's last successful run. `!cancelled()` and no
+  // acceptance gate: it depends on no planning step, and a bot merge of a
+  // change that is not an ADR declares issues too. A push run is a person's
+  // merge, and GitHub closes its issues itself.
+  const closeStep =
+    mergeName === null
+      ? ""
+      : `
+
+      - name: Close the issues a merge made by automation declared
+        if: \${{ !cancelled() && github.event_name == 'workflow_run' }}
+        env:
+          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        run: ${cli} close-merged-references --since-last-run ${ADR_ACCEPTED_WORKFLOW_FILE} --repo "$GITHUB_REPOSITORY" --write`;
   const indent = (script: string) => script.split("\n").map(l => (l === "" ? "" : `          ${l}`)).join("\n");
   // JSON is a YAML double-quoted scalar, so a quote or backslash in a value
   // stays inside it.
@@ -275,6 +294,6 @@ ${indent(boardProjectRun(cli, "Criteria column", `${cli} board-mirror --project 
           PROJECT_ID: \${{ vars.RUNGATE_PROJECT_ID }}
           ACTOR: \${{ github.actor }}
         run: |
-${indent(boardProjectRun(cli, "Ready top-up", `${cli} board-ready --repo "$GITHUB_REPOSITORY" --project "$project" --actor "$ACTOR" --top-up --write`))}
+${indent(boardProjectRun(cli, "Ready top-up", `${cli} board-ready --repo "$GITHUB_REPOSITORY" --project "$project" --actor "$ACTOR" --top-up --write`))}${closeStep}
 `;
 }
