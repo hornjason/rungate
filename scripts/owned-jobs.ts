@@ -46,10 +46,14 @@ export function ownedJobs(root: string): OwnedJobsReading {
   try {
     // The config the generators read, wherever the loader found it, and the
     // package manifest the test-command decision reads.
-    const target = join(scratch, relative(root, resolution.path));
-    mkdirSync(dirname(target), { recursive: true });
-    cpSync(resolution.path, target, { recursive: true });
-    if (existsSync(join(root, "package.json"))) copyFileSync(join(root, "package.json"), join(scratch, "package.json"));
+    try {
+      const target = join(scratch, relative(root, resolution.path));
+      mkdirSync(dirname(target), { recursive: true });
+      cpSync(resolution.path, target, { recursive: true });
+      if (existsSync(join(root, "package.json"))) copyFileSync(join(root, "package.json"), join(scratch, "package.json"));
+    } catch (e) {
+      return { unmeasured: `the config under ${root} could not be copied to generate from: ${(e as Error).message}` };
+    }
 
     const actions: string[] = [];
     // A generator refuses in two ways: a `REFUSED:` action from the per-file
@@ -101,7 +105,15 @@ export function main(argv: readonly string[]): number {
       return EXIT_REFUSED;
     }
   }
-  const reading = ownedJobs(resolve(rootArg ?? process.cwd()));
+  // Every failure inside is meant to come back as a reading; this is the
+  // backstop, so a throw nobody anticipated still keeps the exit-2 contract a
+  // consumer's test relies on rather than crashing (review of #2579).
+  let reading: OwnedJobsReading;
+  try {
+    reading = ownedJobs(resolve(rootArg ?? process.cwd()));
+  } catch (e) {
+    reading = { unmeasured: `owned-jobs failed before it could read anything: ${(e as Error).message}` };
+  }
   if ("unmeasured" in reading) {
     console.error(`UNMEASURED: ${reading.unmeasured}. Nothing was printed.`);
     return EXIT_REFUSED;
