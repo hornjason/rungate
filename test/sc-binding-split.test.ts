@@ -440,7 +440,10 @@ const UNCLAIMED_RATCHET = 150;
 // 191: SC-2793 (#2485) ticked from its describe in test/human-steps.test.ts —
 // the human-steps report's board.id and token-write rows, a reading of a
 // printed report no registered pattern expresses (2026-11-20).
-const CLAIMED_UNBINDABLE = 191;
+// 192: SC-2788 (#2497) ticked from its describe in test/adr-accepted-workflow.test.ts —
+// a merge-triggered adr-accepted run runs close-merged-references, a reading of a
+// generated workflow no registered pattern expresses (2026-11-20).
+const CLAIMED_UNBINDABLE = 192;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
