@@ -200,6 +200,34 @@ describe("#2508: a tick in a spec that declares evidence also writes its fingerp
     expect(criterion(after, "SC-9863").recordedFingerprint).toBeNull();
   });
 
+  // Review of #2512: a block holding a `fingerprint:` and no `proved-by:` (a
+  // hand revert that removed only the proof) got a second fingerprint. The
+  // existing one is kept, as `--record-fingerprints` keeps it: if it is stale,
+  // the audit's staleness check is what says so, and a second line would hide it.
+  test("a block that already carries a fingerprint gets the proof and no second fingerprint", () => {
+    const dir = scratch();
+    const leftover = BOUND.replace(
+      "- [ ] SC-9861: the first thing is true\n      needs: test\n",
+      "- [ ] SC-9861: the first thing is true\n      needs: test\n      fingerprint: deadbeef\n",
+    );
+    expect(leftover).not.toBe(BOUND);
+    writeFileSync(join(dir, "FIXTURE-SPEC.md"), leftover);
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    let said = "";
+    try {
+      flipCheckboxes("FIXTURE-SPEC.md", ["SC-9861"], dir, false, new Map([["SC-9861", "test/a.test.ts"]]));
+      said = log.mock.calls.map(c => String(c[0])).join("\n");
+    } finally {
+      log.mockRestore();
+    }
+    const after = readFileSync(join(dir, "FIXTURE-SPEC.md"), "utf8");
+    const block = after.slice(after.indexOf("- [x] SC-9861:"), after.indexOf("- [ ] SC-9862:"));
+    expect(block.match(/^\s+fingerprint:/gm)?.length, block).toBe(1);
+    expect(block).toContain("fingerprint: deadbeef");
+    expect(criterion(after, "SC-9861").provedBy).toBe("test/a.test.ts");
+    expect(said).not.toContain("SC-9861: wrote fingerprint");
+  });
+
   test("--dry-run says which fingerprint it would write, and writes nothing", () => {
     const dir = boundDir();
     const log = spyOn(console, "log").mockImplementation(() => {});
