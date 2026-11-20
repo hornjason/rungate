@@ -16,7 +16,7 @@ import { writeSpec } from "../write-spec";
 import { generateAgentsMd as buildAgentsMdContent, generateScopedRules } from "../generators/agents-md";
 import { HARNESS_PACKAGE, isHarnessItself } from "../harness-identity";
 import { scanSpecs } from "../scanner";
-import { projectStateDerivation, projectStateKeyFileNote } from "../project-state-derivation";
+import { projectStateDerivation, projectStateKeyFileRows } from "../project-state-derivation";
 import { generateAgentBriefs as buildAgentBriefsContent } from "../generators/agent-briefs";
 import { generateCodeMap as buildCodeMapContent } from "../generators/code-map";
 import { buildAgentMeta, DEFAULT_AGENT_META } from "../create-brief";
@@ -436,8 +436,8 @@ export function generateAgentsMdContent(
   // Scan key files
   const keyFiles: Array<{ file: string; what: string; when: string }> = [
     { file: "AGENTS.md", what: "Project entry point", when: "Always first" },
-    { file: "PROJECT-STATE.md", what: projectStateKeyFileNote(projectStateDerivation(projectPath)), when: "Session start, always first after AGENTS.md" },
-    { file: "project-state.json", what: "Source of truth for project status", when: "When editing state" },
+    // Both project-state rows come from one reading (#2564).
+    ...projectStateKeyFileRows(projectStateDerivation(projectPath)),
   ];
   const conditionalPatterns: Array<{ pattern: string; what: string; when: string }> = [
     { pattern: "package.json", what: "Dependencies and scripts", when: "Adding deps or scripts" },
