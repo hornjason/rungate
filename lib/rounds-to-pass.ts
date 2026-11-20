@@ -217,7 +217,7 @@ export function roundsTaken(
  * (#1592).
  *
  * The round number is the job's own counter, and it only rises, so the
- * newest entry's number is the count. That survives eviction, which drops the
+ * largest number any kept entry carries is the count (`Math.max` over them). That survives eviction, which drops the
  * oldest entries, where counting distinct numbers among the kept entries
  * would not. Every ledger refusal `roundsTaken` makes comes first, so the two
  * readings refuse the same ledgers; this one also refuses a ledger whose

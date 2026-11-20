@@ -243,7 +243,14 @@ export function enginePrefixReading(projectRoot: string): {
  * got an empty queue, it has no queue.
  */
 export function readQueueLabel(projectRoot: string): string | null {
-  return queueLabelIn(tryLoadRungateConfig(projectRoot));
+  // A config that does not parse names no queue label we could trust.
+  let config: unknown = null;
+  try {
+    config = tryLoadRungateConfig(projectRoot);
+  } catch {
+    config = null;
+  }
+  return queueLabelIn(config);
 }
 
 /**
