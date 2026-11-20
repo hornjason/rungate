@@ -275,15 +275,19 @@ describe("#2541: rungate criterion-successor --sweep, end to end over a real spe
     writeFileSync(join(root, "specs", "FIX.md"), SPEC);
     return root;
   };
-  type Closed = { number: number; title: string; body: string | null; closedAt: string };
+  type Closed = { number: number; title: string; body: string | null; closedAt: string; stateReason: string | null };
   const CLOSED: Record<string, Closed[]> = {
     "TST-1": [
-      { number: 5, title: "older", body: "## Criteria this serves\n\nTST-1", closedAt: "2026-11-01T00:00:00Z" },
-      { number: 7, title: "newer", body: "## Criteria this serves\n\nTST-1", closedAt: "2026-11-10T00:00:00Z" },
+      { number: 5, title: "older", body: "## Criteria this serves\n\nTST-1", closedAt: "2026-11-01T00:00:00Z", stateReason: "completed" },
+      { number: 7, title: "newer", body: "## Criteria this serves\n\nTST-1", closedAt: "2026-11-10T00:00:00Z", stateReason: "completed" },
+      // Newer still, and closed as not planned: anyone can file an issue naming
+      // a criterion, and a maintainer's "not planned" is not the work it names.
+      { number: 8, title: "declined", body: "## Criteria this serves\n\nTST-1", closedAt: "2026-11-12T00:00:00Z", stateReason: "not_planned" },
       // The search matched text, not a claim: this one names TST-3 only.
-      { number: 9, title: "newest, about the third thing", body: "## Criteria this serves\n\nTST-3", closedAt: "2026-11-15T00:00:00Z" },
+      { number: 9, title: "newest, about the third thing", body: "## Criteria this serves\n\nTST-3", closedAt: "2026-11-15T00:00:00Z", stateReason: "completed" },
     ],
-    "TST-3": [{ number: 6, title: "third", body: "## Criteria this serves\n\nTST-3", closedAt: "2026-11-05T00:00:00Z" }],
+    // Closed before GitHub recorded a reason: null is not a decline.
+    "TST-3": [{ number: 6, title: "third", body: "## Criteria this serves\n\nTST-3", closedAt: "2026-11-05T00:00:00Z", stateReason: null }],
   };
   const gh = (over: { open?: { number: number; title: string; body: string | null }[]; search?: (id: string) => Promise<Closed[]> } = {}) => {
     const created: { title: string; body: string; milestone: number }[] = [];
@@ -327,6 +331,7 @@ describe("#2541: rungate criterion-successor --sweep, end to end over a real spe
     expect(created.map(c => c.milestone)).toEqual([11, 12]);
     expect(created[0]!.body).toContain("## Criteria this serves\n\nTST-1");
     expect(created[0]!.body, "cited #9, which names TST-3 and only matched the search").not.toContain("#9");
+    expect(created[0]!.body, "cited #8, which was closed as not planned").not.toContain("#8");
     expect(created[0]!.body).toContain("#7");
     expect(created[1]!.body).toContain("#6");
     // Ticked TST-2 is not owed, so it is never searched for.
