@@ -67,6 +67,13 @@ describe("#2566: the scaffold's docs-routing rule", () => {
     expect(rows.some(r => r.includes("`docs/notes/`"))).toBe(true);
   });
 
+  test("DR-3b: an uncategorised docs folder whose markdown is all nested is routed too (review of #2573)", () => {
+    mkdirSync(join(dir, "docs", "minutes", "2026"), { recursive: true });
+    writeFileSync(join(dir, "docs", "minutes", "2026", "m.md"), "# M");
+    expect(routingRows(rule()).some(r => r.includes("`docs/minutes/`"))).toBe(true);
+    expect(scanProject(dir).docRouting.map(r => r.file)).toContain("docs/minutes/");
+  });
+
   test("DR-4: adding a file changes nothing the rule says", () => {
     const before = rule();
     writeFileSync(join(dir, "specs", "TWO.md"), "# Two");
