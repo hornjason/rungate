@@ -175,6 +175,24 @@ describe("#2366: an accepted ADR's Decomposition can grow, and only its new rows
     expect(hidden.kind).toBe("grew");
     expect(outcomes(hidden)).toEqual(["a row added after the pipe-less one"]);
   });
+
+  test("GR-9: a row pasted twice is growth, so decompose refuses the duplicate out loud", () => {
+    // The table's lines are counted, not collected into a set: a second,
+    // byte-identical copy of a row is a line the earlier table had once, not
+    // a line it already had. As a set it read as no growth, and the parser's
+    // "appears twice" refusal never ran. Found by the AI review of #2582.
+    const p = adrPlacement(
+      adrRows("accepted", [["CRC-C2", "a first planned row"]]),
+      adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a first planned row"]]),
+    );
+    expect(p.kind).toBe("grew");
+    expect(p.rows).toEqual([]);
+    // Moving rows around adds none.
+    expect(adrPlacement(
+      adrRows("accepted", [["CRC-C2", "a first planned row"], ["CRC-C2", "a second planned row"]]),
+      adrRows("accepted", [["CRC-C2", "a second planned row"], ["CRC-C2", "a first planned row"]]),
+    ).kind).toBe("none");
+  });
 });
 
 describe("SC-2738: plan-issues --accepted-since lists what a push accepted", () => {
