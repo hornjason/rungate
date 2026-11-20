@@ -147,7 +147,9 @@ export function scanDocsDirectory(docsDir: string, categoryDirs: readonly string
     .filter(d => d.isDirectory() && !categoryDirs.includes(`docs/${d.name}`))
     .map(d => d.name);
   for (const sub of subDirs) {
-    const subFiles = readdirSync(join(docsDir, sub)).filter(f => f.endsWith(".md"));
+    // Recursive, as the category rows are (#91): a folder whose markdown all
+    // sits one level down is still documentation (review of #2573).
+    const subFiles = readdirSync(join(docsDir, sub), { recursive: true }).map(String).filter(f => f.endsWith(".md"));
     if (subFiles.length > 0) {
       // #2566: no count — it is stale after the next commit that adds a doc.
       rows.push({ need: sub, file: `docs/${sub}/` });
