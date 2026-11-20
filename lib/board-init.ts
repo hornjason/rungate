@@ -116,7 +116,7 @@ export interface BoardApi {
 export type BoardStep =
   | { kind: "link-repository" }
   | { kind: "create-status-field" }
-  | { kind: "set-status-options"; fieldId: string; options: Array<Omit<FieldOption, "id"> & { id?: string }>; added: string[] }
+  | { kind: "set-status-options"; fieldId: string; options: Array<Omit<FieldOption, "id"> & { id?: string }>; added: string[]; replace: boolean }
   | { kind: "create-criteria-field" }
   | { kind: "create-view" }
   | { kind: "turn-off-automation"; id: string; name: string };
@@ -131,7 +131,9 @@ export function describeStep(s: BoardStep, repo: string): string {
     case "create-status-field":
       return `create the ${STATUS_FIELD} field with ${BOARD_STATUS_OPTIONS.join(", ")}`;
     case "set-status-options":
-      return `give ${STATUS_FIELD} the lanes it lacks: ${s.added.join(", ")}`;
+      return s.replace
+        ? `replace ${STATUS_FIELD}'s options with ${s.added.join(", ")}`
+        : `give ${STATUS_FIELD} the lanes it lacks: ${s.added.join(", ")}`;
     case "create-criteria-field":
       return `create the ${CRITERIA_FIELD} text field`;
     case "create-view":
@@ -160,9 +162,9 @@ export function boardPlan(p: ProjectReading, repo: string, fresh: boolean): { st
     const have = status[0].options ?? [];
     const added = BOARD_STATUS_OPTIONS.filter(name => !have.some(o => o.name === name));
     if (fresh && have.map(o => o.name).join("\n") !== BOARD_STATUS_OPTIONS.join("\n")) {
-      steps.push({ kind: "set-status-options", fieldId: status[0].id, options: BOARD_STATUS_OPTIONS.map(newOption), added: [...BOARD_STATUS_OPTIONS] });
+      steps.push({ kind: "set-status-options", fieldId: status[0].id, options: BOARD_STATUS_OPTIONS.map(newOption), added: [...BOARD_STATUS_OPTIONS], replace: true });
     } else if (!fresh && added.length > 0) {
-      steps.push({ kind: "set-status-options", fieldId: status[0].id, options: [...have, ...added.map(newOption)], added });
+      steps.push({ kind: "set-status-options", fieldId: status[0].id, options: [...have, ...added.map(newOption)], added, replace: false });
     }
   }
 
@@ -236,7 +238,12 @@ export async function boardInit(opts: {
             kind: "PLANNED",
             steps: [
               `create a project "${title}" owned by ${owner}`,
-              ...["link-repository", "create-status-field", "create-criteria-field", "create-view"].map(k => describeStep({ kind: k } as BoardStep, repo)),
+              // GitHub gives a new project a Status field holding its three
+              // defaults, so the write replaces those options; it never creates
+              // the field (review of #2513).
+              describeStep({ kind: "link-repository" }, repo),
+              describeStep({ kind: "set-status-options", fieldId: "", options: [], added: [...BOARD_STATUS_OPTIONS], replace: true }, repo),
+              ...(["create-criteria-field", "create-view"] as const).map(kind => describeStep({ kind }, repo)),
               ...AUTOMATIONS_OFF.map(name => `turn off the built-in automation "${name}"`),
             ],
           };
