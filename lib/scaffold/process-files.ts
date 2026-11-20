@@ -28,6 +28,10 @@
  * rendered with a guessed command. It is put in with a function replacer: a
  * string replacement reads `$$`, `$&` and `$'` in the project's own
  * command as patterns and renders a different one (review of #2518).
+ *
+ * #2519: the placeholder carries its own code span, because a one-backtick
+ * span around a command holding a backtick closes early and shows a truncated
+ * command. `inlineCode` fences it with a run longer than any inside it.
  */
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
@@ -49,6 +53,22 @@ const READY_NOW = {
     '`env -u GH_TOKEN BOARD_PROJECT_TOKEN="$(env -u GH_TOKEN gh auth token)" bunx rungate board-ready ' +
     "--repo <owner/name> --project <board id> --actor \"$(env -u GH_TOKEN gh api user -q .login)\" --top-up`",
 };
+
+/** Why the work loop is refused when no test command was given — a config that could not be read says more. */
+export const NO_TEST_COMMAND_WHY = "no test command was given, so the work loop's test step would name a guess";
+
+/**
+ * `text` as one inline code span, exactly (CommonMark): fenced by a run of
+ * backticks longer than any run inside it, and padded with a space on each
+ * side when it starts or ends with a backtick, or starts and ends with a
+ * space, since a renderer strips one space from each side of such a span.
+ */
+export function inlineCode(text: string): string {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map(m => m[0].length));
+  const fence = "`".repeat(longest + 1);
+  const pad = text.startsWith("`") || text.endsWith("`") || (text.startsWith(" ") && text.endsWith(" ")) ? " " : "";
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
 
 /** A rendered process file, or why it could not be. */
 export type ProcessFile = { path: string; content: string } | { path: string; content: null; why: string };
@@ -86,7 +106,7 @@ export function processFiles(harness: boolean, dir: string = PROCESS_TEMPLATES_D
     workLoop === null
       ? missing(WORK_LOOP_COMMAND_PATH, "work-loop.md")
       : testCommand === undefined || testCommand.trim() === ""
-        ? { path: WORK_LOOP_COMMAND_PATH, content: null, why: "no test command was given, so the work loop's test step would name a guess" }
-        : { path: WORK_LOOP_COMMAND_PATH, content: workLoop.replaceAll("{{CLI}}", cli).replaceAll("{{TEST_COMMAND}}", () => testCommand) },
+        ? { path: WORK_LOOP_COMMAND_PATH, content: null, why: NO_TEST_COMMAND_WHY }
+        : { path: WORK_LOOP_COMMAND_PATH, content: workLoop.replaceAll("{{CLI}}", cli).replaceAll("{{TEST_COMMAND}}", () => inlineCode(testCommand)) },
   ];
 }
