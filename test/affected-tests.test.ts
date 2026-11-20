@@ -496,8 +496,20 @@ describe("#2576: a reader that builds the path from a directory literal and a te
   });
 
   test("DT-2: a same-named file in another directory does not select it", () => {
-    const r = affectedTests(briefProject(), ["other/briefs/alpha.md"]);
-    expect(r.tests).not.toContain("test/computed.test.ts");
+    // MEASURED first (review of #2578): with nothing naming other/briefs/alpha.md
+    // the reading is UNMEASURED, tests is [] whatever the rule does, and the
+    // case could not fail. A file that names it outright makes the reading
+    // measured, so the template readers' absence is the rule's decision.
+    const root = briefProject();
+    put(
+      root,
+      "test/named-other.test.ts",
+      'import { readFileSync } from "fs";\nexport const n = readFileSync("other/briefs/alpha.md", "utf-8").length;\n',
+    );
+    const r = affectedTests(root, ["other/briefs/alpha.md"]);
+    expect(r.reading, "the case is not measuring the rule unless the reading is measured").toBe("MEASURED");
+    expect(r.tests).toContain("test/named-other.test.ts");
+    expect(r.tests, "a reader of templates/briefs was selected by a change under other/briefs").not.toContain("test/computed.test.ts");
     expect(r.tests).not.toContain("test/segments.test.ts");
   });
 
