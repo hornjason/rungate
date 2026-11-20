@@ -248,7 +248,9 @@ describe("#2571: the board's Criteria column is mirrored after a triage writes",
     // A stand-in CLI: prints the header it is given and exits as told,
     // ignoring the subcommand and flags the step passes it.
     const stub = join(dir, "stub.sh");
-    writeFileSync(stub, `printf '%s\\n' ${JSON.stringify(stdout)}\nexit ${exit}\n`);
+    const printed = join(dir, "stdout.txt");
+    writeFileSync(printed, `${stdout}\n`);
+    writeFileSync(stub, `cat "${printed}"\nexit ${exit}\n`);
     const cli = `bash ${stub}`;
     const r = spawnSync("bash", ["-c", triageRun(cli)], {
       env: { ...process.env, RUNNER_TEMP: dir, GITHUB_OUTPUT: output, GITHUB_REPOSITORY: "o/r" },
