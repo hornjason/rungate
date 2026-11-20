@@ -564,6 +564,8 @@ acceptance test, so it is also the honest answer to *when is the engine done*
       needs: test
       proved-by: test/board-merge-workflow.test.ts "SC-2787: board.mergeWorkflow is read from config"
       fingerprint: eb99bdc8
-- [ ] SC-2788: a pull request merged into main by automation closes the issues it declares: each issue in its `closingIssuesReferences` that is still open, in this repository, and was not reopened after the merge is closed with a comment naming the pull request, and an issue the body only mentions is never closed (Jason, 2026-11-19, ADR-022)
+- [x] SC-2788: a pull request merged into main by automation closes the issues it declares: each issue in its `closingIssuesReferences` that is still open, in this repository, and was not reopened after the merge is closed with a comment naming the pull request, and an issue the body only mentions is never closed (Jason, 2026-11-19, ADR-022)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
+      proved-by: test/adr-accepted-workflow.test.ts "SC-2788: a merge-triggered run closes the issues the merged pull requests declare"
+      fingerprint: 3e729c9d

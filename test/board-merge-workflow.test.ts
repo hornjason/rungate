@@ -95,8 +95,10 @@ describe("SC-2787: with a merge workflow named, adr-accepted also runs when it c
     expect(runOf(accepted)).toContain('plan-issues --accepted-since "$BEFORE"');
     expect(runOf(accepted)).toMatch(/if \[ "\$EVENT" = "workflow_run" \]; then/);
     expect(accepted.env.EVENT).toBe("${{ github.event_name }}");
-    // Listing runs needs actions: read, and nothing else is widened.
-    expect(doc.permissions).toEqual({ contents: "read", issues: "write", actions: "read" });
+    // Listing runs needs actions: read; SC-2788's step reads the merged pull
+    // requests and what they declare, which needs pull-requests: read. Nothing
+    // else is widened.
+    expect(doc.permissions).toEqual({ contents: "read", issues: "write", actions: "read", "pull-requests": "read" });
   });
 
   test("SC-2787: the token reaches the range read only on a merge-triggered run, and the package is fetched before any token", () => {
