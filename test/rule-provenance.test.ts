@@ -150,14 +150,14 @@ describe("#370 SC-819: a generator-owned rule file is still updated", () => {
     scaffold(dir);
     const before = ruleAt(dir, "docs-routing.md");
 
-    mkdirSync(join(dir, "specs"), { recursive: true });
-    writeFileSync(
-      join(dir, "specs", "WIDGET-SPEC.md"),
-      "---\ndoc-type: spec\ntestable: true\ngoverns: widgets\n---\n\n# Widget\n\n## Success Criteria\n\n- [ ] SC-1: widgets exist\n",
-    );
+    // A new routed directory, not a new file in one: since #2566 the rule
+    // states no file count, so adding a spec to specs/ rightly changes
+    // nothing it says. A category that did not exist and now does adds a row.
+    mkdirSync(join(dir, "docs", "research"), { recursive: true });
+    writeFileSync(join(dir, "docs", "research", "FINDING.md"), "---\ndoc-type: research\ngoverns: widgets\n---\n\n# Finding\n");
     const report = scaffold(dir);
 
-    expect(ruleAt(dir, "docs-routing.md"), "the rule did not pick up the new spec").not.toBe(before);
+    expect(ruleAt(dir, "docs-routing.md"), "the rule did not pick up the new directory").not.toBe(before);
     expect(report).toContain("UPDATED: .claude/rules/docs-routing.md");
   }, 300_000);
 
