@@ -84,7 +84,7 @@ describe("#2490: planSuccessors decides which criteria a closed issue leaves owe
   test("an owed criterion with no milestone for its phase refuses the whole plan, naming it, rather than file it unplaced", () => {
     const plan = planSuccessors({ number: 5, names: ["TST-1", "TST-3"] }, [{ id: "TST-1", source: "specs/FIX.md" }, { id: "TST-3", source: "specs/FIX.md" }], spec, MILESTONES.filter(m => m.number !== 12));
     expect("why" in plan && plan.why).toContain("TST-3");
-    expect("why" in plan && plan.why).toContain("Fixture Phase 2");
+    expect("why" in plan && plan.why).toContain("phase 2 of the Fixture family");
   });
 
   test("a spec that cannot be read refuses rather than file a successor with no phase", () => {

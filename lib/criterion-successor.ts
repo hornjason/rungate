@@ -121,7 +121,7 @@ export function planSuccessors(
     }
     const milestone = milestones.find(m => phaseInFamily(m.title, prefix) === Number(phase));
     if (milestone === undefined) {
-      refusals.push(`${id}: no open milestone is ${prefix} Phase ${phase}, so it has nowhere to be placed (rungate plan-spec makes the family's milestones)`);
+      refusals.push(`${id}: no open milestone is phase ${phase} of the ${prefix} family, so it has nowhere to be placed (rungate plan-spec makes the family's milestones)`);
       continue;
     }
     file.push({
