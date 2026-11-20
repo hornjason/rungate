@@ -62,7 +62,15 @@ export type ReviewUnmeasuredReason =
   | "NO_TOOL_CALLS"
   | "NO_REVIEW_POSTED"
   | "REVIEW_COUNT_UNAVAILABLE"
-  | "DIFF_TRUNCATED";
+  | "DIFF_TRUNCATED"
+  | "DIFF_SCOPE_UNAVAILABLE";
+
+/**
+ * How much of the pull request's diff reached the agent WHOLE, counted in
+ * files (#1934). `scripts/review-diff-subject.ts` chooses the subject and
+ * reports both numbers as step outputs; this module decides what they mean.
+ */
+export type DiffScope = { filesRead: number; filesSeen: number };
 
 export type ReviewExecutionReading = {
   reading: "MEASURED" | "UNMEASURED";
@@ -73,6 +81,8 @@ export type ReviewExecutionReading = {
   /** Reviews this run ADDED — after minus before. `null` when either
    * count could not be taken. */
   reviewsPosted: number | null;
+  /** The scope the agent was handed, or `null` when none was reported. */
+  diffScope: DiffScope | null;
   reasons: ReviewUnmeasuredReason[];
   /** One sentence per reason, in the same order. */
   detail: string[];
@@ -85,8 +95,11 @@ export type ReviewExecutionInput = {
    * count before it, or `null` when either could not be taken. A TOTAL would
    * make the second run of any reviewed PR unfalsifiable. */
   reviewsPosted: number | null;
-  /** Whether the diff handed to the agent was cut short of the real one. */
-  diffTruncated: boolean;
+  /**
+   * Files whose whole diff reached the agent, of the files in the pull
+   * request, or `null` when the gather step reported no count (#1934).
+   */
+  diffScope: DiffScope | null;
 };
 
 function countToolUses(raw: string): Record<string, number> | null {
@@ -166,11 +179,30 @@ export function reviewExecutionReading(input: ReviewExecutionInput): ReviewExecu
     );
   }
 
-  if (input.diffTruncated) {
+  // #1934. A diff over the budget is handed over whole files at a time, and
+  // a review of SOME files whole, with its scope stated, is a reading: the
+  // report and the script's warning say which part. A review of NO file
+  // whole is the byte cut, and it stays UNMEASURED — a partial review
+  // reported as a clean one is #732 in miniature. An unreported scope is
+  // UNMEASURED too, never read as whole.
+  const scope = input.diffScope;
+  if (
+    scope === null ||
+    !Number.isInteger(scope.filesRead) ||
+    !Number.isInteger(scope.filesSeen) ||
+    scope.filesRead < 0 ||
+    scope.filesRead > scope.filesSeen
+  ) {
+    add(
+      "DIFF_SCOPE_UNAVAILABLE",
+      "the gather step reported no usable count of the files the agent was handed, so what it " +
+        "reviewed is unestablished rather than whole",
+    );
+  } else if (scope.filesRead === 0 && scope.filesSeen > 0) {
     add(
       "DIFF_TRUNCATED",
-      "the diff handed to the agent was cut short, so part of the pull request was never looked " +
-        "at — a partial review reported as a clean one is the same defect in miniature",
+      "not one file's whole diff fitted the budget, so the agent was handed a byte cut and no file " +
+        "was looked at whole — a partial review reported as a clean one is the same defect in miniature",
     );
   }
 
@@ -179,9 +211,22 @@ export function reviewExecutionReading(input: ReviewExecutionInput): ReviewExecu
     toolCalls,
     toolCallsByName,
     reviewsPosted: input.reviewsPosted,
+    diffScope: input.diffScope,
     reasons,
     detail,
   };
+}
+
+/**
+ * The coverage a review had, as "n of m files read": files whose whole diff
+ * reached the agent, of the files in the pull request (#1934). The spec's
+ * criterion for over-budget diffs is worded in exactly these terms.
+ * `UNREPORTED` when the gather step gave no usable count.
+ */
+export function reviewCoverage(r: ReviewExecutionReading): string {
+  return r.diffScope === null || r.reasons.includes("DIFF_SCOPE_UNAVAILABLE")
+    ? "UNREPORTED"
+    : `${r.diffScope.filesRead} of ${r.diffScope.filesSeen} files read`;
 }
 
 /** The annotation body. Named reasons, named counts — a warning that does not
@@ -200,7 +245,7 @@ export function reviewReadingReport(r: ReviewExecutionReading): string {
     r.reviewsPosted === null
       ? "reviews added by this run: UNCOUNTED"
       : `reviews added by this run: ${r.reviewsPosted}`;
-  const head = `${r.reading} — ${calls}; ${reviews}`;
+  const head = `${r.reading} — ${calls}; ${reviews}; coverage: ${reviewCoverage(r)}`;
   if (r.reading === "MEASURED") return head;
   return [head, ...r.reasons.map((reason, i) => `  ${reason}: ${r.detail[i]}`)].join("\n");
 }

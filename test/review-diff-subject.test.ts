@@ -1,0 +1,232 @@
+/**
+ * #1934 — the review's subject, chosen whole files at a time.
+ *
+ * The `review` job hands the agent the pull request's diff inside one
+ * environment variable, so the diff is capped (`MAX_BYTES` in
+ * `.github/workflows/claude-review.yml`). It used to be cut at a byte, and a
+ * cut diff made the run UNMEASURED / DIFF_TRUNCATED. On a DA state-record pull
+ * request that is permanent: #1932 changed 142 lines in 2 files and its diff
+ * was 168 KB, because `project-state.json` keeps each entry on one line.
+ *
+ * Now the subject is the files whose WHOLE diff fits, in diff order, and the
+ * agent is told which were left out. A byte cut remains only when not one file
+ * fits whole, and it stays DIFF_TRUNCATED: a review of nothing whole is not a
+ * review of something.
+ */
+
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { reviewExecutionReading } from "../lib/review-execution-reading";
+import { chooseSubject, splitDiff } from "../scripts/review-diff-subject";
+
+const SCRATCH: string[] = [];
+afterAll(() => {
+  for (const d of SCRATCH) rmSync(d, { recursive: true, force: true });
+});
+
+/** One file's section of a unified diff, `body` bytes of changed lines. */
+function section(path: string, bodyBytes: number, ch = "+"): string {
+  return [
+    `diff --git a/${path} b/${path}`,
+    "index 1111111..2222222 100644",
+    `--- a/${path}`,
+    `+++ b/${path}`,
+    "@@ -1 +1 @@",
+    ch + "x".repeat(Math.max(0, bodyBytes - 1)),
+    "",
+  ].join("\n");
+}
+
+const bytes = (s: string) => Buffer.byteLength(s, "utf8");
+
+describe("#1934: the diff is split into one section per file", () => {
+  test("each `diff --git` header starts a section, and the sections rejoin to the diff byte for byte", () => {
+    const diff = section("a.ts", 10) + section("dir with space/b.md", 20) + section("c.json", 5);
+    const { preamble, files } = splitDiff(diff);
+    expect(preamble).toBe("");
+    expect(files.map(f => f.path)).toEqual(["a.ts", "dir with space/b.md", "c.json"]);
+    expect(preamble + files.map(f => f.text).join("")).toBe(diff);
+  });
+
+  test("a line that merely CONTAINS `diff --git` is not a header", () => {
+    const tricky = section("a.ts", 10).replace("+xxxxxxxxx", "+ diff --git a/z b/z inside a line");
+    expect(splitDiff(tricky).files.map(f => f.path)).toEqual(["a.ts"]);
+  });
+});
+
+describe("#1934: the subject is whole files, and says what it left out", () => {
+  test("under the budget, the subject is the diff unchanged — not even a newline added", () => {
+    const diff = section("a.ts", 100) + section("b.ts", 100).replace(/\n$/, "");
+    const s = chooseSubject(diff, 10_000);
+    expect(s.subject).toBe(diff);
+    expect(s).toMatchObject({ filesRead: 2, filesSeen: 2, omitted: [], truncated: false });
+  });
+
+  test("#1932's shape: one huge file and one small one — the small one is reviewed whole, the huge one named", () => {
+    const huge = section("project-state.json", 150_000);
+    const small = section("PROJECT-STATE.md", 2_000);
+    const s = chooseSubject(huge + small, 98_304);
+    expect(s).toMatchObject({ filesRead: 1, filesSeen: 2, omitted: ["project-state.json"], truncated: false });
+    expect(s.subject).toContain(small);
+    expect(s.subject).not.toContain("diff --git a/project-state.json");
+    // The agent is told, first, what it is NOT looking at.
+    expect(s.subject.startsWith("*** ")).toBe(true);
+    expect(s.subject.split("\n")[0]).toContain("1 of 2 files");
+    expect(s.subject.split("\n")[0]).toContain("project-state.json");
+    expect(bytes(s.subject)).toBeLessThanOrEqual(98_304);
+  });
+
+  test("a file that does not fit is skipped, and a later one that does is still taken", () => {
+    const s = chooseSubject(section("a.ts", 600) + section("big.ts", 5_000) + section("c.ts", 600), 4_000);
+    expect(s.filesRead).toBe(2);
+    expect(s.omitted).toEqual(["big.ts"]);
+    expect(s.subject).toContain("diff --git a/a.ts");
+    expect(s.subject).toContain("diff --git a/c.ts");
+  });
+
+  test("the subject never exceeds the budget, however long the list of omitted files is", () => {
+    const many = Array.from({ length: 400 }, (_, i) => section(`a/really/quite/long/path/number-${i}.ts`, 3_000)).join("");
+    const s = chooseSubject(section("tiny.ts", 50) + many, 8_192);
+    expect(bytes(s.subject)).toBeLessThanOrEqual(8_192);
+    expect(s.filesSeen).toBe(401);
+    expect(s.filesRead).toBeGreaterThanOrEqual(1);
+    expect(s.omitted.length).toBe(s.filesSeen - s.filesRead);
+    expect(s.subject.split("\n")[0]).toMatch(/and \d+ more/);
+
+    // Files that nearly fill the budget on their own: the first line is added
+    // ON TOP of them, so the room for it has to be kept before choosing.
+    for (let size = 8_192 - 1_200; size <= 8_192 - 50; size += 50) {
+      const near = chooseSubject(section("near.ts", size) + section("big.ts", 20_000), 8_192);
+      expect(bytes(near.subject), `a ${size}-byte file`).toBeLessThanOrEqual(8_192);
+    }
+  });
+
+  test("when no file fits whole, the old byte cut is kept and marked — and it is still a truncation", () => {
+    const diff = section("only.json", 20_000);
+    const s = chooseSubject(diff, 4_096);
+    expect(s).toMatchObject({ filesRead: 0, filesSeen: 1, omitted: ["only.json"], truncated: true });
+    expect(s.subject.startsWith(diff.slice(0, 4_000))).toBe(true);
+    expect(s.subject).toContain(`*** diff truncated at 4096 of ${bytes(diff)} bytes ***`);
+    // The marker is inside the budget, not appended past it.
+    expect(bytes(s.subject)).toBeLessThanOrEqual(4_096);
+    expect(bytes(s.subject)).toBeGreaterThan(4_096 - 100);
+  });
+
+  test("an empty diff has nothing to read and nothing left out", () => {
+    expect(chooseSubject("", 4_096)).toMatchObject({ subject: "", filesRead: 0, filesSeen: 0, omitted: [], truncated: false });
+  });
+
+  test("bytes, not characters: a multi-byte file is measured in UTF-8", () => {
+    // 3,000 three-byte characters are 9,000 bytes: over a 4,096-byte budget
+    // even though the string is only ~3,000 characters long.
+    const wide = section("wide.md", 1).replace("@@ -1 +1 @@\n+", "@@ -1 +1 @@\n+" + "€".repeat(3_000));
+    const s = chooseSubject(wide + section("narrow.md", 100), 4_096);
+    expect(s.omitted).toEqual(["wide.md"]);
+    expect(s.filesRead).toBe(1);
+  });
+});
+
+describe("#1934 review round 1: names and counts that cannot drift from the diff", () => {
+  test("a path containing ` b/` is named whole, not split at the last ` b/`", () => {
+    const diff = section("notes b/draft.txt", 50) + section("a.ts", 50);
+    expect(splitDiff(diff).files.map(f => f.path)).toEqual(["notes b/draft.txt", "a.ts"]);
+    // A rename has two different paths; the new one is the name.
+    const renamed = "diff --git a/old b/x.ts b/new b/y.ts\nsimilarity index 100%\nrename from old b/x.ts\nrename to new b/y.ts\n";
+    expect(splitDiff(renamed).files.map(f => f.path)).toEqual(["new b/y.ts"]);
+    // A copy names its new path the same way, with `copy to` (#2585 review).
+    const copied = "diff --git a/src b/x.ts b/dst b/y.ts\nsimilarity index 100%\ncopy from src b/x.ts\ncopy to dst b/y.ts\n";
+    expect(splitDiff(copied).files.map(f => f.path)).toEqual(["dst b/y.ts"]);
+    // A deletion has no `+++ b/` line to fall back on, so only the exact
+    // split names it: the header is the one place the path is spelled.
+    const deleted = "diff --git a/old b/gone.txt b/old b/gone.txt\ndeleted file mode 100644\n--- a/old b/gone.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n";
+    expect(splitDiff(deleted).files.map(f => f.path)).toEqual(["old b/gone.txt"]);
+  });
+
+  test("a non-empty diff with no file header is one section, so its byte cut is a truncation the counts carry", () => {
+    const headerless = "x".repeat(5_000);
+    const cut = chooseSubject(headerless, 4_096);
+    expect(cut).toMatchObject({ filesRead: 0, filesSeen: 1, truncated: true });
+    const fits = chooseSubject("just some text\n", 4_096);
+    expect(fits).toMatchObject({ filesRead: 1, filesSeen: 1, truncated: false });
+  });
+
+  test("the reading says DIFF_TRUNCATED exactly when the subject was byte-cut — the counts are the one channel", () => {
+    const cases: Array<[string, number]> = [
+      ["", 4_096],
+      ["x".repeat(5_000), 4_096],
+      ["just some text\n", 4_096],
+      [section("only.json", 20_000), 4_096],
+      [section("a.ts", 100), 4_096],
+      [section("project-state.json", 20_000) + section("PROJECT-STATE.md", 500), 8_192],
+      ["preamble\n".repeat(600) + section("a.ts", 100), 4_096],
+    ];
+    for (const [diff, budget] of cases) {
+      const s = chooseSubject(diff, budget);
+      const r = reviewExecutionReading({
+        executionFileRaw: JSON.stringify([{ type: "assistant", message: { content: [{ type: "tool_use", name: "t" }] } }]),
+        reviewsPosted: 1,
+        diffScope: { filesRead: s.filesRead, filesSeen: s.filesSeen },
+      });
+      expect(r.reasons.includes("DIFF_TRUNCATED"), `${diff.length}-char diff at ${budget}`).toBe(s.truncated);
+    }
+  });
+});
+
+describe("#1934: the command writes the subject and the step outputs", () => {
+  const cli = join(import.meta.dir, "..", "scripts", "review-diff-subject.ts");
+
+  function run(diff: string, maxBytes: number) {
+    const dir = mkdtempSync(join(tmpdir(), "r1934-subject-"));
+    SCRATCH.push(dir);
+    const inFile = join(dir, "pr.diff");
+    const outFile = join(dir, "pr.subject");
+    const outputs = join(dir, "github_output");
+    writeFileSync(inFile, diff);
+    writeFileSync(outputs, "prior=kept\n");
+    const p = Bun.spawnSync(["bun", cli, "--in", inFile, "--out", outFile, "--max-bytes", String(maxBytes), "--outputs", outputs]);
+    return {
+      code: p.exitCode,
+      stdout: new TextDecoder().decode(p.stdout),
+      stderr: new TextDecoder().decode(p.stderr),
+      subject: () => readFileSync(outFile, "utf8"),
+      outputs: () => readFileSync(outputs, "utf8"),
+    };
+  }
+
+  test("a partial subject: outputs appended, prior outputs kept, and a warning naming the scope", () => {
+    const r = run(section("project-state.json", 20_000) + section("PROJECT-STATE.md", 500), 8_192);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.outputs()).toBe("prior=kept\ntruncated=false\nfiles_read=1\nfiles_seen=2\n");
+    expect(r.stdout).toContain("::warning title=Review covers part of the diff::");
+    expect(r.stdout).toContain("1 of 2 files");
+    expect(r.subject()).toContain("diff --git a/PROJECT-STATE.md");
+  });
+
+  test("a byte cut warns the way the step always has", () => {
+    const r = run(section("only.json", 20_000), 4_096);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.outputs()).toContain("truncated=true\nfiles_read=0\nfiles_seen=1\n");
+    expect(r.stdout).toContain("::warning::diff truncated at 4096 of");
+  });
+
+  test("a whole diff writes no warning", () => {
+    const r = run(section("a.ts", 100), 4_096);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.outputs()).toContain("truncated=false\nfiles_read=1\nfiles_seen=1\n");
+    expect(r.stdout).not.toContain("::warning");
+  });
+
+  test("a missing argument or an unreadable input refuses rather than writing an empty subject", () => {
+    const missing = Bun.spawnSync(["bun", cli, "--in", "/nonexistent/pr.diff"]);
+    expect(missing.exitCode).not.toBe(0);
+    const dir = mkdtempSync(join(tmpdir(), "r1934-bad-"));
+    SCRATCH.push(dir);
+    const bad = Bun.spawnSync(["bun", cli, "--in", join(dir, "nope.diff"), "--out", join(dir, "o"), "--max-bytes", "4096", "--outputs", join(dir, "g")]);
+    expect(bad.exitCode).not.toBe(0);
+    const zero = Bun.spawnSync(["bun", cli, "--in", join(dir, "nope.diff"), "--out", join(dir, "o"), "--max-bytes", "0", "--outputs", join(dir, "g")]);
+    expect(zero.exitCode).not.toBe(0);
+  });
+});

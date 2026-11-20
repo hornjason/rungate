@@ -293,8 +293,10 @@ jobs:
       # Google credential on the runner for it to pick up.
       #
       # TRUNCATION IS REPORTED, not swallowed. A review of half a diff
-      # reported as a clean review is #732 in miniature, so the cap is an
-      # output the post-step turns into `DIFF_TRUNCATED` / UNMEASURED.
+      # reported as a clean review is #732 in miniature. Over the cap the agent
+      # gets whole files only and is told which it is missing; the counts are
+      # outputs the post-step reads, and a run with no file reviewed whole is
+      # `DIFF_TRUNCATED` / UNMEASURED (#1934).
       - name: Gather the diff under review
         id: subject
         env:
@@ -379,26 +381,28 @@ jobs:
           # pull requests that have needed the most review were the ones whose
           # reviewer could not start. AC-7.
           gh pr diff "$PR" --repo "$REPO" > /tmp/pr.diff
-          full=$(wc -c < /tmp/pr.diff | tr -d ' ')
-          if [ "$full" -gt "$MAX_BYTES" ]; then
-            head -c "$MAX_BYTES" /tmp/pr.diff > /tmp/pr.diff.cut
-            # Tell the AGENT its subject is incomplete. The post-step turns
-            # the same fact into DIFF_TRUNCATED; this is the half the model
-            # can see, and a silently cut diff is #732 one layer down.
-            printf '\n*** diff truncated at %s of %s bytes ***\n' "$MAX_BYTES" "$full" \
-              >> /tmp/pr.diff.cut
-            mv /tmp/pr.diff.cut /tmp/pr.diff
-            echo "truncated=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::diff truncated at $MAX_BYTES of $full bytes"
-          else
-            echo "truncated=false" >> "$GITHUB_OUTPUT"
-          fi
+          # WHAT THE AGENT IS HANDED is decided by a tested script, not here
+          # (#1934). Under the cap: the diff, unchanged. Over it: the files
+          # whose WHOLE diff fits, under a first line naming the ones left out
+          # — so a DA state-record PR (#1932: 2 files, 168 KB, because
+          # project-state.json keeps each entry on one line) gets its other
+          # file reviewed rather than a truncation notice. Only when not one
+          # file fits whole does it fall back to the byte cut, marked as
+          # before, and that stays DIFF_TRUNCATED. It writes `truncated`,
+          # `files_read` and `files_seen` to GITHUB_OUTPUT and prints the
+          # warning; the post-step decides what the counts mean.
+          #
+          # `env -u GH_TOKEN`: the script needs no credential, so it is not
+          # handed one.
+          env -u GH_TOKEN bun scripts/review-diff-subject.ts \
+            --in /tmp/pr.diff --out /tmp/pr.subject \
+            --max-bytes "$MAX_BYTES" --outputs "$GITHUB_OUTPUT"
           # A random delimiter: a diff can contain any fixed one, and a diff
           # that closes the heredoc early is an injection into GITHUB_OUTPUT.
           d="EOF_$(openssl rand -hex 16)"
           {
             echo "diff<<$d"
-            cat /tmp/pr.diff
+            cat /tmp/pr.subject
             # LOAD-BEARING, and not formatting. The heredoc terminator has to
             # START a line. `head -c` cuts mid-line and a patch need not end
             # in a newline at all, so without this blank line the delimiter is
@@ -560,6 +564,12 @@ jobs:
             If a finding cannot be anchored to a line, put it in the submit
             body instead of skipping it.
 
+            If the diff below starts with a line beginning "*** reviewing the
+            whole diff of", the pull request was over the size budget and you
+            are seeing only the files that line counts. Name the files you
+            reviewed and the files left out in the submit body, so the review
+            states its own scope.
+
             --- BEGIN DIFF ---
             ${{ steps.subject.outputs.diff }}
             --- END DIFF ---
@@ -620,7 +630,8 @@ jobs:
           PR: ${{ steps.guard.outputs.pr }}
           REPO: ${{ github.repository }}
           EXECUTION_FILE: ${{ steps.review.outputs.execution_file }}
-          DIFF_TRUNCATED: ${{ steps.subject.outputs.truncated }}
+          FILES_READ: ${{ steps.subject.outputs.files_read }}
+          FILES_SEEN: ${{ steps.subject.outputs.files_seen }}
           REVIEWS_BEFORE: ${{ steps.subject.outputs.reviews_before }}
         run: |
           set -uo pipefail
@@ -632,4 +643,5 @@ jobs:
             --execution-file "$EXECUTION_FILE" \
             --reviews-before "$REVIEWS_BEFORE" \
             --reviews-after "$after" \
-            --diff-truncated "$DIFF_TRUNCATED"
+            --files-read "$FILES_READ" \
+            --files-seen "$FILES_SEEN"

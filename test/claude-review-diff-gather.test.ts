@@ -48,7 +48,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { jobSteps } from "../lib/review-tool-agreement";
 
-const WORKFLOW = join(import.meta.dir, "..", ".github", "workflows", "claude-review.yml");
+const REPO_ROOT = join(import.meta.dir, "..");
+const WORKFLOW = join(REPO_ROOT, ".github", "workflows", "claude-review.yml");
 const source = readFileSync(WORKFLOW, "utf8");
 
 /** The gather step, located by the command it runs rather than by its name. */
@@ -134,7 +135,7 @@ function parseOutputs(text: string): Record<string, string> {
  * long and unterminated at the cut point, which is what a real patch looks
  * like and what the defect needed.
  */
-function runGather(diffBytes: number) {
+function runGather(diffBytes: number, printDiff?: string) {
   const dir = mkdtempSync(join(tmpdir(), "r732-gather-"));
   const bin = join(dir, "bin");
   writeFileSync(join(dir, "ignored"), "");
@@ -144,10 +145,10 @@ function runGather(diffBytes: number) {
     stub,
     `#!/bin/bash
 if [ "$1" = "pr" ] && [ "$2" = "diff" ]; then
-  # One long unterminated line at the end, which is what a patch hunk is and
+${printDiff ?? `  # One long unterminated line at the end, which is what a patch hunk is and
   # what makes a byte-cut land mid-line.
   printf 'diff --git a/x b/x\\n'
-  head -c ${diffBytes} < /dev/zero | tr '\\0' '+'
+  head -c ${diffBytes} < /dev/zero | tr '\\0' '+'`}
   exit 0
 fi
 if [ "$1" = "api" ]; then printf '101\\n102\\n103\\n'; exit 0; fi
@@ -160,7 +161,7 @@ exit 1
   const script = join(dir, "step.sh");
   writeFileSync(script, runBody);
   const p = Bun.spawnSync(["bash", script], {
-    cwd: dir,
+    cwd: REPO_ROOT,
     env: {
       ...process.env,
       PATH: `${bin}:${process.env.PATH}`,
@@ -362,9 +363,37 @@ describe("the gather step hands the agent a diff the runner can actually read (#
     expect(r.code).toBe(0);
     const o = r.outputs();
     expect(o.truncated).toBe("false");
+    expect(o.files_read).toBe("1");
+    expect(o.files_seen).toBe("1");
     expect(o.reviews_before).toBe("3");
     expect(o.diff.length).toBeGreaterThan(MAX_BYTES / 4);
     expect(o.diff).toContain("diff --git a/x b/x");
+    expect(o.diff).not.toContain("truncated at");
+  });
+
+  /**
+   * #1934, through the real step: #1932's shape. One file far over the cap
+   * and one small one. The small one reaches the agent whole, the first line
+   * names the one left out, and the step reports 1 of 2 — not a byte cut.
+   */
+  test("AC-9: over the cap, the files that fit are handed over whole and the rest are named", () => {
+    const r = runGather(
+      0,
+      `  printf 'diff --git a/project-state.json b/project-state.json\\n+'
+  head -c ${MAX_BYTES * 2} < /dev/zero | tr '\\0' 'x'
+  printf '\\ndiff --git a/PROJECT-STATE.md b/PROJECT-STATE.md\\n+a small change\\n'`,
+    );
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("::warning title=Review covers part of the diff::");
+    const o = r.outputs();
+    expect(o.truncated).toBe("false");
+    expect(o.files_read).toBe("1");
+    expect(o.files_seen).toBe("2");
+    expect(o.reviews_before).toBe("3");
+    expect(o.diff.split("\n")[0]).toContain("1 of 2 files");
+    expect(o.diff.split("\n")[0]).toContain("project-state.json");
+    expect(o.diff).toContain("diff --git a/PROJECT-STATE.md b/PROJECT-STATE.md\n+a small change");
+    expect(o.diff).not.toContain("diff --git a/project-state.json");
     expect(o.diff).not.toContain("truncated at");
   });
 
@@ -379,6 +408,8 @@ describe("the gather step hands the agent a diff the runner can actually read (#
     expect(r.stdout).toContain("::warning::diff truncated");
     const o = r.outputs();
     expect(o.truncated).toBe("true");
+    expect(o.files_read).toBe("0");
+    expect(o.files_seen).toBe("1");
     expect(o.reviews_before).toBe("3");
     // The agent is TOLD its subject is incomplete. A silently cut diff is the
     // same defect as a silently skipped review, one layer down.
@@ -437,7 +468,7 @@ exit 1
     const script = join(dir, "step.sh");
     writeFileSync(script, broken);
     const p = Bun.spawnSync(["bash", script], {
-      cwd: dir,
+      cwd: REPO_ROOT,
       env: {
         ...process.env,
         PATH: `${bin}:${process.env.PATH}`,

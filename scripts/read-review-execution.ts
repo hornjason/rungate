@@ -13,8 +13,12 @@
  * bun scripts/read-review-execution.ts \
  *   --execution-file "$RUNNER_TEMP/claude-execution-output.json" \
  *   --reviews-before 2 --reviews-after 3 \
- *   --diff-truncated false
+ *   --files-read 2 --files-seen 2
  * ```
+ *
+ * The two file counts are the gather step's outputs (#1934): files whose
+ * whole diff reached the agent, of the files in the pull request. Either
+ * absent or non-numeric is `DIFF_SCOPE_UNAVAILABLE`, never "whole".
  *
  * Two counts, differenced here, because a TOTAL makes the second run of any
  * reviewed PR unfalsifiable: #746's first dispatch left one review on it, and
@@ -30,6 +34,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   REVIEW_UNMEASURED_EXIT,
+  reviewCoverage,
   reviewExecutionReading,
   reviewReadingReport,
 } from "../lib/review-execution-reading";
@@ -51,14 +56,27 @@ const before = count("reviews-before");
 const after = count("reviews-after");
 const reviewsPosted = before === null || after === null ? null : Math.max(0, after - before);
 
+const filesRead = count("files-read");
+const filesSeen = count("files-seen");
+
 const reading = reviewExecutionReading({
   executionFileRaw,
   reviewsPosted,
-  diffTruncated: flag("diff-truncated") === "true",
+  diffScope: filesRead === null || filesSeen === null ? null : { filesRead, filesSeen },
 });
 
 const report = reviewReadingReport(reading);
 console.log(report);
+
+// A review of part of the diff is a reading, and the part is on the run page,
+// not only in this log (#1934).
+const scope = reading.diffScope;
+if (reading.reading === "MEASURED" && scope !== null && scope.filesRead < scope.filesSeen) {
+  console.log(
+    `::warning title=Claude review covered part of the diff::coverage ${reviewCoverage(reading)} whole; ` +
+      "the rest were over the diff budget",
+  );
+}
 
 if (reading.reading === "UNMEASURED") {
   // A GitHub annotation, so the state is visible on the run page and not only
