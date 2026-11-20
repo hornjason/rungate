@@ -19,6 +19,7 @@ import { dirname, join } from "path";
 import { ADR_TEMPLATE_PATH, processFiles } from "./process-files";
 import { decideRuleWrite } from "../rule-provenance";
 import { isHarnessItself } from "../harness-identity";
+import { testCommandDecision } from "../test-command";
 
 import {
   safeDir,
@@ -233,7 +234,8 @@ What does this workflow produce?
  * hand edit is preserved and reported rather than overwritten.
  */
 export function writeProcessFiles(projectPath: string, actions: string[]): void {
-  for (const file of processFiles(isHarnessItself(projectPath))) {
+  // #2486: the work loop's test step is the command the generated CI runs.
+  for (const file of processFiles(isHarnessItself(projectPath), undefined, testCommandDecision(projectPath).command)) {
     if (file.content === null) {
       actions.push(`REFUSED: ${file.path} (${file.why}) — nothing was written`);
       continue;
