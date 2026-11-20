@@ -421,7 +421,13 @@ const UNCLAIMED_RATCHET = 150;
 // reading of GitHub project mutations and a config write no registered
 // pattern expresses; the `SC-2789` describes in test/board-init.test.ts name
 // it (2026-11-19).
-const CLAIMED_UNBINDABLE = 187;
+// 187 -> 188: SC-2792 (#2483) ticked by `sync-sc-status --only SC-2792`:
+// work-status and verify-merge-ref run as rungate commands and read the
+// repository from --repo, then GITHUB_REPOSITORY, then origin, a reading of
+// the CLI registry and the repository resolution no registered pattern
+// expresses; the `SC-2792` describes in test/verify-merge-ref.test.ts name it
+// (2026-11-19).
+const CLAIMED_UNBINDABLE = 188;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
