@@ -74,9 +74,10 @@ export function testCommandDecision(root: string): TestCommandDecision {
   //
   // It THROWS on a malformed config, deliberately: a corrupt config is
   // never a missing config, and `catch {}` here is the conversion that rule
-  // exists to forbid. The one caller that must survive corruption is the
-  // config REPAIR step, and it calls `inferredTestCommand` instead — see
-  // below for why that is not a loophole.
+  // exists to forbid. The one step that does not come through here is the
+  // one that WRITES `dev.testCmd`: it calls `inferredTestCommand`, because
+  // asking for the value it is about to write is circular — see below. No
+  // step sees a corrupt config; the scaffold refuses one first (#2520).
   const config = tryLoadRungateConfig(root) as { dev?: { testCmd?: unknown } } | null;
   const declared = config?.dev?.testCmd;
   if (typeof declared === "string" && declared.trim() !== "") {

@@ -110,6 +110,11 @@ if (fix) {
     // The rehearsal gets the same flags, so an audit reports what --fix would
     // actually do rather than what it would do with different settings (#398).
     runScaffoldWriteSteps(rehearsal.dir, projectType, actions, { force, commit: false, rehearsing: true, profile, autoFix, pruneConsumers });
+  } catch (err) {
+    // A config that changed after the check above is refused inside the
+    // clone, and the `finally` deletes the clone before the refusal prints,
+    // so it is renamed onto the project first (review, PR #2553).
+    throw err instanceof ScaffoldConfigUnreadable ? err.relocated(rehearsal.dir, rehearsal.source) : err;
   } finally {
     // #549: a cleanup failure is a sentence, not an exception. The report
     // has already printed by now, and throwing here threw it away.

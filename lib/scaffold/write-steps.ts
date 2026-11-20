@@ -15,7 +15,7 @@
  */
 
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, isAbsolute, join, relative, sep } from "path";
 import { ADR_TEMPLATE_PATH, NO_TEST_COMMAND_WHY, processFiles, WORK_LOOP_COMMAND_PATH } from "./process-files";
 import { decideRuleWrite } from "../rule-provenance";
 import { isHarnessItself } from "../harness-identity";
@@ -108,6 +108,19 @@ export class ScaffoldConfigUnreadable extends Error {
   ) {
     super(`scaffold: UNMEASURED — ${location} could not be read (${reason}). Nothing was written; fix it and run the scaffold again.`);
     this.name = "ScaffoldConfigUnreadable";
+  }
+
+  /**
+   * The same refusal, naming the path under `to` that this one names under
+   * `from`. For a refusal raised inside a rehearsal clone, which is deleted
+   * before the refusal prints (review, PR #2553). A location outside `from`,
+   * or one that is not a path, is returned as it was.
+   */
+  relocated(from: string, to: string): ScaffoldConfigUnreadable {
+    if (!isAbsolute(this.location)) return this;
+    const rel = relative(from, this.location);
+    if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return this;
+    return new ScaffoldConfigUnreadable(join(to, rel), this.reason);
   }
 }
 
