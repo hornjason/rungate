@@ -16,8 +16,13 @@ import {
   CONSUMER_INTAKE_WORKFLOW_FILE,
   REMOVED_FILTER,
   SWEEP_FILTER,
+  CONSUMER_TRIAGE_STEP_ID,
   buildConsumerIntakeWorkflow,
+  triageRun,
 } from "../lib/scaffold/consumer-intake-workflow";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { CONSUMER_INTAKE_GRACE_MS } from "../scripts/board-conformance";
 import { spawnSync } from "child_process";
 import { CONSUMER_LABEL, TRUSTED_ASSOCIATIONS } from "../lib/consumer-triage";
@@ -201,5 +206,75 @@ describe("#2390: an issue a bot filed is never labelled from-consumer", () => {
     const cond = doc().jobs[CONSUMER_INTAKE_JOB]!.if ?? "";
     expect(cond).toContain(`github.event.label.name == '${CONSUMER_LABEL}'`);
     expect(cond).not.toContain("user.type");
+  });
+});
+
+// ── #2571: the triage's own token starts no workflow, so the job mirrors ──
+//
+// `consumer-triage --write` milestones an issue with GITHUB_TOKEN, and an event
+// that token writes starts no workflow, so `phase-order.yml` never ran
+// `board-mirror` for a triaged issue. #2568 declared `serves no criterion` and
+// still sat with an empty Criteria cell, reddening B4 and E4 on every pull
+// request. The job now runs the mirror itself, only after the triage wrote a
+// verdict, as `criterion-label.yml` does after a filing (#2542).
+describe("#2571: the board's Criteria column is mirrored after a triage writes", () => {
+  type Job = { steps: (Step & { id?: string })[] };
+  const steps = () => (Bun.YAML.parse(yml()) as { jobs: Record<string, Job> }).jobs[CONSUMER_INTAKE_JOB]!.steps;
+
+  test("MT-1: the triage step reports whether it wrote, and the mirror runs only then, after it", () => {
+    const all = steps();
+    const triage = all.findIndex(s => s.id === CONSUMER_TRIAGE_STEP_ID);
+    expect(triage, "no step carries the triage id").toBeGreaterThan(-1);
+    const mirror = all.findIndex(s => (s.run ?? "").includes("board-mirror --project"));
+    expect(mirror, "no step writes the Criteria column").toBeGreaterThan(triage);
+    expect(all[mirror]!.if).toContain(`steps.${CONSUMER_TRIAGE_STEP_ID}.outputs.wrote == 'true'`);
+    expect(all[mirror]!.if).toContain("!cancelled()");
+    expect(all[mirror]!.env?.GITHUB_TOKEN).toBe("${{ secrets.RUNGATE_PROJECT_TOKEN }}");
+    expect(all[mirror]!.env?.PROJECT_ID).toBe("${{ vars.RUNGATE_PROJECT_ID }}");
+  });
+
+  test("MT-2: the commands the job now calls are registered", () => {
+    for (const c of ["board-mirror", "board-id"]) {
+      expect(CONSUMER_INTAKE_COMMANDS as readonly string[]).toContain(c);
+      expect(Object.keys(CLI_COMMANDS)).toContain(c);
+    }
+  });
+
+  // The step's own shell, run under bash with a stand-in for the CLI.
+  function runTriage(stdout: string, exit: number): { code: number | null; output: string } {
+    const dir = mkdtempSync(join(tmpdir(), "rg-triage-run-"));
+    const output = join(dir, "out");
+    writeFileSync(output, "");
+    const cli = `printf '%s\\n' ${JSON.stringify(stdout)}; (exit ${exit}) #`;
+    const r = spawnSync("bash", ["-c", triageRun(cli)], {
+      env: { ...process.env, RUNNER_TEMP: dir, GITHUB_OUTPUT: output, GITHUB_REPOSITORY: "o/r" },
+      encoding: "utf-8",
+    });
+    const text = readFileSync(output, "utf-8");
+    rmSync(dir, { recursive: true, force: true });
+    return { code: r.status, output: text };
+  }
+
+  test("MT-3: a run that triaged something says wrote=true; one with nothing pending says nothing", () => {
+    expect(runTriage("consumer-triage — o/r: 5 open from-consumer issue(s), 2 with no verdict", 0)).toEqual({
+      code: 0,
+      output: "wrote=true\n",
+    });
+    expect(runTriage("consumer-triage — o/r: 5 open from-consumer issue(s), 0 with no verdict", 0)).toEqual({
+      code: 0,
+      output: "",
+    });
+  });
+
+  test("MT-4: a triage that failed part-way still reports what it wrote, and the step stays red", () => {
+    expect(runTriage("consumer-triage — o/r: 3 open from-consumer issue(s), 1 with no verdict", 1)).toEqual({
+      code: 1,
+      output: "wrote=true\n",
+    });
+  });
+
+  test("MT-5: the line the step reads is the line consumer-triage prints", () => {
+    const script = readFileSync(join(import.meta.dir, "..", "scripts", "consumer-triage.ts"), "utf-8");
+    expect(script).toContain("${pending.length} with no verdict`");
   });
 });
