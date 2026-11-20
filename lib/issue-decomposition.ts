@@ -756,8 +756,17 @@ export interface AdrPlacement {
 export function adrPlacement(before: string | null, after: string): AdrPlacement {
   if (newlyAccepted(before, after)) return { kind: "accepted", rows: parseDecompositionPlan(after).rows };
   if (before === null || adrStatus(before) !== "accepted" || adrStatus(after) !== "accepted") return { kind: "none", rows: [] };
-  const had = new Set(decompositionTableLines(before));
-  if (!decompositionTableLines(after).some(l => !had.has(l))) return { kind: "none", rows: [] };
+  // Counted, not collected: a second copy of a row the table already had
+  // once is a line added, so a pasted duplicate reaches decompose and is
+  // refused there rather than read as no change (#2582 review).
+  const had = new Map<string, number>();
+  for (const l of decompositionTableLines(before)) had.set(l, (had.get(l) ?? 0) + 1);
+  const added = decompositionTableLines(after).some(l => {
+    const left = had.get(l) ?? 0;
+    had.set(l, left - 1);
+    return left === 0;
+  });
+  if (!added) return { kind: "none", rows: [] };
   const titled = new Set(parseDecompositionPlan(before).rows.map(r => r.outcome));
   return { kind: "grew", rows: parseDecompositionPlan(after).rows.filter(r => !titled.has(r.outcome)) };
 }
