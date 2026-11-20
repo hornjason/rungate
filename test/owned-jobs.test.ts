@@ -16,7 +16,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -134,5 +134,30 @@ describe("#2503: a generator that throws is UNMEASURED, not a crash (review of #
     expect(run.status, run.stderr).toBe(EXIT_REFUSED);
     expect(run.stdout).toBe("");
     expect(run.stderr).toContain("UNMEASURED");
+  });
+});
+
+describe("#2503: a config that cannot be copied is UNMEASURED, not a crash (review of #2579)", () => {
+  test("OJ-7: an unreadable file in the config directory exits 2 with the reason, and nothing on stdout", () => {
+    // resolveConfig reads only the files it knows, so it succeeds; the copy of
+    // the whole directory into the scratch tree is what meets the unreadable one.
+    const locked = mkdtempSync(join(tmpdir(), "rg-owned-jobs-locked-"));
+    scratch.push(locked);
+    mkdirSync(join(locked, ".claude", "rungate"), { recursive: true });
+    writeFileSync(join(locked, ".claude", "rungate", "config.json"), "{}");
+    const unreadable = join(locked, ".claude", "rungate", "extra.json");
+    writeFileSync(unreadable, "{}");
+    chmodSync(unreadable, 0o000);
+    try {
+      const reading = ownedJobs(locked);
+      expect("unmeasured" in reading && reading.unmeasured).toContain("could not be copied");
+
+      const run = spawnSync("bun", [join(ROOT, "bin", "rungate.ts"), "owned-jobs", "--json", "--project-root", locked], { encoding: "utf-8" });
+      expect(run.status, run.stderr).toBe(EXIT_REFUSED);
+      expect(run.stdout).toBe("");
+      expect(run.stderr).toContain("UNMEASURED");
+    } finally {
+      chmodSync(unreadable, 0o644);
+    }
   });
 });
