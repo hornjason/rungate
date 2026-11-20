@@ -30,7 +30,7 @@ bun check-instruction-surface.ts --root $W/ddb
 
 `git grep -l "measureSurface\|check-instruction-surface" -- lib/scaffold lib/conformity.ts lib/generators templates .github` matches only a comment in `lib/generators/agents-md.ts`. No scaffold step, generated conformity test, or consumer workflow calls the check. The consumer created the 2 MB directory itself (#1754 in its own tracker), so this is not a template bug. It is the kind of failure that only a check running on the consumer can see.
 
-**2. Four template defects appear only in rendered output, and the suite passes with all of them present.** Found by reading one consumer's rendered `.claude/`. Filed as #2564, #2565, #2566 and #2567:
+**2. Four template defects appear only in rendered output, and the suite passes with all of them present.** Found by reading one consumer's rendered `.claude/`. Filed as #2564, #2565, #2566 and #2567: #2564 and #2566 were fixed on main by #2574 and #2573 while this ADR was open, which is the point: each was found only by a person reading rendered output. Nothing would catch a recurrence.
 
 | Defect | Where | Why no current check sees it |
 |---|---|---|
