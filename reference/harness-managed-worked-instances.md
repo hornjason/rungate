@@ -17,6 +17,20 @@ The move was #544 and nothing was rewritten: every section below is the text
 that was in the rules file, at its original heading level, in its original
 order.
 
+## What each strategy does on a re-scaffold
+
+Moved here from the rule by #2481, whose `board-flow.yml` row would otherwise
+have taken the peak instruction surface past its reserve. The Strategy column
+in the rule names one of these; this is what each means.
+
+| Strategy | What re-scaffold does |
+|----------|----------------------|
+| regenerate | Rewrites it every run; reports CHANGED only when the bytes differ |
+| provenance | Rewrites it unless you edited it; then it is preserved and reported (#370) |
+| job-preserving | Owns named jobs inside a file you also write to; your jobs are carried forward |
+| section-preserving | Rewrites the file except named sections, carried forward verbatim |
+| create-only | Seeds it once and never touches it again — the content is yours, not the harness's |
+
 ## Why the move happened here and not in #1009
 
 `harness-managed.md` carries `paths:`, so it loads on demand and #1009's
