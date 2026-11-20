@@ -920,6 +920,15 @@ export function proofsFor(
 }
 
 const PROOF_OR_WAIVER = /^\s{2,}(?:proved-by|waived-reason|waived-by|waived-until):/;
+/**
+ * Review of #2512: a block can hold a `fingerprint:` with no proof, after a
+ * hand revert that removed only the `proved-by:` line. The tick then writes
+ * the proof and keeps that fingerprint, never a second one. That is
+ * `audit-spec-evidence --record-fingerprints`'s rule too: a recorded
+ * fingerprint is never rewritten, because if it is stale the audit's
+ * staleness check is what reports it, and a second line would hide that.
+ */
+const FINGERPRINT_LINE = /^\s{2,}fingerprint:/;
 
 /**
  * `content` with a `proved-by:` line written under ticked criterion `id`
@@ -934,18 +943,20 @@ export function withProofLine(
   proof: string,
   /** #2508: written beneath the proof when the spec declares `evidence: required`. */
   fingerprint?: string,
-): { content: string; wrote: boolean } {
+): { content: string; wrote: boolean; wroteFingerprint: boolean } {
   const lines = content.split("\n");
   const at = lines.findIndex(l => l.startsWith(`- [x] ${id}:`) || l.startsWith(`- [X] ${id}:`));
-  if (at === -1) return { content, wrote: false };
+  if (at === -1) return { content, wrote: false, wroteFingerprint: false };
   let end = at + 1;
   let indent = "      ";
   let sawAnnotation = false;
+  let hasFingerprint = false;
   // An unindented `<!-- REVIEW: … -->` marker from `audit-specs --fix` sits
   // inside the block, as parseCriteria reads it; stopping there would miss a
   // proof or waiver below it and write a second one (review of #2492).
   while (end < lines.length && (/^\s{2,}\S/.test(lines[end]) || /^\s*<!--/.test(lines[end]))) {
-    if (PROOF_OR_WAIVER.test(lines[end])) return { content, wrote: false };
+    if (PROOF_OR_WAIVER.test(lines[end])) return { content, wrote: false, wroteFingerprint: false };
+    if (FINGERPRINT_LINE.test(lines[end])) hasFingerprint = true;
     const kv = lines[end].match(/^(\s{2,})[a-z-]+:/);
     if (kv && !sawAnnotation) {
       indent = kv[1];
@@ -953,8 +964,9 @@ export function withProofLine(
     }
     end++;
   }
-  lines.splice(end, 0, `${indent}proved-by: ${proof}`, ...(fingerprint === undefined ? [] : [`${indent}fingerprint: ${fingerprint}`]));
-  return { content: lines.join("\n"), wrote: true };
+  const wroteFingerprint = fingerprint !== undefined && !hasFingerprint;
+  lines.splice(end, 0, `${indent}proved-by: ${proof}`, ...(wroteFingerprint ? [`${indent}fingerprint: ${fingerprint}`] : []));
+  return { content: lines.join("\n"), wrote: true, wroteFingerprint };
 }
 
 export function flipCheckboxes(
@@ -1002,7 +1014,7 @@ export function flipCheckboxes(
           content = r.content;
           const verb = shouldSkipWrite ? "would write" : "wrote";
           console.log(`  ${id}: ${verb} proved-by: ${proof}`);
-          if (fingerprint !== undefined) console.log(`  ${id}: ${verb} fingerprint: ${fingerprint}`);
+          if (r.wroteFingerprint) console.log(`  ${id}: ${verb} fingerprint: ${fingerprint}`);
         }
       }
     }
