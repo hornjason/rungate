@@ -76,7 +76,9 @@ export type RoundsRefusal =
   /** The ledger parsed and holds no rounds, which is not a pull request reviewed once. */
   | "ROUNDS_EMPTY"
   /** A stated eviction count that is not a count. */
-  | "ROUNDS_DROPPED_UNREADABLE";
+  | "ROUNDS_DROPPED_UNREADABLE"
+  /** No entry recorded a round number, so the distinct-round reading has nothing to read (#1592). */
+  | "ROUNDS_NOT_NUMBERED";
 
 /** One pull request's history, as the caller read it. */
 export interface PullRequestRounds {
@@ -121,10 +123,33 @@ export interface RoundsToPassReading {
   readonly distribution: ReadonlyMap<number, number>;
   /** Every pull request that could not be counted, and why. */
   readonly unmeasured: readonly UnmeasuredPullRequest[];
+  /**
+   * The same three numbers in DISTINCT ROUNDS (#1592). Every field above
+   * counts run attempts, because a re-run of a failed review appends a second
+   * ledger entry with the same round number. Attempts are developer cost;
+   * rounds are convergence, and the unit the targets are written in. Both are
+   * reported, labelled, and neither replaces the other.
+   */
+  readonly distinct: DistinctRoundsReading;
+}
+
+/** Rounds-to-pass in distinct rounds, beside the attempt reading (#1592). */
+export interface DistinctRoundsReading {
+  readonly meanRoundsToPass: number | null;
+  readonly passedAfterOneRoundRate: number | null;
+  readonly fiveOrMoreRate: number | null;
+  /** Pull requests counted in rounds, passed or not. */
+  readonly measured: number;
+  /** Pull requests the round reading refused, and why — a superset of the attempt reading's refusals. */
+  readonly unmeasured: readonly UnmeasuredPullRequest[];
 }
 
 /**
- * How many rounds this pull request has had, or a refusal.
+ * How many review RUN ATTEMPTS this pull request has had, or a refusal.
+ *
+ * Named `roundsTaken` and returning `rounds` for its callers' sake, but the
+ * unit is ledger entries: a re-run of a failed review is a second entry with
+ * the same round number (#1592). `distinctRoundsTaken` is the round reading.
  *
  * Exported because it is the single decision site this module's battery
  * mutates: every count in the summary comes through here, so a mutation of it
@@ -188,6 +213,48 @@ export function roundsTaken(
 }
 
 /**
+ * How many distinct review ROUNDS this pull request has had, or a refusal
+ * (#1592).
+ *
+ * The round number is the job's own counter, and it only rises, so the
+ * newest entry's number is the count. That survives eviction, which drops the
+ * oldest entries, where counting distinct numbers among the kept entries
+ * would not. Every ledger refusal `roundsTaken` makes comes first, so the two
+ * readings refuse the same ledgers; this one also refuses a ledger whose
+ * entries recorded no round number at all.
+ */
+export function distinctRoundsTaken(
+  pr: PullRequestRounds,
+): { rounds: number } | { refusal: RoundsRefusal; detail: string } {
+  const attempts = roundsTaken(pr);
+  if ("refusal" in attempts) return attempts;
+  // roundsTaken refuses every ledger that is not READ, so this is one.
+  const ledger = pr.ledger as Extract<typeof pr.ledger, { rounds: unknown }>;
+  const numbered = ledger.rounds.map(r => r.round).filter((n): n is number => typeof n === "number" && Number.isInteger(n) && n > 0);
+  if (numbered.length === 0) {
+    return {
+      refusal: "ROUNDS_NOT_NUMBERED",
+      detail:
+        `The ledger holds ${ledger.rounds.length} entr${ledger.rounds.length === 1 ? "y" : "ies"} and none recorded a round ` +
+        `number, so it can say how many times the review ran (${attempts.rounds}) but not how many ` +
+        `rounds that was. A retry is an attempt and not a round.`,
+    };
+  }
+  return { rounds: Math.max(...numbered) };
+}
+
+/** The three target statistics over one unit's counts. Nulls, never zeros, over nothing. */
+function targetStatistics(passed: readonly number[], open: readonly number[]) {
+  const measured = passed.length + open.length;
+  return {
+    meanRoundsToPass: passed.length === 0 ? null : passed.reduce((a, b) => a + b, 0) / passed.length,
+    passedAfterOneRoundRate: passed.length === 0 ? null : passed.filter(r => r === 1).length / passed.length,
+    // Whole population, passed or not: see summariseRoundsToPass.
+    fiveOrMoreRate: measured === 0 ? null : [...passed, ...open].filter(r => r >= LONG_REVIEW_ROUNDS).length / measured,
+  };
+}
+
+/**
  * The three numbers the spec's target is written in, plus what it took to
  * refuse the rest.
  *
@@ -202,8 +269,15 @@ export function summariseRoundsToPass(
   const distribution = new Map<number, number>();
   const passedRounds: number[] = [];
   const stillOpenRounds: number[] = [];
+  const distinctUnmeasured: UnmeasuredPullRequest[] = [];
+  const distinctPassed: number[] = [];
+  const distinctOpen: number[] = [];
 
   for (const pr of prs) {
+    const distinct = distinctRoundsTaken(pr);
+    if ("refusal" in distinct) distinctUnmeasured.push({ number: pr.number, refusal: distinct.refusal, detail: distinct.detail });
+    else (pr.passed ? distinctPassed : distinctOpen).push(distinct.rounds);
+
     const taken = roundsTaken(pr);
     if ("refusal" in taken) {
       unmeasured.push({ number: pr.number, refusal: taken.refusal, detail: taken.detail });
@@ -237,6 +311,11 @@ export function summariseRoundsToPass(
     stillOpenRounds,
     distribution,
     unmeasured,
+    distinct: {
+      ...targetStatistics(distinctPassed, distinctOpen),
+      measured: distinctPassed.length + distinctOpen.length,
+      unmeasured: distinctUnmeasured,
+    },
   };
 }
 
@@ -256,10 +335,16 @@ export function formatRoundsToPass(reading: RoundsToPassReading): string[] {
   const lines = [
     `rounds-to-pass: measured ${measured}, unmeasured ${reading.unmeasured.length}` +
       ` (passed ${reading.passedCount}, still open ${reading.stillOpenCount})`,
-    `  mean rounds to pass   ${num(reading.meanRoundsToPass)}   (target 1.32, from 2.08)`,
-    `  passed after 1 round  ${pct(reading.passedAfterOneRoundRate)}   (target 78%, from 65%)`,
-    `  ${LONG_REVIEW_ROUNDS}+ rounds            ${pct(reading.fiveOrMoreRate)}   ` +
+    // #1592: two units, each labelled. Attempts count every run, retries
+    // included; distinct rounds are the unit the targets are written in.
+    `  mean rounds to pass   ${num(reading.meanRoundsToPass)}   (run attempts)   (target 1.32, from 2.08)`,
+    `  passed after 1 round  ${pct(reading.passedAfterOneRoundRate)}   (run attempts)   (target 78%, from 65%)`,
+    `  ${LONG_REVIEW_ROUNDS}+ rounds            ${pct(reading.fiveOrMoreRate)}   (run attempts)   ` +
       `(target 1.5%, from 8.9%; over ALL measured, not only those that passed)`,
+    `  mean rounds to pass   ${num(reading.distinct.meanRoundsToPass)}   (distinct rounds)   (target 1.32, from 2.08)`,
+    `  passed after 1 round  ${pct(reading.distinct.passedAfterOneRoundRate)}   (distinct rounds)   (target 78%, from 65%)`,
+    `  ${LONG_REVIEW_ROUNDS}+ rounds            ${pct(reading.distinct.fiveOrMoreRate)}   (distinct rounds)   (target 1.5%, from 8.9%)`,
+    `  distinct rounds: measured ${reading.distinct.measured}, unmeasured ${reading.distinct.unmeasured.length}`,
   ];
   if (reading.stillOpenCount > 0) {
     lines.push(
