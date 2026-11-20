@@ -3,6 +3,7 @@
  *
  * Usage:
  *   rungate close-merged-references --since <sha> [--repo owner/name] [--project-root <dir>] [--write]
+ *   rungate close-merged-references --since-last-run <workflow.yml> [--repo owner/name] [--project-root <dir>] [--write]
  *   rungate close-merged-references --fixture <prs.json> [--repo owner/name]     # offline, never writes
  *
  * A merge made with `GITHUB_TOKEN` starts no workflow, and GitHub does not act
@@ -12,6 +13,14 @@
  * that is still open, in this repository, and was not reopened after the
  * merge, with a comment naming the pull request. `lib/closing-reference-audit.ts`
  * decides; this script only reads and writes.
+ *
+ * **`--since-last-run <workflow.yml>`** is the range for a run a merge
+ * workflow starts, whose `workflow_run` event carries no `before` sha: the
+ * head of that workflow's newest successful run whose head is on this branch
+ * (ADR-022 decision 3). `lib/last-successful-run.ts` decides it, the same
+ * function `plan-issues --accepted-since-last-run` calls, so the two commands
+ * cannot disagree about where a run starts (#2522). No successful run, none on
+ * this branch, or runs that could not be read refuse UNMEASURED.
  *
  * **Nothing is written without `--write`.** A run without it prints what it
  * would close and what it leaves, and why.
@@ -38,6 +47,7 @@ import {
   type MergedReferenceVerdict,
 } from "../lib/closing-reference-audit";
 import { createGitHubClient, parseOwnerRepo, resolveGitHubToken } from "../lib/github";
+import { LIVE_RUNS, WORKFLOW_FILE, lastSuccessfulRunStart, type RunsGitHub } from "../lib/last-successful-run";
 import { resolveRepo } from "./status-view";
 
 /** A reading that could not be taken, or a run that was asked for wrongly. Nothing was written. */
@@ -192,9 +202,38 @@ export async function closeAll(
   return failed;
 }
 
-export async function main(argv: string[], root = process.cwd()): Promise<number> {
+/**
+ * Where the range starts: `--since` as given, or the head of the named
+ * workflow's newest successful run on this branch, with the line that says
+ * which run it was. Neither, or a run that cannot be found, is a reason.
+ */
+export async function resolveSince(opts: {
+  since?: string;
+  sinceLastRun?: string;
+  root: string;
+  repo: string;
+  runs: RunsGitHub;
+}): Promise<{ sha: string; said?: string } | { why: string }> {
+  if (opts.sinceLastRun === undefined) {
+    if (opts.since === undefined || opts.since === "") return { why: "there is no range to read" };
+    return { sha: opts.since };
+  }
+  const file = opts.sinceLastRun;
+  const start = await lastSuccessfulRunStart(opts.runs, opts.repo, file, opts.root);
+  if ("why" in start) return { why: `${file}: ${start.why}` };
+  return {
+    sha: start.sha,
+    said:
+      `reading what was merged since run ${start.run} (${start.sha.slice(0, 12)}), the newest successful run of ${file} on this branch` +
+      (start.skipped > 0 ? `; ${start.skipped} newer run(s) had a head not on it` : "") +
+      ".",
+  };
+}
+
+export async function main(argv: string[], root = process.cwd(), runs: RunsGitHub = LIVE_RUNS): Promise<number> {
   const fixture = flag(argv, "--fixture");
   const since = flag(argv, "--since");
+  const sinceLastRun = flag(argv, "--since-last-run");
   const write = argv.includes("--write");
   const rootFlag = flag(argv, "--project-root");
   if (rootFlag === "") return refuse("--project-root needs a directory after it");
@@ -204,6 +243,14 @@ export async function main(argv: string[], root = process.cwd()): Promise<number
     return refuse("--write cannot be used with --fixture: a fixture is a reading, never a target");
   }
   if (fixture !== null && since !== null) return refuse("--fixture and --since name two different inputs; pass one");
+  if (sinceLastRun !== null) {
+    if (since !== null) return refuse("--since-last-run and --since name two different starts for the range; pass one");
+    if (fixture !== null) return refuse("--since-last-run and --fixture name two different inputs; pass one");
+    // A bare file name: it is interpolated into an API path.
+    if (!WORKFLOW_FILE.test(sinceLastRun)) {
+      return refuse(`--since-last-run needs a workflow file name such as adr-accepted.yml, not ${JSON.stringify(sinceLastRun)}`);
+    }
+  }
 
   const named = resolveRepo(argv, process.env, projectRoot);
   let owner: string;
@@ -230,12 +277,24 @@ export async function main(argv: string[], root = process.cwd()): Promise<number
     return 0;
   }
 
-  if (since === null || since === "") {
-    return refuse("there is no range to read: name it with --since <sha> (the commit the last run reached), or read a --fixture");
+  if (sinceLastRun === null && (since === null || since === "")) {
+    return refuse(
+      "there is no range to read: name it with --since <sha> (the commit the last run reached), " +
+        "--since-last-run <workflow.yml> (the head of that workflow's newest successful run on this branch), or read a --fixture",
+    );
   }
+  // Before the runs are read: with no credential they cannot be, and that is
+  // not the same reading as a workflow that has never succeeded.
   if (!resolveGitHubToken()) return refuse("no GitHub credential; set GITHUB_TOKEN or GH_TOKEN");
 
-  const commits = commitsSince(projectRoot, since);
+  const start = await resolveSince(
+    sinceLastRun !== null
+      ? { sinceLastRun, root: projectRoot, repo: `${owner}/${name}`, runs }
+      : { since: since ?? "", root: projectRoot, repo: `${owner}/${name}`, runs },
+  );
+  if ("why" in start) return refuse(start.why);
+  if (start.said !== undefined) console.error(`close-merged-references: ${start.said}`);
+  const commits = commitsSince(projectRoot, start.sha);
   if ("why" in commits) return refuse(commits.why);
 
   try {
