@@ -164,6 +164,22 @@ every session can see; a claim anywhere else is not a claim.
 
 ---
 
+## Making the board
+
+`rungate board-init --write` makes the project board every command above
+reads, so nobody builds one by hand (ADR-023). It creates a project linked to
+the repository, or adopts the one `board.id` names. It gives the project the
+six lanes (Backlog, Ready, In progress, In review, Done, Cancelled), a Criteria
+text field and a board view. It turns off GitHub's "Item closed" and "Pull
+request linked to issue" automations, because `board-flow` owns those
+moves. Then it writes `board.id` and `board.fields` into the config.
+
+Run it without `--write` first to see what it would do. A second run changes
+nothing. Anything it cannot create or read is UNMEASURED, and then no config is
+written. The token needs the `project` scope.
+
+---
+
 ## What updates itself, and what you run
 
 The commands above run when you **change the plan** — the way a compiler runs

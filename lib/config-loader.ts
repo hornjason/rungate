@@ -567,6 +567,43 @@ export function writeRoleConfig(
   return target;
 }
 
+/**
+ * Write a board's id and field ids under `board` (ADR-023, SC-2789), into
+ * whichever layout the project's config is in.
+ *
+ * Every other key under `board`, and every other field id, stays as it was.
+ * Writing the same ids again leaves the file byte-identical and reports
+ * `changed: false`, so a second `board-init` changes nothing. A project
+ * with no config, or a `board` that is not a block, is refused: board-init
+ * writes into a scaffolded project and never invents one.
+ */
+export function writeBoardConfig(
+  projectRoot: string,
+  board: { id: string; fields: Record<string, string> },
+): { path: string; changed: boolean } {
+  const resolution = resolveConfig(projectRoot);
+  if (resolution.status === "absent") {
+    throw new Error(`No rungate config found under ${join(projectRoot, ".claude")} — scaffold the project before board-init writes its board`);
+  }
+  const configPath = resolution.source === "directory" ? join(resolution.path, "config.json") : resolution.path;
+  const before = readFileSync(configPath, "utf-8");
+  const existing = JSON.parse(before) as Record<string, unknown>;
+  const current = existing.board ?? {};
+  if (typeof current !== "object" || current === null || Array.isArray(current)) {
+    throw new Error(`${configPath}: board is not a block, so board-init will not write into it`);
+  }
+  const block = current as Record<string, unknown>;
+  const fields = block.fields ?? {};
+  if (typeof fields !== "object" || fields === null || Array.isArray(fields)) {
+    throw new Error(`${configPath}: board.fields is not a block, so board-init will not write into it`);
+  }
+  existing.board = { ...block, id: board.id, fields: { ...(fields as Record<string, unknown>), ...board.fields } };
+  const after = JSON.stringify(existing, null, 2) + "\n";
+  if (JSON.stringify(JSON.parse(before)) === JSON.stringify(existing)) return { path: configPath, changed: false };
+  writeFileSync(configPath, after);
+  return { path: configPath, changed: true };
+}
+
 /** Whether a scaffold wrote, or stepped aside because something was there. */
 export type ScaffoldWriteResult =
   | { status: "created"; path: string }

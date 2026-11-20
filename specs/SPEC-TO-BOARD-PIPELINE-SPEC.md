@@ -283,9 +283,11 @@ take.
       needs: test
       proved-by: test/human-steps.test.ts — 8 pass, 0 fail; 2026-11-14, on the PR for #2051. `humanSteps` prints one OWED command each for an absent `RUNGATE_PROJECT_TOKEN`, a `RUNGATE_REQUIRE_CLOSING_REF` that is not the string `true`, and a process check this tree defines that the default branch does not require; an unreadable reading is `UNMEASURED` with its reason; the all-clear names what it measured and never says done. `scripts/scaffold-project.ts` prints the section on every run, executed in the last case.
       fingerprint: 29c768f6
-- [ ] SC-2789: `rungate board-init` makes a consumer's project board: it creates a project linked to the repository, or adopts the one `board.id` names, gives it the Status options Backlog, Ready, In progress, In review, Done and Cancelled, a Criteria text field and a board view by Status, turns off the built-in automations that move cards on close and on a linked pull request, and writes `board.id` and `board.fields` into `.claude/rungate/config.json`; a second run changes nothing, and anything it cannot create or read is named UNMEASURED with no partial config written (Jason, 2026-11-19, ADR-023)
+- [x] SC-2789: `rungate board-init` makes a consumer's project board: it creates a project linked to the repository, or adopts the one `board.id` names, gives it the Status options Backlog, Ready, In progress, In review, Done and Cancelled, a Criteria text field and a board view by Status, turns off the built-in automations that move cards on close and on a linked pull request, and writes `board.id` and `board.fields` into `.claude/rungate/config.json`; a second run changes nothing, and anything it cannot create or read is named UNMEASURED with no partial config written (Jason, 2026-11-19, ADR-023)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
+      proved-by: test/board-init.test.ts "SC-2789: board-init makes a board and wires it"
+      fingerprint: d22238ff
 - [ ] SC-2790: `rungate scaffold` emits `.github/workflows/board-flow.yml` as an owned workflow that calls the published CLI and reads the board from `board.id`, so a consumer's card moves to In progress when its issue is assigned, to In review when a pull request for it opens, and to Done or Cancelled when it closes; this repository's copy is the generated one (Jason, 2026-11-19, ADR-023)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test

@@ -342,6 +342,14 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     summary: "Print the board's node id from config",
     usage: "rungate board-id [--project-root <dir>]   (UNMEASURED and exit 2 when the config names no board)",
   },
+  // ADR-023 (#2480): every board command assumes a board somebody made.
+  // This makes it, and writes board.id and board.fields. Writes only with
+  // --write; the root defaults to the working directory, so no projectRootFlag.
+  "board-init": {
+    script: "scripts/board-init.ts",
+    summary: "Make this repository's project board and write its ids into the config",
+    usage: "rungate board-init [--repo <owner/name>] [--owner <login>] [--project-root <dir>] [--write]",
+  },
   // #2273, the command half of #1046: a merged PR's CI breakdown. Ships before
   // #1046's generated job-summary step, which calls it through `bunx`. Reads
   // the API only, so no `projectRootFlag`.

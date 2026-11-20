@@ -37,6 +37,7 @@
     "lib/compliance.ts::join(outDir, \"compliance-generated.json\") | root: parameter (nested)",
     "lib/compliance.ts::join(outDir, \"compliance-report.json\") | root: parameter (nested)",
     "lib/config-loader.ts::join(dirPath, name) | name: destructured, projectRoot: parameter (nested)",
+    "lib/config-loader.ts::configPath | projectRoot: parameter (nested)",
     "lib/config-loader.ts::target | projectRoot: parameter (nested)",
     "lib/config-trackable.ts::gitignorePath | root: parameter (nested)",
     "lib/config-trackable.ts::gitignorePath | root: parameter (nested)",
