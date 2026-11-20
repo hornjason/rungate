@@ -1,4 +1,4 @@
-# generated-sha: 41835b538a558e1d
+# generated-sha: 29c4b16cd1d1729c
 # Managed by rungate — do not edit the generated job.
 #
 # SC-2784 (ADR-020 Decision 2): a consumer's issue is triaged when it is filed
@@ -89,9 +89,11 @@ jobs:
 
       # #2571: the triage writes its milestones with the job's own token, which
       # starts no workflow, so phase-order.yml never mirrors them. The
-      # Criteria-column write it would have run, runs here, after a triage.
+      # Criteria-column write it would have run, runs here, after a triage that
+      # set a milestone, and on every daily run, so a triage that set one and
+      # died before printing it is mirrored within a day (review of #2572).
       - name: Criteria column on the board
-        if: ${{ !cancelled() && steps.triage.outputs.wrote == 'true' }}
+        if: ${{ !cancelled() && (steps.triage.outputs.wrote == 'true' || github.event_name == 'schedule') }}
         env:
           GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
           PROJECT_ID: ${{ vars.RUNGATE_PROJECT_ID }}
