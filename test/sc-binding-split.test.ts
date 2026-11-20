@@ -437,7 +437,10 @@ const UNCLAIMED_RATCHET = 150;
 // from board.id, a reading of a generated workflow no registered pattern
 // expresses; the `SC-2790` describe in test/board-flow-workflow.test.ts names
 // it (2026-11-19).
-const CLAIMED_UNBINDABLE = 190;
+// 191: SC-2793 (#2485) ticked from its describe in test/human-steps.test.ts —
+// the human-steps report's board.id and token-write rows, a reading of a
+// printed report no registered pattern expresses (2026-11-20).
+const CLAIMED_UNBINDABLE = 191;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

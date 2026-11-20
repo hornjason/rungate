@@ -13,7 +13,9 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { protectionFactsFromPayload, unreadableFacts } from "../lib/branch-protection";
+import { CLI_COMMANDS } from "../lib/cli-commands";
 import {
+  BOARD_INIT_COMMAND,
   LIVE_PROBES,
   PROJECT_TOKEN_SECRET,
   REQUIRE_CLOSING_REF_VARIABLE,
@@ -22,6 +24,7 @@ import {
   processChecksIn,
   wantedChecks,
   readHumanSteps,
+  readBoardId,
   readOrigin,
   sshHostName,
   timed,
@@ -35,8 +38,12 @@ const ROOT = join(import.meta.dir, "..");
 const read = <T>(value: T) => ({ kind: "READ", value }) as const;
 const unmeasured = (why: string) => ({ kind: "UNMEASURED", why }) as const;
 
+const BOARD = "PVT_kwDOtest";
+const tokenRow = `UNMEASURED: whether ${PROJECT_TOKEN_SECRET} can write board ${BOARD}`;
+
 const allSet: HumanStepReadings = {
   slug: read("o/n"),
+  boardId: read(BOARD),
   secretPresent: read(true),
   requireClosingRef: read("true"),
   protection: read({ branch: "main", contexts: ["test", "closing-references"], statusChecks: "required-checks" }),
@@ -52,8 +59,9 @@ describe("SC-2749: every human step still owed is one command", () => {
       requireClosingRef: read(null),
       protection: read({ branch: "main", contexts: ["test"], statusChecks: "required-checks" }),
     });
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(4);
     expect(lines[0]).toStartWith(`OWED: gh secret set ${PROJECT_TOKEN_SECRET} -R o/n`);
+    expect(lines[3]).toStartWith(`${tokenRow} — no ${PROJECT_TOKEN_SECRET} is set`);
     expect(lines[1]).toStartWith(`OWED: gh variable set ${REQUIRE_CLOSING_REF_VARIABLE} -R o/n --body true`);
     expect(lines[2]).toStartWith(
       "OWED: gh api -X POST repos/o/n/branches/main/protection/required_status_checks/contexts -f 'contexts[]=closing-references'",
@@ -65,7 +73,8 @@ describe("SC-2749: every human step still owed is one command", () => {
   // and the old line 404'd there — for exactly the audience it was written for.
   test("an unprotected branch gets one PUT that protects it and requires only the missing checks", () => {
     const lines = humanSteps({ ...allSet, protection: read({ branch: "main", contexts: [], statusChecks: "unprotected" }) });
-    expect(lines).toHaveLength(1);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toStartWith(tokenRow);
     expect(lines[0]).toStartWith("OWED: gh api -X PUT repos/o/n/branches/main/protection --input - <<<'");
     const body = JSON.parse(lines[0].match(/<<<'([^']*)'/)![1]);
     expect(body).toEqual({
@@ -79,7 +88,8 @@ describe("SC-2749: every human step still owed is one command", () => {
 
   test("a protected branch requiring no checks is never sent a call that would replace its rule", () => {
     const lines = humanSteps({ ...allSet, protection: read({ branch: "main", contexts: [], statusChecks: "no-required-checks" }) });
-    expect(lines).toHaveLength(1);
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toStartWith(tokenRow);
     expect(lines[0]).toStartWith("OWED: require closing-references on main");
     expect(lines[0], "PUT replaces the existing protection; POST 404s without required checks").not.toMatch(/-X (PUT|POST)/);
   });
@@ -128,22 +138,26 @@ describe("SC-2749: every human step still owed is one command", () => {
     expect(lines).toEqual([
       `UNMEASURED: ${PROJECT_TOKEN_SECRET} — HTTP 403: Resource not accessible`,
       "UNMEASURED: required checks (closing-references) — GET …/protection returned 403",
+      `${tokenRow} — the secret could not be read (HTTP 403: Resource not accessible), so it is not known that there is a token to ask about`,
     ]);
     expect(lines.join("\n")).not.toMatch(/none owed|done/i);
   });
 
-  test("no GitHub repository at all is one UNMEASURED line, not a clean report", () => {
+  test("no GitHub repository at all is one UNMEASURED line, then the board row, not a clean report", () => {
     const lines = humanSteps({ ...allSet, slug: read(null) });
-    expect(lines).toHaveLength(1);
+    expect(lines).toHaveLength(2);
     expect(lines[0]).toStartWith("UNMEASURED: human steps");
+    expect(lines[1]).toStartWith(tokenRow);
   });
 
-  test("everything in place says what it measured, and never says done", () => {
+  // SC-2793 made the token row UNMEASURED whenever a board is set: GitHub never
+  // returns a secret's value, so no scaffold run can say the token writes the
+  // board. Everything else in place leaves that row alone, and it is never done.
+  test("everything else in place leaves only the token row, which is never done", () => {
     const lines = humanSteps(allSet);
-    expect(lines).toEqual([
-      `Human steps: none owed — measured: ${PROJECT_TOKEN_SECRET} is set; ${REQUIRE_CLOSING_REF_VARIABLE} is true; closing-references required on main.`,
-    ]);
-    expect(lines[0]).not.toMatch(/\bdone\b/i);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toStartWith(tokenRow);
+    expect(lines.join("\n")).not.toMatch(/none owed|\bdone\b/i);
   });
 });
 
@@ -181,6 +195,7 @@ describe("SC-2749: a read that never answers is UNMEASURED, not a hung scaffold"
 describe("SC-2749: the readings come from the tree and the probes, and the scaffold prints them", () => {
   const probes = (over: Partial<HumanStepProbes> = {}): HumanStepProbes => ({
     slug: () => read("o/n"),
+    boardId: () => read(null),
     secret: async () => read(false),
     variable: async () => read(null),
     protection: async slug => ({
@@ -273,6 +288,7 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
       const called: string[] = [];
       const r = await readHumanSteps(root, {
         slug: LIVE_PROBES.slug,
+        boardId: () => read(null),
         secret: async () => (called.push("secret"), read(true)),
         variable: async () => (called.push("variable"), read("true")),
         protection: async slug => (called.push("protection"), unreadableFacts(slug, "")),
@@ -368,6 +384,7 @@ describe("#2161: a reading that cannot be taken is UNMEASURED, never read agains
       mkdirSync(join(root, ".github", "workflows", "closing-references.yml"), { recursive: true });
       const r = await readHumanSteps(root, {
         slug: () => read("o/n"),
+        boardId: () => read(null),
         secret: async () => read(true),
         variable: async () => read("true"),
         protection: async slug => ({ ...unreadableFacts(slug, ""), unreadable: null, branch: "main", contexts: [], statusChecks: "unprotected" as const }),
@@ -494,5 +511,106 @@ describe("#2169: an alias is resolved as written, because ssh's Host match is ca
     const ssh = (h: string) => (asked.push(h), read(h === "GitHub-Perso" ? "github.com" : h.toLowerCase()));
     expect(githubSlugOf("git@GitHub-Perso:o/r.git", ssh)).toEqual(read("o/r"));
     expect(asked).toEqual(["GitHub-Perso"]);
+  });
+});
+
+/**
+ * Covers SC-2793 (SPEC-TO-BOARD-PIPELINE-SPEC.md), #2485, ADR-023: the report
+ * says whether `board.id` is set and whether the project token can write that
+ * board, each as one OWED command or UNMEASURED with its reason, never "done".
+ *
+ * Before this the report read only that a secret named RUNGATE_PROJECT_TOKEN
+ * existed. A consumer with no board, or with a token that cannot write the one
+ * it has, was told nothing was owed, and every board step then refused.
+ */
+describe("SC-2793: the human-steps report says whether board.id is set and whether the token can write that board", () => {
+  test("no board.id is one OWED board-init command, registered and able to write", () => {
+    const lines = humanSteps({ ...allSet, boardId: read(null) });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toStartWith(`OWED: ${BOARD_INIT_COMMAND}`);
+    expect(lines[0], "the token is asked about once there is a board to ask about").toContain(PROJECT_TOKEN_SECRET);
+    expect(BOARD_INIT_COMMAND).toContain("bunx rungate board-init --write");
+    expect(CLI_COMMANDS["board-init"]?.usage, "board-init writes nothing without --write").toContain("--write");
+  });
+
+  test("a board.id that could not be read is UNMEASURED with its reason, and the token was not asked about", () => {
+    const lines = humanSteps({ ...allSet, boardId: unmeasured("the rungate config could not be read (JSON Parse error)") });
+    expect(lines).toEqual([
+      `UNMEASURED: the project board — board.id could not be read (the rungate config could not be read (JSON Parse error)), so whether ${PROJECT_TOKEN_SECRET} can write it was not asked`,
+    ]);
+  });
+
+  test("board.id set and the secret present: UNMEASURED, saying why, naming the board, with the read-only check", () => {
+    const [line] = humanSteps(allSet);
+    expect(line).toStartWith(`${tokenRow} — GitHub never returns a secret's value, so scaffold cannot try it`);
+    expect(line, "the check a person holding the token can run").toContain(
+      `gh api graphql -f query='query($id: ID!) { node(id: $id) { ... on ProjectV2 { viewerCanUpdate } } }' -f id=${BOARD}`,
+    );
+    expect(line).toContain("organisation");
+  });
+
+  test("board.id set and no secret, or one that could not be read: the token row says there is no token to ask about", () => {
+    expect(humanSteps({ ...allSet, secretPresent: read(false) }).at(-1)).toBe(`${tokenRow} — no ${PROJECT_TOKEN_SECRET} is set, so there is no token to ask about`);
+    expect(humanSteps({ ...allSet, secretPresent: unmeasured("HTTP 403") }).at(-1)).toBe(
+      `${tokenRow} — the secret could not be read (HTTP 403), so it is not known that there is a token to ask about`,
+    );
+  });
+
+  // Review of #2529: board.id is read from the local config, so a project
+  // with no GitHub remote still has its board reported as read, and only what
+  // needs a repository says why it was not.
+  test("no GitHub repository: board.id is still reported as read, and only what needs a repository says why it is not", () => {
+    const why = "the origin remote names no GitHub repository";
+    const set = humanSteps({ ...allSet, slug: read(null) });
+    expect(set[0], "the board is not among what was not read").not.toContain("the project board");
+    expect(set.at(-1)).toBe(`${tokenRow} — ${why}, so the secret was not read`);
+    expect(humanSteps({ ...allSet, slug: read(null), boardId: read(null) }).at(-1)).toBe(
+      `UNMEASURED: the project board — board.id is not set, and ${why}, so no board-init command is given: it makes the board for the origin's GitHub repository`,
+    );
+    // Review of #2529, round 2: an origin that could not be read is not one
+    // that names no repository, so no board line may assert an absence.
+    const unread = "the origin remote could not be read (git exited 128)";
+    for (const boardId of [read(BOARD), read(null)]) {
+      const line = humanSteps({ ...allSet, slug: unmeasured("git exited 128"), boardId }).at(-1)!;
+      expect(line, JSON.stringify(boardId)).toContain(unread);
+      expect(line, "a reading not taken was reported as an absence").not.toMatch(/there is no repository|names no GitHub repository/);
+    }
+    expect(humanSteps({ ...allSet, slug: unmeasured("git exited 128"), boardId: unmeasured("the rungate config could not be read (x)") }).at(-1)).toStartWith(
+      "UNMEASURED: the project board — board.id could not be read (the rungate config could not be read (x))",
+    );
+  });
+
+  test("readBoardId: no config is no board; a board.id is read; a malformed config or an id no project has is UNMEASURED", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-human-steps-board-"));
+    const config = (body: string) => {
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(join(root, ".claude", "rungate", "config.json"), body);
+    };
+    try {
+      expect(readBoardId(root)).toEqual(read(null));
+      config(JSON.stringify({ board: { id: BOARD } }));
+      expect(readBoardId(root)).toEqual(read(BOARD));
+      config(JSON.stringify({ board: { id: "PVT_x'; touch pwned; '" } }));
+      const odd = readBoardId(root);
+      expect(odd.kind, "an id that would break out of the printed command was passed through").toBe("UNMEASURED");
+      config("{ not json");
+      const bad = readBoardId(root);
+      expect(bad.kind).toBe("UNMEASURED");
+      expect(bad.kind === "UNMEASURED" && bad.why).toContain("the rungate config could not be read");
+      expect(LIVE_PROBES.boardId, "the live probe is the reader").toBe(readBoardId);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("readHumanSteps carries the board reading from its probe", async () => {
+    const r = await readHumanSteps(ROOT, {
+      slug: () => read("o/n"),
+      boardId: () => read(BOARD),
+      secret: async () => read(true),
+      variable: async () => read("true"),
+      protection: async slug => ({ ...unreadableFacts(slug, ""), unreadable: null, branch: "main", contexts: [], statusChecks: "unprotected" as const }),
+    });
+    expect(r.boardId).toEqual(read(BOARD));
   });
 });
