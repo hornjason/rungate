@@ -114,3 +114,25 @@ describe("#2503: rungate owned-jobs", () => {
     expect(refused.stderr).toContain("UNMEASURED");
   });
 });
+
+describe("#2503: a generator that throws is UNMEASURED, not a crash (review of #2579)", () => {
+  test("OJ-6: a config the workflow generator refuses by throwing exits 2 with the reason, and nothing on stdout", () => {
+    // `ci.trackerTokenSecret` is interpolated into a generated `${{ }}`
+    // expression, so `trackerTokenSecret` throws on an illegal name, and it
+    // throws before the per-file loop that turns refusals into actions.
+    const bad = mkdtempSync(join(tmpdir(), "rg-owned-jobs-throw-"));
+    scratch.push(bad);
+    mkdirSync(join(bad, ".claude", "rungate"), { recursive: true });
+    writeFileSync(
+      join(bad, ".claude", "rungate", "config.json"),
+      JSON.stringify({ ci: { suiteReadsTracker: true, trackerTokenSecret: "123-bad" } }),
+    );
+    const reading = ownedJobs(bad);
+    expect("unmeasured" in reading && reading.unmeasured).toContain("trackerTokenSecret");
+
+    const run = spawnSync("bun", [join(ROOT, "bin", "rungate.ts"), "owned-jobs", "--json", "--project-root", bad], { encoding: "utf-8" });
+    expect(run.status, run.stderr).toBe(EXIT_REFUSED);
+    expect(run.stdout).toBe("");
+    expect(run.stderr).toContain("UNMEASURED");
+  });
+});
