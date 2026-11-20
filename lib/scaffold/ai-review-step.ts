@@ -5135,8 +5135,11 @@ threads_fetch() {
 
   # The \`body\` taken is the thread's FIRST comment and only the first. The
   # key marker is written by the poster; a later reply quoting it would make
-  # one thread answer a finding it is not about.
-  query='query(\$owner:String!,\$name:String!,\$number:Int!,\$cursor:String){repository(owner:\$owner,name:\$name){pullRequest(number:\$number){reviewThreads(first:100,after:\$cursor){pageInfo{hasNextPage endCursor}nodes{isResolved comments(first:1){nodes{body}}}}}}}'
+  # one thread answer a finding it is not about. The REPLIES are kept apart,
+  # with whether each came from a bot, for CRC-N7 (#1818): a class finding
+  # is answered by a person stating its population on the thread. Up to 50
+  # comments a thread; a reply past that is not read, and reads as unstated.
+  query='query(\$owner:String!,\$name:String!,\$number:Int!,\$cursor:String){repository(owner:\$owner,name:\$name){pullRequest(number:\$number){reviewThreads(first:100,after:\$cursor){pageInfo{hasNextPage endCursor}nodes{isResolved comments(first:50){nodes{body author{__typename login}}}}}}}}'
 
   threads_acc='[]'
   threads_cursor=''
@@ -5174,7 +5177,7 @@ threads_fetch() {
     # \`threadReading\`, which has a negative control; jq silently dropping it
     # would be a second decider with none.
     if ! threads_acc=\$(printf '%s' "\${response}" | jq -c --argjson acc "\${threads_acc}" \\
-      '\$acc + [.data.repository.pullRequest.reviewThreads.nodes[] | {isResolved:.isResolved, body:(.comments.nodes[0].body)}]'); then
+      '\$acc + [.data.repository.pullRequest.reviewThreads.nodes[] | {isResolved:.isResolved, body:(.comments.nodes[0].body), replies:[((.comments.nodes // [])[1:])[] | {body:.body, bot:(.author.__typename == "Bot")}]}]'); then
       threads_unmeasured "the review threads on page \${threads_page} could not be reshaped."
       return 0
     fi
