@@ -21,7 +21,7 @@ import { isHarnessItself } from "./harness-identity";
 import { isSpecFile } from "./spec-listing";
 import { scanDocsDirectory } from "./doc-routing";
 import { testCommandDecision } from "./test-command";
-import { projectStateDerivation, projectStateKeyFileNote } from "./project-state-derivation";
+import { projectStateDerivation, projectStateKeyFileRows } from "./project-state-derivation";
 import type {
   ProjectScan,
   ProjectType,
@@ -243,8 +243,8 @@ function scanKeyFiles(root: string): KeyFile[] {
   // Always include scaffold-generated files for idempotency (SC-364)
   const keyFiles: KeyFile[] = [
     { file: "AGENTS.md", what: "Project entry point", when: "Always first" },
-    { file: "PROJECT-STATE.md", what: projectStateKeyFileNote(projectStateDerivation(root)), when: "Session start, always first after AGENTS.md" },
-    { file: "project-state.json", what: "Source of truth for project status", when: "When editing state" },
+    // Both project-state rows come from one reading (#2564).
+    ...projectStateKeyFileRows(projectStateDerivation(root)),
   ];
 
   // Conditionally included files (only if they exist)

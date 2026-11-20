@@ -83,11 +83,12 @@
  * confirmed byte-identical by sha256 afterwards.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 import { generateScopedRules } from "../lib/generators/agents-md";
+import { generateAgentsMdContent } from "../lib/scaffold/steps";
 import {
   PROJECT_STATE_DERIVED,
   PROJECT_STATE_OWNERSHIP,
@@ -331,5 +332,66 @@ describe("#781 AC-5: one binding, and it is not evidence for itself", () => {
     expect(owned, "owned-files.ts still asserts the derivation unconditionally").not.toContain(
       AUTHORISATION,
     );
+  });
+});
+
+describe("#2564: the project-state.json row agrees with the PROJECT-STATE.md row", () => {
+  // The PROJECT-STATE.md row became a reading in #781. The project-state.json
+  // row beside it stayed a literal, "Source of truth for project status", so a
+  // project with no reader got one row saying nothing reads the file and the
+  // next row calling it the source of truth. Both writers are read here: the
+  // scanner path (generateScopedRules over scanProject) and the scaffold path
+  // (generateAgentsMdContent, which is what writes the consumer's file).
+  const SOURCE_CLAIM = "Source of truth for project status";
+
+  function rowsFor(content: string): { md: string; json: string } {
+    const lines = content.split("\n");
+    const md = lines.find(l => l.startsWith("| PROJECT-STATE.md |"));
+    const json = lines.find(l => l.startsWith("| project-state.json |"));
+    expect(md, "no PROJECT-STATE.md row, so the case reads nothing").toBeTruthy();
+    expect(json, "no project-state.json row, so the case reads nothing").toBeTruthy();
+    return { md: md!, json: json! };
+  }
+  function viaScanner(root: string): { md: string; json: string } {
+    return rowsFor(generateScopedRules(scanProject(root)).find(r => r.filename === "key-files.md")!.content);
+  }
+  function viaScaffold(root: string): { md: string; json: string } {
+    generateAgentsMdContent(root, "code", [], "full");
+    const path = join(root, ".claude", "rules", "key-files.md");
+    expect(existsSync(path), "the scaffold wrote no key-files rule").toBe(true);
+    return rowsFor(readFileSync(path, "utf-8"));
+  }
+
+  test("KF-1: with nothing reading the JSON, neither writer calls it the source of truth", () => {
+    for (const [name, read] of [["scanner", viaScanner], ["scaffold", viaScaffold]] as const) {
+      const { md, json } = read(fixture(NO_GENERATOR));
+      expect(md, `${name}: the PROJECT-STATE.md row lost its no-reader reading`).toContain("nothing in this project reads");
+      expect(json, `${name}: the JSON row still claims to be the source of truth (#2564)`).not.toContain(SOURCE_CLAIM);
+      expect(json, `${name}: the JSON row does not say nothing reads it`).toContain("nothing in this project reads it");
+    }
+  });
+
+  test("KF-2: a project that derives PROJECT-STATE.md from the JSON still gets the source-of-truth row", () => {
+    for (const read of [viaScanner, viaScaffold]) {
+      const { md, json } = read(fixture(WITH_GENERATOR));
+      expect(md).toContain(AUTHORISATION);
+      expect(json).toContain(SOURCE_CLAIM);
+    }
+  });
+
+  test("KF-3: an unmeasured reading does not call the JSON the source of truth either", () => {
+    for (const read of [viaScanner, viaScaffold]) {
+      const { json } = read(fixture({ "README.md": "# hi\n" }));
+      expect(json).not.toContain(SOURCE_CLAIM);
+      expect(json).toContain("could not be determined");
+    }
+  });
+
+  test("KF-4: the two writers emit the same two rows for every reading", () => {
+    // One writer fixed and the other left is #781's SC-2 again; this is the
+    // case that catches it, whichever one is left behind.
+    for (const files of [NO_GENERATOR, WITH_GENERATOR, { "README.md": "# hi\n" }]) {
+      expect(viaScaffold(fixture(files))).toEqual(viaScanner(fixture(files)));
+    }
   });
 });

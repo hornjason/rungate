@@ -201,6 +201,48 @@ export function projectStateDerivation(root: string): DerivationReading {
 }
 
 /**
+ * The `what` column of `key-files.md`'s project-state.json row, per verdict
+ * (#2564). It was a literal, "Source of truth for project status", emitted
+ * beside a PROJECT-STATE.md row that could say nothing reads the file — two
+ * adjacent rows, two answers. The JSON is only the source of truth where
+ * something derives the Markdown from it, which is the same reading.
+ */
+export const PROJECT_STATE_JSON_SOURCE = "Source of truth for project status";
+
+export const PROJECT_STATE_JSON_UNREAD =
+  "Seeded by the scaffold; nothing in this project reads it, so it is not the source " +
+  "of truth for status and editing it changes nothing — PROJECT-STATE.md is maintained directly";
+
+export const PROJECT_STATE_JSON_UNMEASURED =
+  "Whether anything in this project reads it could not be determined, so do not treat " +
+  "it as the source of truth for status";
+
+export interface ProjectStateKeyFileRow {
+  file: string;
+  what: string;
+  when: string;
+}
+
+/**
+ * Both project-state rows of `key-files.md`, from one reading.
+ *
+ * One function for the pair, so the two writers (`lib/scanner.ts` and
+ * `lib/scaffold/steps.ts`) cannot emit one row from the reading and the
+ * other from a literal — which is what #2564 was.
+ */
+export function projectStateKeyFileRows(reading: DerivationReading): ProjectStateKeyFileRow[] {
+  const json: Record<DerivationVerdict, { what: string; when: string }> = {
+    GENERATOR_FOUND: { what: PROJECT_STATE_JSON_SOURCE, when: "When editing state" },
+    NO_GENERATOR: { what: PROJECT_STATE_JSON_UNREAD, when: "Not for status — read PROJECT-STATE.md" },
+    UNMEASURED: { what: PROJECT_STATE_JSON_UNMEASURED, when: "Before relying on it, find what reads it" },
+  };
+  return [
+    { file: "PROJECT-STATE.md", what: projectStateKeyFileNote(reading), when: "Session start, always first after AGENTS.md" },
+    { file: "project-state.json", ...json[reading.verdict] },
+  ];
+}
+
+/**
  * The `what` column of `key-files.md`'s PROJECT-STATE.md row.
  *
  * One binding for the three sentences, so the two generators cannot drift —
