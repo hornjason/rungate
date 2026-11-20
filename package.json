@@ -35,6 +35,7 @@
     "scripts/board-scope.ts",
     "scripts/status-view.ts",
     "scripts/work-status.ts",
+    "scripts/verify-merge-ref.ts",
     "scripts/plan-deps.ts",
     "scripts/plan-issues.ts",
     "scripts/consumer-triage.ts",

@@ -298,6 +298,14 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     usage:
       'rungate work-status [--repo <owner/name>] [--milestone "<name>"|none] [--project-root <dir>]   (repository defaults to GITHUB_REPOSITORY, then the origin remote)',
   },
+  // ADR-023 (#2483): the pinned merge and its after-merge check, as the
+  // work loop runs them. The working directory's origin is the remote it
+  // compares against, so no projectRootFlag.
+  "verify-merge-ref": {
+    script: "scripts/verify-merge-ref.ts",
+    summary: "Print the head to pin a merge to, or confirm after a merge that the work is on main",
+    usage: "rungate verify-merge-ref --pr <N> [--after-merge | --by-hand] [--repo <owner/name>] [--remote <name|path>]",
+  },
   // Step 5 of ADR-003, as ADR-021 reworded it: the `blocked by` links an
   // accepted ADR's Decomposition declares, never the order of the milestones
   // (SC-2606). AGENTS.md rule 4 — ordering is data, not prose.

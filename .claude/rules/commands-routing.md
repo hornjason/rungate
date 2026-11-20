@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: ef0c152772e4b7f9
+generated-sha: ef44d9e8bc228a5c
 ---
 
 ## Command Routing
@@ -28,6 +28,7 @@ Generated from the CLI's command registry. Run one as
 | `board-scope` | Spec criteria and opt-in, with looks-done hints |
 | `board` | Each phase's open issues and blockers |
 | `work-status` | What is being worked, what is Ready next, and the plan, read live |
+| `verify-merge-ref` | Print the head to pin a merge to, or confirm after a merge that the work is on main |
 | `plan-deps` | Write the blocked-by links accepted ADRs declare onto the tracker |
 | `board-ready` | Move the work a closed blocker freed, or the top of the backlog, into the board's Ready lane |
 | `board-flow` | Move an issue's card to the lane an issue or pull request event decides |

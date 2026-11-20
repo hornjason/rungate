@@ -566,14 +566,19 @@ function arg(name: string, argv: string[]): string | undefined {
 export function main(argv: string[]): number {
   const pr = arg("pr", argv);
   if (!pr) {
-    console.error("usage: verify-merge-ref.ts --pr <N> [--after-merge | --by-hand] [--repo owner/name] [--remote <name|path>]");
+    console.error("usage: rungate verify-merge-ref --pr <N> [--after-merge | --by-hand] [--repo owner/name] [--remote <name|path>]");
     return REFUSE_EXIT;
   }
   if (argv.includes("--after-merge") && argv.includes("--by-hand")) {
     console.error("UNMEASURED: --after-merge and --by-hand ask different questions; pass one.");
     return REFUSE_EXIT;
   }
-  const repo = arg("repo", argv);
+  // SC-2792 (ADR-023): `--repo`, then `GITHUB_REPOSITORY`, then the origin
+  // remote, never a constant. The third is `gh`'s own inference from the
+  // working directory, so with neither of the first two no `--repo` is
+  // passed. An empty GITHUB_REPOSITORY names nothing, as in `rungate board`.
+  const envRepo = process.env.GITHUB_REPOSITORY;
+  const repo = arg("repo", argv) ?? (envRepo !== undefined && envRepo !== "" ? envRepo : undefined);
   const remote = arg("remote", argv) ?? "origin";
 
   // Before any subprocess, because the bound governs all three of them and a
