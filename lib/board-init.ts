@@ -21,9 +21,11 @@
  * ## Never a second board
  *
  * `board.id` is written last, so a run that stops part-way leaves none. The
- * next run looks among the projects linked to the repository for the title
- * rungate gives its boards (`boardTitle`) and resumes that one, rather than
- * creating another.
+ * next run looks among the OWNER's projects for the title rungate gives its
+ * boards (`boardTitle`) and resumes that one, rather than creating another.
+ * The owner's, not the repository's linked projects: linking is the first
+ * write after the project is made, so a run that stopped there left a project
+ * the repository does not list, and every retry made another (review of #2513).
  *
  * ## What it changes on a board it did not make
  *
@@ -87,7 +89,8 @@ export interface BoardApi {
   repositoryId(repo: string): Promise<string>;
   /** Null when no project the token can read has that id. */
   project(id: string): Promise<ProjectReading | null>;
-  linkedProjects(repo: string): Promise<Array<{ id: string; title: string }>>;
+  /** The owner's projects whose title is `title`, linked to a repository or not. */
+  ownerProjects(owner: string, title: string): Promise<Array<{ id: string; title: string }>>;
   createProject(ownerId: string, title: string): Promise<string>;
   linkRepository(projectId: string, repositoryId: string): Promise<void>;
   createField(projectId: string, name: string, dataType: "TEXT" | "SINGLE_SELECT", options?: Array<Omit<FieldOption, "id">>): Promise<void>;
@@ -208,11 +211,11 @@ export async function boardInit(opts: {
       if (reading === null) return no(`board.id is ${boardId}, and no project the token can read has that id`);
     } else {
       const title = boardTitle(repo);
-      const ours = (await api.linkedProjects(repo)).filter(p => p.title === title);
-      if (ours.length > 1) return no(`${ours.length} projects linked to ${repo} carry the title "${title}", so which one to resume cannot be read`);
+      const ours = (await api.ownerProjects(owner, title)).filter(p => p.title === title);
+      if (ours.length > 1) return no(`${ours.length} projects owned by ${owner} carry the title "${title}", so which one to resume cannot be read`);
       if (ours.length === 1) {
         reading = await api.project(ours[0].id);
-        if (reading === null) return no(`the project "${title}" linked to ${repo} could not be read`);
+        if (reading === null) return no(`the project "${title}" owned by ${owner} could not be read`);
       } else {
         if (!write) {
           return {

@@ -85,13 +85,18 @@ export function liveBoardApi(client: GitHubClient): BoardApi {
       };
       return reading;
     },
-    linkedProjects: async repo => {
-      const { owner, repo: name } = parseOwnerRepo(repo);
-      const r = await q<{ repository?: { projectsV2?: { totalCount?: number; nodes?: unknown } } | null }>(
-        `query($o: String!, $n: String!) { repository(owner: $o, name: $n) { projectsV2(first: ${PAGE}) { totalCount nodes { id title } } } }`,
-        { o: owner, n: name },
+    // A user and an organisation each own projects; `query` narrows the list
+    // to titles matching the words, and board-init keeps the exact title.
+    ownerProjects: async (login, title) => {
+      const r = await q<{ repositoryOwner?: { projectsV2?: { totalCount?: number; nodes?: unknown } } | null }>(
+        `query($l: String!, $t: String!) { repositoryOwner(login: $l) {
+          ... on User { projectsV2(first: ${PAGE}, query: $t) { totalCount nodes { id title } } }
+          ... on Organization { projectsV2(first: ${PAGE}, query: $t) { totalCount nodes { id title } } }
+        } }`,
+        { l: login, t: title },
       );
-      return whole<{ id: string; title: string }>(r.repository?.projectsV2, "projects linked to the repository");
+      if (!r.repositoryOwner) throw new Error(`no user or organisation named ${login}`);
+      return whole<{ id: string; title: string }>(r.repositoryOwner.projectsV2, `projects owned by ${login}`);
     },
     createProject: async (ownerId, title) => {
       const r = await q<{ createProjectV2?: { projectV2?: { id?: string } } }>(

@@ -66,7 +66,7 @@ function memoryBoard(seed: ProjectReading[] = [], faults: { failOn?: string; ign
     ownerId: async login => `owner:${login}`,
     repositoryId: async repo => `repo:${repo}`,
     project: async id => (projects.has(id) ? structuredClone(projects.get(id)!) : null),
-    linkedProjects: async repo => [...projects.values()].filter(p => p.linkedRepositories.includes(repo)).map(p => ({ id: p.id, title: p.title })),
+    ownerProjects: async (_owner, title) => [...projects.values()].filter(p => p.title === title).map(p => ({ id: p.id, title: p.title })),
     createProject: async (_owner, title) => {
       fault(`create-project ${title}`);
       const id = `P${++n}`;
@@ -158,7 +158,7 @@ describe("SC-2789: board-init makes a board and wires it", () => {
     const first = await boardInit({ repo: REPO, owner: "acme", boardId: null, write: true, api: half.api });
     expect(first.kind).toBe("UNMEASURED");
     // board.id was never written, so the next run finds the board by the title
-    // rungate gives it, among the projects linked to this repository.
+    // rungate gives it, among the owner's projects.
     half.faults.failOn = undefined;
     const resumed = await boardInit({ repo: REPO, owner: "acme", boardId: null, write: true, api: half.api });
     expect(resumed.kind, "why" in resumed ? resumed.why : "").toBe("DONE");
