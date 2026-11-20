@@ -159,8 +159,14 @@ describe("#1652: the self-inflicted ratio — later-round findings on lines writ
     expect(stated.judged).toBe(1);
     expect(stated.fromCutLedgers).toBe(1);
 
-    const legacy = selfInflictedRatio([entry(1, legacyLedgerBody(rounds))], headsOnly);
-    expect(legacy.fromCutLedgers, "a bare-array ledger states no truncation, so it may have dropped rounds").toBe(1);
+    // A bare-array ledger states no drop count. One at the 12-round cap it
+    // was written under may have been cut; one below the cap never was.
+    const atCap = [round(1, H1, "", []), ...Array.from({ length: 10 }, (_, i) => round(i + 2, H2, "", [])), round(12, H2, "", [finding("lib/a.ts", 1)])];
+    const legacy = selfInflictedRatio([entry(1, legacyLedgerBody(atCap))], headsOnly);
+    expect(legacy.judged).toBe(1);
+    expect(legacy.fromCutLedgers, "a full bare-array ledger may have dropped rounds").toBe(1);
+    const shortLegacy = selfInflictedRatio([entry(1, legacyLedgerBody(rounds))], headsOnly);
+    expect(shortLegacy.fromCutLedgers).toBe(0);
 
     const whole = selfInflictedRatio([entry(1, ledgerBody(rounds, 0))], headsOnly);
     expect(whole.fromCutLedgers).toBe(0);
