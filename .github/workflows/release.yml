@@ -157,7 +157,7 @@ jobs:
         run: |
           set -uo pipefail
           status=0
-          npm install -g 'agnix@0.59.0' '@reporails/cli@0.6.4' || status=$?
+          npm install -g 'agnix@0.59.0' '@reporails/cli@0.6.8' || status=$?
           if [ "$status" -ne 0 ]; then
             echo "::warning title=Global tools UNMEASURED::npm install -g exited $status, so the tools pinned by ci.globalTools are absent from this runner and the compliance checks that shell out to them will report it."
           fi
@@ -214,6 +214,10 @@ jobs:
           # 41649310261), twice. The built-in token is repository-scoped and
           # cannot see a board, so it is not a substitute.
           GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          # #2594: the same key `ci.yml` hands the suite through ci.testSecrets.
+          # Anonymous RepoRails checks are 5 an hour per address, and an
+          # unread surface already cost v0.8.32 and v0.8.33.
+          AILS_API_KEY: ${{ secrets.AILS_API_KEY }}
       - run: bun scripts/typecheck.ts
 
       # No token and no `--provenance`. Authentication is the OIDC credential

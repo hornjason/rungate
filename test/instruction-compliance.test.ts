@@ -201,7 +201,9 @@ describe("Instruction Compliance — Layer 1 (Template Quality)", () => {
 });
 
 // #2401: on 2026-11-18 RepoRails' server refused every anonymous check during
-// its 0.6.8 release, and each `check --format json` printed the refusal below.
+// the CLI release it shipped that day, and each `check --format json` printed
+// the refusal below. (The version is not written here: ci-global-tools.test.ts
+// counts every tracked mention of the pinned version as a declaring position.)
 // It parses, so it was returned as a reading and the run crashed on its
 // missing `files`, failing CI on every pull request. A reply that is not a
 // reading is no reading for that file: never a crash, never a clean score.
