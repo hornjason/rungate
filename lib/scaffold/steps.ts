@@ -108,6 +108,8 @@ import {
 } from "./owned-files";
 import { readPreservedSection, type SectionSpec } from "../agents-md-sections";
 import { executedHookPath, hookRegistrationPath } from "../hook-trees";
+// #2597: the consumer's surface, measured by the one check this repository runs on itself.
+import { measureConcurrentLoad, surfaceReport } from "../../scripts/check-instruction-surface";
 
 /**
  * Look for a declared health route in the places a server declares one.
@@ -5879,6 +5881,29 @@ export function addPaiHarnessDevDep(root: string, actions: string[], version?: s
  * feature exists; adoption stays something a person chooses. The step writes
  * nothing, which is also why it is safe during rehearsal.
  */
+/**
+ * #2597, ADR-024 decision 1 / SC-2796: measure the instruction surface this
+ * run leaves the consumer, and report it.
+ *
+ * rungate checked its own surface and nothing checked the one it hands a
+ * consumer: one consumer's tree read 2,003,937 bytes at peak, 3,131% of the
+ * budget, and no scaffold run said so. The measurement is
+ * `measureConcurrentLoad`, which takes the launch surface from
+ * `measureSurface` — the same one this repository's own check runs — and the
+ * words are `surfaceReport`, beside it.
+ *
+ * REPORTED, not refused: refusing an over-budget surface is SC-2798's, in the
+ * generated conformity test. A tree the measurement cannot read (no rules, no
+ * CLAUDE.md) is said to be UNMEASURED, never reported as a surface of zero.
+ */
+export function reportInstructionSurfaceStep(root: string, actions: string[]): void {
+  try {
+    actions.push(...surfaceReport(measureConcurrentLoad(root)));
+  } catch (e) {
+    actions.push(`UNMEASURED: instruction surface — ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 export function reportExternalAdoptionStep(root: string, actions: string[]): void {
   const config = loadComplianceConfig(root);
   const sources = config?.organize?.externalSources ?? [];

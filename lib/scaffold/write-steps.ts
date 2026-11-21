@@ -45,6 +45,7 @@ import {
   deployHooksToConsumers,
   addPaiHarnessDevDep,
   reportExternalAdoptionStep,
+  reportInstructionSurfaceStep,
   runAuditSpecsFix,
   postScaffoldCommit,
 } from "./steps";
@@ -278,6 +279,9 @@ What does this workflow produce?
   // Phase 3.5: steps that DESCRIBE the project run last, so they describe the tree this run left (#123).
   reportExternalAdoptionStep(projectPath, actions);
   refreshScopedRulesStep(projectPath, projectType, actions, profile);
+  // #2597 / SC-2796: AFTER the scoped rules are refreshed, so it measures the
+  // rules this run left, not the ones it found.
+  reportInstructionSurfaceStep(projectPath, actions);
   if (projectType === "code") {
     generateCodeMapStep(projectPath, actions);
   }

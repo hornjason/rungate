@@ -675,6 +675,39 @@ export function headroomWarning(reading: ConcurrentLoadReading): string {
 // to keep the remedy correct, and the launch surface is no longer a thing
 // this script refuses separately.
 
+/** How many of the largest launch files the report names (#2597). */
+export const SURFACE_REPORT_LARGEST = 3;
+
+/**
+ * #2597 / SC-2796: the surface as a few report lines — launch and peak, the
+ * budget and the share of it used, and what is biggest.
+ *
+ * Kept HERE, beside the measurement, so a scaffold run and this script read
+ * one reading the same way. Lines start `SURFACE:` so a scaffold report can
+ * be searched for them; none starts with a write verb, so the scaffold's
+ * commit step never mistakes one for a file it wrote.
+ */
+export function surfaceReport(peak: ConcurrentLoadReading, largest: number = SURFACE_REPORT_LARGEST): string[] {
+  const launch = peak.launch;
+  const loaded = launch.entries.filter(e => e.excluded === null);
+  const used = Math.round((peak.peakBytes / peak.budgetBytes) * 100);
+  const lines = [
+    `SURFACE: launch ${launch.totalBytes.toLocaleString()} bytes (~${Math.round(launch.totalBytes / 4).toLocaleString()} tokens) ` +
+      `over ${loaded.length} files; peak ${peak.peakBytes.toLocaleString()} bytes on ${peak.peakFile ?? "every file (no scoped rule matches any)"}; ` +
+      `budget ${peak.budgetBytes.toLocaleString()}, ${used}% used`,
+  ];
+  const top = [...loaded].sort((a, b) => b.bytes - a.bytes || a.file.localeCompare(b.file)).slice(0, largest);
+  if (top.length > 0) {
+    lines.push(`SURFACE: largest at launch — ${top.map(e => `${e.file} ${e.bytes.toLocaleString()}`).join(" · ")}`);
+  }
+  if (peak.peakFile !== null && peak.peakRules.length > 0) {
+    lines.push(
+      `SURFACE: on ${peak.peakFile} also — ${peak.peakRules.map(r => `${r.file} ${r.bytes.toLocaleString()}`).join(" · ")}`,
+    );
+  }
+  return lines;
+}
+
 function main(argv: string[]): number {
   const rootArg = argv.indexOf("--root");
   const root = rootArg >= 0 ? argv[rootArg + 1]! : process.cwd();
