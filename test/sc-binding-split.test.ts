@@ -458,7 +458,11 @@ const UNCLAIMED_RATCHET = 150;
 // run reports the consumer's instruction surface, a reading of the run's
 // report lines that no registered pattern expresses; the `SC-2796` describe in
 // test/consumer-instruction-surface.test.ts names it (2026-11-21).
-const CLAIMED_UNBINDABLE = 196;
+// 197: SC-2799 (#2600) ticked by `sync-sc-status --only SC-2799` — CI renders the
+// scaffold into fixture consumers and lints read that rendered tree, a reading of
+// a scaffold run and the surface reader that no registered pattern expresses; the
+// `SC-2799` describe in test/rendered-surface.test.ts names it (2026-11-21).
+const CLAIMED_UNBINDABLE = 197;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
