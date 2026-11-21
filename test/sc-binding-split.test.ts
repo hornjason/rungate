@@ -451,7 +451,10 @@ const UNCLAIMED_RATCHET = 150;
 // advisory findings already posted, a reading of the adjudicator's suppression
 // gate over a thread list that no registered pattern expresses; the `CRC-N4`
 // describe in test/ai-review-suppression.test.ts names it (2026-11-21).
-const CLAIMED_UNBINDABLE = 194;
+// 195: SC-2795 (#2589) ticked from its describe in test/board-conformance.test.ts —
+// criteria-named does not count a consumer issue short for its first two days, a
+// reading of a board snapshot no registered pattern expresses (2026-11-21).
+const CLAIMED_UNBINDABLE = 195;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
