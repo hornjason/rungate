@@ -109,7 +109,7 @@ import {
 import { readPreservedSection, type SectionSpec } from "../agents-md-sections";
 import { executedHookPath, hookRegistrationPath } from "../hook-trees";
 // #2597: the consumer's surface, measured by the one check this repository runs on itself.
-import { measureConcurrentLoad, surfaceReport } from "../../scripts/check-instruction-surface";
+import { measureConcurrentLoad, surfaceReport, SurfaceUnmeasured } from "../../scripts/check-instruction-surface";
 
 /**
  * Look for a declared health route in the places a server declares one.
@@ -5895,13 +5895,27 @@ export function addPaiHarnessDevDep(root: string, actions: string[], version?: s
  * REPORTED, not refused: refusing an over-budget surface is SC-2798's, in the
  * generated conformity test. A tree the measurement cannot read (no rules, no
  * CLAUDE.md) is said to be UNMEASURED, never reported as a surface of zero.
+ *
+ * Only that case. The catch is narrowed to `SurfaceUnmeasured`, the error the
+ * measurement throws for it, exactly as the script's own `main` does: any
+ * other error is a defect in the measurement and propagates, rather than
+ * reading as a routine UNMEASURED line (review, PR #2619). `measure` is a
+ * parameter so a test can hand it each kind of failure.
  */
-export function reportInstructionSurfaceStep(root: string, actions: string[]): void {
+export function reportInstructionSurfaceStep(
+  root: string,
+  actions: string[],
+  measure: typeof measureConcurrentLoad = measureConcurrentLoad,
+): void {
+  let reading: ReturnType<typeof measureConcurrentLoad>;
   try {
-    actions.push(...surfaceReport(measureConcurrentLoad(root)));
+    reading = measure(root);
   } catch (e) {
-    actions.push(`UNMEASURED: instruction surface — ${e instanceof Error ? e.message : String(e)}`);
+    if (!(e instanceof SurfaceUnmeasured)) throw e;
+    actions.push(`UNMEASURED: instruction surface — ${e.message}`);
+    return;
   }
+  actions.push(...surfaceReport(reading));
 }
 
 export function reportExternalAdoptionStep(root: string, actions: string[]): void {

@@ -19,7 +19,7 @@ import { join } from "path";
 
 import { reportInstructionSurfaceStep } from "../lib/scaffold/steps";
 import { runScaffoldWriteSteps } from "../lib/scaffold/write-steps";
-import { SURFACE_BUDGET_BYTES, measureConcurrentLoad } from "../scripts/check-instruction-surface";
+import { SURFACE_BUDGET_BYTES, SurfaceUnmeasured, measureConcurrentLoad } from "../scripts/check-instruction-surface";
 
 const ROOT = join(import.meta.dir, "..");
 const made: string[] = [];
@@ -91,6 +91,24 @@ describe("SC-2796: a scaffold run reports the consumer's instruction surface", (
     expect(actions.some(a => a.startsWith("SURFACE:")), actions.join(" | ")).toBe(false);
     const line = actions.find(a => a.startsWith("UNMEASURED: instruction surface"));
     expect(line, actions.join(" | ")).toContain("no .md files under");
+  });
+
+  test("only an unreadable tree is UNMEASURED: any other failure in the measurement propagates", () => {
+    const root = consumer();
+    const unreadable: string[] = [];
+    reportInstructionSurfaceStep(root, unreadable, () => {
+      throw new SurfaceUnmeasured("planted: nothing to measure");
+    });
+    expect(unreadable).toEqual(["UNMEASURED: instruction surface — planted: nothing to measure"]);
+    // A defect in the measurement is not a tree it could not read, so it is
+    // not reported as one (review, PR #2619).
+    const broken: string[] = [];
+    expect(() =>
+      reportInstructionSurfaceStep(root, broken, () => {
+        throw new TypeError("planted: a defect in the measurement");
+      }),
+    ).toThrow("planted: a defect in the measurement");
+    expect(broken).toEqual([]);
   });
 
   test("a real scaffold run reports it, after the rules it wrote", () => {
