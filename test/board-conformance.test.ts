@@ -35,6 +35,7 @@ import { spawnSync } from "child_process";
 import {
   BOARD_SNAPSHOT_DIR_ENV,
   DEFAULT_PRODUCER,
+  keptBoardPath,
   OFFENDERS_SHOWN,
   READINGS,
   READING_NAMES,
@@ -1954,6 +1955,15 @@ describe("#2612: a run produces each board once", () => {
     produceBoard(flags({ prefix: "Convergence" }), p.at, memo);
     produceBoard(flags({ repo: "o/other" }), p.at, memo);
     expect(p.runs()).toBe(4);
+  });
+
+  test("the same flags run from two checkouts are two boards (#2618 review)", () => {
+    // With no flags at all the producer resolves the spec, prefix and repo
+    // from the config of the directory it runs in, so the directory is part
+    // of what was asked.
+    const omitted = { spec: undefined, prefix: undefined, repo: undefined };
+    expect(keptBoardPath("/memo", omitted, "/work/project-a")).not.toBe(keptBoardPath("/memo", omitted, "/work/project-b"));
+    expect(keptBoardPath("/memo", omitted, "/work/project-a")).toBe(keptBoardPath("/memo", omitted, "/work/project-a"));
   });
 
   test("with no directory named, every produce asks the producer", () => {

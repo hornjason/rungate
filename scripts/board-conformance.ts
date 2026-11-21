@@ -36,7 +36,7 @@
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { join } from "path";
+import { join, resolve } from "path";
 import { parseArgs } from "util";
 
 /**
@@ -1640,10 +1640,21 @@ export const DEFAULT_PRODUCER = join(import.meta.dir, "board-snapshot.ts");
  */
 export const BOARD_SNAPSHOT_DIR_ENV = "RUNGATE_BOARD_SNAPSHOT_DIR";
 
-/** Where a run keeps the board these inputs produce: one file per spec, prefix and repository as given. */
-function keptBoardPath(dir: string, flags: Pick<Flags, "spec" | "prefix" | "repo">): string {
+/**
+ * Where a run keeps the board these inputs produce: one file per spec, prefix
+ * and repository as given, AND per directory the producer runs in.
+ *
+ * The directory is part of what was asked: with a flag omitted the producer
+ * resolves it from that directory's rungate config, so two checkouts asking
+ * with no flags at all are asking about two different boards (#2618 review).
+ */
+export function keptBoardPath(
+  dir: string,
+  flags: Pick<Flags, "spec" | "prefix" | "repo">,
+  cwd: string = process.cwd(),
+): string {
   const key = createHash("sha256")
-    .update(JSON.stringify([flags.spec ?? null, flags.prefix ?? null, flags.repo ?? null]))
+    .update(JSON.stringify([resolve(cwd), flags.spec ?? null, flags.prefix ?? null, flags.repo ?? null]))
     .digest("hex")
     .slice(0, 16);
   return join(dir, `board-${key}.json`);
