@@ -1,4 +1,4 @@
-# generated-sha: 17ba7dfa605bbed5
+# generated-sha: ae890ea64ee96fff
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: CI
 
@@ -125,7 +125,7 @@ jobs:
         run: |
           set -uo pipefail
           status=0
-          npm install -g 'agnix@0.59.0' '@reporails/cli@0.6.4' || status=$?
+          npm install -g 'agnix@0.59.0' '@reporails/cli@0.6.8' || status=$?
           if [ "$status" -eq 0 ]; then exit 0; fi
           if [ "${RUNGATE_REQUIRE_GLOBAL_TOOLS:-}" = "true" ]; then
             echo "::error title=Global tools UNMEASURED::npm install -g exited $status, so the tools pinned by ci.globalTools are absent from this runner and the checks that shell out to them measured nothing. RUNGATE_REQUIRE_GLOBAL_TOOLS is the exact string 'true', so this repository has declared an unmeasured run fatal."
@@ -155,6 +155,9 @@ jobs:
           # If this secret is unset the value is empty and the command refuses by
           # name — it does not quietly fall back to a token that cannot answer.
           GITHUB_TOKEN: ${{ secrets.RUNGATE_PROJECT_TOKEN }}
+          # ci.testSecrets — each named secret, handed to the suite under its own
+          # name (#2594). Unset is empty, and the reader that needs it says so.
+          AILS_API_KEY: ${{ secrets.AILS_API_KEY }}
       - run: bun run typecheck
       # #1173. The per-case durations, kept so they can accumulate across
       # runs — one run cannot say whether a case has regressed.

@@ -3121,6 +3121,49 @@ export function trackerTokenSecret(ci: unknown): string {
 }
 
 /**
+ * The secrets the suite step is handed as environment variables of the same
+ * name — `ci.testSecrets`, #2594.
+ *
+ * Written for a keyed tool the suite calls: RepoRails allows 5 anonymous
+ * checks an hour per address and 100 with a free key, and a CI run makes
+ * dozens. The names live in config, not here, so a consumer with its own
+ * keyed tool declares it the same way.
+ *
+ * REFUSES rather than drops, the same direction as {@link trackerTokenSecret}:
+ * a non-list, a non-string, an illegal name (the pattern is the injection
+ * guard: each name is interpolated into a `${{ }}` expression), `GITHUB_TOKEN`
+ * (the tracker token's slot in the same `env:` block), and a duplicate (one
+ * key written twice, the later silently winning). Absent or empty is none.
+ */
+export function testSecrets(ci: unknown): string[] {
+  const raw = (ci as { testSecrets?: unknown } | null | undefined)?.testSecrets;
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error(`ci.testSecrets is ${JSON.stringify(raw)}, expected a list of secret NAMES.`);
+  }
+  const names: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(entry.trim())) {
+      throw new Error(
+        `ci.testSecrets has ${JSON.stringify(entry)}, which is not a legal GitHub secret name ` +
+          `(a letter or underscore, then letters, digits and underscores). It is interpolated into a ` +
+          `\${{ }} expression in the generated workflow, so this refuses rather than emitting it.`,
+      );
+    }
+    const name = entry.trim();
+    if (name === "GITHUB_TOKEN") {
+      throw new Error(
+        "ci.testSecrets names GITHUB_TOKEN, which is the tracker token's variable in the same env block. " +
+          "Use ci.suiteReadsTracker and ci.trackerTokenSecret for it.",
+      );
+    }
+    if (names.includes(name)) throw new Error(`ci.testSecrets names ${name} twice.`);
+    names.push(name);
+  }
+  return names;
+}
+
+/**
  * The one non-zero exit the shard aggregate ever takes (#1181).
  *
  * Declared once, and spelled nowhere else in the script, so
@@ -3986,8 +4029,15 @@ export function createCiWorkflows(root: string, actions: string[], opts: { force
     tokenSecretName === DEFAULT_TRACKER_SECRET
       ? `\n          # ci.suiteReadsTracker. Read-only, and paired with \`issues: read\`\n          # on the job above — the workflow declares \`contents: read\` and nothing else,\n          # so every other scope on this token is \`none\` and a tracker read\n          # is a 403 whatever this line says.`
       : `\n          # ci.suiteReadsTracker, with ci.trackerTokenSecret naming the secret.\n          # NOT the built-in token: that one is repository-scoped and cannot see a\n          # ProjectV2 board at all, so a board reading came back UNMEASURED with\n          # milestones and issues passing beside it. The \`issues: read\` grant on\n          # the job above still applies to the built-in token and is kept for it.\n          # If this secret is unset the value is empty and the command refuses by\n          # name — it does not quietly fall back to a token that cannot answer.`;
-  const trackerTokenEnv = tracker
-    ? `\n        env:${trackerTokenNote}\n          GITHUB_TOKEN: \${{ secrets.${tokenSecretName} }}`
+  // #2594: ci.testSecrets join the SAME env block. Two `env:` keys on one
+  // step is invalid YAML, and the later would silently drop the tracker token.
+  const secretNames = testSecrets(harness?.ci);
+  const secretEnv = secretNames.length === 0
+    ? ""
+    : `\n          # ci.testSecrets — each named secret, handed to the suite under its own\n          # name (#2594). Unset is empty, and the reader that needs it says so.` +
+      secretNames.map((n) => `\n          ${n}: \${{ secrets.${n} }}`).join("");
+  const trackerTokenEnv = tracker || secretNames.length > 0
+    ? `\n        env:${tracker ? `${trackerTokenNote}\n          GITHUB_TOKEN: \${{ secrets.${tokenSecretName} }}` : ""}${secretEnv}`
     : "";
   const trackerPermissions = tracker
     ? `\n    # ci.suiteReadsTracker. The step below reads milestones and issues;\n    # without this the token it is handed has no scope for either.\n    permissions:\n      contents: read\n      issues: read`

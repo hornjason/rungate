@@ -46,11 +46,12 @@
     "runner": "ubuntu-24.04",
     "globalTools": {
       "agnix": "0.59.0",
-      "@reporails/cli": "0.6.4"
+      "@reporails/cli": "0.6.8"
     },
     "shards": 4,
     "suiteReadsTracker": true,
     "trackerTokenSecret": "RUNGATE_PROJECT_TOKEN",
+    "testSecrets": ["AILS_API_KEY"],
     "vertex": {
       "project": "jhorn-pai",
       "workloadIdentityProvider": "projects/939083080179/locations/global/workloadIdentityPools/github/providers/github-actions",
