@@ -296,6 +296,24 @@ describe("#2596: the fetch tap records what Octokit and hand-rolled readers send
     expect(countCalls([reading])).toMatchObject({ external: 0, notExternal: 1, unparsed: 0 });
   });
 
+  test("a scheme-less URL is recorded as unparsed, never as a call to the host it names (#2614 review)", async () => {
+    // `//example.com/path` has no spaces and no scheme: new URL() throws on
+    // it, and a sentinel that merely prefixed it (`unparseable://example.com`)
+    // parsed again as a call to example.com.
+    const record = file("schemeless-tap.log", `${TAP_START}\n`);
+    const script = file("client5.ts", 'await fetch("//example.com/path").catch(() => null);\n');
+    const run = Bun.spawn([process.execPath, script], {
+      cwd: dirname(script),
+      env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record, RUNGATE_API_TAP_FROM: "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await run.exited, await new Response(run.stderr).text()).toBe(0);
+    const census = countCalls([readTap(readFileSync(record, "utf-8"))]);
+    expect(census).toMatchObject({ unparsed: 1, external: 0, notExternal: 0 });
+    expect(census.apis).toEqual([]);
+  });
+
   test("a URL that does not parse is recorded once, and never also reported lost (#2614 review)", async () => {
     const record = file("bad-url-tap.log", `${TAP_START}\n`);
     const script = file("client4.ts", 'await fetch("::not a url::").catch(() => null);\n');
@@ -384,6 +402,21 @@ describe("#2596: the gh tap is gh, plus a record", () => {
     });
     expect(await run.exited, await new Response(run.stderr).text()).toBe(0);
     expect(readFileSync(record, "utf-8")).toBe(`${TAP_START}\nAPI-TAP gh - https://api.github.com/graphql from=${basename(caller)}\n`);
+  });
+
+  test("a gh call nobody handed a caller to is labelled as such, apart from unattributed fetches (#2614 review)", () => {
+    // The real tap writes `from=-` when RUNGATE_API_TAP_FROM is unset — a gh
+    // run straight from a workflow step — and the census must still tell it
+    // apart from a fetch whose caller could not be read.
+    const record = file("gh-unhanded.log", `${TAP_START}\n`);
+    const env: Record<string, string | undefined> = { ...process.env, RUNGATE_API_TAP: record };
+    delete env.RUNGATE_API_TAP_FROM;
+    Bun.spawnSync([installed(), "api", "graphql"], { env, stdout: "pipe", stderr: "pipe" });
+    const text = `${readFileSync(record, "utf-8")}API-TAP fetch GET https://api.github.com/repos/o/r from=-\n`;
+    const sources = countCalls([readTap(text)]).sources;
+    expect(sources).toContainEqual({ from: "(gh: caller not handed down)", calls: 1 });
+    expect(sources).toContainEqual({ from: "-", calls: 1 });
+    expect(sources).toHaveLength(2);
   });
 
   test("with no record named it is the real gh, untouched", () => {

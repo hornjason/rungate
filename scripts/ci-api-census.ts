@@ -171,7 +171,9 @@ export function countCalls(readings: TapReading[]): Census {
         continue;
       }
       census.external++;
-      const from = call.from ?? (call.via === "gh" ? "(gh: caller not handed down)" : "-");
+      // The gh tap writes `from=-` when nobody handed it a caller, so "-"
+      // from gh is that case, not an unreadable stack (#2614 review, round 2).
+      const from = call.from && call.from !== "-" ? call.from : call.via === "gh" ? "(gh: caller not handed down)" : "-";
       bySource.set(from, (bySource.get(from) ?? 0) + 1);
       const endpoints = byApi.get(api) ?? new Map<string, number>();
       endpoints.set(endpoint, (endpoints.get(endpoint) ?? 0) + 1);

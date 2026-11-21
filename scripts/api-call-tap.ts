@@ -100,7 +100,12 @@ if (record) {
       // Recorded, not lost: the line below is written with this degraded URL,
       // and the census counts it once, as a line that did not parse. An
       // API-TAP-LOST here as well counted one call twice (#2614 review).
-      where = `unparseable:${raw.split("?")[0]}`;
+      //
+      // Not URL-shaped on purpose: `unparseable:` + `//example.com/path`
+      // parsed again as a call to example.com (#2614 review, round 2). `!`
+      // cannot appear in a scheme and the encoding removes every `/` and
+      // space, so the census can only ever count this line as unparsed.
+      where = `unparseable!${encodeURIComponent(raw.split("?")[0])}`;
     }
     try {
       const from = inherited ?? callerOf(new Error().stack ?? "", process.cwd(), Bun.main);
