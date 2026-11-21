@@ -323,6 +323,14 @@ const ok = (over: Partial<Stage> = {}): Stage => ({
   ...over,
 });
 
+describe("#2612: the verify commands share one board per run", () => {
+  test("every verify command is handed this run's board directory, and it exists", () => {
+    const r = run(`printf %s "$${BOARD_SNAPSHOT_DIR_ENV}"`);
+    expect(r.stdout, "a verify command produced the board again instead of reading the run's").toBe(BOARD_KEPT_FOR_THIS_RUN);
+    expect(BOARD_KEPT_FOR_THIS_RUN.startsWith(tmpdir()), "the boards must live in a scratch directory made for this run").toBe(true);
+  });
+});
+
 describe("the live plan", () => {
   test("is internally consistent — goal, goals and stages together", () => {
     expect(ladderViolations(doc), "project-state.json's plan is malformed").toEqual([]);
