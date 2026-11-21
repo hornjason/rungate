@@ -13,7 +13,7 @@
  * cached, and a null cache path turns the cache off.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { tryLoadRungateConfig } from "../lib/config-loader";
@@ -185,6 +185,19 @@ describe("#2595: the caller counts its calls", () => {
     asked.length = 0;
     await p.run({ reporailsRunner: flaky });
     expect(asked.length, "a refusal was cached as a reading").toBe(2);
+  });
+
+  test("a file that cannot be read is checked, not a crash that loses the rest (#2608)", async () => {
+    const p = project();
+    const locked = join(p.root, ".claude", "agents", "marcus.md");
+    chmodSync(locked, 0o000);
+    try {
+      const report = await p.run();
+      expect(p.asked.length, "the unreadable file or its neighbour was skipped").toBe(2);
+      expect(report.reporailsCache).toMatchObject({ hits: 0, checked: 2 });
+    } finally {
+      chmodSync(locked, 0o644);
+    }
   });
 
   test("a null cache path turns the cache off and writes nothing", async () => {

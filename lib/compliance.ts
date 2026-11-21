@@ -475,7 +475,17 @@ export async function runTemplateCompliance(
     const cache: ReporailsCache | null =
       cachePath !== null && version !== null ? loadReporailsCache(cachePath, isRepoRailsFinding) : null;
     const now = Date.now();
-    const keys = files.map(f => (cache && version !== null ? reporailsCacheKey(readFileSync(f, "utf-8"), version) : null));
+    // A file that cannot be read here gets no key: it is a miss and is
+    // checked, never a crash that loses every other file's reading (#2608).
+    const keyOf = (f: string): string | null => {
+      if (!cache || version === null) return null;
+      try {
+        return reporailsCacheKey(readFileSync(f, "utf-8"), version);
+      } catch {
+        return null;
+      }
+    };
+    const keys = files.map(keyOf);
     const toCheck: number[] = [];
     let hits = 0;
     files.forEach((filePath, i) => {
