@@ -1,7 +1,13 @@
 /**
  * A Bun preload that records every `fetch` this process makes (#2596).
  *
- *   BUN_OPTIONS="--preload scripts/api-call-tap.ts" RUNGATE_API_TAP=<record> bun …
+ *   BUN_OPTIONS="--preload=$PWD/scripts/api-call-tap.ts" RUNGATE_API_TAP=<record> bun …
+ *
+ * Spell it with `=`, which `tapBunOptions` in `scripts/ci-api-census.ts`
+ * does. Bun 1.3.14 reads `BUN_OPTIONS="--preload <path>"` (a space) as a
+ * flag followed by a script name, so `bun test` answers `Script not found
+ * "test"` — measured, and `test/ci-api-census.test.ts` runs `bun test`
+ * under the preload so a respelling goes red.
  *
  * Octokit and every hand-rolled GitHub reader in this repository send through
  * `fetch`, so one wrapper sees them all, in every `bun` process the run starts

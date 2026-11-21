@@ -4,7 +4,7 @@
  *
  * Two taps write the record and one counter reads it:
  *
- * - `scripts/api-call-tap.ts` is a Bun preload (`BUN_OPTIONS=--preload …`).
+ * - `scripts/api-call-tap.ts` is a Bun preload (`BUN_OPTIONS=--preload=…`).
  *   It wraps `fetch`, which is what Octokit and every hand-rolled GitHub
  *   reader here call, and appends one line per request.
  * - `scripts/ci-api-census.ts --install-gh-tap <dir>` writes a `gh` that runs
@@ -29,6 +29,7 @@ import {
   ghTapScript,
   readTap,
   renderCensus,
+  tapBunOptions,
 } from "../scripts/ci-api-census";
 
 const ROOT = join(import.meta.dir, "..");
@@ -163,7 +164,7 @@ describe("#2596: the fetch tap records what Octokit and hand-rolled readers send
         `await fetch("http://127.0.0.1:${server.port}/repos/o/r/issues/5?x=1", { method: "PATCH" });\n`,
       );
       const run = Bun.spawn([process.execPath, script], {
-        env: { ...process.env, BUN_OPTIONS: `--preload ${TAP}`, RUNGATE_API_TAP: record },
+        env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -177,11 +178,39 @@ describe("#2596: the fetch tap records what Octokit and hand-rolled readers send
     }
   });
 
+  test("bun test runs under the preload, and a test's request is recorded", async () => {
+    // The spelling matters: `--preload <path>` with a space makes `bun test`
+    // answer `Script not found "test"`, and a CI suite run that way runs nothing.
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("ok") });
+    try {
+      const record = file("bun-test-tap.log", `${TAP_START}\n`);
+      const dir = mkdtempSync(join(scratch, "suite-"));
+      writeFileSync(
+        join(dir, "probe.test.ts"),
+        `import { expect, test } from "bun:test";\n` +
+          `test("asks", async () => { expect((await fetch("http://127.0.0.1:${server.port}/graphql")).ok).toBe(true); });\n`,
+      );
+      const run = Bun.spawn([process.execPath, "test", "./probe.test.ts"], {
+        cwd: dir,
+        env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const code = await run.exited;
+      const err = await new Response(run.stderr).text();
+      expect(code, err).toBe(0);
+      expect(err).toContain("1 pass");
+      expect(readFileSync(record, "utf-8")).toBe(`${TAP_START}\nAPI-TAP fetch GET http://127.0.0.1:${server.port}/graphql\n`);
+    } finally {
+      server.stop(true);
+    }
+  }, 30_000);
+
   test("with no record named, the tap writes nothing and changes nothing", async () => {
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("body-7") });
     try {
       const script = file("client2.ts", `console.log(await (await fetch("http://127.0.0.1:${server.port}/")).text());\n`);
-      const env = { ...process.env, BUN_OPTIONS: `--preload ${TAP}` };
+      const env = { ...process.env, BUN_OPTIONS: tapBunOptions(TAP) };
       delete (env as Record<string, string | undefined>).RUNGATE_API_TAP;
       const run = Bun.spawn([process.execPath, script], { env, stdout: "pipe", stderr: "pipe" });
       expect(await run.exited).toBe(0);

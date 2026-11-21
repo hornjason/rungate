@@ -39,6 +39,15 @@ import { dirname, join, resolve } from "path";
 /** The one exit code for every refusal: an unreadable or never-started record, or nothing to read. */
 export const CENSUS_UNMEASURED_EXIT = 1;
 
+/**
+ * The `BUN_OPTIONS` value that turns the fetch tap on. With `=`, never a
+ * space: Bun reads `--preload <path>` there as a flag and then a script name,
+ * and `bun test` refuses with `Script not found "test"`.
+ */
+export function tapBunOptions(tapPath: string): string {
+  return `--preload=${tapPath}`;
+}
+
 /** Written by the step that installs the taps, before the first request. */
 export const TAP_START = "API-TAP-START";
 
