@@ -56,12 +56,33 @@ export function callerOf(stack: string, cwd: string, main?: string): string {
   return pick ? (relative(cwd, pick) || pick).replace(/\s/g, "_") : "-";
 }
 
-/** A child's environment with the caller added, whichever form the spawn was given. */
-export function withCaller(env: Record<string, string | undefined> | undefined, from: string): Record<string, string | undefined> {
-  return { ...(env ?? process.env), RUNGATE_API_TAP_FROM: from };
+export const FROM_VAR = "RUNGATE_API_TAP_FROM";
+
+type Env = Record<string, string | undefined>;
+
+/**
+ * A child's environment with the caller in it.
+ *
+ * - An environment the spawn was GIVEN that already names a caller is left
+ *   exactly as it is — including `""`, which is how a test opts its child out.
+ * - Otherwise the base is that environment, or with none given the STARTUP
+ *   environment: Bun hands a child given no `env` the environment the process
+ *   started with, not later `process.env` writes, and #1096's tests hold it
+ *   to that. Passing today's `process.env` instead changed what children saw.
+ * - A caller inherited in the base is kept, so the outermost one names the
+ *   call — the test file, when a test spawned the script that spawned gh.
+ */
+export function withCaller(given: Env | undefined, from: string, startup: Env): Env {
+  if (given && given[FROM_VAR] !== undefined) return given;
+  const base = given ?? startup;
+  return base[FROM_VAR] ? base : { ...base, [FROM_VAR]: from };
 }
 
 const record = process.env.RUNGATE_API_TAP;
+/** What Bun gives a child spawned with no `env`: the environment at startup, which is when a preload runs. */
+const startup: Env = { ...process.env };
+/** A caller this process was handed by the one that spawned it. Empty means none. */
+const inherited = startup[FROM_VAR] || undefined;
 
 if (record) {
   const real = globalThis.fetch;
@@ -80,7 +101,7 @@ if (record) {
       console.error(`API-TAP-LOST fetch ${method}: the URL did not parse (${e instanceof Error ? e.message : String(e)})`);
     }
     try {
-      const from = callerOf(new Error().stack ?? "", process.cwd(), Bun.main);
+      const from = inherited ?? callerOf(new Error().stack ?? "", process.cwd(), Bun.main);
       appendFileSync(record, `API-TAP fetch ${method} ${where} from=${from}\n`);
     } catch (e) {
       console.error(`API-TAP-LOST fetch ${method} ${where}: ${e instanceof Error ? e.message : String(e)}`);
@@ -97,11 +118,11 @@ if (record) {
     const [first, second] = args;
     if (Array.isArray(first)) {
       const opts = (second ?? {}) as { env?: Record<string, string | undefined> };
-      return [first, { ...opts, env: withCaller(opts.env, here()) }, ...args.slice(2)];
+      return [first, { ...opts, env: withCaller(opts.env, here(), startup) }, ...args.slice(2)];
     }
     if (first && typeof first === "object") {
       const opts = first as { env?: Record<string, string | undefined> };
-      return [{ ...opts, env: withCaller(opts.env, here()) }, ...args.slice(1)];
+      return [{ ...opts, env: withCaller(opts.env, here(), startup) }, ...args.slice(1)];
     }
     return args;
   };

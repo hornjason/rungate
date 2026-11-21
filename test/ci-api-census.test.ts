@@ -112,8 +112,20 @@ describe("#2596: each call names the file that made it", () => {
   });
 
   test("a child's environment carries the caller, added to whatever environment it was given", () => {
-    expect(withCaller({ A: "1" }, "test/x.test.ts")).toEqual({ A: "1", RUNGATE_API_TAP_FROM: "test/x.test.ts" });
-    expect(withCaller(undefined, "f").RUNGATE_API_TAP_FROM).toBe("f");
+    expect(withCaller({ A: "1" }, "test/x.test.ts", { S: "1" })).toEqual({ A: "1", RUNGATE_API_TAP_FROM: "test/x.test.ts" });
+  });
+
+  test("with no environment given, the child gets the STARTUP environment, not today's process.env", () => {
+    // #1096: Bun hands such a child the environment the process started with.
+    expect(withCaller(undefined, "f", { S: "1" })).toEqual({ S: "1", RUNGATE_API_TAP_FROM: "f" });
+  });
+
+  test("the outermost caller wins, and a caller named explicitly — even empty — is left alone", () => {
+    expect(withCaller(undefined, "scripts/x.ts", { RUNGATE_API_TAP_FROM: "test/outer.test.ts" }).RUNGATE_API_TAP_FROM).toBe("test/outer.test.ts");
+    expect(withCaller({ RUNGATE_API_TAP_FROM: "test/outer.test.ts" }, "inner", {}).RUNGATE_API_TAP_FROM).toBe("test/outer.test.ts");
+    expect(withCaller({ RUNGATE_API_TAP_FROM: "" }, "inner", {}).RUNGATE_API_TAP_FROM).toBe("");
+    // An inherited empty caller is none: the child names itself.
+    expect(withCaller(undefined, "scripts/x.ts", { RUNGATE_API_TAP_FROM: "" }).RUNGATE_API_TAP_FROM).toBe("scripts/x.ts");
   });
 
   test("the census adds up calls by the file that made them; gh calls say they have no stack", () => {
@@ -224,7 +236,7 @@ describe("#2596: the fetch tap records what Octokit and hand-rolled readers send
       );
       const run = Bun.spawn([process.execPath, script], {
         cwd: dirname(script),
-        env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record },
+        env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record, RUNGATE_API_TAP_FROM: "" },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -253,7 +265,7 @@ describe("#2596: the fetch tap records what Octokit and hand-rolled readers send
       );
       const run = Bun.spawn([process.execPath, "test", "./probe.test.ts"], {
         cwd: dir,
-        env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record },
+        env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record, RUNGATE_API_TAP_FROM: "" },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -274,7 +286,7 @@ describe("#2596: the fetch tap records what Octokit and hand-rolled readers send
     const script = file("client3.ts", `await (await fetch("file://${dir}/body.txt")).text();\n`);
     const run = Bun.spawn([process.execPath, script], {
       cwd: dirname(script),
-      env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record },
+      env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record, RUNGATE_API_TAP_FROM: "" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -349,7 +361,7 @@ describe("#2596: the gh tap is gh, plus a record", () => {
     const caller = file("spawns-gh.ts", 'Bun.spawnSync(["gh", "api", "graphql"]);\n');
     const run = Bun.spawn([process.execPath, caller], {
       cwd: dirname(caller),
-      env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record },
+      env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record, RUNGATE_API_TAP_FROM: "" },
       stdout: "pipe",
       stderr: "pipe",
     });
