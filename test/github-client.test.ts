@@ -5,7 +5,7 @@
  *
  * All tests mock HTTP calls — never hit real GitHub API (spec constraint).
  */
-import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
+import { describe, test, expect, mock, beforeEach, afterEach, afterAll } from "bun:test";
 
 /**
  * The options the most recent Octokit construction received. #139 is about
@@ -83,6 +83,16 @@ const {
 
 describe("lib/github.ts", () => {
   const originalToken = process.env.GITHUB_TOKEN;
+
+  // Put the real token back when this file is done. Without this the fake one
+  // outlived the file: bun runs a shard's files in one process, and on
+  // #2620's shard 2 test/stage-ladder.test.ts ran later, spawned the board
+  // readings with `{ ...process.env }`, and every one came back 401 Bad
+  // credentials.
+  afterAll(() => {
+    if (originalToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = originalToken;
+  });
 
   beforeEach(() => {
     // Set a fake token so createGitHubClient() doesn't throw
