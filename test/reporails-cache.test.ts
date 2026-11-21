@@ -41,10 +41,10 @@ const reading = { quality: 6.5, findings: [{ line: 3, severity: "warning", rule:
 
 describe("#2595: the store", () => {
   test("the key changes with the content and with the CLI version, and with nothing else", () => {
-    const k = reporailsCacheKey("body", "0.6.8");
-    expect(reporailsCacheKey("body", "0.6.8")).toBe(k);
-    expect(reporailsCacheKey("body!", "0.6.8")).not.toBe(k);
-    expect(reporailsCacheKey("body", "0.6.9")).not.toBe(k);
+    const k = reporailsCacheKey("body", "9.9.1");
+    expect(reporailsCacheKey("body", "9.9.1")).toBe(k);
+    expect(reporailsCacheKey("body!", "9.9.1")).not.toBe(k);
+    expect(reporailsCacheKey("body", "9.9.2")).not.toBe(k);
   });
 
   test("a reading is fresh inside seven days and gone a millisecond past it", () => {
@@ -126,7 +126,7 @@ describe("#2595: the caller counts its calls", () => {
       reporails: { outcome: "available" as const, available: true, tool: "reporails", exitCode: 0, reason: "PLANTED-reporails-present" },
     };
     const run = (extra: Record<string, unknown> = {}) =>
-      runTemplateCompliance(root, { surface, writeReport: false, probes, reporailsRunner: runner, reporailsVersion: "0.6.8", ...extra });
+      runTemplateCompliance(root, { surface, writeReport: false, probes, reporailsRunner: runner, reporailsVersion: "9.9.1", ...extra });
     return { root, asked, run };
   };
 
@@ -157,7 +157,7 @@ describe("#2595: the caller counts its calls", () => {
     const p = project();
     await p.run();
     p.asked.length = 0;
-    await p.run({ reporailsVersion: "0.6.9" });
+    await p.run({ reporailsVersion: "9.9.2" });
     expect(p.asked.length).toBe(2);
   });
 

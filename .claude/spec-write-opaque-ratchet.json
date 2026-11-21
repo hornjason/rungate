@@ -52,6 +52,7 @@
     "lib/promote-outputs.ts::destFile | projectRoot: parameter (nested)",
     "lib/promote-outputs.ts::destFile | projectRoot: parameter (nested)",
     "lib/promote-outputs.ts::join(archiveDir, slug) | dir: no-initialiser (nested)",
+    "lib/reporails-cache.ts::path | path: parameter",
     "lib/runner-home.ts::join(workRoot, WORK_ROOT_OWNER_FILE) | workRoot: parameter",
     "lib/scaffold/steps.ts::agentsMdPath | root: parameter (nested)",
     "lib/scaffold/steps.ts::agentsMdPath | root: parameter (nested)",
