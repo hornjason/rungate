@@ -168,7 +168,7 @@ export function countCalls(readings: TapReading[]): Census {
         continue;
       }
       census.external++;
-      const from = call.from ?? (call.via === "gh" ? "(gh: no stack)" : "-");
+      const from = call.from ?? (call.via === "gh" ? "(gh: caller not handed down)" : "-");
       bySource.set(from, (bySource.get(from) ?? 0) + 1);
       const endpoints = byApi.get(api) ?? new Map<string, number>();
       endpoints.set(endpoint, (endpoints.get(endpoint) ?? 0) + 1);
@@ -284,11 +284,13 @@ export function ghTapScript(realGh: string): string {
     'tap="${RUNGATE_API_TAP:-}"',
     '[ -n "$tap" ] || exec "$real" "$@"',
     'err="$(mktemp "${TMPDIR:-/tmp}/gh-tap.XXXXXX")" || exec "$real" "$@"',
+    "# Who asked: scripts/api-call-tap.ts hands every child the caller it read.",
+    'from="$(printf %s "${RUNGATE_API_TAP_FROM:--}" | tr -s " \\t" "__")"',
     'GH_DEBUG=1 "$real" "$@" 2>"$err"',
     "status=$?",
     'while IFS= read -r line || [ -n "$line" ]; do',
     '  case "$line" in',
-    `    "* Request to "*) printf 'API-TAP gh - %s\\n' "\${line#\\* Request to }" >> "$tap" ;;`,
+    `    "* Request to "*) printf 'API-TAP gh - %s from=%s\\n' "\${line#\\* Request to }" "$from" >> "$tap" ;;`,
     '    "* Request at "*|"* Request took "*|"[git "*|"[]") ;;',
     "    *) printf '%s\\n' \"$line\" >&2 ;;",
     "  esac",

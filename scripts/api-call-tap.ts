@@ -24,6 +24,11 @@
  * logs, and a query is where a token would travel if anything ever sent one
  * that way. `scripts/ci-api-census.ts` counts the record.
  *
+ * `gh` has no stack to read, so this also wraps `Bun.spawn` and
+ * `Bun.spawnSync` — `node:child_process` goes through the latter — and hands
+ * every child `RUNGATE_API_TAP_FROM`, the caller as read here. The `gh` tap
+ * writes it on its own lines, so a gh request is attributed like a fetch.
+ *
  * With `RUNGATE_API_TAP` unset this does nothing at all, so the preload can be
  * left in place without changing what a run does. A request whose line cannot
  * be written still goes out — the record must never break the call it
@@ -34,13 +39,26 @@
 import { appendFileSync } from "fs";
 import { relative } from "path";
 
-/** The file that asked: a test file if one is on the stack, else the first frame outside node_modules and this tap. */
-export function callerOf(stack: string, cwd: string): string {
+const TEST_FILE = /\.test\.[cm]?[jt]sx?$/;
+
+/**
+ * The file that asked. A test file on the stack first; then the running test
+ * file (`main` — `Bun.main` names the file `bun test` is executing, which
+ * is what an Octokit call is left with once its own frames are dropped); then
+ * the first frame outside node_modules and this tap; then `main` whatever it
+ * is; then `-`.
+ */
+export function callerOf(stack: string, cwd: string, main?: string): string {
   const files = [...stack.matchAll(/\(?((?:\/|[A-Za-z]:\\)[^():\s]+):\d+:\d+\)?/g)]
     .map(m => m[1])
     .filter(f => !f.includes("/node_modules/") && !f.endsWith("api-call-tap.ts"));
-  const pick = files.find(f => /\.test\.[cm]?[jt]sx?$/.test(f)) ?? files[0];
-  return pick ? relative(cwd, pick) || pick : "-";
+  const pick = files.find(f => TEST_FILE.test(f)) ?? (main && TEST_FILE.test(main) ? main : undefined) ?? files[0] ?? main;
+  return pick ? (relative(cwd, pick) || pick).replace(/\s/g, "_") : "-";
+}
+
+/** A child's environment with the caller added, whichever form the spawn was given. */
+export function withCaller(env: Record<string, string | undefined> | undefined, from: string): Record<string, string | undefined> {
+  return { ...(env ?? process.env), RUNGATE_API_TAP_FROM: from };
 }
 
 const record = process.env.RUNGATE_API_TAP;
@@ -62,7 +80,7 @@ if (record) {
       console.error(`API-TAP-LOST fetch ${method}: the URL did not parse (${e instanceof Error ? e.message : String(e)})`);
     }
     try {
-      const from = callerOf(new Error().stack ?? "", process.cwd()).replace(/\s/g, "_");
+      const from = callerOf(new Error().stack ?? "", process.cwd(), Bun.main);
       appendFileSync(record, `API-TAP fetch ${method} ${where} from=${from}\n`);
     } catch (e) {
       console.error(`API-TAP-LOST fetch ${method} ${where}: ${e instanceof Error ? e.message : String(e)}`);
@@ -70,4 +88,25 @@ if (record) {
     return real(input, init);
   };
   globalThis.fetch = Object.assign(tapped, real) as typeof fetch;
+
+  // Both call forms: (cmd[], options?) and ({ cmd, env, … }).
+  const here = () => callerOf(new Error().stack ?? "", process.cwd(), Bun.main);
+  const realSpawnSync = Bun.spawnSync;
+  const realSpawn = Bun.spawn;
+  const tag = (args: unknown[]): unknown[] => {
+    const [first, second] = args;
+    if (Array.isArray(first)) {
+      const opts = (second ?? {}) as { env?: Record<string, string | undefined> };
+      return [first, { ...opts, env: withCaller(opts.env, here()) }, ...args.slice(2)];
+    }
+    if (first && typeof first === "object") {
+      const opts = first as { env?: Record<string, string | undefined> };
+      return [{ ...opts, env: withCaller(opts.env, here()) }, ...args.slice(1)];
+    }
+    return args;
+  };
+  (Bun as unknown as { spawnSync: unknown }).spawnSync = (...args: unknown[]) =>
+    (realSpawnSync as unknown as (...a: unknown[]) => unknown).apply(Bun, tag(args));
+  (Bun as unknown as { spawn: unknown }).spawn = (...args: unknown[]) =>
+    (realSpawn as unknown as (...a: unknown[]) => unknown).apply(Bun, tag(args));
 }

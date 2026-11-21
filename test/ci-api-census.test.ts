@@ -19,7 +19,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { callerOf } from "../scripts/api-call-tap";
+import { callerOf, withCaller } from "../scripts/api-call-tap";
 import { basename, dirname, join } from "path";
 
 import {
@@ -103,6 +103,19 @@ describe("#2596: each call names the file that made it", () => {
     expect(callerOf("Error", "/w")).toBe("-");
   });
 
+  test("an Octokit call whose frames are all library frames is put on the running test file", () => {
+    const stack = ["Error", "    at tapped (/w/scripts/api-call-tap.ts:30:5)", "    at r (/w/node_modules/@octokit/request/x.js:1:1)"].join("\n");
+    expect(callerOf(stack, "/w", "/w/test/prove-label-gate.test.ts")).toBe("test/prove-label-gate.test.ts");
+    expect(callerOf(stack, "/w", "/w/gates/prove.ts")).toBe("gates/prove.ts");
+    // A real frame outside node_modules still beats a main that is not a test.
+    expect(callerOf(`${stack}\n    at run (/w/lib/github.ts:9:9)`, "/w", "/w/gates/prove.ts")).toBe("lib/github.ts");
+  });
+
+  test("a child's environment carries the caller, added to whatever environment it was given", () => {
+    expect(withCaller({ A: "1" }, "test/x.test.ts")).toEqual({ A: "1", RUNGATE_API_TAP_FROM: "test/x.test.ts" });
+    expect(withCaller(undefined, "f").RUNGATE_API_TAP_FROM).toBe("f");
+  });
+
   test("the census adds up calls by the file that made them; gh calls say they have no stack", () => {
     const census = countCalls([
       readTap(
@@ -117,7 +130,7 @@ describe("#2596: each call names the file that made it", () => {
     ]);
     expect(census.sources).toEqual([
       { from: "test/a.test.ts", calls: 2 },
-      { from: "(gh: no stack)", calls: 1 },
+      { from: "(gh: caller not handed down)", calls: 1 },
     ]);
     expect(census.sources.reduce((s, x) => s + x.calls, 0)).toBe(census.external);
   });
@@ -316,14 +329,32 @@ describe("#2596: the gh tap is gh, plus a record", () => {
   test("each request lands in the record; stdout, other stderr and the exit code pass through", () => {
     const record = file("gh-tap.log", `${TAP_START}\n`);
     const run = Bun.spawnSync([installed(), "api", "graphql"], {
-      env: { ...process.env, RUNGATE_API_TAP: record },
+      env: { ...process.env, RUNGATE_API_TAP: record, RUNGATE_API_TAP_FROM: "test/caller one.test.ts" },
       stdout: "pipe",
       stderr: "pipe",
     });
     expect(run.exitCode).toBe(3);
     expect(run.stdout.toString()).toBe("stdout:api graphql\n");
     expect(run.stderr.toString()).toBe("a real warning\n");
-    expect(readFileSync(record, "utf-8")).toBe(`${TAP_START}\nAPI-TAP gh - https://api.github.com/graphql\n`);
+    // The caller the fetch tap handed down, with its space folded so the line stays four fields.
+    expect(readFileSync(record, "utf-8")).toBe(`${TAP_START}\nAPI-TAP gh - https://api.github.com/graphql from=test/caller_one.test.ts\n`);
+  });
+
+  test("a gh spawned under the fetch tap is attributed to the file that spawned it", async () => {
+    const record = file("gh-chain.log", `${TAP_START}\n`);
+    const shimDir = mkdtempSync(join(scratch, "shim-"));
+    const shim = join(shimDir, "gh");
+    writeFileSync(shim, ghTapScript(fakeGh));
+    chmodSync(shim, 0o755);
+    const caller = file("spawns-gh.ts", 'Bun.spawnSync(["gh", "api", "graphql"]);\n');
+    const run = Bun.spawn([process.execPath, caller], {
+      cwd: dirname(caller),
+      env: { ...process.env, PATH: `${shimDir}:${process.env.PATH}`, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await run.exited, await new Response(run.stderr).text()).toBe(0);
+    expect(readFileSync(record, "utf-8")).toBe(`${TAP_START}\nAPI-TAP gh - https://api.github.com/graphql from=${basename(caller)}\n`);
   });
 
   test("with no record named it is the real gh, untouched", () => {
