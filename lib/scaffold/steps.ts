@@ -108,6 +108,8 @@ import {
 } from "./owned-files";
 import { readPreservedSection, type SectionSpec } from "../agents-md-sections";
 import { executedHookPath, hookRegistrationPath } from "../hook-trees";
+// #2597: the consumer's surface, measured by the one check this repository runs on itself.
+import { measureConcurrentLoad, surfaceReport, SurfaceUnmeasured } from "../../scripts/check-instruction-surface";
 
 /**
  * Look for a declared health route in the places a server declares one.
@@ -5879,6 +5881,46 @@ export function addPaiHarnessDevDep(root: string, actions: string[], version?: s
  * feature exists; adoption stays something a person chooses. The step writes
  * nothing, which is also why it is safe during rehearsal.
  */
+/**
+ * #2597, ADR-024 decision 1 / SC-2796: measure the instruction surface this
+ * run leaves the consumer, and report it.
+ *
+ * rungate checked its own surface and nothing checked the one it hands a
+ * consumer: one consumer's tree read 2,003,937 bytes at peak, 3,131% of the
+ * budget, and no scaffold run said so. The measurement is
+ * `measureConcurrentLoad`, which takes the launch surface from
+ * `measureSurface` — the same one this repository's own check runs — and the
+ * words are `surfaceReport`, beside it.
+ *
+ * REPORTED, not refused: refusing an over-budget surface is SC-2798's, in the
+ * generated conformity test. A tree the measurement cannot read (no rules, no
+ * CLAUDE.md) is said to be UNMEASURED, never reported as a surface of zero.
+ *
+ * Two errors mean the tree could not be read: `SurfaceUnmeasured`, which the
+ * measurement throws itself, and a file-system error from one of its reads (a
+ * rule symlinked to nothing, a rule the user cannot read). Before this step
+ * existed, a scaffold run on such a tree finished; a report-only step must not
+ * be the thing that aborts it (review, PR #2619). Any other error is a defect
+ * in the measurement and propagates rather than reading as a routine
+ * UNMEASURED line. `measure` is a parameter so a test can hand it each kind.
+ */
+export function reportInstructionSurfaceStep(
+  root: string,
+  actions: string[],
+  measure: typeof measureConcurrentLoad = measureConcurrentLoad,
+): void {
+  let reading: ReturnType<typeof measureConcurrentLoad>;
+  try {
+    reading = measure(root);
+  } catch (e) {
+    const unreadable = e instanceof SurfaceUnmeasured || (e instanceof Error && "syscall" in e && "code" in e);
+    if (!unreadable) throw e;
+    actions.push(`UNMEASURED: instruction surface — ${e.message}`);
+    return;
+  }
+  actions.push(...surfaceReport(reading));
+}
+
 export function reportExternalAdoptionStep(root: string, actions: string[]): void {
   const config = loadComplianceConfig(root);
   const sources = config?.organize?.externalSources ?? [];

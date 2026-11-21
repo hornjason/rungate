@@ -370,8 +370,9 @@ in that consumer's rendered output (#2564–#2567) passed this repository's
 suite. `docs/adr/ADR-024-what-a-consumer-loads-is-checked-before-it-ships.md`
 holds the decisions and the decomposition.
 
-- [ ] SC-2796: A scaffold or re-scaffold run measures the consumer's launch and peak surface with `measureSurface` and reports the reading with its largest contributors
+- [x] SC-2796: A scaffold or re-scaffold run measures the consumer's launch and peak surface with `measureSurface` and reports the reading with its largest contributors
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      proved-by: test/consumer-instruction-surface.test.ts "SC-2796: a scaffold run reports the consumer's instruction surface"
 - [ ] SC-2797: The consumer budget is read from rungate config, defaults to `SURFACE_BUDGET_BYTES`, and a budget more than 35% above the measured surface is refused
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2798: The generated conformity test refuses an over-budget consumer surface, and an unreadable one as UNMEASURED

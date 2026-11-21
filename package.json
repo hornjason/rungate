@@ -21,6 +21,7 @@
     "templates/",
     "specs/SPEC-TEMPLATE.md",
     "scripts/scaffold-project.ts",
+    "scripts/check-instruction-surface.ts",
     "scripts/extract-constraints.ts",
     "scripts/convert-spec.ts",
     "scripts/sync-spec-tests.ts",
