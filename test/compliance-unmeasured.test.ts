@@ -22,11 +22,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 import {
+  COMPLIANCE_TOOL_PROBE_TIMEOUT_MS,
   COMPLIANCE_TOOLS,
   complianceReading,
   overallQualityOf,
@@ -50,8 +51,11 @@ import { TOOL_PROBE_TIMEOUT_MS, toolProbe, type ToolProbe, type ToolProbeOutcome
  * the full-suite run of the commit that introduced it, with
  * `this test timed out after 5000ms`, while passing in isolation. Shipping it
  * that way would have replaced the flake #597 is about with a new one.
+ *
+ * The case waits on RepoRails' probe, whose budget is its own since #2609,
+ * so the bound follows that budget rather than the shared one.
  */
-const REAL_PROBE_TIMEOUT_MS = TOOL_PROBE_TIMEOUT_MS * 4;
+const REAL_PROBE_TIMEOUT_MS = COMPLIANCE_TOOL_PROBE_TIMEOUT_MS.reporails + 20_000;
 
 const COMPLIANCE_SOURCE = readFileSync(
   join(import.meta.dir, "..", "lib", "compliance.ts"),
@@ -118,7 +122,7 @@ describe("SC-2080: the probe seam is injected, not discovered through PATH", () 
     // a later edit lowering either number back into a tie reintroduces the
     // race, and a timeout failure reads like a broken probe rather than a
     // budget that was always too small.
-    expect(REAL_PROBE_TIMEOUT_MS).toBeGreaterThan(TOOL_PROBE_TIMEOUT_MS);
+    expect(REAL_PROBE_TIMEOUT_MS).toBeGreaterThan(Math.max(...Object.values(COMPLIANCE_TOOL_PROBE_TIMEOUT_MS)));
   });
 
   test("available is derived from the outcome and cannot be set against it", () => {
@@ -255,4 +259,59 @@ describe("SC-2079: the quality score is withheld, not averaged over whoever answ
     expect(mentions - declarations, "overallQualityOf must be called exactly once").toBe(1);
     expect(COMPLIANCE_SOURCE).toContain("overallQuality: overallQualityOf(");
   });
+});
+
+/**
+ * #2609: on a fresh machine `npx @reporails/cli version` installs uv and
+ * fetches the Python CLI before it prints a line — 13s cold on a laptop that
+ * already had uv. Under the shared 5-second budget the probe was killed
+ * mid-install, so a cold CI runner read RepoRails as broken and never wrote
+ * its cache.
+ *
+ * The fake CLI goes on a SUBPROCESS's PATH, never this process's, which is
+ * the reason the file's other cases inject their probes: nothing here leaks
+ * into the rest of the suite. It answers after 6 seconds, the least that a
+ * 5-second budget cannot wait for.
+ */
+describe("#2609: a RepoRails CLI that is still installing is not read as broken", () => {
+  const SLOW_CLI_SECONDS = 6;
+
+  test("RepoRails has a budget of its own, longer than the slow CLI; agnix keeps the shared one", () => {
+    expect(COMPLIANCE_TOOL_PROBE_TIMEOUT_MS.reporails).toBeGreaterThan(SLOW_CLI_SECONDS * 1000);
+    expect(COMPLIANCE_TOOL_PROBE_TIMEOUT_MS.agnix).toBe(TOOL_PROBE_TIMEOUT_MS);
+    expect(Object.keys(COMPLIANCE_TOOL_PROBE_TIMEOUT_MS).sort()).toEqual([...COMPLIANCE_TOOLS].sort());
+  });
+
+  test("a CLI that answers after six seconds reads as available, with its version", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-2609-slow-cli-"));
+    try {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, "npx"),
+        `#!/bin/sh\necho 'uv not found — installing...' >&2\nsleep ${SLOW_CLI_SECONDS}\necho 'CLI:     9.9.1'\n`,
+      );
+      chmodSync(join(bin, "npx"), 0o755);
+      const script = join(dir, "probe.ts");
+      writeFileSync(
+        script,
+        `import { probeComplianceTools } from ${JSON.stringify(join(import.meta.dir, "..", "lib", "compliance.ts"))};\n` +
+          `console.log(JSON.stringify(probeComplianceTools().reporails));\n`,
+      );
+      const run = Bun.spawnSync([process.execPath, script], {
+        env: { ...process.env, PATH: `${bin}:/bin:/usr/bin` },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = run.stdout.toString().trim();
+      expect(run.exitCode, run.stderr.toString()).toBe(0);
+      const probe = JSON.parse(out.split("\n").pop() ?? "null") as ToolProbe;
+      // The fake's own sentinel, so a real RepoRails on this machine cannot
+      // pass the case: only the slow stand-in prints 9.9.1.
+      expect(probe.outcome, probe.reason).toBe("available");
+      expect(probe.answer).toBe("CLI:     9.9.1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

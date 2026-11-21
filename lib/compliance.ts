@@ -10,7 +10,7 @@
  */
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from "fs";
 import { join, relative } from "path";
-import { probeExternalTool, type ToolProbe, type ToolProbeOutcome } from "./tool-probe";
+import { TOOL_PROBE_TIMEOUT_MS, probeExternalTool, type ToolProbe, type ToolProbeOutcome } from "./tool-probe";
 import { REPORAILS_CACHE_REL, freshReading, loadReporailsCache, reporailsCacheKey, saveReporailsCache, type ReporailsCache } from "./reporails-cache";
 
 // ── Types ──────────────────────────────────────────────────
@@ -308,6 +308,24 @@ const COMPLIANCE_TOOL_PROBE_ARGV: Record<ComplianceTool, string[]> = {
 };
 
 /**
+ * How long each tool's probe may take (#2609).
+ *
+ * agnix's `--version` is a local binary answering, and keeps the shared
+ * five seconds. RepoRails' `version` is not local on a fresh machine: the npm
+ * wrapper installs uv when it is missing, then uvx fetches the pinned Python
+ * CLI from PyPI before it prints a line — 13s cold on a laptop that already had
+ * uv, and a CI runner pays the uv install as well. Under five seconds the probe
+ * was killed mid-install, a cold runner read RepoRails as broken, and the
+ * RepoRails cache was never written. Killing `npx` does not stop the uvx it
+ * started, so whether a LATER probe found the install finished depended on
+ * what ran earlier in the shard: the same SHA, two verdicts (#597).
+ */
+export const COMPLIANCE_TOOL_PROBE_TIMEOUT_MS: Record<ComplianceTool, number> = {
+  agnix: TOOL_PROBE_TIMEOUT_MS,
+  reporails: 60_000,
+};
+
+/**
  * The single seam between this module and the outside world (#597).
  *
  * Every availability question Layer 1 asks is asked here, once per tool, and
@@ -332,7 +350,7 @@ export function probeComplianceTools(
       continue;
     }
     const [command, ...args] = COMPLIANCE_TOOL_PROBE_ARGV[tool];
-    probes[tool] = probeExternalTool(command, args);
+    probes[tool] = probeExternalTool(command, args, { timeoutMs: COMPLIANCE_TOOL_PROBE_TIMEOUT_MS[tool] });
   }
   return probes;
 }
