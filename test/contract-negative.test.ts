@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
-import { mkdirSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import { execSync } from "child_process";
 
@@ -60,14 +61,30 @@ const BASE = {
 };
 
 describe("contract: negative — missing environments fails ship", () => {
-  test("fails", () => {
-    makeNegFixture("broken-env", {
-      ...BASE, issue: 9997, slug: "broken-env", issueGoal: "Broken env test",
-      acs: [{ id: "AC-1", type: "CODE", statement: "Fix applied correctly to module", threshold: { op: "contains", value: "fix" }, evidenceMethod: { type: "BUN_TEST", command: "bun test" }, evidence: { type: "command-output", content: "24 pass" }, verdict: "PASS" }],
-      environments: {},
-    });
-    const r = runGate("ship", "broken-env");
-    expect(r.fail).toBeGreaterThan(0);
+  // #2615: the environment checks return early unless the project declares a
+  // dev server, and this case's project used to be `/tmp/test`, which declares
+  // nothing — so they never read `environments`, and `r.fail > 0` was
+  // satisfied by fourteen unrelated failures. The project now declares
+  // `dev.apiBase`, and the case asserts the check it is named after.
+  test("fails on local-api-validated", () => {
+    const project = mkdtempSync(join(tmpdir(), "rg-2615-env-project-"));
+    try {
+      mkdirSync(join(project, ".claude"), { recursive: true });
+      writeFileSync(join(project, ".claude", "rungate.json"), JSON.stringify({ dev: { apiBase: "http://127.0.0.1:1" } }));
+      makeNegFixture("broken-env", {
+        ...BASE, projectRoot: project, issue: 9997, slug: "broken-env", issueGoal: "Broken env test",
+        acs: [{ id: "AC-1", type: "CODE", statement: "Fix applied correctly to module", threshold: { op: "contains", value: "fix" }, evidenceMethod: { type: "BUN_TEST", command: "bun test" }, evidence: { type: "command-output", content: "24 pass" }, verdict: "PASS" }],
+        environments: {},
+      });
+      const r = runGate("ship", "broken-env");
+      expect(r.fail).toBeGreaterThan(0);
+      expect(
+        r.output,
+        "ship failed, but not on the environment check — this case is satisfied by any unrelated failure unless it names its own",
+      ).toMatch(/^\s*- local-api-validated: /m);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
   });
 });
 
