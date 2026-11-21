@@ -4,6 +4,7 @@
  *
  *   bun scripts/ci-api-census.ts <record-or-job-log>… [--json]
  *   bun scripts/ci-api-census.ts --install-gh-tap <dir> [--real-gh <path>]
+ *   bun scripts/ci-api-census.ts --model <review-job-log>…
  *
  * Jason, on 2026-11-21: "we shouldn't be spamming API endpoints if we can find
  * a better method to batch." Nobody had counted. This reads what a run itself
@@ -29,6 +30,11 @@
  * file is UNMEASURED too. Either exits `CENSUS_UNMEASURED_EXIT`, naming the
  * file. A line that does not parse, and a request the preload could not write
  * down (`API-TAP-LOST`), are counted and printed, never dropped.
+ *
+ * `--model` reads the AI reviewers' model calls instead, from the result the
+ * review action prints when it finishes: `num_turns` (one model request per
+ * turn) and `total_cost_usd`. A log with no result made no model call — a
+ * review skipped on push — and is counted as such, never as zero turns.
  *
  * Imports nothing relative, so a mutant copy of this file still loads.
  */
@@ -177,6 +183,33 @@ export function renderCensus(c: Census): string {
   return out.join("\n");
 }
 
+/** One review job's model run, from the last result object its log printed; null when it printed none. */
+export function readModelRun(log: string): { turns: number; costUsd: number | null } | null {
+  const turns = [...log.matchAll(/"num_turns":\s*(\d+)/g)];
+  if (turns.length === 0) return null;
+  const costs = [...log.matchAll(/"total_cost_usd":\s*([0-9.]+)/g)];
+  return {
+    turns: Number(turns[turns.length - 1][1]),
+    costUsd: costs.length === 0 ? null : Number(costs[costs.length - 1][1]),
+  };
+}
+
+export function renderModelRuns(rows: { log: string; run: { turns: number; costUsd: number | null } | null }[]): string {
+  const runs = rows.flatMap(r => (r.run ? [r.run] : []));
+  const turns = runs.map(r => r.turns);
+  const total = turns.reduce((s, n) => s + n, 0);
+  const costed = runs.filter(r => r.costUsd !== null);
+  const cost = costed.reduce((s, r) => s + (r.costUsd ?? 0), 0);
+  const out = [`${rows.length} logs: ${runs.length} with a model run, ${rows.length - runs.length} without`];
+  if (runs.length > 0) {
+    out.push(
+      `${total} model turns (one request each): mean ${(total / runs.length).toFixed(1)}, min ${Math.min(...turns)}, max ${Math.max(...turns)}`,
+    );
+    out.push(`cost $${cost.toFixed(2)} over ${costed.length} run${costed.length === 1 ? "" : "s"} that reported one, mean $${costed.length ? (cost / costed.length).toFixed(2) : "n/a"}`);
+  }
+  return out.join("\n");
+}
+
 /** The `gh` the tap installs: the real one, with each request moved into the record. */
 export function ghTapScript(realGh: string): string {
   const quoted = `'${realGh.replace(/'/g, `'\\''`)}'`;
@@ -237,6 +270,19 @@ if (import.meta.main) {
   const json = args.includes("--json");
   const files = args.filter(a => !a.startsWith("--"));
   if (files.length === 0) refuse("name at least one record or CI job log to count");
+  if (args.includes("--model")) {
+    const rows = files.map(f => {
+      let text: string;
+      try {
+        text = readFileSync(f, "utf-8");
+      } catch (e) {
+        refuse(`${f}: unreadable (${e instanceof Error ? e.message.split("\n")[0] : String(e)})`);
+      }
+      return { log: f, run: readModelRun(text) };
+    });
+    console.log(json ? JSON.stringify(rows, null, 2) : renderModelRuns(rows));
+    process.exit(0);
+  }
   const readings: TapReading[] = files.map(f => {
     let text: string;
     try {

@@ -27,8 +27,10 @@ import {
   classifyCall,
   countCalls,
   ghTapScript,
+  readModelRun,
   readTap,
   renderCensus,
+  renderModelRuns,
   tapBunOptions,
 } from "../scripts/ci-api-census";
 
@@ -282,5 +284,59 @@ describe("#2596: the gh tap is gh, plus a record", () => {
     expect(readFileSync(shim, "utf-8")).toContain(fakeGh);
     const call = Bun.spawnSync([shim, "x"], { stdout: "pipe", stderr: "pipe" });
     expect(call.stdout.toString()).toBe("stdout:x\n");
+  });
+});
+
+/**
+ * The reviewers' model calls are read from what the review action itself
+ * prints at the end of a run — its result object carries `num_turns`, one
+ * model request per turn, and `total_cost_usd`. No tap is needed, and none
+ * could see inside the action.
+ */
+describe("#2596: model calls are read from the review action's own result", () => {
+  const result = (turns: number, cost: number) =>
+    [
+      "2026-11-21T19:04:22.5000000Z {",
+      `2026-11-21T19:04:22.5224731Z   "num_turns": ${turns},`,
+      `2026-11-21T19:04:22.5300000Z   "total_cost_usd": ${cost},`,
+      "2026-11-21T19:04:22.5400000Z }",
+    ].join("\n");
+
+  test("a log with a result reads its turns and cost", () => {
+    expect(readModelRun(result(24, 0.4822))).toEqual({ turns: 24, costUsd: 0.4822 });
+  });
+
+  test("a log with no result is no model run, not zero turns", () => {
+    expect(readModelRun("2026-11-21T19:04:22Z the review was skipped on push")).toBeNull();
+  });
+
+  test("a result printed twice is one run, read once", () => {
+    expect(readModelRun(`${result(24, 0.48)}\n${result(24, 0.48)}`)).toEqual({ turns: 24, costUsd: 0.48 });
+  });
+
+  test("the summary counts runs with and without a model call, and its total is the sum", () => {
+    const text = renderModelRuns([
+      { log: "a.log", run: { turns: 20, costUsd: 0.5 } },
+      { log: "b.log", run: { turns: 30, costUsd: 1 } },
+      { log: "c.log", run: null },
+    ]);
+    expect(text).toContain("3 logs: 2 with a model run, 1 without");
+    expect(text).toContain("50 model turns");
+    expect(text).toContain("mean 25.0, min 20, max 30");
+    expect(text).toContain("$1.50");
+  });
+
+  test("--model over an unreadable log is UNMEASURED", () => {
+    const run = Bun.spawnSync([process.execPath, CENSUS, "--model", join(scratch, "no-such.log")], { stdout: "pipe", stderr: "pipe" });
+    expect(run.exitCode).toBe(CENSUS_UNMEASURED_EXIT);
+    expect(run.exitCode).not.toBe(0);
+  });
+
+  test("--model over real-shaped logs prints the count", () => {
+    const a = file("air-a.log", result(20, 0.5));
+    const b = file("air-b.log", "no model here");
+    const run = Bun.spawnSync([process.execPath, CENSUS, "--model", a, b], { stdout: "pipe", stderr: "pipe" });
+    expect(run.exitCode, run.stderr.toString()).toBe(0);
+    expect(run.stdout.toString()).toContain("2 logs: 1 with a model run, 1 without");
   });
 });
