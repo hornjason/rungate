@@ -404,7 +404,7 @@ is built from this document.
 | **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741, SC-2752, SC-2753, SC-2762, SC-2763, SC-2764, SC-2786 |
 | **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749, SC-2751, SC-2787, SC-2788, SC-2789, SC-2790, SC-2791, SC-2792, SC-2793, SC-2794 |
 | **Phase 8** | SC-2622, SC-2623, SC-2624 |
-| **Phase 9** | SC-2776, SC-2777, SC-2778, SC-2779, SC-2780, SC-2782, SC-2783, SC-2784, SC-2785 |
+| **Phase 9** | SC-2776, SC-2777, SC-2778, SC-2779, SC-2780, SC-2782, SC-2783, SC-2784, SC-2785, SC-2795 |
 | **Phase 10** | SC-2625 |
 
 ### Phase 0 — the transform refuses
@@ -559,6 +559,11 @@ acceptance test, so it is also the honest answer to *when is the engine done*
       needs: test
       proved-by: test/issue-filing-gate.test.ts, the FG-266..FG-278 describe (`-t "FG-2(6[6-9]|7[0-8])"`) — 13 pass, 0 fail, 2026-11-17, on the PR that closes #2343. With the count injected, in `ship.mode: direct`: a shrinking, level or growing backlog admits a 36th filing and refuses a 37th naming 36; an unread or throwing count does the same and the refusal says UNMEASURED with the reason; an engine-queued clause gets the ceiling, not its raise of 24; every refusal prints the day's opened and closed counts; harness mode keeps its cap of 1 and reads no count; an explicit `board.filingsPerRun` is not lifted. Three hand mutations (a growing backlog falling back, an unread count falling back, harness lifted), each caught.
       fingerprint: b980e1d9
+- [x] SC-2795: `board-conformance`'s `criteria-named` does not count an open `from-consumer` issue that names no criterion as short for its first two days, the window `consumer-intake` reads (SC-2783) from the same constant, and names it apart, over a denominator that stays every open issue; from then on it is counted as any other issue is, an issue no consumer filed gets no grace at any age, and a consumer intake that could not be read graces nobody (Jason, 2026-11-21, #2589)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+      proved-by: test/board-conformance.test.ts "SC-2795: criteria-named does not count a consumer issue short for its first two days" (`-t SC-2795`, 8 pass, 0 fail, 2026-11-21, on the PR that closes #2589). `consumerGrace` in scripts/board-conformance.ts is the one decider, reading `CONSUMER_INTAKE_GRACE_MS`. A consumer issue naming nothing at one day is not counted short and is printed as "not yet counted", over a denominator that stays every open issue, so a board whose only open issue is that one is met 1 of 1, never 0 of 0. At three days it is SHORT and named. At exactly two days both `criteria-named` and `consumer-intake` hold, and a millisecond later both count. An issue no consumer filed is SHORT at any age. A young issue that names a criterion or declares none is counted as covered. An intake never read, read at no time, or a row with no filing time graces nobody. Eight hand mutations, each caught: the age check dropped (3 fail), `<` at the edge (1), every nameless issue graced (4), covered issues graced (5), an unread intake gracing all (1), the denominator shrunk to the ungraced issues (2), the line not printed (1), the list emptied (2). Ticked by `sync-sc-status --only SC-2795`
+      fingerprint: 4953ed1f
 - [x] SC-2787: when `board.mergeWorkflow` names a consumer's merge workflow, the generated `adr-accepted.yml` also runs on that workflow's `workflow_run` completion and places every ADR accepted since the head of its own last successful run on main; with no such run it refuses UNMEASURED rather than guess a range (Jason, 2026-11-19, ADR-022)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
