@@ -22,7 +22,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { DEFAULT_TRACKER_SECRET, createCiWorkflows, shardCount, suiteReadsTracker, testSecrets, trackerTokenSecret } from "../lib/scaffold/steps";
+import { DEFAULT_TRACKER_SECRET, createCiWorkflows, persistPaths, shardCount, suiteReadsTracker, testSecrets, trackerTokenSecret } from "../lib/scaffold/steps";
 import { mergeManagedWorkflow } from "../lib/scaffold/managed-workflow";
 
 describe("#728: shardCount reads one declaration", () => {
@@ -579,6 +579,74 @@ describe("#2594: ci.testSecrets", () => {
       const tracker = { ...b.ci, suiteReadsTracker: true, trackerTokenSecret: "RUNGATE_PROJECT_TOKEN" };
       expect(emit({ ...tracker, testSecrets: [] })).toBe(emit(tracker));
       expect(handsOver(suiteJob(emit(b.ci), b.job), "AILS_API_KEY")).toBe(false);
+    });
+  }
+});
+
+/**
+ * #2595: `ci.persistPaths` carries named files from one CI run to the next,
+ * so the RepoRails cache survives and a run that changed no instruction file
+ * makes no RepoRails call. Restored before the suite from the most recent
+ * entry, saved after it under the files' own hash, so a shard that changed
+ * nothing skips the save and the shard that ran the checks writes the newest.
+ */
+describe("#2595: ci.persistPaths", () => {
+  const emit = (ci: Record<string, unknown>): string => {
+    const root = mkdtempSync(join(tmpdir(), "rungate-persist-"));
+    try {
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(
+        join(root, ".claude", "rungate", "config.json"),
+        JSON.stringify({ slug: "persistfix", test: { command: "bun test", timeout: 300000 }, ci }),
+      );
+      writeFileSync(join(root, ".bun-version"), "1.4.3\n");
+      createCiWorkflows(root, [], { force: true });
+      const out = join(root, ".github", "workflows", "ci.yml");
+      if (!existsSync(out)) throw new Error("the generator wrote no ci.yml. UNMEASURED, not a pass.");
+      return readFileSync(out, "utf8");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const P = ".rungate/reporails-cache.json";
+  const bodies = [
+    { what: "unsharded", ci: {} as Record<string, unknown> },
+    { what: "sharded", ci: { shards: 2 } as Record<string, unknown> },
+  ];
+
+  test("absent and empty mean nothing persisted; paths are trimmed", () => {
+    expect(persistPaths(undefined)).toEqual([]);
+    expect(persistPaths({})).toEqual([]);
+    expect(persistPaths({ persistPaths: [] })).toEqual([]);
+    expect(persistPaths({ persistPaths: [` ${P} `] })).toEqual([P]);
+  });
+
+  test("a path that could escape the checkout or the YAML is REFUSED", () => {
+    // "." and its spellings would restore an old snapshot over the whole
+    // checkout before the suite runs (#2608 review); a segment must name something.
+    for (const bad of [P, [7], [""], ["/etc/passwd"], ["../outside"], ["a/../../b"], ["it's"], ["a\nb"], ["${{ secrets.X }}"], ["x*"], [P, P], ["."], ["./x"], ["a/./b"], ["a//b"], ["dir/"]]) {
+      expect(() => persistPaths({ persistPaths: bad }), `${JSON.stringify(bad)} was accepted`).toThrow();
+    }
+  });
+
+  for (const b of bodies) {
+    test(`${b.what}: restored before the suite, saved after it under the file's own hash`, () => {
+      const yml = emit({ ...b.ci, persistPaths: [P] });
+      const restore = yml.indexOf("uses: actions/cache/restore@v4");
+      const suite = yml.indexOf("      - run: bun test");
+      const save = yml.indexOf("uses: actions/cache/save@v4");
+      expect(restore, "no restore step").toBeGreaterThan(0);
+      expect(save, "no save step").toBeGreaterThan(0);
+      expect(restore < suite && suite < save, "restore, suite and save are out of order").toBe(true);
+      expect(yml).toContain("restore-keys: |\n            rungate-persist-");
+      expect(yml).toContain(`key: rungate-persist-\${{ hashFiles('${P}') }}`);
+      // A failed suite still saves what it read.
+      expect(/- name: Save persisted paths[^\n]*\n {8}if: always\(\)/.test(yml), "the save is skipped when the suite fails").toBe(true);
+    });
+
+    test(`${b.what}: nothing declared is byte-identical to today`, () => {
+      expect(emit({ ...b.ci, persistPaths: [] })).toBe(emit(b.ci));
+      expect(emit(b.ci)).not.toContain("actions/cache");
     });
   }
 });

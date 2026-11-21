@@ -59,6 +59,14 @@ export interface ToolProbe {
   exitCode: number | null;
   /** One line a log reader can act on. */
   reason: string;
+  /**
+   * The first line the tool printed, when it answered. For a `--version`-style
+   * probe this is the version, so a caller that needs it (the RepoRails cache
+   * key, #2595) reads it here instead of spawning the tool a second time,
+   * which would be a second availability decider. Absent when it did not
+   * answer or printed nothing.
+   */
+  answer?: string;
 }
 
 export interface ToolProbeOptions {
@@ -80,6 +88,7 @@ export function toolProbe(fields: {
   tool: string;
   exitCode?: number | null;
   reason: string;
+  answer?: string;
 }): ToolProbe {
   return {
     outcome: fields.outcome,
@@ -87,6 +96,7 @@ export function toolProbe(fields: {
     tool: fields.tool,
     exitCode: fields.exitCode ?? null,
     reason: fields.reason,
+    ...(fields.answer ? { answer: fields.answer } : {}),
   };
 }
 
@@ -127,6 +137,7 @@ export function probeExternalTool(command: string, args: string[] = [], opts?: T
       tool,
       exitCode,
       reason: `${tool} ran and answered (exit ${exitCode})`,
+      answer: stdout.trim().split("\n")[0]?.trim() || undefined,
     });
   }
 

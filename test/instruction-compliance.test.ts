@@ -192,6 +192,10 @@ describe("Instruction Compliance — Layer 1 (Template Quality)", () => {
       console.log(`   Overall RepoRails quality: ${report.overallQuality.toFixed(1)}/10`);
     }
     console.log(`   Tools: agnix=${report.toolsAvailable.agnix}, reporails=${report.toolsAvailable.reporails}`);
+    // #2595: how many RepoRails readings came from the cache, so a CI log
+    // shows the call count falling rather than asserting that it did.
+    const c = report.reporailsCache;
+    if (c) console.log(`   RepoRails cache: ${c.hits} from cache, ${c.checked} checked (${c.path ?? "off"}; ${c.version ?? "no CLI version"})`);
     for (const f of scored.sort((a, b) => (a.reporailsQuality ?? 0) - (b.reporailsQuality ?? 0))) {
       const q = f.reporailsQuality !== null ? `${f.reporailsQuality.toFixed(1)}/10` : "n/a";
       const high = f.findings.filter(fi => fi.severity === "HIGH").length;

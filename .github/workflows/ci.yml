@@ -1,4 +1,4 @@
-# generated-sha: ae890ea64ee96fff
+# generated-sha: 1d42b5928b10a749
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: CI
 
@@ -145,6 +145,15 @@ jobs:
           else
             echo "rungate: no scripts/ci-setup.sh in this tree, so no consumer setup ran (#529)"
           fi
+      # ci.persistPaths (#2595): the most recent saved copy, from any run.
+      - name: Restore persisted paths (ci.persistPaths)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .rungate/reporails-cache.json
+          key: rungate-persist-${{ github.run_id }}
+          restore-keys: |
+            rungate-persist-
       - run: bun test --shard=${{ matrix.shard }}/4 --reporter=junit --reporter-outfile=${{ runner.temp }}/rungate-junit-${{ matrix.shard }}.xml
         env:
           # ci.suiteReadsTracker, with ci.trackerTokenSecret naming the secret.
@@ -159,6 +168,15 @@ jobs:
           # name (#2594). Unset is empty, and the reader that needs it says so.
           AILS_API_KEY: ${{ secrets.AILS_API_KEY }}
       - run: bun run typecheck
+      # Keyed on the files' own hash: a shard that changed nothing finds the key
+      # taken and skips, so the shard that wrote new readings saves the newest.
+      - name: Save persisted paths (ci.persistPaths)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .rungate/reporails-cache.json
+          key: rungate-persist-${{ hashFiles('.rungate/reporails-cache.json') }}
       # #1173. The per-case durations, kept so they can accumulate across
       # runs — one run cannot say whether a case has regressed.
       - name: Keep this run's per-case durations

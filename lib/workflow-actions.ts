@@ -163,6 +163,21 @@ export const PINNING: readonly ActionPin[] = [
     version: "v4",
     why: "GitHub's own namespace on GitHub's own runner; the tag is how a security patch reaches a consumer who is not watching",
   },
+  // #2595. `ci.persistPaths` restores and saves named files between runs
+  // through the Actions cache, which the runner reaches for its own run. Same
+  // first-party reasoning as `actions/checkout` above.
+  {
+    action: "actions/cache/restore",
+    style: "tag",
+    version: "v4",
+    why: "GitHub's own namespace on GitHub's own runner; the tag is how a security patch reaches a consumer who is not watching",
+  },
+  {
+    action: "actions/cache/save",
+    style: "tag",
+    version: "v4",
+    why: "GitHub's own namespace on GitHub's own runner; the tag is how a security patch reaches a consumer who is not watching",
+  },
   {
     action: "oven-sh/setup-bun",
     style: "sha",

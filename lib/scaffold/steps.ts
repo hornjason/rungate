@@ -3164,6 +3164,67 @@ export function testSecrets(ci: unknown): string[] {
 }
 
 /**
+ * The files carried from one CI run to the next — `ci.persistPaths`, #2595.
+ *
+ * Written for the RepoRails cache: a reading is keyed by file content, so a
+ * run that restores the last run's cache and changed no instruction file asks
+ * RepoRails nothing. Generic, so a consumer with its own cache declares it the
+ * same way.
+ *
+ * Each path is interpolated into a YAML block and into `hashFiles('…')`, so
+ * this REFUSES anything that is not a plain relative path inside the checkout:
+ * absolute, `..`, a quote, a newline, an expression, a glob, a duplicate.
+ * And every SEGMENT must name something: `.`, `./x`, `a//b` and `dir/` are
+ * refused, because `path: .` would restore an old snapshot over the whole
+ * checkout before the suite runs (#2608 review). Name files git does not
+ * track: a restore writes over whatever is at the path.
+ */
+export function persistPaths(ci: unknown): string[] {
+  const raw = (ci as { persistPaths?: unknown } | null | undefined)?.persistPaths;
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) throw new Error(`ci.persistPaths is ${JSON.stringify(raw)}, expected a list of relative paths.`);
+  const paths: string[] = [];
+  for (const entry of raw) {
+    const p = typeof entry === "string" ? entry.trim() : "";
+    const segments = p.split("/");
+    if (!/^[A-Za-z0-9._][A-Za-z0-9._/-]*$/.test(p) || segments.some((seg) => seg === "" || seg === "." || seg === "..")) {
+      throw new Error(
+        `ci.persistPaths has ${JSON.stringify(entry)}, which is not a plain relative path inside the checkout ` +
+          `(letters, digits, . _ - and /, no ..). It is written into the generated workflow, so this refuses rather than emitting it.`,
+      );
+    }
+    if (paths.includes(p)) throw new Error(`ci.persistPaths names ${p} twice.`);
+    paths.push(p);
+  }
+  return paths;
+}
+
+/** The restore and save steps for {@link persistPaths}, or two empty strings. */
+function persistSteps(ci: unknown): { restore: string; save: string } {
+  const paths = persistPaths(ci);
+  if (paths.length === 0) return { restore: "", save: "" };
+  const block = paths.map((p) => `\n            ${p}`).join("");
+  const hash = paths.map((p) => `'${p}'`).join(", ");
+  return {
+    restore:
+      `\n      # ci.persistPaths (#2595): the most recent saved copy, from any run.` +
+      `\n      - name: Restore persisted paths (ci.persistPaths)` +
+      `\n        uses: actions/cache/restore@v4` +
+      `\n        with:\n          path: |${block}` +
+      `\n          key: rungate-persist-\${{ github.run_id }}` +
+      `\n          restore-keys: |\n            rungate-persist-`,
+    save:
+      `\n      # Keyed on the files' own hash: a shard that changed nothing finds the key` +
+      `\n      # taken and skips, so the shard that wrote new readings saves the newest.` +
+      `\n      - name: Save persisted paths (ci.persistPaths)` +
+      `\n        if: always()` +
+      `\n        uses: actions/cache/save@v4` +
+      `\n        with:\n          path: |${block}` +
+      `\n          key: rungate-persist-\${{ hashFiles(${hash}) }}`,
+  };
+}
+
+/**
  * The one non-zero exit the shard aggregate ever takes (#1181).
  *
  * Declared once, and spelled nowhere else in the script, so
@@ -4043,6 +4104,7 @@ export function createCiWorkflows(root: string, actions: string[], opts: { force
     ? `\n    # ci.suiteReadsTracker. The step below reads milestones and issues;\n    # without this the token it is handed has no scope for either.\n    permissions:\n      contents: read\n      issues: read`
     : "";
 
+  const persist = persistSteps(harness?.ci);
   const typecheck = typecheckDecision(root);
   const typecheckStep = typecheck.command
     ? `\n      - run: ${typecheck.command}`
@@ -4138,8 +4200,8 @@ ${baseRefStep}
         with:
 ${bunStep}
 ${setupBunEnv("        ")}
-      - run: bun install${globalTools.step}${ciSetupStep()}
-      - run: ${test.command} --shard=\${{ matrix.shard }}/${shards}${junitReporterFlags(test.command, ciJunitOutfile(CI_JUNIT_SHARD_LEG))}${trackerTokenEnv}${typecheckStep}
+      - run: bun install${globalTools.step}${ciSetupStep()}${persist.restore}
+      - run: ${test.command} --shard=\${{ matrix.shard }}/${shards}${junitReporterFlags(test.command, ciJunitOutfile(CI_JUNIT_SHARD_LEG))}${trackerTokenEnv}${typecheckStep}${persist.save}
 ${buildJunitArtifactStep("      ", test.command, CI_JUNIT_SHARD_LEG)}${buildShardMarkerSteps("      ")}
 
   # The aggregate. Named "test" because that is the context branch protection
@@ -4227,8 +4289,8 @@ ${baseRefStep}
         with:
 ${bunStep}
 ${setupBunEnv("        ")}
-      - run: bun install${globalTools.step}${ciSetupStep()}
-      - run: ${test.command}${junitReporterFlags(test.command, ciJunitOutfile(CI_JUNIT_SINGLE_LEG))}${trackerTokenEnv}${typecheckStep}
+      - run: bun install${globalTools.step}${ciSetupStep()}${persist.restore}
+      - run: ${test.command}${junitReporterFlags(test.command, ciJunitOutfile(CI_JUNIT_SINGLE_LEG))}${trackerTokenEnv}${typecheckStep}${persist.save}
 ${buildJunitArtifactStep("      ", test.command, CI_JUNIT_SINGLE_LEG)}`;
 
   const gatesYml = `# Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
