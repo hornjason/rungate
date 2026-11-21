@@ -13,7 +13,7 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -91,6 +91,19 @@ describe("SC-2796: a scaffold run reports the consumer's instruction surface", (
     expect(actions.some(a => a.startsWith("SURFACE:")), actions.join(" | ")).toBe(false);
     const line = actions.find(a => a.startsWith("UNMEASURED: instruction surface"));
     expect(line, actions.join(" | ")).toContain("no .md files under");
+  });
+
+  test("a rule symlinked to nothing is UNMEASURED, and does not abort the run", () => {
+    // A scaffold run on this tree finished before the step existed (review,
+    // PR #2619): the measurement's read of the dangling rule throws ENOENT.
+    const root = consumer();
+    symlinkSync(join(root, "nowhere.md"), join(root, ".claude", "rules", "dangling.md"));
+    const actions: string[] = [];
+    reportInstructionSurfaceStep(root, actions);
+    expect(actions.some(a => a.startsWith("SURFACE:")), actions.join(" | ")).toBe(false);
+    const line = actions.find(a => a.startsWith("UNMEASURED: instruction surface"));
+    expect(line, actions.join(" | ")).toContain("dangling.md");
+    expect(line).toContain("ENOENT");
   });
 
   test("only an unreadable tree is UNMEASURED: any other failure in the measurement propagates", () => {

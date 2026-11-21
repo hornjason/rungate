@@ -5896,11 +5896,13 @@ export function addPaiHarnessDevDep(root: string, actions: string[], version?: s
  * generated conformity test. A tree the measurement cannot read (no rules, no
  * CLAUDE.md) is said to be UNMEASURED, never reported as a surface of zero.
  *
- * Only that case. The catch is narrowed to `SurfaceUnmeasured`, the error the
- * measurement throws for it, exactly as the script's own `main` does: any
- * other error is a defect in the measurement and propagates, rather than
- * reading as a routine UNMEASURED line (review, PR #2619). `measure` is a
- * parameter so a test can hand it each kind of failure.
+ * Two errors mean the tree could not be read: `SurfaceUnmeasured`, which the
+ * measurement throws itself, and a file-system error from one of its reads (a
+ * rule symlinked to nothing, a rule the user cannot read). Before this step
+ * existed, a scaffold run on such a tree finished; a report-only step must not
+ * be the thing that aborts it (review, PR #2619). Any other error is a defect
+ * in the measurement and propagates rather than reading as a routine
+ * UNMEASURED line. `measure` is a parameter so a test can hand it each kind.
  */
 export function reportInstructionSurfaceStep(
   root: string,
@@ -5911,7 +5913,8 @@ export function reportInstructionSurfaceStep(
   try {
     reading = measure(root);
   } catch (e) {
-    if (!(e instanceof SurfaceUnmeasured)) throw e;
+    const unreadable = e instanceof SurfaceUnmeasured || (e instanceof Error && "syscall" in e && "code" in e);
+    if (!unreadable) throw e;
     actions.push(`UNMEASURED: instruction surface — ${e.message}`);
     return;
   }
