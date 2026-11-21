@@ -69,6 +69,9 @@ const SCANNED_FILES = [
   // caught it the same way — a PR that adds a consumer-* file has to say so
   // here or the scan silently stops covering the file it just created.
   "test/consumer-requirements-ownership.test.ts",
+  // #2597: measures the instruction surface a scaffold run leaves a consumer.
+  // It runs the real scaffold and the real measurement; it rebuilds no ship.
+  "test/consumer-instruction-surface.test.ts",
   "test/helpers/consumer-ship-sites.ts",
   "test/fixtures/consumer-ui-project/.claude/rungate.json",
   "test/fixtures/consumer-ui-project/workflow-state.json",

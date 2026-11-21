@@ -454,7 +454,11 @@ const UNCLAIMED_RATCHET = 150;
 // 195: SC-2795 (#2589) ticked from its describe in test/board-conformance.test.ts —
 // criteria-named does not count a consumer issue short for its first two days, a
 // reading of a board snapshot no registered pattern expresses (2026-11-21).
-const CLAIMED_UNBINDABLE = 195;
+// 196: SC-2796 (#2597) ticked by `sync-sc-status --only SC-2796` — a scaffold
+// run reports the consumer's instruction surface, a reading of the run's
+// report lines that no registered pattern expresses; the `SC-2796` describe in
+// test/consumer-instruction-surface.test.ts names it (2026-11-21).
+const CLAIMED_UNBINDABLE = 196;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
