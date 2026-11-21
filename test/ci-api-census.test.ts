@@ -487,3 +487,21 @@ describe("#2596: runs per workflow are counted from the Actions API's list", () 
     expect(run.exitCode).not.toBe(0);
   });
 });
+
+/**
+ * The research document tells the next person how to repeat the count. Its
+ * commands are held to this script, so a renamed flag or a respelt preload
+ * cannot leave the document describing a command that no longer runs.
+ */
+describe("#2596: the research document's commands are ones this script accepts", () => {
+  const DOC = join(ROOT, "docs", "research", "ci-api-call-census.md");
+
+  test("every flag the document passes is one the script reads, and the preload is spelt with =", () => {
+    const doc = readFileSync(DOC, "utf-8");
+    const source = readFileSync(CENSUS, "utf-8");
+    const flags = new Set([...doc.matchAll(/ci-api-census\.ts (--[a-z-]+)/g)].map(m => m[1]));
+    expect([...flags].sort()).toEqual(["--install-gh-tap", "--model", "--runs"]);
+    for (const f of flags) expect(source, `the document runs ${f}, which the script does not read`).toContain(`"${f}"`);
+    expect(doc).toContain(`BUN_OPTIONS="${tapBunOptions("$PWD/scripts/api-call-tap.ts")}"`);
+  });
+});
