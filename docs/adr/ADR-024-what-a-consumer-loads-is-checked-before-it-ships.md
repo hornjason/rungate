@@ -9,7 +9,7 @@ updated: 2026-11-21
 
 ## Status
 
-**Accepted, 2026-11-21 (#2568).** Jason approved merging it as written: decisions 2 to 7 as the DA proposed them, and the criteria stay in `specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md` (`board-scope: deferred`) rather than moving to an active spec. The criteria are SC-2796 to SC-2805: SC-2795 was taken on main by #2589 before this merged, so the block moved up one. The rest of this paragraph is the proposal as it stood. **Proposed, 2026-11-20 (#2568).** Jason decides. Jason has already chosen the overall shape: render, then lint, then audit, then verify, with the surface check shipping to consumers as phase 1. Still open: decisions 4 to 7 below, and everything under "Not decided here".
+**Accepted, 2026-11-21 (#2568).** Jason approved merging it as written: decisions 2 to 7 as the DA proposed them, and the criteria stay in `specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md` (`board-scope: deferred`) rather than moving to an active spec. The criteria are SC-2796 to SC-2805: SC-2795 was taken on main by #2589 before this merged, so the block moved up one. One wording change came with acceptance: SC-2801 said "a `CANARY_MARKER`", and that word alone matched the registry's `canary` pattern, whose assertion passes, so `sync-sc-status` would have ticked the whole criterion with nothing testing its other clauses (`test/sync-sc-todo-outranks-comment.test.ts` AC-4 refused it). It now says "the brief templates' test-only marker string", the same thing without the word. The rest of this paragraph is the proposal as it stood. **Proposed, 2026-11-20 (#2568).** Jason decides. Jason has already chosen the overall shape: render, then lint, then audit, then verify, with the surface check shipping to consumers as phase 1. Still open: decisions 4 to 7 below, and everything under "Not decided here".
 
 ## Context
 
@@ -86,7 +86,7 @@ SC-2796 to SC-2805 are reserved in `specs/sc-reservations.json` on this ADR's br
 - SC-2798: The generated conformity test refuses an over-budget consumer surface, and refuses an unreadable one as UNMEASURED.
 - SC-2799: CI renders the full scaffold into fixture consumers, and every lint below reads that rendered tree.
 - SC-2800: Every file, heading or table that a rendered brief or rule tells its agent to read exists in the rendered tree.
-- SC-2801: No rendered file carries an unexpanded `${…}`, a `CANARY_MARKER`, or a numbered list that skips, and the SC-354 test edits a copy, never the shipped template.
+- SC-2801: No rendered file carries an unexpanded `${…}`, the brief templates' test-only marker string, or a numbered list that skips, and the SC-354 test edits a copy, never the shipped template.
 - SC-2802: No always-loaded rendered rule states a count of files that adding one file would change.
 - SC-2803: Pull requests touching `templates/`, `lib/generators/` or `lib/doc-routing.ts` get a prompt-audit review lens that posts findings as threads, proven by a planted-cruft subject that it flags and a clean control that it does not.
 - SC-2804: A pull request that removes a line from `templates/agent-briefs/<name>.md` runs that brief's evals, and aditi and discovery have at least one eval each.
