@@ -28,12 +28,14 @@
  * refuses unconditionally.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { spawnSync } from "child_process";
 import {
+  BOARD_SNAPSHOT_DIR_ENV,
   DEFAULT_PRODUCER,
+  keptBoardPath,
   OFFENDERS_SHOWN,
   READINGS,
   READING_NAMES,
@@ -1886,6 +1888,109 @@ describe("D3: what the producer said on the success path", () => {
     // This is the only case that names the production value.
     expect(DEFAULT_PRODUCER.endsWith("scripts/board-snapshot.ts"), DEFAULT_PRODUCER).toBe(true);
     expect(readFileSync(DEFAULT_PRODUCER, "utf-8")).toContain("board-snapshot");
+  });
+});
+
+/**
+ * #2612: one stage-ladder run used to produce the same board up to nine
+ * times — nine API round-trips, taken at nine moments, inside one verdict.
+ * A run that names a directory in `RUNGATE_BOARD_SNAPSHOT_DIR` produces each
+ * board once and every later `--produce` for the same inputs reads that
+ * file. The directory is the run's own, so nothing is carried between runs.
+ */
+describe("#2612: a run produces each board once", () => {
+  const flags = (over: Partial<Flags> = {}): Flags => ({
+    listReadings: false,
+    produce: true,
+    snapshotGiven: false,
+    readingGiven: false,
+    emitReadingsGiven: false,
+    spec: "specs/X.md",
+    specGiven: true,
+    prefix: "Pipeline",
+    prefixGiven: true,
+    repo: "o/n",
+    repoGiven: true,
+    ...over,
+  });
+
+  /** A producer that appends a line to `calls` every time it runs, then emits a complete board. */
+  function countingProducer(): { at: string; calls: string; runs: () => number } {
+    const dir = mkdtempSync(join(SCRATCH, "producer-2612-"));
+    const calls = join(dir, "calls.log");
+    const at = join(dir, "stub.ts");
+    writeFileSync(
+      at,
+      `import { appendFileSync } from "fs";\n` +
+        `appendFileSync(${JSON.stringify(calls)}, "ran\\n");\n` +
+        `console.log(${JSON.stringify(JSON.stringify(completeBoard()))});\n`,
+    );
+    return { at, calls, runs: () => (existsSync(calls) ? readFileSync(calls, "utf-8").split("\n").filter(Boolean).length : 0) };
+  }
+
+  test("the env var it reads is the one named here", () => {
+    expect(BOARD_SNAPSHOT_DIR_ENV).toBe("RUNGATE_BOARD_SNAPSHOT_DIR");
+  });
+
+  test("the first produce asks the producer; the second, for the same inputs, reads what the first kept", () => {
+    const p = countingProducer();
+    const memo = mkdtempSync(join(SCRATCH, "memo-2612-"));
+    const first = produceBoard(flags(), p.at, memo);
+    expect(first.error, `the stub producer refused: ${first.error}`).toBeNull();
+    expect(p.runs()).toBe(1);
+    const second = produceBoard(flags(), p.at, memo);
+    expect(second.error).toBeNull();
+    expect(p.runs(), "the second produce asked the producer again").toBe(1);
+    expect(second.board).toEqual(first.board);
+    expect(second.notes, "a board read from the run's own file must say so, not pass as a fresh reading").toContain(
+      "already produced",
+    );
+  });
+
+  test("different inputs are different boards", () => {
+    const p = countingProducer();
+    const memo = mkdtempSync(join(SCRATCH, "memo-2612-"));
+    produceBoard(flags(), p.at, memo);
+    produceBoard(flags({ spec: "specs/Y.md" }), p.at, memo);
+    produceBoard(flags({ prefix: "Convergence" }), p.at, memo);
+    produceBoard(flags({ repo: "o/other" }), p.at, memo);
+    expect(p.runs()).toBe(4);
+  });
+
+  test("the same flags run from two checkouts are two boards (#2618 review)", () => {
+    // With no flags at all the producer resolves the spec, prefix and repo
+    // from the config of the directory it runs in, so the directory is part
+    // of what was asked.
+    const omitted = { spec: undefined, prefix: undefined, repo: undefined };
+    expect(keptBoardPath("/memo", omitted, "/work/project-a")).not.toBe(keptBoardPath("/memo", omitted, "/work/project-b"));
+    expect(keptBoardPath("/memo", omitted, "/work/project-a")).toBe(keptBoardPath("/memo", omitted, "/work/project-a"));
+  });
+
+  test("with no directory named, every produce asks the producer", () => {
+    const p = countingProducer();
+    produceBoard(flags(), p.at, undefined);
+    produceBoard(flags(), p.at, undefined);
+    expect(p.runs()).toBe(2);
+  });
+
+  test("a kept board that cannot be read is UNMEASURED, never a clean board or a silent re-fetch", () => {
+    const p = countingProducer();
+    const memo = mkdtempSync(join(SCRATCH, "memo-2612-"));
+    produceBoard(flags(), p.at, memo);
+    for (const f of readdirSync(memo)) writeFileSync(join(memo, f), "{ not a board");
+    const r = produceBoard(flags(), p.at, memo);
+    expect(r.board).toBeNull();
+    expect(r.error).toContain("already produced");
+    expect(p.runs(), "an unreadable kept board was papered over by asking again").toBe(1);
+  });
+
+  test("a refusing producer keeps nothing, so the next produce asks again", () => {
+    const memo = mkdtempSync(join(SCRATCH, "memo-2612-"));
+    const dir = mkdtempSync(join(SCRATCH, "producer-2612-"));
+    const at = join(dir, "refuse.ts");
+    writeFileSync(at, `console.error("no board today");\nprocess.exit(3);\n`);
+    expect(produceBoard(flags(), at, memo).error).toContain("no board today");
+    expect(readdirSync(memo)).toEqual([]);
   });
 });
 
