@@ -443,7 +443,11 @@ const UNCLAIMED_RATCHET = 150;
 // 192: SC-2788 (#2497) ticked from its describe in test/adr-accepted-workflow.test.ts —
 // a merge-triggered adr-accepted run runs close-merged-references, a reading of a
 // generated workflow no registered pattern expresses (2026-11-20).
-const CLAIMED_UNBINDABLE = 192;
+// 193: CRC-N3 (#2544) ticked by `sync-sc-status --only CRC-N3` — flag the class
+// of a bug, a reading of the adjudicator's re-count and the class thread's hold
+// that no registered pattern expresses; the `CRC-N3` describe in
+// test/ai-review-population-declared.test.ts names it (2026-11-21).
+const CLAIMED_UNBINDABLE = 193;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

@@ -27,6 +27,7 @@ import {
   main,
   populationDeclared,
   populationOwed,
+  populationVerdict,
   threadBody,
   threadKeyFrom,
   threadPopulationFrom,
@@ -240,5 +241,46 @@ describe("#1818: the carry step fetches the replies the rule reads", () => {
     expect(yml).not.toContain("comments(first:1){nodes{body}}");
     expect(yml).toMatch(/comments\(first:\d{2,3}\)\{nodes\{body author\{__typename login\}\}\}/);
     expect(yml).toContain("replies:");
+  });
+});
+
+/**
+ * #2544. CRC-N3 asks that the class of a bug be flagged, so the author fixes
+ * every instance rather than one line. It has two halves, and each was built
+ * on its own:
+ *
+ * - **The reviewer's half (#1883, #2459):** a finding names its class as a
+ *   count and the literal search that produced it, and the adjudicator
+ *   re-counts by that search. A count the search contradicts is refused, so
+ *   a class of three cannot be filed as a class of one. #2463 read the rate
+ *   over real rounds: 29 of 45 judged findings counted their class by a
+ *   search that ran.
+ * - **The author's half (#1818, CRC-N7):** the class finding's thread blocks
+ *   the next round until a person replies with the population. Fixing the
+ *   one cited line and resolving the thread no longer closes it.
+ *
+ * Both halves are asserted here, through the deciders CI runs.
+ */
+describe("CRC-N3: the class is flagged, counted by its own search, and held open until its population is answered", () => {
+  const LINES = ["listIssues(a)", "listIssues(b)", "unrelated", "listIssues(c)"];
+
+  test("the reviewer's class is counted by the search it names; a count that search contradicts is refused", () => {
+    expect(populationVerdict(3, ["listIssues("], LINES)).toEqual({ kind: "measured", count: 3 });
+    expect(populationVerdict(1, ["listIssues("], LINES)).toEqual({ kind: "contradicted", declared: 1, count: 3 });
+    // A count with no search behind it is not believed.
+    expect(populationVerdict(3, undefined, LINES).kind).toBe("unbacked");
+  });
+
+  test("the class thread blocks the merge until a person states the population, so fixing one line does not close it", () => {
+    const classBody = threadBody(CLASS_FINDING, "k");
+    const fixedOneLine = populationOwed([{ body: classBody, replies: [{ body: "fixed the cited line", bot: false }] }]);
+    const blocked = captured(() => main([cleanPayload()], null, null, null, undefined, fixedOneLine));
+    expect(blocked.code).toBe(AI_REVIEW_REQUIRED_EXIT);
+    expect(blocked.lines).toContain(`${AI_REVIEW_OUTCOME_LINE} BLOCKED`);
+
+    const answered = populationOwed([{ body: classBody, replies: [{ body: STATED, bot: false }] }]);
+    const cleared = captured(() => main([cleanPayload()], null, null, null, undefined, answered));
+    expect(cleared.code).toBe(0);
+    expect(cleared.lines).toContain(`${AI_REVIEW_OUTCOME_LINE} CLEAN`);
   });
 });
