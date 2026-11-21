@@ -93,6 +93,7 @@
     "scripts/board-conformance.ts::probeAt | flags: no-initialiser (nested), argv: parameter (nested)",
     "scripts/check-installed-hook-currency.ts::path | path: parameter",
     "scripts/claim-files.ts::path | project: parameter (nested), FILE_CLAIMS_PATH: import (nested)",
+    "scripts/ci-api-census.ts::shim | dir: parameter (nested)",
     "scripts/crc-reading.ts::args.save | argv: parameter (nested)",
     "scripts/crc-reading.ts::storePath | argv: parameter (nested)",
     "scripts/criterion-inventory.ts::join(dir, \"issues.json\") | dir: parameter",
