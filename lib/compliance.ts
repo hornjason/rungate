@@ -422,26 +422,10 @@ export interface TemplateComplianceOpts {
    * the cache off.
    */
   reporailsCachePath?: string | null;
-  /** The CLI version the cache key carries. Read from `npx @reporails/cli version` when omitted. */
+  /** The CLI version the cache key carries. Read from the RepoRails probe's answer when omitted. */
   reporailsVersion?: string;
   /** The per-file RepoRails call. A seam for tests, which count the calls. */
   reporailsRunner?: (path: string) => Promise<RepoRailsOutput | null>;
-}
-
-/**
- * The installed RepoRails CLI's version, or null when it does not answer. A
- * local call with no network. Null turns the cache off for the run, because a
- * key without a version would carry a reading across a CLI upgrade.
- */
-export function reporailsCliVersion(): string | null {
-  try {
-    const r = Bun.spawnSync(["npx", "@reporails/cli", "version"], { stdout: "pipe", stderr: "ignore", timeout: 60_000 });
-    const line = (r.stdout?.toString() ?? "").trim().split("\n")[0]?.trim() ?? "";
-    return r.exitCode === 0 && line !== "" ? line : null;
-  } catch {
-    // No process was created: the CLI is not here, and the probe already says so.
-    return null;
-  }
 }
 
 export async function runTemplateCompliance(
@@ -484,7 +468,10 @@ export async function runTemplateCompliance(
     const cachePath = opts?.reporailsCachePath === undefined
       ? join(root, ".rungate", "reporails-cache.json")
       : opts.reporailsCachePath;
-    const version = cachePath === null ? null : (opts?.reporailsVersion ?? reporailsCliVersion());
+    // The version is what the probe's `npx @reporails/cli version` printed:
+    // one spawn, one decider (#597). None means no cache this run, because a
+    // key without a version would carry a reading across a CLI upgrade.
+    const version = cachePath === null ? null : (opts?.reporailsVersion ?? toolProbes.reporails.answer ?? null);
     const cache: ReporailsCache | null =
       cachePath !== null && version !== null ? loadReporailsCache(cachePath, isRepoRailsFinding) : null;
     const now = Date.now();
