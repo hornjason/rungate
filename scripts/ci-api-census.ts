@@ -49,7 +49,7 @@
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
-import { dirname, join, resolve } from "path";
+import { basename, dirname, join, resolve } from "path";
 
 /** The one exit code for every refusal: an unreadable or never-started record, or nothing to read. */
 export const CENSUS_UNMEASURED_EXIT = 1;
@@ -248,15 +248,45 @@ export function countRuns(jsonl: string): RunCount {
   return { total, workflows };
 }
 
-/** One review job's model run, from the last result object its log printed; null when it printed none. */
+const TURNS = /"num_turns":\s*(\d+)/;
+const COST = /"total_cost_usd":\s*([0-9.]+)/;
+/** A log line's content, behind the runner's timestamp. */
+const content = (line: string) => line.replace(/^\S+Z\s/, "").trim();
+
+/**
+ * One review job's model run, from the LAST result object its log printed;
+ * null when it printed none.
+ *
+ * Turns and cost come from the same object. The object is the lines between
+ * the `{` and the `}` that stand alone around the `num_turns` line, or that
+ * one line when the result was printed compact; a cost outside it belongs to
+ * another result. Reading the last of each separately paired a retried call's
+ * turns with the first call's cost (#2614 review).
+ */
 export function readModelRun(log: string): { turns: number; costUsd: number | null } | null {
-  const turns = [...log.matchAll(/"num_turns":\s*(\d+)/g)];
-  if (turns.length === 0) return null;
-  const costs = [...log.matchAll(/"total_cost_usd":\s*([0-9.]+)/g)];
-  return {
-    turns: Number(turns[turns.length - 1][1]),
-    costUsd: costs.length === 0 ? null : Number(costs[costs.length - 1][1]),
-  };
+  const lines = log.split("\n");
+  let at = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (TURNS.test(lines[i])) {
+      at = i;
+      break;
+    }
+  }
+  if (at < 0) return null;
+  const turns = Number(lines[at].match(TURNS)![1]);
+  const own = lines[at].match(COST);
+  if (own) return { turns, costUsd: Number(own[1]) };
+  let start = at;
+  while (start > 0 && content(lines[start]) !== "{") start--;
+  let end = at;
+  while (end < lines.length - 1 && !/^}\s*,?$/.test(content(lines[end]))) end++;
+  const enclosed = content(lines[start]) === "{" && /^}\s*,?$/.test(content(lines[end]));
+  if (!enclosed) return { turns, costUsd: null };
+  for (let i = start; i <= end; i++) {
+    const m = lines[i].match(COST);
+    if (m) return { turns, costUsd: Number(m[1]) };
+  }
+  return { turns, costUsd: null };
 }
 
 export function renderModelRuns(rows: { log: string; run: { turns: number; costUsd: number | null } | null }[]): string {
@@ -313,8 +343,20 @@ function installGhTap(dir: string, realGhArg: string | undefined): void {
   const target = resolve(dir);
   const found = realGhArg ?? Bun.which("gh") ?? undefined;
   if (!found) refuse("gh is not on PATH, so there is no gh to tap");
-  const realGh = realpathSync(found);
-  if (dirname(realGh) === realpathSync(existsSync(target) ? target : dirname(target))) {
+  let realGh: string;
+  try {
+    realGh = realpathSync(found);
+  } catch (e) {
+    refuse(`${found}: no gh there to tap (${e instanceof Error ? e.message.split("\n")[0] : String(e)})`);
+  }
+  // The target directory itself, resolved whether or not it exists yet: a new
+  // directory inside the real gh's own directory is not the tap wrapping
+  // itself, though its parent is (#2614 review).
+  const parent = dirname(target);
+  const targetReal = existsSync(target)
+    ? realpathSync(target)
+    : join(existsSync(parent) ? realpathSync(parent) : parent, basename(target));
+  if (dirname(realGh) === targetReal) {
     refuse(`the gh found (${realGh}) is the tap itself; pass --real-gh <path>`);
   }
   mkdirSync(target, { recursive: true });

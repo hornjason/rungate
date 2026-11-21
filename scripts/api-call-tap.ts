@@ -96,9 +96,11 @@ if (record) {
       // `origin` is the string "null" for file: and other non-network schemes,
       // so those are written scheme-first and the census files them as local.
       where = u.protocol === "http:" || u.protocol === "https:" ? `${u.origin}${u.pathname}` : `${u.protocol}//${u.host}${u.pathname}`;
-    } catch (e) {
+    } catch {
+      // Recorded, not lost: the line below is written with this degraded URL,
+      // and the census counts it once, as a line that did not parse. An
+      // API-TAP-LOST here as well counted one call twice (#2614 review).
       where = `unparseable:${raw.split("?")[0]}`;
-      console.error(`API-TAP-LOST fetch ${method}: the URL did not parse (${e instanceof Error ? e.message : String(e)})`);
     }
     try {
       const from = inherited ?? callerOf(new Error().stack ?? "", process.cwd(), Bun.main);

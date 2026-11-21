@@ -296,6 +296,23 @@ describe("#2596: the fetch tap records what Octokit and hand-rolled readers send
     expect(countCalls([reading])).toMatchObject({ external: 0, notExternal: 1, unparsed: 0 });
   });
 
+  test("a URL that does not parse is recorded once, and never also reported lost (#2614 review)", async () => {
+    const record = file("bad-url-tap.log", `${TAP_START}\n`);
+    const script = file("client4.ts", 'await fetch("::not a url::").catch(() => null);\n');
+    const run = Bun.spawn([process.execPath, script], {
+      cwd: dirname(script),
+      env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record, RUNGATE_API_TAP_FROM: "" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stderr = await new Response(run.stderr).text();
+    expect(await run.exited, stderr).toBe(0);
+    // The census reads stderr and the record together in a CI log: one bad
+    // call must count once, under unparsed, and not again under lost.
+    const census = countCalls([readTap(`${readFileSync(record, "utf-8")}\n${stderr}`)]);
+    expect(census).toMatchObject({ unparsed: 1, lost: 0, external: 0 });
+  });
+
   test("with no record named, the tap writes nothing and changes nothing", async () => {
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("body-7") });
     try {
@@ -378,6 +395,38 @@ describe("#2596: the gh tap is gh, plus a record", () => {
     expect(run.stderr.toString()).toBe("a real warning\n");
   });
 
+  test("a --real-gh that does not exist is UNMEASURED, not a stack trace (#2614 review)", () => {
+    const dir = mkdtempSync(join(scratch, "bin-missing-"));
+    const run = Bun.spawnSync([process.execPath, CENSUS, "--install-gh-tap", dir, "--real-gh", join(scratch, "no-such-gh")], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(run.exitCode).toBe(CENSUS_UNMEASURED_EXIT);
+    expect(run.exitCode).not.toBe(0);
+    const err = run.stderr.toString();
+    expect(err).toMatch(/^UNMEASURED: .*no-such-gh/m);
+    expect(err, "a raw exception reached the user").not.toContain("    at ");
+  });
+
+  test("a new tap directory inside the real gh's directory is not mistaken for the tap itself (#2614 review)", () => {
+    // The real gh lives in binDir; the tap goes to binDir/tap, which does not
+    // exist yet. Its PARENT is binDir, which is what the first version
+    // compared against — so it refused. Only binDir itself is the tap
+    // wrapping itself.
+    const binDir = mkdtempSync(join(scratch, "realbin-"));
+    const realGh = join(binDir, "gh");
+    writeFileSync(realGh, readFileSync(fakeGh, "utf-8"));
+    chmodSync(realGh, 0o755);
+    const sibling = join(binDir, "tap");
+    const ok = Bun.spawnSync([process.execPath, CENSUS, "--install-gh-tap", sibling, "--real-gh", realGh], { stdout: "pipe", stderr: "pipe" });
+    expect(ok.exitCode, ok.stderr.toString()).toBe(0);
+    expect(existsSync(join(sibling, "gh"))).toBe(true);
+    // And the tap's own directory, which does exist, is still refused.
+    const self = Bun.spawnSync([process.execPath, CENSUS, "--install-gh-tap", binDir, "--real-gh", realGh], { stdout: "pipe", stderr: "pipe" });
+    expect(self.exitCode).toBe(CENSUS_UNMEASURED_EXIT);
+    expect(self.stderr.toString()).toContain("is the tap itself");
+  });
+
   test("--install-gh-tap writes an executable gh that names the real one", () => {
     const dir = mkdtempSync(join(scratch, "bin-"));
     const run = Bun.spawnSync([process.execPath, CENSUS, "--install-gh-tap", dir, "--real-gh", fakeGh], {
@@ -418,6 +467,19 @@ describe("#2596: model calls are read from the review action's own result", () =
 
   test("a log with no result is no model run, not zero turns", () => {
     expect(readModelRun("2026-11-21T19:04:22Z the review was skipped on push")).toBeNull();
+  });
+
+  test("turns and cost are read from the same result object, never paired across two (#2614 review)", () => {
+    // A retried call: the first result carries a cost, the second does not.
+    const first = result(5, 1);
+    const second = [
+      "2026-11-21T19:05:00.0000000Z {",
+      '2026-11-21T19:05:00.1000000Z   "num_turns": 10,',
+      "2026-11-21T19:05:00.2000000Z }",
+    ].join("\n");
+    expect(readModelRun(`${first}\n${second}`)).toEqual({ turns: 10, costUsd: null });
+    // A compact, one-line result reads both from its own line.
+    expect(readModelRun('2026-11-21T19:05:00Z {"num_turns": 7, "total_cost_usd": 0.5}')).toEqual({ turns: 7, costUsd: 0.5 });
   });
 
   test("a result printed twice is one run, read once", () => {
