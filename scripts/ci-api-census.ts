@@ -42,6 +42,9 @@
  * '.workflow_runs[]'`), by event and conclusion. An empty list is UNMEASURED:
  * a window with no runs and a query that returned nothing look the same.
  *
+ * The reading this produced on 2026-11-21, and the follow-ups it filed:
+ * `docs/research/ci-api-call-census.md`.
+ *
  * Imports nothing relative, so a mutant copy of this file still loads.
  */
 
