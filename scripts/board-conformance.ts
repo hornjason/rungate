@@ -34,7 +34,8 @@
  * self-contained.
  */
 import { spawnSync } from "child_process";
-import { readFileSync, rmSync, writeFileSync } from "fs";
+import { createHash } from "crypto";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { parseArgs } from "util";
 
@@ -1621,9 +1622,37 @@ function normaliseDeclaredWork(raw: unknown): DeclaredWork | null {
  */
 export const DEFAULT_PRODUCER = join(import.meta.dir, "board-snapshot.ts");
 
+/**
+ * #2612: a directory one run keeps its produced boards in.
+ *
+ * `test/stage-ladder.test.ts` runs every done item's verify command in turn,
+ * and nine of them ran `board-conformance --produce` over the same spec,
+ * prefix and repository — nine board productions, about 96 GitHub calls a
+ * CI run, and nine readings taken at nine moments inside one verdict. With
+ * this set, the first `--produce` for a set of inputs asks the producer and
+ * keeps what it emitted; every later one for the same inputs reads that
+ * file, and says so in `notes`.
+ *
+ * The directory is the caller's and the run's: the ladder makes it with
+ * `mkdtemp` and removes it, so no board outlives the run that read it.
+ * Unset, nothing changes. A kept board that will not read is UNMEASURED — it
+ * is never re-fetched behind the caller's back, and never an empty board.
+ */
+export const BOARD_SNAPSHOT_DIR_ENV = "RUNGATE_BOARD_SNAPSHOT_DIR";
+
+/** Where a run keeps the board these inputs produce: one file per spec, prefix and repository as given. */
+function keptBoardPath(dir: string, flags: Pick<Flags, "spec" | "prefix" | "repo">): string {
+  const key = createHash("sha256")
+    .update(JSON.stringify([flags.spec ?? null, flags.prefix ?? null, flags.repo ?? null]))
+    .digest("hex")
+    .slice(0, 16);
+  return join(dir, `board-${key}.json`);
+}
+
 export function produceBoard(
   flags: Flags,
   producer: string = DEFAULT_PRODUCER,
+  keepIn: string | undefined = process.env[BOARD_SNAPSHOT_DIR_ENV] || undefined,
 ): { board: BoardSnapshot | null; error: string | null; notes: string } {
   const { spec, prefix, repo, specGiven, prefixGiven, repoGiven } = flags;
   // **GIVEN-AND-BLANK REFUSES. ABSENT FORWARDS NOTHING.** These used to be
@@ -1664,6 +1693,19 @@ export function produceBoard(
         `entirely and the spec and prefix are read from \`board.engineSpec\` and ` +
         `\`board.milestonePrefix\` in this project's rungate config.`,
     };
+  }
+  // #2612: a board this run already produced, for these inputs, is read
+  // rather than produced again.
+  const kept = keepIn === undefined ? null : keptBoardPath(keepIn, flags);
+  if (kept !== null && existsSync(kept)) {
+    const read = readSnapshot(kept);
+    return read.board === null
+      ? { board: null, notes: "", error: `the board this run already produced (${kept}) will not read — ${read.why}` }
+      : {
+          board: read.board,
+          notes: `board-conformance: read the board this run already produced for these inputs (${kept}, ${BOARD_SNAPSHOT_DIR_ENV}); no API call.`,
+          error: null,
+        };
   }
   const args = [producer];
   if (spec !== undefined) args.push(spec);
@@ -1724,11 +1766,21 @@ export function produceBoard(
   // PAST THE EXIT CODE, so `notes` carries what the producer said on the
   // path where nothing else quotes it. This is the daily path, and it is the
   // one that used to be silent.
-  const notes = (r.stderr ?? "").trim();
+  let notes = (r.stderr ?? "").trim();
   const read = readSnapshotText(r.stdout);
-  return read.board === null
-    ? { board: null, notes, error: `board-snapshot exited 0 and what it emitted is unreadable — ${read.why}` }
-    : { board: read.board, notes, error: null };
+  if (read.board === null) {
+    return { board: null, notes, error: `board-snapshot exited 0 and what it emitted is unreadable — ${read.why}` };
+  }
+  // Kept only once it has read as a board, so a later produce can never be
+  // handed something this one refused.
+  if (kept !== null) {
+    try {
+      writeFileSync(kept, r.stdout);
+    } catch (e) {
+      notes = `${notes}${notes ? "\n" : ""}board-conformance: could not keep this board for the rest of the run (${(e as Error).message}); the next produce asks again.`;
+    }
+  }
+  return { board: read.board, notes, error: null };
 }
 
 /**

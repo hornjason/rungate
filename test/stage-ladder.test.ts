@@ -20,10 +20,12 @@
  * worthless. `A1.verify` was then set to `false` in the live file and this
  * suite went red naming it, green again on restore.
  */
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import { spawnSync } from "child_process";
+import { BOARD_SNAPSHOT_DIR_ENV } from "../scripts/board-conformance";
 import {
   COMMAND_NOT_FOUND,
   ITEM_SCOPES,
@@ -230,7 +232,24 @@ const COMPLETE_STAGES = 8;
  * same string would have been fail-closed here and fail-open in CI.
  */
 const run = (cmd: string, timeoutMs?: number) =>
-  spawnSync("bash", ["-o", "pipefail", "-c", cmd], { cwd: ROOT, encoding: "utf-8", timeout: timeoutMs });
+  spawnSync("bash", ["-o", "pipefail", "-c", cmd], {
+    cwd: ROOT,
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    env: { ...process.env, [BOARD_SNAPSHOT_DIR_ENV]: BOARD_KEPT_FOR_THIS_RUN },
+  });
+
+/**
+ * #2612: one board per set of inputs for the whole run. Nine done items
+ * verify with `board-conformance --produce` over the same spec and
+ * repository, and each used to produce the board again — 96 of the suite's
+ * 144 external calls a CI run, and nine readings taken at nine moments
+ * inside one verdict. Named here, every `--produce` after the first for the
+ * same inputs reads the board the first one kept. Made per run and removed
+ * after it, so no board is carried into another run.
+ */
+const BOARD_KEPT_FOR_THIS_RUN = mkdtempSync(join(tmpdir(), "rg-2612-ladder-boards-"));
+afterAll(() => rmSync(BOARD_KEPT_FOR_THIS_RUN, { recursive: true, force: true }));
 
 /**
  * #1975: the overall goal's command makes live GitHub calls. It ran under
