@@ -20,6 +20,14 @@ import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname } from "path";
 
+/**
+ * Where the cache lives, relative to the project root. The ONE spelling: the
+ * compliance runner's default and this repository's `ci.persistPaths` both
+ * name it, and `test/reporails-cache.test.ts` asserts the config agrees, so a
+ * rename cannot leave CI persisting a file nothing reads (#2608 review).
+ */
+export const REPORAILS_CACHE_REL = ".rungate/reporails-cache.json";
+
 /** Bumped when the stored shape changes; any other value reads as unreadable. */
 export const REPORAILS_CACHE_SCHEMA = 1;
 

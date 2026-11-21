@@ -16,7 +16,9 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { tryLoadRungateConfig } from "../lib/config-loader";
 import {
+  REPORAILS_CACHE_REL,
   REPORAILS_CACHE_SCHEMA,
   REPORAILS_CACHE_TTL_MS,
   freshReading,
@@ -108,6 +110,15 @@ describe("#2595: the store", () => {
   });
 });
 
+describe("#2608 review: the file CI persists is the file the runner reads", () => {
+  test("this repository's ci.persistPaths names REPORAILS_CACHE_REL", () => {
+    // Without this, renaming the cache in lib/ leaves CI restoring and saving
+    // a file nothing reads: every run silently misses, at full call cost.
+    const config = tryLoadRungateConfig(join(import.meta.dir, "..")) as { ci?: { persistPaths?: string[] } } | null;
+    expect(config?.ci?.persistPaths ?? [], "ci.persistPaths does not carry the cache the runner reads").toContain(REPORAILS_CACHE_REL);
+  });
+});
+
 describe("#2595: the caller counts its calls", () => {
   /** A project with two instruction files, and a runner that counts what it is asked. */
   const project = () => {
@@ -186,10 +197,11 @@ describe("#2595: the caller counts its calls", () => {
     expect(existsSync(join(p.root, ".rungate", "reporails-cache.json"))).toBe(false);
   });
 
-  test("the default cache lives under .rungate/ in the project, which git ignores", async () => {
+  test("the default cache lives at REPORAILS_CACHE_REL, under .rungate/, which git ignores", async () => {
     const p = project();
     await p.run();
-    const path = join(p.root, ".rungate", "reporails-cache.json");
+    expect(REPORAILS_CACHE_REL.startsWith(".rungate/")).toBe(true);
+    const path = join(p.root, REPORAILS_CACHE_REL);
     expect(existsSync(path)).toBe(true);
     expect(JSON.parse(readFileSync(path, "utf-8")).schema).toBe(REPORAILS_CACHE_SCHEMA);
   });

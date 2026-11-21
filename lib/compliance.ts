@@ -11,7 +11,7 @@
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from "fs";
 import { join, relative } from "path";
 import { probeExternalTool, type ToolProbe, type ToolProbeOutcome } from "./tool-probe";
-import { freshReading, loadReporailsCache, reporailsCacheKey, saveReporailsCache, type ReporailsCache } from "./reporails-cache";
+import { REPORAILS_CACHE_REL, freshReading, loadReporailsCache, reporailsCacheKey, saveReporailsCache, type ReporailsCache } from "./reporails-cache";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -466,7 +466,7 @@ export async function runTemplateCompliance(
   let reporailsCache: ComplianceReport["reporailsCache"];
   if (reporailsAvailable && files.length > 0) {
     const cachePath = opts?.reporailsCachePath === undefined
-      ? join(root, ".rungate", "reporails-cache.json")
+      ? join(root, REPORAILS_CACHE_REL)
       : opts.reporailsCachePath;
     // The version is what the probe's `npx @reporails/cli version` printed:
     // one spawn, one decider (#597). None means no cache this run, because a
