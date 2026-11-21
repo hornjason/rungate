@@ -11,6 +11,7 @@
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync } from "fs";
 import { join, relative } from "path";
 import { probeExternalTool, type ToolProbe, type ToolProbeOutcome } from "./tool-probe";
+import { freshReading, loadReporailsCache, reporailsCacheKey, saveReporailsCache, type ReporailsCache } from "./reporails-cache";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -90,6 +91,13 @@ export interface ComplianceReport {
    */
   toolProbes: Record<ComplianceTool, ToolProbe>;
   reading: ComplianceReading;
+  /**
+   * What the RepoRails cache did this run (#2595): how many files were read
+   * from it and how many were checked. Absent when RepoRails did not run.
+   * `path: null` is the cache turned off; `unreadable` names why a cache
+   * file could not be used, which costs a full re-check and is said.
+   */
+  reporailsCache?: { path: string | null; version: string | null; hits: number; checked: number; unreadable: string | null };
 }
 
 // ── Tool Runners ───────────────────────────────────────────
@@ -124,7 +132,7 @@ function runAgnixBatch(paths: string[]): AgnixDiagnostic[] | null {
   }
 }
 
-interface RepoRailsFinding {
+export interface RepoRailsFinding {
   line: number;
   severity: string;
   rule: string;
@@ -134,7 +142,7 @@ interface RepoRailsFinding {
   fix?: string;
 }
 
-interface RepoRailsOutput {
+export interface RepoRailsOutput {
   quality: number;
   level?: string;
   files: Record<string, { findings: RepoRailsFinding[] }>;
@@ -408,6 +416,32 @@ export interface TemplateComplianceOpts {
    * probed for real.
    */
   probes?: Partial<Record<ComplianceTool, ToolProbe>>;
+  /**
+   * Where RepoRails readings are cached (#2595). Defaults to
+   * `<root>/.rungate/reporails-cache.json`, which git ignores; `null` turns
+   * the cache off.
+   */
+  reporailsCachePath?: string | null;
+  /** The CLI version the cache key carries. Read from `npx @reporails/cli version` when omitted. */
+  reporailsVersion?: string;
+  /** The per-file RepoRails call. A seam for tests, which count the calls. */
+  reporailsRunner?: (path: string) => Promise<RepoRailsOutput | null>;
+}
+
+/**
+ * The installed RepoRails CLI's version, or null when it does not answer. A
+ * local call with no network. Null turns the cache off for the run, because a
+ * key without a version would carry a reading across a CLI upgrade.
+ */
+export function reporailsCliVersion(): string | null {
+  try {
+    const r = Bun.spawnSync(["npx", "@reporails/cli", "version"], { stdout: "pipe", stderr: "ignore", timeout: 60_000 });
+    const line = (r.stdout?.toString() ?? "").trim().split("\n")[0]?.trim() ?? "";
+    return r.exitCode === 0 && line !== "" ? line : null;
+  } catch {
+    // No process was created: the CLI is not here, and the probe already says so.
+    return null;
+  }
 }
 
 export async function runTemplateCompliance(
@@ -442,16 +476,47 @@ export async function runTemplateCompliance(
     }
   }
 
+  // #2595: a file whose content and CLI version are in the cache is not
+  // checked again. A refused reading (null) is never stored, so the next run
+  // asks again rather than carrying a refusal forward as a reading.
+  let reporailsCache: ComplianceReport["reporailsCache"];
   if (reporailsAvailable && files.length > 0) {
-    const results = await mapWithConcurrency(files, REPORAILS_CONCURRENCY, runRepoRailsOne);
+    const cachePath = opts?.reporailsCachePath === undefined
+      ? join(root, ".rungate", "reporails-cache.json")
+      : opts.reporailsCachePath;
+    const version = cachePath === null ? null : (opts?.reporailsVersion ?? reporailsCliVersion());
+    const cache: ReporailsCache | null =
+      cachePath !== null && version !== null ? loadReporailsCache(cachePath, isRepoRailsFinding) : null;
+    const now = Date.now();
+    const keys = files.map(f => (cache && version !== null ? reporailsCacheKey(readFileSync(f, "utf-8"), version) : null));
+    const toCheck: number[] = [];
+    let hits = 0;
     files.forEach((filePath, i) => {
-      const result = results[i];
+      const key = keys[i];
+      const hit = cache && key ? freshReading(cache, key, now) : null;
+      if (hit) {
+        hits++;
+        rrByFile.set(relative(root, filePath), { quality: hit.quality, findings: hit.findings as RepoRailsFinding[] });
+      } else {
+        toCheck.push(i);
+      }
+    });
+    const runner = opts?.reporailsRunner ?? runRepoRailsOne;
+    const results = await mapWithConcurrency(toCheck.map(i => files[i]!), REPORAILS_CONCURRENCY, runner);
+    toCheck.forEach((i, j) => {
+      const result = results[j];
       if (!result) return;
-      rrByFile.set(relative(root, filePath), {
+      const fileReading = {
         quality: result.quality,
         findings: Object.values(result.files).flatMap(d => d.findings),
-      });
+      };
+      rrByFile.set(relative(root, files[i]!), fileReading);
+      const key = keys[i];
+      if (cache && key) cache.entries[key] = { ...fileReading, at: new Date(now).toISOString() };
     });
+    if (cache && cachePath !== null && toCheck.length > 0) saveReporailsCache(cachePath, cache.entries, now);
+    reporailsCache = { path: cachePath, version, hits, checked: toCheck.length, unreadable: cache?.unreadable ?? null };
+    if (cache?.unreadable) console.warn(`WARN REPORAILS-CACHE-UNREADABLE: ${cache.unreadable} — every file was checked again`);
   }
 
   const fileScores: FileScore[] = [];
@@ -519,6 +584,7 @@ export async function runTemplateCompliance(
     toolsAvailable: { agnix: agnixAvailable, reporails: reporailsAvailable },
     toolProbes,
     reading,
+    ...(reporailsCache === undefined ? {} : { reporailsCache }),
   };
 
   if (opts?.writeReport !== false) {
