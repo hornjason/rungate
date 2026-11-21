@@ -280,7 +280,7 @@ describe("SC-2783: consumer-intake reads an unanswered consumer issue as short",
  * stays every open issue; past it, it is counted exactly as before. An intake
  * that could not be read graces nobody.
  */
-describe("SC-2795: criteria-named leaves a consumer issue out for its first two days", () => {
+describe("SC-2795: criteria-named does not count a consumer issue short for its first two days", () => {
   const named = (b: BoardSnapshot) => takeReading(READINGS.find(r => r.name === "criteria-named")!, b);
   const intake = (b: BoardSnapshot) => takeReading(READINGS.find(r => r.name === "consumer-intake")!, b);
   /** The complete board plus #40: a consumer issue naming nothing, filed at `createdAt`. */
