@@ -59,7 +59,7 @@ describe("SC-2796: a scaffold run reports the consumer's instruction surface", (
     expect(line, `no SURFACE line among: ${actions.join(" | ")}`).toBeDefined();
     expect(line).toContain(`launch ${reading.launch.totalBytes.toLocaleString()} bytes`);
     expect(line).toContain(`peak ${reading.peakBytes.toLocaleString()} bytes on src/a.ts`);
-    expect(line).toContain(`budget ${SURFACE_BUDGET_BYTES.toLocaleString()}`);
+    expect(line).toContain(`budget ${SURFACE_BUDGET_BYTES.toLocaleString()}, 5% used`);
     // Four files load at launch: the path-scoped rule loads on demand and is
     // not counted among them.
     expect(line).toContain("over 4 files");

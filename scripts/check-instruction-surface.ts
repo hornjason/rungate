@@ -690,7 +690,7 @@ export const SURFACE_REPORT_LARGEST = 3;
 export function surfaceReport(peak: ConcurrentLoadReading, largest: number = SURFACE_REPORT_LARGEST): string[] {
   const launch = peak.launch;
   const loaded = launch.entries.filter(e => e.excluded === null);
-  const used = Math.round((peak.peakBytes / peak.budgetBytes) * 100);
+  const used = Math.round(headroom(peak).used * 100);
   const lines = [
     `SURFACE: launch ${launch.totalBytes.toLocaleString()} bytes (~${Math.round(launch.totalBytes / 4).toLocaleString()} tokens) ` +
       `over ${loaded.length} files; peak ${peak.peakBytes.toLocaleString()} bytes on ${peak.peakFile ?? "every file (no scoped rule matches any)"}; ` +
