@@ -604,7 +604,7 @@ showed **~59%** of what the reviewer kept flagging was code present at its first
       needs: test
       proved-by: test/ai-review-population-declared.test.ts "CRC-N3: the class is flagged, counted by its own search, and held open until its population is answered" — both halves through the deciders CI runs: the adjudicator re-counts a class by the search it names and refuses a count that search contradicts, and a class thread blocks the merge until a person states its population. And test/ai-review-ledger-step.test.ts "CRC-N3: the ledger keeps a finding's class size, and says when there was none". The rate over real rounds: 29 of 45 judged findings counted their class by a search that ran (docs/research/crc-n3-population-rate.md, #2463). Ticked by `sync-sc-status --only CRC-N3` (#2544).
       fingerprint: 4c6865a5
-- [ ] CRC-N4: **No repeats** of findings already posted.
+- [ ] CRC-N4: **No repeats** of advisory findings already posted; a blocking finding is re-reported until it is fixed.
       needs: test
 - [ ] CRC-N5: Review agents run **nightly over existing code**.
       needs: run

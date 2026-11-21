@@ -518,6 +518,54 @@ describe("AS-2: the planted prior blocking finding is re-emitted and still block
   });
 });
 
+// ── CRC-N4, as Jason reworded it on 2026-11-21 (#2552) ───────────────────
+//
+// "No repeats of advisory findings already posted; a blocking finding is
+// re-reported until it is fixed." AS-1 and AS-2 above carry the mutations;
+// this describe is the criterion's own claim over the deployed reader, one
+// case per clause, plus the clause's end: once the reviewer stops raising
+// the blocking finding, nothing is carried in its place.
+
+describe("CRC-N4: an advisory finding already posted is not reported again; a blocking one is re-reported until it is fixed", () => {
+  test("an advisory finding raised again at a place an earlier round posted is not reported, and is named as suppressed", () => {
+    const reading = readAiReviewFindings(payloadOf("PASS", [advisory()]), undefined, gate({ threads: raisedBefore() }));
+
+    expect(reading.reported).toEqual([]);
+    expect(reading.suppressedReported).toHaveLength(1);
+    expect(reading.outcome).toBe("CLEAN");
+  });
+
+  test("the same advisory reworded is still the same place, so it is still not reported again", () => {
+    // The key is file + the TEXT of the cited line (#1168): the reviewer
+    // rewords on essentially every re-raise, so a wording-keyed match would
+    // never fire.
+    const reworded = advisory({ summary: "this name does not say what the value holds" });
+    const reading = readAiReviewFindings(payloadOf("PASS", [reworded]), undefined, gate({ threads: raisedBefore() }));
+
+    expect(reading.reported).toEqual([]);
+    expect(reading.suppressedReported).toHaveLength(1);
+  });
+
+  test("a blocking finding raised again is re-reported and blocks, every round it is raised", () => {
+    const threads = raisedBefore(blocking());
+    for (const roundNo of [2, 3, 4]) {
+      const reading = readAiReviewFindings(payloadOf("BLOCK", [blocking()]), undefined, gate({ threads }));
+      expect(reading.suppressedReported, `round ${roundNo}`).toEqual([]);
+      expect(reading.blockingReported, `round ${roundNo}`).toHaveLength(1);
+      expect(reading.outcome, `round ${roundNo}`).toBe("BLOCKED");
+      expect(aiReviewExitCode(reading), `round ${roundNo}`).not.toBe(0);
+    }
+  });
+
+  test("once it is fixed and the reviewer no longer raises it, the earlier thread carries nothing into the verdict", () => {
+    const reading = readAiReviewFindings(payloadOf("PASS", []), undefined, gate({ threads: raisedBefore(blocking()) }));
+
+    expect(reading.blockingReported).toEqual([]);
+    expect(reading.outcome).toBe("CLEAN");
+    expect(aiReviewExitCode(reading)).toBe(0);
+  });
+});
+
 // ── AS-3: an unreadable or absent history suppresses NOTHING ─────────────
 
 describe("AS-3: every refusal reports everything, and says a different thing", () => {
