@@ -388,7 +388,11 @@ describe("#2596: the gh tap is gh, plus a record", () => {
     const shim = join(dir, "gh");
     expect(existsSync(shim)).toBe(true);
     expect(readFileSync(shim, "utf-8")).toContain(fakeGh);
-    const call = Bun.spawnSync([shim, "x"], { stdout: "pipe", stderr: "pipe" });
+    // Without a record named, so a suite that is itself being tapped does not
+    // count the stand-in's planted request as one of its own.
+    const env = { ...process.env };
+    delete env.RUNGATE_API_TAP;
+    const call = Bun.spawnSync([shim, "x"], { env, stdout: "pipe", stderr: "pipe" });
     expect(call.stdout.toString()).toBe("stdout:x\n");
   });
 });
