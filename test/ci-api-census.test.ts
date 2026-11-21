@@ -135,6 +135,7 @@ describe("#2596: the CLI", () => {
   test("an unreadable record is UNMEASURED, not an empty one", () => {
     const run = Bun.spawnSync([process.execPath, CENSUS, join(scratch, "absent.log")], { stdout: "pipe", stderr: "pipe" });
     expect(run.exitCode).toBe(CENSUS_UNMEASURED_EXIT);
+    expect(run.exitCode).not.toBe(0);
     expect(run.stdout.toString() + run.stderr.toString()).toContain("UNMEASURED");
   });
 
