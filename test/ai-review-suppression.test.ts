@@ -547,8 +547,12 @@ describe("CRC-N4: an advisory finding already posted is not reported again; a bl
   });
 
   test("a blocking finding raised again is re-reported and blocks, every round it is raised", () => {
-    const threads = raisedBefore(blocking());
+    // The history GROWS, as the carry step's thread list does: round N reads
+    // the N-1 threads the earlier rounds posted for this finding, so a defect
+    // that only appears against a longer history is not hidden behind three
+    // byte-identical calls (#2593 review round 1).
     for (const roundNo of [2, 3, 4]) {
+      const threads = threadsOf(Array.from({ length: roundNo - 1 }, () => ({ finding: blocking() })));
       const reading = readAiReviewFindings(payloadOf("BLOCK", [blocking()]), undefined, gate({ threads }));
       expect(reading.suppressedReported, `round ${roundNo}`).toEqual([]);
       expect(reading.blockingReported, `round ${roundNo}`).toHaveLength(1);
