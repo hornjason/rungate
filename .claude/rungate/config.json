@@ -52,6 +52,7 @@
     "suiteReadsTracker": true,
     "trackerTokenSecret": "RUNGATE_PROJECT_TOKEN",
     "testSecrets": ["AILS_API_KEY"],
+    "persistPaths": [".rungate/reporails-cache.json"],
     "vertex": {
       "project": "jhorn-pai",
       "workloadIdentityProvider": "projects/939083080179/locations/global/workloadIdentityPools/github/providers/github-actions",
