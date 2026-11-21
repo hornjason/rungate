@@ -5,6 +5,7 @@
  *   bun scripts/ci-api-census.ts <record-or-job-log>… [--json]
  *   bun scripts/ci-api-census.ts --install-gh-tap <dir> [--real-gh <path>]
  *   bun scripts/ci-api-census.ts --model <review-job-log>…
+ *   bun scripts/ci-api-census.ts --runs <runs.jsonl>
  *
  * Jason, on 2026-11-21: "we shouldn't be spamming API endpoints if we can find
  * a better method to batch." Nobody had counted. This reads what a run itself
@@ -35,6 +36,11 @@
  * review action prints when it finishes: `num_turns` (one model request per
  * turn) and `total_cost_usd`. A log with no result made no model call — a
  * review skipped on push — and is counted as such, never as zero turns.
+ *
+ * `--runs` counts how often each workflow ran, from the Actions API's own
+ * list (`gh api --paginate "…/actions/runs?created=>=<when>" --jq
+ * '.workflow_runs[]'`), by event and conclusion. An empty list is UNMEASURED:
+ * a window with no runs and a query that returned nothing look the same.
  *
  * Imports nothing relative, so a mutant copy of this file still loads.
  */
@@ -183,6 +189,40 @@ export function renderCensus(c: Census): string {
   return out.join("\n");
 }
 
+export interface RunCount {
+  total: number;
+  workflows: { name: string; runs: number; by: Record<string, number> }[];
+}
+
+/** Runs per workflow from one Actions run object per line. A line that is not one refuses the list. */
+export function countRuns(jsonl: string): RunCount {
+  const byName = new Map<string, Record<string, number>>();
+  let total = 0;
+  jsonl.split("\n").forEach((raw, i) => {
+    if (raw.trim() === "") return;
+    let run: { name?: unknown; event?: unknown; conclusion?: unknown };
+    try {
+      run = JSON.parse(raw);
+    } catch {
+      throw new Error(`line ${i + 1} is not a JSON run object`);
+    }
+    if (typeof run.name !== "string" || typeof run.event !== "string") throw new Error(`line ${i + 1} has no name or event`);
+    const key = `${run.event} ${typeof run.conclusion === "string" ? run.conclusion : "in progress"}`;
+    const by = byName.get(run.name) ?? {};
+    by[key] = (by[key] ?? 0) + 1;
+    byName.set(run.name, by);
+    total++;
+  });
+  const workflows = [...byName.entries()]
+    .map(([name, by]) => ({
+      name,
+      runs: Object.values(by).reduce((s, n) => s + n, 0),
+      by: Object.fromEntries(Object.entries(by).sort(([a], [b]) => a.localeCompare(b))),
+    }))
+    .sort((a, b) => b.runs - a.runs || a.name.localeCompare(b.name));
+  return { total, workflows };
+}
+
 /** One review job's model run, from the last result object its log printed; null when it printed none. */
 export function readModelRun(log: string): { turns: number; costUsd: number | null } | null {
   const turns = [...log.matchAll(/"num_turns":\s*(\d+)/g)];
@@ -270,6 +310,23 @@ if (import.meta.main) {
   const json = args.includes("--json");
   const files = args.filter(a => !a.startsWith("--"));
   if (files.length === 0) refuse("name at least one record or CI job log to count");
+  if (args.includes("--runs")) {
+    let counted: RunCount;
+    try {
+      counted = countRuns(readFileSync(files[0], "utf-8"));
+    } catch (e) {
+      refuse(`${files[0]}: ${e instanceof Error ? e.message.split("\n")[0] : String(e)}`);
+    }
+    if (counted.total === 0) refuse(`${files[0]}: no runs in the list, which cannot be told from a query that returned nothing`);
+    if (json) console.log(JSON.stringify(counted, null, 2));
+    else {
+      console.log(`${counted.total} runs across ${counted.workflows.length} workflows`);
+      for (const w of counted.workflows) {
+        console.log(`  ${String(w.runs).padStart(4)}  ${w.name}  (${Object.entries(w.by).map(([k, n]) => `${k} ${n}`).join(", ")})`);
+      }
+    }
+    process.exit(0);
+  }
   if (args.includes("--model")) {
     const rows = files.map(f => {
       let text: string;

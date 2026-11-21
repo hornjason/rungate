@@ -27,6 +27,7 @@ import {
   classifyCall,
   countCalls,
   ghTapScript,
+  countRuns,
   readModelRun,
   readTap,
   renderCensus,
@@ -338,5 +339,42 @@ describe("#2596: model calls are read from the review action's own result", () =
     const run = Bun.spawnSync([process.execPath, CENSUS, "--model", a, b], { stdout: "pipe", stderr: "pipe" });
     expect(run.exitCode, run.stderr.toString()).toBe(0);
     expect(run.stdout.toString()).toContain("2 logs: 1 with a model run, 1 without");
+  });
+});
+
+/**
+ * How often each workflow runs, from the Actions API's own list — the other
+ * half of a per-day figure. One JSON object per line, as
+ * `gh api --paginate …/actions/runs --jq '.workflow_runs[]'` writes them.
+ */
+describe("#2596: runs per workflow are counted from the Actions API's list", () => {
+  const line = (name: string, event: string, conclusion: string | null) => JSON.stringify({ name, event, conclusion, id: 1 });
+
+  test("each workflow is counted by event and conclusion, and the total is the sum of the rows", () => {
+    const runs = countRuns(
+      [line("CI", "push", "success"), line("CI", "pull_request", "success"), line("CI", "pull_request", "success"), line("Status", "workflow_run", "cancelled")].join("\n"),
+    );
+    expect(runs.total).toBe(4);
+    expect(runs.workflows.map(w => [w.name, w.runs])).toEqual([
+      ["CI", 3],
+      ["Status", 1],
+    ]);
+    expect(runs.workflows.reduce((s, w) => s + w.runs, 0)).toBe(runs.total);
+    expect(runs.workflows[0].by).toEqual({ "pull_request success": 2, "push success": 1 });
+  });
+
+  test("a run still going is counted as in progress, not dropped", () => {
+    expect(countRuns(line("CI", "push", null)).workflows[0].by).toEqual({ "push in progress": 1 });
+  });
+
+  test("a line that is not a run refuses the whole list", () => {
+    expect(() => countRuns(`${line("CI", "push", "success")}\nnot json`)).toThrow(/line 2/);
+  });
+
+  test("--runs over an empty list is UNMEASURED, not zero runs", () => {
+    const empty = file("runs-empty.jsonl", "");
+    const run = Bun.spawnSync([process.execPath, CENSUS, "--runs", empty], { stdout: "pipe", stderr: "pipe" });
+    expect(run.exitCode).toBe(CENSUS_UNMEASURED_EXIT);
+    expect(run.exitCode).not.toBe(0);
   });
 });
