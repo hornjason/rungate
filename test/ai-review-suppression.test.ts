@@ -523,8 +523,10 @@ describe("AS-2: the planted prior blocking finding is re-emitted and still block
 // "No repeats of advisory findings already posted; a blocking finding is
 // re-reported until it is fixed." AS-1 and AS-2 above carry the mutations;
 // this describe is the criterion's own claim over the deployed reader, one
-// case per clause, plus the clause's end: once the reviewer stops raising
-// the blocking finding, nothing is carried in its place.
+// case per clause. "Until it is fixed" is the reviewer's half — it stops
+// raising a defect that is gone — and the gate cannot witness that: a round
+// with no findings never reaches it (#2593 review round 1), so no case here
+// pretends to.
 
 describe("CRC-N4: an advisory finding already posted is not reported again; a blocking one is re-reported until it is fixed", () => {
   test("an advisory finding raised again at a place an earlier round posted is not reported, and is named as suppressed", () => {
@@ -559,14 +561,6 @@ describe("CRC-N4: an advisory finding already posted is not reported again; a bl
       expect(reading.outcome, `round ${roundNo}`).toBe("BLOCKED");
       expect(aiReviewExitCode(reading), `round ${roundNo}`).not.toBe(0);
     }
-  });
-
-  test("once it is fixed and the reviewer no longer raises it, the earlier thread carries nothing into the verdict", () => {
-    const reading = readAiReviewFindings(payloadOf("PASS", []), undefined, gate({ threads: raisedBefore(blocking()) }));
-
-    expect(reading.blockingReported).toEqual([]);
-    expect(reading.outcome).toBe("CLEAN");
-    expect(aiReviewExitCode(reading)).toBe(0);
   });
 });
 
