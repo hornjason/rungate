@@ -1,15 +1,15 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-20
-updated: 2026-11-20
+updated: 2026-11-21
 ---
 
 # ADR-024 — What a consumer's agents load is checked before it ships
 
 ## Status
 
-**Proposed, 2026-11-20 (#2568).** Jason decides. Jason has already chosen the overall shape: render, then lint, then audit, then verify, with the surface check shipping to consumers as phase 1. Still open: decisions 4 to 7 below, and everything under "Not decided here".
+**Accepted, 2026-11-21 (#2568).** Jason approved merging it as written: decisions 2 to 7 as the DA proposed them, and the criteria stay in `specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md` (`board-scope: deferred`) rather than moving to an active spec. The criteria are SC-2796 to SC-2805: SC-2795 was taken on main by #2589 before this merged, so the block moved up one. The rest of this paragraph is the proposal as it stood. **Proposed, 2026-11-20 (#2568).** Jason decides. Jason has already chosen the overall shape: render, then lint, then audit, then verify, with the surface check shipping to consumers as phase 1. Still open: decisions 4 to 7 below, and everything under "Not decided here".
 
 ## Context
 
@@ -39,7 +39,7 @@ bun check-instruction-surface.ts --root $W/ddb
 | docs-routing bakes `(N files)` into an always-loaded rule (#2566) | `lib/scaffold/steps.ts`, `lib/scanner.ts`, `lib/doc-routing.ts` | correct at render time; wrong one commit later |
 | `CANARY_MARKER_FOR_SC354`, a bare `${SOURCE_DIRS}`, and lists numbered 1, 3 (#2567) | `templates/agent-briefs/marcus.md`, and aditi, rook, serena, discovery | SC-354 writes the canary into the real template (`test/agent-brief-template.test.ts`); it leaked in ba7a00ff0, and the test still passes because it asserts that the canary appears |
 
-**3. Pressure language and model names are not rungate's problem today.** A count of MANDATORY, NEVER, CRITICAL, MUST, IMPORTANT and ZERO EXCEPTIONS gives at most 1 per brief in `templates/agent-briefs/`. A search for a model name in `templates/` finds none. The consumer's surface does have them: about 19 pressure markers in its CLAUDE.md, and its rules point at retired files. That text belongs to the consumer, so a lint for it belongs on the consumer side (row SC-2804). A rungate-side lint would have nothing to fail on.
+**3. Pressure language and model names are not rungate's problem today.** A count of MANDATORY, NEVER, CRITICAL, MUST, IMPORTANT and ZERO EXCEPTIONS gives at most 1 per brief in `templates/agent-briefs/`. A search for a model name in `templates/` finds none. The consumer's surface does have them: about 19 pressure markers in its CLAUDE.md, and its rules point at retired files. That text belongs to the consumer, so a lint for it belongs on the consumer side (row SC-2805). A rungate-side lint would have nothing to fail on.
 
 **4. Evals cover four of the six briefs.** `evals/` holds marcus (6), quinn (2), rook (1) and serena (2). There are none for aditi or discovery. A line removed from those two briefs has nothing that would show the behavior change.
 
@@ -71,38 +71,38 @@ On the consumer side, the same surface check runs inside the conformity test run
 
 ## Not decided here
 
-- **How a model release triggers a re-audit.** Options are a scheduled run against rendered fixtures or a check when the configured default model changes. Either one opens a PR whose diff carries the findings as threads. Decided in a follow-up issue once SC-2802 exists.
+- **How a model release triggers a re-audit.** Options are a scheduled run against rendered fixtures or a check when the configured default model changes. Either one opens a PR whose diff carries the findings as threads. Decided in a follow-up issue once SC-2803 exists.
 - **Whether contradiction between rows (the key-files case) can be checked deterministically.** Until there is a detector that fails on that case and passes a negative control, it stays with the model lens.
-- **The fixture set.** `test/fixtures/golden-project` is one fixture. Whether to add a legacy-monolith config consumer (as SUCCESS.md "Done, for a consumer" describes) belongs to SC-2798's issue.
+- **The fixture set.** `test/fixtures/golden-project` is one fixture. Whether to add a legacy-monolith config consumer (as SUCCESS.md "Done, for a consumer" describes) belongs to SC-2799's issue.
 - **Milestones.** Every row below says `—` until the phase placement table in `specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md` gives them one (ADR-021).
-- **Which spec governs these criteria.** `specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md` declares `board-scope: deferred`, so SC-2795 to SC-2804 are banked as deferred (`.claude/spec-deferral-ratchet.json`, 28 to 38) and are not placed in board phases. ADR-022 and ADR-023 put theirs in the active `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`. `specs/CODE-REVIEW-CONVERGENCE-SPEC.md` is active and already names this check (CRC-A3). Jason decides before merge whether to move them there.
+- **Which spec governs these criteria.** `specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md` declares `board-scope: deferred`, so SC-2796 to SC-2805 are banked as deferred (`.claude/spec-deferral-ratchet.json`, 28 to 38) and are not placed in board phases. ADR-022 and ADR-023 put theirs in the active `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md`. `specs/CODE-REVIEW-CONVERGENCE-SPEC.md` is active and already names this check (CRC-A3). Jason decides before merge whether to move them there.
 
 ## Decomposition
 
-SC-2795 to SC-2804 are reserved in `specs/sc-reservations.json` on this ADR's branch, above ADR-023's 2789 to 2794. Each is a `- [ ] SC-<N>:` line under "What a consumer loads is checked before it ships (ADR-024, #2568)" in `specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md`:
+SC-2796 to SC-2805 are reserved in `specs/sc-reservations.json` on this ADR's branch, above ADR-023's 2789 to 2794. Each is a `- [ ] SC-<N>:` line under "What a consumer loads is checked before it ships (ADR-024, #2568)" in `specs/RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md`:
 
-- SC-2795: A scaffold or re-scaffold run measures the consumer's launch and peak surface with `measureSurface`, and reports the reading with its largest contributors.
-- SC-2796: The consumer budget is read from rungate config, defaults to `SURFACE_BUDGET_BYTES`, and a budget more than 35% above the measured surface is refused.
-- SC-2797: The generated conformity test refuses an over-budget consumer surface, and refuses an unreadable one as UNMEASURED.
-- SC-2798: CI renders the full scaffold into fixture consumers, and every lint below reads that rendered tree.
-- SC-2799: Every file, heading or table that a rendered brief or rule tells its agent to read exists in the rendered tree.
-- SC-2800: No rendered file carries an unexpanded `${…}`, a `CANARY_MARKER`, or a numbered list that skips, and the SC-354 test edits a copy, never the shipped template.
-- SC-2801: No always-loaded rendered rule states a count of files that adding one file would change.
-- SC-2802: Pull requests touching `templates/`, `lib/generators/` or `lib/doc-routing.ts` get a prompt-audit review lens that posts findings as threads, proven by a planted-cruft subject that it flags and a clean control that it does not.
-- SC-2803: A pull request that removes a line from `templates/agent-briefs/<name>.md` runs that brief's evals, and aditi and discovery have at least one eval each.
-- SC-2804: `rungate prompt-audit` runs the rendered-surface lints plus pressure-density and dangling-path lints on a consumer, labels each finding consumer-owned or harness-owned, and writes harness-owned findings as `reporting-upstream.md` bodies without filing them.
+- SC-2796: A scaffold or re-scaffold run measures the consumer's launch and peak surface with `measureSurface`, and reports the reading with its largest contributors.
+- SC-2797: The consumer budget is read from rungate config, defaults to `SURFACE_BUDGET_BYTES`, and a budget more than 35% above the measured surface is refused.
+- SC-2798: The generated conformity test refuses an over-budget consumer surface, and refuses an unreadable one as UNMEASURED.
+- SC-2799: CI renders the full scaffold into fixture consumers, and every lint below reads that rendered tree.
+- SC-2800: Every file, heading or table that a rendered brief or rule tells its agent to read exists in the rendered tree.
+- SC-2801: No rendered file carries an unexpanded `${…}`, a `CANARY_MARKER`, or a numbered list that skips, and the SC-354 test edits a copy, never the shipped template.
+- SC-2802: No always-loaded rendered rule states a count of files that adding one file would change.
+- SC-2803: Pull requests touching `templates/`, `lib/generators/` or `lib/doc-routing.ts` get a prompt-audit review lens that posts findings as threads, proven by a planted-cruft subject that it flags and a clean control that it does not.
+- SC-2804: A pull request that removes a line from `templates/agent-briefs/<name>.md` runs that brief's evals, and aditi and discovery have at least one eval each.
+- SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus pressure-density and dangling-path lints on a consumer, labels each finding consumer-owned or harness-owned, and writes harness-owned findings as `reporting-upstream.md` bodies without filing them.
 
 Each lint row records its mutation under the rule for mutation records: baseline and mutant counts, the tests that flipped, and a negative control.
 
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
-| SC-2795 | Scaffold measures the consumer instruction surface | scripts/check-instruction-surface.ts, lib/scaffold/steps.ts, test/consumer-instruction-surface.test.ts | — | — |
-| SC-2796 | Consumer surface budget comes from rungate config | lib/config-loader.ts, scripts/check-instruction-surface.ts, test/consumer-instruction-surface.test.ts | — | Scaffold measures the consumer instruction surface |
-| SC-2797 | Generated conformity test refuses an over-budget surface | lib/scaffold/steps.ts, lib/conformity.ts, test/scaffold-conformity-surface.test.ts | — | Consumer surface budget comes from rungate config |
-| SC-2798 | CI renders the scaffold into fixture consumers | test/rendered-surface.test.ts, lib/surface-lint.ts, test/fixtures/golden-project/package.json | — | — |
-| SC-2799 | Rendered briefs name only targets that exist | lib/surface-lint.ts, test/rendered-surface.test.ts, templates/agent-briefs/discovery.md, lib/create-brief.ts | — | CI renders the scaffold into fixture consumers |
-| SC-2800 | Rendered surface carries no template artifacts | lib/surface-lint.ts, test/rendered-surface.test.ts, test/agent-brief-template.test.ts, templates/agent-briefs/marcus.md, templates/agent-briefs/aditi.md, templates/agent-briefs/rook.md, templates/agent-briefs/serena.md | — | CI renders the scaffold into fixture consumers |
-| SC-2801 | Always-loaded rules carry no count a commit can stale | lib/surface-lint.ts, lib/doc-routing.ts, lib/scaffold/steps.ts, lib/scanner.ts, test/rendered-surface.test.ts | — | CI renders the scaffold into fixture consumers |
-| SC-2802 | Prompt-audit lens reviews instruction-surface pull requests | lib/scaffold/ai-review-step.ts, REVIEW.md, evals/ai-review-control/subjects/planted-cruft/subject.json, evals/ai-review-control/subjects/planted-cruft/planted.ts, evals/ai-review-control/subjects/planted-cruft/clean.ts | — | — |
-| SC-2803 | A brief line is removed only with its eval green | evals/aditi-visual-review/README.md, evals/discovery-finds-spec/README.md, evals/README.md, evals/scaffold-workspace.sh | — | — |
-| SC-2804 | Consumer prompt-audit sorts findings by owner | lib/cli-commands.ts, lib/prompt-audit.ts, bin/rungate.ts, test/prompt-audit-command.test.ts | — | Rendered briefs name only targets that exist |
+| SC-2796 | Scaffold measures the consumer instruction surface | scripts/check-instruction-surface.ts, lib/scaffold/steps.ts, test/consumer-instruction-surface.test.ts | — | — |
+| SC-2797 | Consumer surface budget comes from rungate config | lib/config-loader.ts, scripts/check-instruction-surface.ts, test/consumer-instruction-surface.test.ts | — | Scaffold measures the consumer instruction surface |
+| SC-2798 | Generated conformity test refuses an over-budget surface | lib/scaffold/steps.ts, lib/conformity.ts, test/scaffold-conformity-surface.test.ts | — | Consumer surface budget comes from rungate config |
+| SC-2799 | CI renders the scaffold into fixture consumers | test/rendered-surface.test.ts, lib/surface-lint.ts, test/fixtures/golden-project/package.json | — | — |
+| SC-2800 | Rendered briefs name only targets that exist | lib/surface-lint.ts, test/rendered-surface.test.ts, templates/agent-briefs/discovery.md, lib/create-brief.ts | — | CI renders the scaffold into fixture consumers |
+| SC-2801 | Rendered surface carries no template artifacts | lib/surface-lint.ts, test/rendered-surface.test.ts, test/agent-brief-template.test.ts, templates/agent-briefs/marcus.md, templates/agent-briefs/aditi.md, templates/agent-briefs/rook.md, templates/agent-briefs/serena.md | — | CI renders the scaffold into fixture consumers |
+| SC-2802 | Always-loaded rules carry no count a commit can stale | lib/surface-lint.ts, lib/doc-routing.ts, lib/scaffold/steps.ts, lib/scanner.ts, test/rendered-surface.test.ts | — | CI renders the scaffold into fixture consumers |
+| SC-2803 | Prompt-audit lens reviews instruction-surface pull requests | lib/scaffold/ai-review-step.ts, REVIEW.md, evals/ai-review-control/subjects/planted-cruft/subject.json, evals/ai-review-control/subjects/planted-cruft/planted.ts, evals/ai-review-control/subjects/planted-cruft/clean.ts | — | — |
+| SC-2804 | A brief line is removed only with its eval green | evals/aditi-visual-review/README.md, evals/discovery-finds-spec/README.md, evals/README.md, evals/scaffold-workspace.sh | — | — |
+| SC-2805 | Consumer prompt-audit sorts findings by owner | lib/cli-commands.ts, lib/prompt-audit.ts, bin/rungate.ts, test/prompt-audit-command.test.ts | — | Rendered briefs name only targets that exist |

@@ -370,24 +370,24 @@ in that consumer's rendered output (#2564–#2567) passed this repository's
 suite. `docs/adr/ADR-024-what-a-consumer-loads-is-checked-before-it-ships.md`
 holds the decisions and the decomposition.
 
-- [ ] SC-2795: A scaffold or re-scaffold run measures the consumer's launch and peak surface with `measureSurface` and reports the reading with its largest contributors
+- [ ] SC-2796: A scaffold or re-scaffold run measures the consumer's launch and peak surface with `measureSurface` and reports the reading with its largest contributors
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2796: The consumer budget is read from rungate config, defaults to `SURFACE_BUDGET_BYTES`, and a budget more than 35% above the measured surface is refused
+- [ ] SC-2797: The consumer budget is read from rungate config, defaults to `SURFACE_BUDGET_BYTES`, and a budget more than 35% above the measured surface is refused
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2797: The generated conformity test refuses an over-budget consumer surface, and an unreadable one as UNMEASURED
+- [ ] SC-2798: The generated conformity test refuses an over-budget consumer surface, and an unreadable one as UNMEASURED
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2798: CI renders the full scaffold into fixture consumers, and every lint below reads that rendered tree
+- [ ] SC-2799: CI renders the full scaffold into fixture consumers, and every lint below reads that rendered tree
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2799: Every file, heading or table a rendered brief or rule tells its agent to read exists in the rendered tree
+- [ ] SC-2800: Every file, heading or table a rendered brief or rule tells its agent to read exists in the rendered tree
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2800: No rendered file carries an unexpanded `${…}`, a `CANARY_MARKER` or a numbered list that skips, and the SC-354 test edits a copy, never the shipped template
-- [ ] SC-2801: No always-loaded rendered rule states a count of files that adding one file would change
+- [ ] SC-2801: No rendered file carries an unexpanded `${…}`, a `CANARY_MARKER` or a numbered list that skips, and the SC-354 test edits a copy, never the shipped template
+- [ ] SC-2802: No always-loaded rendered rule states a count of files that adding one file would change
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2802: Pull requests touching `templates/`, `lib/generators/` or `lib/doc-routing.ts` get a prompt-audit review lens that posts findings as threads, proven by a planted-cruft subject it flags and a clean control it does not
+- [ ] SC-2803: Pull requests touching `templates/`, `lib/generators/` or `lib/doc-routing.ts` get a prompt-audit review lens that posts findings as threads, proven by a planted-cruft subject it flags and a clean control it does not
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2803: A pull request that removes a line from `templates/agent-briefs/<name>.md` runs that brief's evals, and aditi and discovery have at least one eval each
+- [ ] SC-2804: A pull request that removes a line from `templates/agent-briefs/<name>.md` runs that brief's evals, and aditi and discovery have at least one eval each
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2804: `rungate prompt-audit` runs the rendered-surface lints plus pressure-density and dangling-path lints on a consumer, labels each finding consumer-owned or harness-owned, and writes harness-owned findings as `reporting-upstream.md` bodies without filing them
+- [ ] SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus pressure-density and dangling-path lints on a consumer, labels each finding consumer-owned or harness-owned, and writes harness-owned findings as `reporting-upstream.md` bodies without filing them
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ## Proving it

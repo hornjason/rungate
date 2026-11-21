@@ -42,7 +42,7 @@ const SC_RANGES = [
   // allocated by finding-promotion in the pull request that consumes it.
   { owner: "#2104 (ADR-015, #1553)", lo: 2769, hi: 2769 },
   // #2568: ADR-024's criteria, reserved in specs/sc-reservations.json.
-  { owner: "#2568 (ADR-024)", lo: 2795, hi: 2804 },
+  { owner: "#2568 (ADR-024)", lo: 2796, hi: 2805 },
 ] as const;
 
 function specBody(): string {
@@ -73,7 +73,7 @@ describe("RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC: document integrity", () => {
     // five of the original nineteen rather than adding any, so the count is
     // unchanged and the enumeration below is what moved. 27 -> 28 on
     // 2026-11-13: ADR-015's promotion of #1553 (#2104). 28 -> 38 on
-    // 2026-11-20: ADR-024's ten, SC-2795..SC-2804 (#2568).
+    // 2026-11-20: ADR-024's ten, SC-2796..SC-2805 (#2568).
     expect(scs.length).toBe(38);
   });
 
