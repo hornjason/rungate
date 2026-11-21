@@ -381,6 +381,7 @@ holds the decisions and the decomposition.
 - [ ] SC-2800: Every file, heading or table a rendered brief or rule tells its agent to read exists in the rendered tree
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2801: No rendered file carries an unexpanded `${…}`, the brief templates' test-only marker string, or a numbered list that skips, and the SC-354 test edits a copy, never the shipped template
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2802: No always-loaded rendered rule states a count of files that adding one file would change
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2803: Pull requests touching `templates/`, `lib/generators/` or `lib/doc-routing.ts` get a prompt-audit review lens that posts findings as threads, proven by a planted-cruft subject it flags and a clean control it does not
