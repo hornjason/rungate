@@ -363,7 +363,19 @@ describe("SC-1491: the gate check, spawned over planted state", () => {
     // The control. Same state, same unreachable repo, one variable changed.
     // Whatever the credential does — 401, 404, no route to host — the read
     // did not answer and a token says it should have.
-    const { out, failed } = runCheck({ GITHUB_TOKEN: "NOT-A-REAL-TOKEN-0123456789" });
+    //
+    // The read goes to a loopback port nothing listens on (#2613): before, it
+    // went to api.github.com with a made-up token, a real request about a
+    // repository that does not exist. `GITHUB_API_URL` is honoured for
+    // loopback by `resolveApiBaseUrl`, and a refused connection is the
+    // "no route to host" answer above.
+    const closed = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
+    const port = closed.port;
+    closed.stop(true);
+    const { out, failed } = runCheck({
+      GITHUB_TOKEN: "NOT-A-REAL-TOKEN-0123456789",
+      GITHUB_API_URL: `http://127.0.0.1:${port}`,
+    });
     expect(failed, `an authenticated read that failed must block:\n${out}`).toBe(true);
     expect(out).toContain("could not find out");
     expect(out, "a refusal must not be reported as unmeasured")

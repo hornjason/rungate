@@ -21,7 +21,12 @@ function runGate(gate: string, slug: string): { pass: number; fail: number; outp
   const gateRunner = join(GATES_DIR, "run-gate.ts");
   const cmd = `RUNGATE_WORK_DIR=${TEST_BASE} RUNGATE_SKIP_AGENTS=1 bun run ${gateRunner} --gate ${gate} --slug ${slug} --issue 9999 2>&1`;
   try {
-    const output = execSync(cmd, { encoding: "utf-8", timeout: 30000 });
+    // No token (#2613). The ship gate's prove-label check reads the issue's
+    // labels; with a token it asked api.github.com about `test/repo`, which
+    // does not exist, and a failed read with a token present REFUSES — one
+    // more failure on every case, for a reason no case is about. Without a
+    // token the read is never attempted and the check reports UNMEASURED.
+    const output = execSync(cmd, { encoding: "utf-8", timeout: 30000, env: { ...process.env, GITHUB_TOKEN: "", GH_TOKEN: "" } });
     const passMatch = output.match(/(\d+) pass/);
     const failMatch = output.match(/(\d+) fail/);
     return { pass: passMatch ? parseInt(passMatch[1]) : 0, fail: failMatch ? parseInt(failMatch[1]) : 0, output };

@@ -97,7 +97,13 @@ async function hookDecision(
       ),
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env, RUNGATE_WORK_DIR: work },
+      // No token (#2613). The hook's second gate, the filing gate, reads open
+      // issues for `o/r` and this repository over the real API; no case here
+      // asserts on that gate (see `blockedByArbiter` below), and with a token
+      // each case sent four requests to GitHub about a repository that does
+      // not exist — eight a run, plus the same again when `sync-sc-status`
+      // re-runs this file. Empty counts as absent in `resolveGitHubToken`.
+      env: { ...process.env, RUNGATE_WORK_DIR: work, GITHUB_TOKEN: "", GH_TOKEN: "" },
     });
     text = await new Response(proc.stdout).text();
     await proc.exited;
