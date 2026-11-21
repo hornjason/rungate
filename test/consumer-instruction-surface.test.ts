@@ -60,6 +60,10 @@ describe("SC-2796: a scaffold run reports the consumer's instruction surface", (
     expect(line).toContain(`launch ${reading.launch.totalBytes.toLocaleString()} bytes`);
     expect(line).toContain(`peak ${reading.peakBytes.toLocaleString()} bytes on src/a.ts`);
     expect(line).toContain(`budget ${SURFACE_BUDGET_BYTES.toLocaleString()}`);
+    // Four files load at launch: the path-scoped rule loads on demand and is
+    // not counted among them.
+    expect(line).toContain("over 4 files");
+    expect(reading.launch.entries.filter(e => e.excluded === null)).toHaveLength(4);
     // The planted tree's own arithmetic, so the agreement above is not two
     // readings of the same wrong number.
     expect(reading.launch.totalBytes).toBe(2450);
