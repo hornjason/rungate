@@ -447,7 +447,11 @@ const UNCLAIMED_RATCHET = 150;
 // of a bug, a reading of the adjudicator's re-count and the class thread's hold
 // that no registered pattern expresses; the `CRC-N3` describe in
 // test/ai-review-population-declared.test.ts names it (2026-11-21).
-const CLAIMED_UNBINDABLE = 193;
+// 194: CRC-N4 (#2552) ticked by `sync-sc-status --only CRC-N4` — no repeats of
+// advisory findings already posted, a reading of the adjudicator's suppression
+// gate over a thread list that no registered pattern expresses; the `CRC-N4`
+// describe in test/ai-review-suppression.test.ts names it (2026-11-21).
+const CLAIMED_UNBINDABLE = 194;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
