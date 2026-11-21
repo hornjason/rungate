@@ -2,11 +2,11 @@
 
 **Current phase: Engine — a spec becomes a readable board, with nothing hand-run (ADR-009) — IN PROGRESS**
 
-**Session 100 (2026-11-20)** — ADR-022 and ADR-023 were accepted and most of each is built. rungate now makes, wires and moves a consumer's project board; the human-steps row saying whether the project token can write it (SC-2793, #2485) is still open. A merge made by automation now places the plan (SC-2787). Closing the issues such a merge declares (SC-2788) is not live yet: release 0.8.39 is being cut so the generated close step (#2497) can call the new range flag.
+**Session 101 (2026-11-21)** — A criterion whose last issue closes now gets its successor filed and placed by a workflow, on close and daily, instead of reddening every PR until someone files it by hand. ADR-022 is finished: a bot's merge closes the issues it declares. The consumer's scaffold reports were fixed and released in 0.8.42. Review-convergence work landed: CRC-N7 holds a class finding open until its population is stated, and CRC-M18 is ticked from a live reading. ADR-024 waits for Jason's merge.
 
-Suite: 31 PRs merged (#2443 to #2524); releases 0.8.36, 0.8.37 and 0.8.38 published.
-Issues opened: #2461, #2463, #2464, #2466, #2467, #2470, #2472, #2474, #2477, #2479, #2480, #2481, #2482, #2483, #2484, #2485, #2486, #2487, #2488, #2489, #2490, #2493, #2495, #2496, #2497, #2499, #2501, #2503, #2504, #2507, #2508, #2514, #2517, #2519, #2520, #2522, #2525
-Issues closed: #1653, #2337, #2344, #2452, #2461, #2464, #2466, #2467, #2470, #2472, #2474, #2477, #2479, #2480, #2481, #2482, #2483, #2484, #2486, #2487, #2489, #2493, #2495, #2496, #2499, #2501, #2507, #2508, #2514, #2517, #2522
+Suite: 32 PRs merged (#2527 to #2588); releases 0.8.39, 0.8.40, 0.8.41 and 0.8.42 published.
+Issues opened: #2528, #2532, #2535, #2536, #2541, #2542, #2544, #2546, #2547, #2552, #2564, #2565, #2566, #2567, #2568, #2571, #2576, #2580, #2584, #2586, #2587, #2589
+Issues closed: #1591, #1592, #1652, #1654, #1764, #1818, #1934, #2366, #2463, #2485, #2490, #2497, #2503, #2519, #2520, #2525, #2528, #2532, #2535, #2536, #2541, #2542, #2546, #2547, #2564, #2565, #2566, #2567, #2571, #2576, #2580, #2587
 
 Read this before anything else. The suite is green under a CLEAN ENVIRONMENT, which is a stronger claim than the one this file made yesterday — run `bun scripts/test-clean-env.ts`, not `bun test`, before believing any gate. Plain `bun test` passes on this machine for reasons that have nothing to do with the code.
 
@@ -100,6 +100,16 @@ Suite: 25/25 SCs done.
 
 ---
 
+**Session 2026-11-21 session 101 (a closed criterion's successor files itself; consumer-reported scaffold fixes; review convergence work; releases 0.8.39 to 0.8.42):**
+- MERGED: 32 PRs from #2527 to #2588, the last of them (#2570) on 2026-11-21. Releases 0.8.39, 0.8.40, 0.8.41 and 0.8.42 are on npm.
+- A CLOSED CRITERION'S SUCCESSOR FILES ITSELF: rungate criterion-successor files a successor for each criterion a closed issue leaves owed by nobody (#2534), refusing when two open milestones read as one phase (#2537); criterion-label.yml runs it when an issue closes (#2540) and on a daily sweep (#2545, #2548, #2550), so closing a criterion's last issue no longer reds every PR for want of a hand-filed successor.
+- MERGES BY AUTOMATION (ADR-022) finished: a merge-triggered adr-accepted run closes the issues the merged pull requests declare (#2533, SC-2788), and rows added to an accepted ADR's Decomposition are placed on merge (#2582). The human-steps report says whether board.id is set and whether the token can write the board (#2529, SC-2793).
+- CONSUMER-REPORTED SCAFFOLD FIXES (#2564 to #2567, #2571, #2576), released in 0.8.42: the key-files rows come from one reading (#2574), docs-routing states no file count (#2573), the discovery brief names the rule files that hold its tables (#2575), brief templates ship no test canary (#2577), consumer-intake mirrors the Criteria column after triage (#2572), and the reader selection handles a template basename (#2578). rungate owned-jobs prints the jobs the scaffold owns (#2579); scaffold refuses an unreadable config by name before writing (#2553).
+- REVIEW CONVERGENCE: a class finding stays open until a reply states its population (#2570, CRC-N7); CRC-N3's population rate reads 29 of 45 (#2538); an over-budget diff is reviewed whole files at a time with the scope stated (#2585), and CRC-M18 is ticked from the live reading on #1932 (#2588); the self-inflicted ratio is measured, 14.0% (#2583); the generated review prompt asks for the root cause on a bug fix (#2543); rounds-to-pass labels run attempts and distinct rounds apart (#2551); CRC-B4's vote recording is recorded as built, not wired (#2554); first-pass completeness measured (#2563).
+- SMALLER: the work loop fences the test command exactly (#2527); stage F's retro case sets its own timeout (#2530).
+- IN FLIGHT: #2590 ticks CRC-N3 (#2544); #2589, a two-day grace in criteria-named for consumer-filed issues, is built and goes to Jason to merge because it changes what a board check counts; CRC-N4 is reworded by Jason's decision and waits on #2590 (#2552).
+- OPEN, for Jason: ADR-024 (#2569, issue #2568) needs his merge; #2488 and #2504 each still need an ADR.
+
 **Session 2026-11-20 session 100 (rungate makes and moves a consumer's board; a bot's merge places the plan; releases 0.8.36 to 0.8.38):**
 - MERGED: 31 PRs from #2443 to #2524. Releases 0.8.36, 0.8.37 and 0.8.38 are on npm.
 - ACCEPTED: ADR-022 (#2443), a merge made by automation still places the plan and closes its issues; ADR-023 (#2454), rungate makes, wires and moves a consumer's project board.
@@ -118,11 +128,4 @@ Suite: 25/25 SCs done.
 - SMALLER: one 60s budget per conformity check (#2386); a reading that names every hand edit on the payload's board, for SC-2625 (#2388); HYGIENE-11 dates a doc from a merge that changed it on both sides (#2456); a refusing stage item's report shows the reading that refused (#2458); a coverage verb credits only its own sentence (#2429); the deferral bank's one write path (#2381); a refused RepoRails check is no reading (#2402); an over-cap refusal from an unread config opens with UNMEASURED (#2446); RELEASING step 9 pins with --by-hand (#2394).
 - TOKEN: every board move since 2026-11-17 was signed hornjason, so RUNGATE_PROJECT_TOKEN held a hornjason token and #1722's hand-edit window could not open. On 2026-11-19 the secret was set to a token verified as rungate-bot's (gh api user returned rungate-bot), and a report-only board-ready run read the board with it.
 - OPEN, for Jason: ADR-022 (#2443) and ADR-023 (#2454) wait on acceptance of their criterion texts; #2459 changes ai-review.yml and waits on his merge.
-
-**Session 2026-11-18 session 98 (consumer issues get a verdict; releases 0.8.27 and 0.8.28):**
-- MERGED: 27 PRs from #2321 to #2378. Releases 0.8.27 (specs-placed and board-scope) and 0.8.28 (consumer triage, the consumer-intake reading, sync-sc-status as a consumer CLI command).
-- A CONSUMER'S ISSUE GETS A VERDICT (ADR-020, #2321). One decider gives each from-consumer issue exactly one triage verdict (#2356, SC-2782); the board reads an unanswered one as SHORT (#2368, SC-2783); scaffold emits consumer-intake.yml, which triages on filing, on the label and daily through the published CLI (#2376, SC-2784). An outside reporter's issue is labelled first, because GitHub drops labels such an author sets.
-- CONSUMERS: sync-sc-status runs against a consumer's own specs (#2365); the filing gate asks for a claim from the consumer's SUCCESS.md (#2371); scaffold owes test and ai-review as required checks (#2362), names an owned file left in an ignored path (#2359), and gives a consumer the claim convention sync-sc-status enforces (#2377); a family can opt out of phase-order links (#2352); a repo with no board takes specs-placed and adr-accepted without a red run (#2355).
-- REVIEW: a finding GitHub will not put on the diff goes on the conversation (#2358), classified from GitHub's structured errors (#2370); a review thread resolved with no stated reason is reported on its pull request, which ticks CRC-C3 (#2378).
-- SMALLER: a Decomposition table can make an existing issue wait on a new row and refuses an unknown #N (#2374); a generated spec copy is not a second author of its source's criteria (#2372); in direct-ship mode the filing cap is the ceiling (#2346); board-scope (#2329) and rungate board (#2334) for any repository.
 
