@@ -76,6 +76,8 @@ export interface TapCall {
   via: string;
   method: string;
   url: string;
+  /** The calling file the fetch tap read off the stack; absent for gh, which has no stack to read. */
+  from?: string;
 }
 
 export type TapReading =
@@ -99,11 +101,12 @@ export function readTap(text: string): TapReading {
     const at = line.indexOf(TAP_LINE);
     if (at < 0) continue;
     const parts = line.slice(at + TAP_LINE.length).trim().split(/\s+/);
-    if (parts.length !== 3 || !/^[a-z][a-z0-9+.-]*:\/\//i.test(parts[2])) {
+    const fromOk = parts.length === 3 || (parts.length === 4 && parts[3].startsWith("from="));
+    if (!fromOk || !/^[a-z][a-z0-9+.-]*:\/\//i.test(parts[2])) {
       unparsed++;
       continue;
     }
-    calls.push({ via: parts[0], method: parts[1], url: parts[2] });
+    calls.push({ via: parts[0], method: parts[1], url: parts[2], ...(parts[3] ? { from: parts[3].slice(5) } : {}) });
   }
   if (starts === 0) {
     return {
@@ -143,11 +146,14 @@ export interface Census {
   unparsed: number;
   lost: number;
   apis: { api: string; calls: number; endpoints: { endpoint: string; calls: number }[] }[];
+  /** External calls by the file that made them, where the tap could read it. */
+  sources: { from: string; calls: number }[];
 }
 
 export function countCalls(readings: TapReading[]): Census {
   const byApi = new Map<string, Map<string, number>>();
-  const census: Census = { records: readings.length, unmeasured: [], external: 0, notExternal: 0, unparsed: 0, lost: 0, apis: [] };
+  const census: Census = { records: readings.length, unmeasured: [], external: 0, notExternal: 0, unparsed: 0, lost: 0, apis: [], sources: [] };
+  const bySource = new Map<string, number>();
   for (const r of readings) {
     if (r.status === "unmeasured") {
       census.unmeasured.push(r.reason);
@@ -162,6 +168,8 @@ export function countCalls(readings: TapReading[]): Census {
         continue;
       }
       census.external++;
+      const from = call.from ?? (call.via === "gh" ? "(gh: no stack)" : "-");
+      bySource.set(from, (bySource.get(from) ?? 0) + 1);
       const endpoints = byApi.get(api) ?? new Map<string, number>();
       endpoints.set(endpoint, (endpoints.get(endpoint) ?? 0) + 1);
       byApi.set(api, endpoints);
@@ -176,6 +184,9 @@ export function countCalls(readings: TapReading[]): Census {
         .sort((a, b) => b.calls - a.calls || a.endpoint.localeCompare(b.endpoint)),
     }))
     .sort((a, b) => b.calls - a.calls || a.api.localeCompare(b.api));
+  census.sources = [...bySource.entries()]
+    .map(([from, calls]) => ({ from, calls }))
+    .sort((a, b) => b.calls - a.calls || a.from.localeCompare(b.from));
   return census;
 }
 
@@ -188,6 +199,11 @@ export function renderCensus(c: Census): string {
     out.push(`  ${a.api}: ${a.calls}`);
     for (const e of a.endpoints.slice(0, ENDPOINTS_SHOWN)) out.push(`    ${String(e.calls).padStart(5)}  ${e.endpoint}`);
     if (a.endpoints.length > ENDPOINTS_SHOWN) out.push(`    … ${a.endpoints.length - ENDPOINTS_SHOWN} more endpoints`);
+  }
+  if (c.sources.length > 0) {
+    out.push("  by the file that made them:");
+    for (const s of c.sources.slice(0, ENDPOINTS_SHOWN)) out.push(`    ${String(s.calls).padStart(5)}  ${s.from}`);
+    if (c.sources.length > ENDPOINTS_SHOWN) out.push(`    … ${c.sources.length - ENDPOINTS_SHOWN} more files`);
   }
   if (c.unparsed > 0) out.push(`${plural(c.unparsed, "tap line")} did not parse, and ${c.unparsed === 1 ? "is" : "are"} not in the count above`);
   if (c.lost > 0) out.push(`${plural(c.lost, "request")} went out but could not be written down (API-TAP-LOST), so the count above is short by at least that`);

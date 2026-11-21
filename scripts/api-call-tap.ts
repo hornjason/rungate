@@ -15,8 +15,12 @@
  * subprocesses are counted too. `gh` is a Go binary and is counted by the
  * `gh` tap `scripts/ci-api-census.ts --install-gh-tap` writes instead.
  *
- * One line per request, `API-TAP fetch <METHOD> <origin><path>`, appended to
- * the record. The query string is not written: a record is printed into CI
+ * One line per request, `API-TAP fetch <METHOD> <origin><path> from=<file>`,
+ * appended to the record. `from` is the calling file, read off the stack: the
+ * test file when a test is on the stack, otherwise the first frame outside
+ * `node_modules` and this file, relative to the working directory — `-` when
+ * neither is there. It is what turns "the suite made 200 calls" into "these
+ * three files made most of them". The query string is not written: a record is printed into CI
  * logs, and a query is where a token would travel if anything ever sent one
  * that way. `scripts/ci-api-census.ts` counts the record.
  *
@@ -28,6 +32,16 @@
  */
 
 import { appendFileSync } from "fs";
+import { relative } from "path";
+
+/** The file that asked: a test file if one is on the stack, else the first frame outside node_modules and this tap. */
+export function callerOf(stack: string, cwd: string): string {
+  const files = [...stack.matchAll(/\(?((?:\/|[A-Za-z]:\\)[^():\s]+):\d+:\d+\)?/g)]
+    .map(m => m[1])
+    .filter(f => !f.includes("/node_modules/") && !f.endsWith("api-call-tap.ts"));
+  const pick = files.find(f => /\.test\.[cm]?[jt]sx?$/.test(f)) ?? files[0];
+  return pick ? relative(cwd, pick) || pick : "-";
+}
 
 const record = process.env.RUNGATE_API_TAP;
 
@@ -48,7 +62,8 @@ if (record) {
       console.error(`API-TAP-LOST fetch ${method}: the URL did not parse (${e instanceof Error ? e.message : String(e)})`);
     }
     try {
-      appendFileSync(record, `API-TAP fetch ${method} ${where}\n`);
+      const from = callerOf(new Error().stack ?? "", process.cwd()).replace(/\s/g, "_");
+      appendFileSync(record, `API-TAP fetch ${method} ${where} from=${from}\n`);
     } catch (e) {
       console.error(`API-TAP-LOST fetch ${method} ${where}: ${e instanceof Error ? e.message : String(e)}`);
     }

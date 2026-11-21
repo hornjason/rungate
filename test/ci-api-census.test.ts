@@ -19,7 +19,8 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { callerOf } from "../scripts/api-call-tap";
+import { basename, dirname, join } from "path";
 
 import {
   CENSUS_UNMEASURED_EXIT,
@@ -81,6 +82,44 @@ describe("#2596: a record is read, or refused by name", () => {
     const reading = readTap(`${TAP_START}\nAPI-TAP fetch\nAPI-TAP gh - https://api.github.com/graphql\n`);
     expect(reading).toMatchObject({ status: "measured", unparsed: 1 });
     expect(renderCensus(countCalls([reading]))).toContain("1 tap line did not parse");
+  });
+});
+
+describe("#2596: each call names the file that made it", () => {
+  test("a test file on the stack wins over the library frame below it", () => {
+    const stack = [
+      "Error",
+      "    at tapped (/w/scripts/api-call-tap.ts:30:5)",
+      "    at fetchWrapper (/w/node_modules/@octokit/request/dist/index.js:10:3)",
+      "    at listOpenIssues (/w/lib/github.ts:600:9)",
+      "    at async <anonymous> (/w/test/board-mirror.test.ts:44:7)",
+    ].join("\n");
+    expect(callerOf(stack, "/w")).toBe("test/board-mirror.test.ts");
+  });
+
+  test("with no test on the stack, the first frame outside node_modules and the tap is named", () => {
+    const stack = ["Error", "    at tapped (/w/scripts/api-call-tap.ts:30:5)", "    at x (/w/node_modules/a/b.js:1:1)", "    at render (/w/scripts/status-view.ts:12:3)"].join("\n");
+    expect(callerOf(stack, "/w")).toBe("scripts/status-view.ts");
+    expect(callerOf("Error", "/w")).toBe("-");
+  });
+
+  test("the census adds up calls by the file that made them; gh calls say they have no stack", () => {
+    const census = countCalls([
+      readTap(
+        [
+          TAP_START,
+          "API-TAP fetch GET https://api.github.com/graphql from=test/a.test.ts",
+          "API-TAP fetch GET https://api.github.com/graphql from=test/a.test.ts",
+          "API-TAP gh - https://api.github.com/graphql",
+          "API-TAP fetch GET http://127.0.0.1:1/x from=test/b.test.ts",
+        ].join("\n"),
+      ),
+    ]);
+    expect(census.sources).toEqual([
+      { from: "test/a.test.ts", calls: 2 },
+      { from: "(gh: no stack)", calls: 1 },
+    ]);
+    expect(census.sources.reduce((s, x) => s + x.calls, 0)).toBe(census.external);
   });
 });
 
@@ -171,14 +210,16 @@ describe("#2596: the fetch tap records what Octokit and hand-rolled readers send
         `await fetch("http://127.0.0.1:${server.port}/repos/o/r/issues/5?x=1", { method: "PATCH" });\n`,
       );
       const run = Bun.spawn([process.execPath, script], {
+        cwd: dirname(script),
         env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record },
         stdout: "pipe",
         stderr: "pipe",
       });
       expect(await run.exited, await new Response(run.stderr).text()).toBe(0);
       // The query string is not written: a record is printed into CI logs.
+      // `from` names the script that asked, relative to where it ran.
       expect(readFileSync(record, "utf-8")).toBe(
-        `${TAP_START}\nAPI-TAP fetch PATCH http://127.0.0.1:${server.port}/repos/o/r/issues/5\n`,
+        `${TAP_START}\nAPI-TAP fetch PATCH http://127.0.0.1:${server.port}/repos/o/r/issues/5 from=${basename(script)}\n`,
       );
     } finally {
       server.stop(true);
@@ -207,7 +248,7 @@ describe("#2596: the fetch tap records what Octokit and hand-rolled readers send
       const err = await new Response(run.stderr).text();
       expect(code, err).toBe(0);
       expect(err).toContain("1 pass");
-      expect(readFileSync(record, "utf-8")).toBe(`${TAP_START}\nAPI-TAP fetch GET http://127.0.0.1:${server.port}/graphql\n`);
+      expect(readFileSync(record, "utf-8")).toBe(`${TAP_START}\nAPI-TAP fetch GET http://127.0.0.1:${server.port}/graphql from=probe.test.ts\n`);
     } finally {
       server.stop(true);
     }
@@ -219,12 +260,13 @@ describe("#2596: the fetch tap records what Octokit and hand-rolled readers send
     const record = file("file-tap.log", `${TAP_START}\n`);
     const script = file("client3.ts", `await (await fetch("file://${dir}/body.txt")).text();\n`);
     const run = Bun.spawn([process.execPath, script], {
+      cwd: dirname(script),
       env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record },
       stdout: "pipe",
       stderr: "pipe",
     });
     expect(await run.exited, await new Response(run.stderr).text()).toBe(0);
-    expect(readFileSync(record, "utf-8")).toBe(`${TAP_START}\nAPI-TAP fetch GET file://${dir}/body.txt\n`);
+    expect(readFileSync(record, "utf-8")).toBe(`${TAP_START}\nAPI-TAP fetch GET file://${dir}/body.txt from=${basename(script)}\n`);
     const reading = readTap(readFileSync(record, "utf-8"));
     expect(countCalls([reading])).toMatchObject({ external: 0, notExternal: 1, unparsed: 0 });
   });
