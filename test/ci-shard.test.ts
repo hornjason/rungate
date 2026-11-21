@@ -22,7 +22,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { DEFAULT_TRACKER_SECRET, createCiWorkflows, shardCount, suiteReadsTracker, trackerTokenSecret } from "../lib/scaffold/steps";
+import { DEFAULT_TRACKER_SECRET, createCiWorkflows, shardCount, suiteReadsTracker, testSecrets, trackerTokenSecret } from "../lib/scaffold/steps";
 import { mergeManagedWorkflow } from "../lib/scaffold/managed-workflow";
 
 describe("#728: shardCount reads one declaration", () => {
@@ -472,4 +472,113 @@ describe("#1700: ci.suiteReadsTracker", () => {
     expect(emitWith({})).not.toContain("test-shard");
     expect(emitWith({ shards: 2 })).toContain("test-shard");
   });
+});
+
+/**
+ * #2594: `ci.testSecrets` hands named secrets to the suite step as
+ * environment variables of the same name.
+ *
+ * Written for RepoRails: anonymous checks are limited to 5 an hour per
+ * address, a CI run makes about 33, and a free account's key raises the
+ * limit to 100. The names live in config rather than in the generator, so a
+ * consumer with its own keyed tool gets the same thing.
+ */
+describe("#2594: ci.testSecrets", () => {
+  const emit = (ci: Record<string, unknown>): string => {
+    const root = mkdtempSync(join(tmpdir(), "rungate-testsecrets-"));
+    try {
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(
+        join(root, ".claude", "rungate", "config.json"),
+        JSON.stringify({ slug: "secretsfix", test: { command: "bun test", timeout: 300000 }, ci }),
+      );
+      writeFileSync(join(root, ".bun-version"), "1.4.3\n");
+      createCiWorkflows(root, [], { force: true });
+      const out = join(root, ".github", "workflows", "ci.yml");
+      if (!existsSync(out)) throw new Error("the generator wrote no ci.yml. UNMEASURED, not a pass.");
+      return readFileSync(out, "utf8");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+  const suiteJob = (yml: string, start: string): string => {
+    const from = yml.indexOf(start);
+    if (from < 0) return "";
+    const end = yml.slice(from + start.length).search(/\n {2}[a-z][\w-]*:\n/);
+    return end < 0 ? yml.slice(from) : yml.slice(from, from + start.length + end);
+  };
+  /** A YAML line handing the secret over, not the phrase in a comment. */
+  const handsOver = (job: string, name: string): boolean =>
+    new RegExp(`^ {10}${name}: \\$\\{\\{ secrets\\.${name} \\}\\}$`, "m").test(job);
+  const bodies = [
+    { what: "unsharded", ci: {} as Record<string, unknown>, job: "\n  test:" },
+    { what: "sharded", ci: { shards: 2 } as Record<string, unknown>, job: "\n  test-shard:" },
+  ];
+
+  test("absent, null and an empty list all mean no secrets", () => {
+    expect(testSecrets(undefined)).toEqual([]);
+    expect(testSecrets(null)).toEqual([]);
+    expect(testSecrets({})).toEqual([]);
+    expect(testSecrets({ testSecrets: [] })).toEqual([]);
+  });
+
+  test("names are trimmed and returned in order", () => {
+    expect(testSecrets({ testSecrets: [" AILS_API_KEY ", "OTHER_KEY"] })).toEqual(["AILS_API_KEY", "OTHER_KEY"]);
+  });
+
+  test("a malformed declaration is REFUSED, never dropped or partly applied", () => {
+    // The names are interpolated into a ${{ }} expression, so the pattern
+    // is the injection guard; GITHUB_TOKEN is the tracker token's slot; a
+    // duplicate would write one env key twice.
+    for (const bad of [
+      "AILS_API_KEY",
+      { AILS_API_KEY: "X" },
+      [7],
+      [""],
+      ["has space"],
+      ["A }} B"],
+      ["${{ secrets.NPM_TOKEN }}"],
+      ["1LEADING"],
+      ["GITHUB_TOKEN"],
+      ["AILS_API_KEY", "AILS_API_KEY"],
+    ]) {
+      expect(() => testSecrets({ testSecrets: bad }), `${JSON.stringify(bad)} was accepted`).toThrow();
+    }
+  });
+
+  test("an injection-shaped name never reaches the generated YAML", () => {
+    expect(() => emit({ testSecrets: ["X }} ${{ secrets.NPM_TOKEN"] })).toThrow();
+  });
+
+  for (const b of bodies) {
+    test(`${b.what}: a declared secret is handed to the suite step under its own name`, () => {
+      const job = suiteJob(emit({ ...b.ci, testSecrets: ["AILS_API_KEY"] }), b.job);
+      expect(job.length, `the ${b.what} suite job was not found`).toBeGreaterThan(0);
+      expect(handsOver(job, "AILS_API_KEY"), `the ${b.what} suite step was not handed AILS_API_KEY`).toBe(true);
+    });
+
+    test(`${b.what}: beside the tracker token, both land in ONE env block`, () => {
+      const job = suiteJob(
+        emit({ ...b.ci, suiteReadsTracker: true, trackerTokenSecret: "RUNGATE_PROJECT_TOKEN", testSecrets: ["AILS_API_KEY"] }),
+        b.job,
+      );
+      expect(handsOver(job, "AILS_API_KEY")).toBe(true);
+      expect(/^ {10}GITHUB_TOKEN: \$\{\{ secrets\.RUNGATE_PROJECT_TOKEN \}\}$/m.test(job)).toBe(true);
+      // Two `env:` keys on one step is invalid YAML, the later one wins,
+      // and the tracker token would silently vanish. Counted on the SUITE
+      // STEP only: other steps in the job carry env blocks of their own.
+      const from = job.indexOf("      - run: bun test");
+      expect(from, "the suite step was not found, so this case read nothing").toBeGreaterThanOrEqual(0);
+      const next = job.indexOf("\n      - ", from + 1);
+      const step = next < 0 ? job.slice(from) : job.slice(from, next);
+      expect((step.match(/^ {8}env:$/gm) ?? []).length, "the suite step carries more than one env block").toBe(1);
+    });
+
+    test(`${b.what}: nothing declared is byte-identical to today, tracker on or off`, () => {
+      expect(emit({ ...b.ci, testSecrets: [] })).toBe(emit(b.ci));
+      const tracker = { ...b.ci, suiteReadsTracker: true, trackerTokenSecret: "RUNGATE_PROJECT_TOKEN" };
+      expect(emit({ ...tracker, testSecrets: [] })).toBe(emit(tracker));
+      expect(handsOver(suiteJob(emit(b.ci), b.job), "AILS_API_KEY")).toBe(false);
+    });
+  }
 });
