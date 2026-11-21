@@ -363,7 +363,21 @@ describe("SC-1491: the gate check, spawned over planted state", () => {
     // The control. Same state, same unreachable repo, one variable changed.
     // Whatever the credential does — 401, 404, no route to host — the read
     // did not answer and a token says it should have.
-    const { out, failed } = runCheck({ GITHUB_TOKEN: "NOT-A-REAL-TOKEN-0123456789" });
+    //
+    // The read goes to a loopback port nothing listens on (#2613): before, it
+    // went to api.github.com with a made-up token, a real request about a
+    // repository that does not exist. `GITHUB_API_URL` is honoured for
+    // loopback by `resolveApiBaseUrl`, and a refused connection is the
+    // "no route to host" answer above.
+    //
+    // Port 1, not a port borrowed with `port: 0` and released: a released
+    // ephemeral port can be bound by any other process before the spawned
+    // check connects, and then the read gets an answer (#2616 review). Port 1
+    // is below every ephemeral range, so no `port: 0` bind is ever handed it.
+    const { out, failed } = runCheck({
+      GITHUB_TOKEN: "NOT-A-REAL-TOKEN-0123456789",
+      GITHUB_API_URL: "http://127.0.0.1:1",
+    });
     expect(failed, `an authenticated read that failed must block:\n${out}`).toBe(true);
     expect(out).toContain("could not find out");
     expect(out, "a refusal must not be reported as unmeasured")
