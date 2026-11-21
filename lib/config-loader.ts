@@ -90,6 +90,13 @@ export const ResolvedConfigSchema = ProjectHarnessSchema.partial()
     prod: ProdSchema.extend({ apiBase: LooseUrl, uiBase: LooseUrl }).optional(),
     container: ContainerSchema.optional(),
     pages: z.record(z.unknown()).optional(),
+    // #2598 / SC-2797: the consumer's own instruction-surface budget. Strict
+    // on the value, so a budget that is not a positive whole number of bytes
+    // is a config nothing can read, never a silent default.
+    instructionSurface: z
+      .object({ budgetBytes: z.number().int().positive().optional() })
+      .passthrough()
+      .optional(),
     // Merged from side files by the directory loader, so always present in the
     // resolved shape — callers index them without a null check.
     roles: z.record(z.unknown()).default({}),
@@ -104,6 +111,19 @@ export const ResolvedConfigSchema = ProjectHarnessSchema.partial()
   .passthrough();
 
 export type ResolvedConfig = z.infer<typeof ResolvedConfigSchema>;
+
+/**
+ * #2598 / SC-2797: the instruction-surface budget the consumer's rungate
+ * config sets, or null when there is no config or it sets none. Null is not a
+ * budget: the caller substitutes `SURFACE_BUDGET_BYTES` and reports that it
+ * did. A value that is not a positive whole number throws, with the rest of a
+ * malformed config.
+ */
+export function configuredSurfaceBudget(projectRoot: string): number | null {
+  const resolved = resolveConfig(projectRoot);
+  if (resolved.status === "absent") return null;
+  return resolved.config.instructionSurface?.budgetBytes ?? null;
+}
 
 /** ship.js:1705's fallback, kept identical so normalisation changes no run. */
 export const DEFAULT_TEST_TIMEOUT = 120000;

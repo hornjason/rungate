@@ -687,14 +687,63 @@ export const SURFACE_REPORT_LARGEST = 3;
  * be searched for them; none starts with a write verb, so the scaffold's
  * commit step never mistakes one for a file it wrote.
  */
-export function surfaceReport(peak: ConcurrentLoadReading, largest: number = SURFACE_REPORT_LARGEST): string[] {
+/**
+ * How far above its measured peak a consumer may raise its own budget
+ * (#2598, ADR-024 decision 3). The same 35% rungate holds its own budget to,
+ * so a consumer's budget is constrained the way this repository's is.
+ */
+export const CONSUMER_BUDGET_SLACK = 1.35;
+
+/** Where the budget a reading is held to came from. */
+export type BudgetSource = "default" | "rungate config";
+
+export interface ConsumerBudget {
+  /** The budget the reading is held to. The default whenever the configured one is refused. */
+  budgetBytes: number;
+  source: BudgetSource;
+  /** Why the configured budget was refused, or null when it was not. */
+  refused: string | null;
+}
+
+/**
+ * #2598 / SC-2797: the budget a consumer's surface is held to.
+ *
+ * `configured` is what the consumer's rungate config sets, or null when it
+ * sets none; reading the config is `lib/config-loader.ts`'s, so this file
+ * keeps no relative import. No setting means `SURFACE_BUDGET_BYTES`. A
+ * setting at or below the default is taken as it is: it constrains at least
+ * as much as the default, however far above the peak it sits. A setting
+ * above the default must sit within `CONSUMER_BUDGET_SLACK` of the measured
+ * peak, or it is refused — a budget a consumer can raise freely constrains
+ * nothing — and the reading falls back to the default.
+ */
+export function judgeConsumerBudget(configured: number | null, peakBytes: number): ConsumerBudget {
+  if (configured === null) return { budgetBytes: SURFACE_BUDGET_BYTES, source: "default", refused: null };
+  const allowed = Math.max(SURFACE_BUDGET_BYTES, Math.round(peakBytes * CONSUMER_BUDGET_SLACK));
+  if (configured <= allowed) return { budgetBytes: configured, source: "rungate config", refused: null };
+  return {
+    budgetBytes: SURFACE_BUDGET_BYTES,
+    source: "default",
+    refused:
+      `rungate config sets the instruction-surface budget to ${configured.toLocaleString()} bytes, more than 35% above ` +
+      `the measured peak of ${peakBytes.toLocaleString()} — at most ${allowed.toLocaleString()} is allowed. A budget that ` +
+      `far above what it governs cannot go red. Lower instructionSurface.budgetBytes, or move a worked record ` +
+      `into reference/ and route to it, rather than raising the number.`,
+  };
+}
+
+export function surfaceReport(
+  peak: ConcurrentLoadReading,
+  largest: number = SURFACE_REPORT_LARGEST,
+  budgetFrom: BudgetSource | null = null,
+): string[] {
   const launch = peak.launch;
   const loaded = launch.entries.filter(e => e.excluded === null);
   const used = Math.round(headroom(peak).used * 100);
   const lines = [
     `SURFACE: launch ${launch.totalBytes.toLocaleString()} bytes (~${Math.round(launch.totalBytes / 4).toLocaleString()} tokens) ` +
       `over ${loaded.length} files; peak ${peak.peakBytes.toLocaleString()} bytes on ${peak.peakFile ?? "every file (no scoped rule matches any)"}; ` +
-      `budget ${peak.budgetBytes.toLocaleString()}, ${used}% used`,
+      `budget ${peak.budgetBytes.toLocaleString()}${budgetFrom === null ? "" : ` (${budgetFrom})`}, ${used}% used`,
   ];
   const top = [...loaded].sort((a, b) => b.bytes - a.bytes || a.file.localeCompare(b.file)).slice(0, largest);
   if (top.length > 0) {
