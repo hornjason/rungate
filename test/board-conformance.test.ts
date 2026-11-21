@@ -274,6 +274,87 @@ describe("SC-2783: consumer-intake reads an unanswered consumer issue as short",
 });
 
 /**
+ * SC-2795: `criteria-named` gives a consumer-filed issue the same two days
+ * `consumer-intake` gives it (#2589). Inside the window an issue that names
+ * nothing is out of both sides and named apart; past it, it is counted
+ * exactly as before. An intake that could not be read graces nobody.
+ */
+describe("SC-2795: criteria-named leaves a consumer issue out for its first two days", () => {
+  const named = (b: BoardSnapshot) => takeReading(READINGS.find(r => r.name === "criteria-named")!, b);
+  const intake = (b: BoardSnapshot) => takeReading(READINGS.find(r => r.name === "consumer-intake")!, b);
+  /** The complete board plus #40: a consumer issue naming nothing, filed at `createdAt`. */
+  const withConsumerIssue = (createdAt: string): BoardSnapshot => {
+    const b = completeBoard();
+    b.repoIssues!.push({ number: 40, names: [], servesNone: false });
+    b.consumerIntake!.issues.push({ number: 40, createdAt, milestone: null, verdict: null });
+    return b;
+  };
+
+  test("a consumer issue filed a day ago is out of both sides, named apart, and the reading is met", () => {
+    const b = withConsumerIssue("2026-11-19T00:00:00.000Z");
+    const r = named(b);
+    expect(r.status).toBe("met");
+    expect(r.target).toBe(b.repoIssues!.length - 1);
+    expect(r.graced).toEqual(["#40"]);
+    expect(formatReading(r)).toContain("in their first two days, not yet counted (1): #40");
+  });
+
+  test("the same issue at three days is counted, short, and named as an offender", () => {
+    const b = withConsumerIssue("2026-11-17T00:00:00.000Z");
+    const r = named(b);
+    expect(r.status).toBe("short");
+    expect(r.target).toBe(b.repoIssues!.length);
+    expect(r.offenders.join("\n")).toContain("#40");
+    expect(r.graced).toEqual([]);
+  });
+
+  test("the window is CONSUMER_INTAKE_GRACE_MS: both readings start counting at the same millisecond", () => {
+    const edge = withConsumerIssue("2026-11-18T00:00:00.000Z");
+    expect(named(edge).status).toBe("met");
+    expect(intake(edge).status).toBe("met");
+    const past = withConsumerIssue("2026-11-17T23:59:59.999Z");
+    expect(named(past).status).toBe("short");
+    expect(intake(past).status).toBe("short");
+  });
+
+  test("an issue no consumer filed is short at any age — the grace is not an amnesty", () => {
+    const b = completeBoard();
+    b.repoIssues!.push({ number: 41, names: [], servesNone: false });
+    const r = named(b);
+    expect(r.status).toBe("short");
+    expect(r.offenders.join("\n")).toContain("#41");
+    expect(r.graced).toEqual([]);
+  });
+
+  test("a young consumer issue that names a criterion or declares none is counted as covered, not graced", () => {
+    // #32 on the complete board is young and declares it serves none.
+    const b = completeBoard();
+    const r = named(b);
+    expect(r.status).toBe("met");
+    expect(r.target).toBe(b.repoIssues!.length);
+    expect(r.graced).toEqual([]);
+  });
+
+  test("an intake never read, or read at no time, graces nobody", () => {
+    const unread = withConsumerIssue("2026-11-19T00:00:00.000Z");
+    delete unread.consumerIntake;
+    expect(named(unread).status).toBe("short");
+    expect(named(unread).offenders.join("\n")).toContain("#40");
+
+    const noTime = withConsumerIssue("2026-11-19T00:00:00.000Z");
+    noTime.consumerIntake!.takenAt = "not a time";
+    expect(named(noTime).status).toBe("short");
+
+    const noAge = withConsumerIssue("not a date");
+    expect(named(noAge).status).toBe("short");
+  });
+
+  test("a met reading with nobody in the window prints no grace line", () => {
+    expect(formatReading(named(completeBoard()))).not.toContain("not yet counted");
+  });
+});
+
+/**
  * #2223 / E4: the Criteria column across every phase-milestone family.
  *
  * B4's `criteria-field` reads `issues`, the engine family. E4 asks the same

@@ -36,6 +36,12 @@
   ],
   "reservations": [
     {
+      "owner": "rg/2589-consumer-grace",
+      "from": 2795,
+      "to": 2795,
+      "note": "criteria-named grace for consumer-filed issues (#2589); above ADR-023's 2789-2794"
+    },
+    {
       "owner": "rg/2337-adr-bot-merges",
       "from": 2787,
       "to": 2788,
