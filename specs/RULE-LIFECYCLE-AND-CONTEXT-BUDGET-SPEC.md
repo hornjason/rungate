@@ -360,6 +360,37 @@ retire.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2769: lib/scaffold/marked-section.ts contains [carryMarkedSection] — Every scaffold-owned file that allows hand edits carries a marked section for them; re-scaffold rewrites everything outside the marked section and carries the section forward verbatim, so a hand edit never freezes the rest of the file. First target: `.claude/rules/*.md`.
 
+### What a consumer loads is checked before it ships (ADR-024, #2568)
+
+The surface check above measures this repository only. Run against one
+consumer's committed tree on 2026-11-20 it read a peak of 2,003,937 bytes,
+3131% of `SURFACE_BUDGET_BYTES`, and nothing in the scaffold, the generated
+conformity test or a consumer workflow calls it. Four template defects found
+in that consumer's rendered output (#2564–#2567) passed this repository's
+suite. `docs/adr/ADR-024-what-a-consumer-loads-is-checked-before-it-ships.md`
+holds the decisions and the decomposition.
+
+- [ ] SC-2796: A scaffold or re-scaffold run measures the consumer's launch and peak surface with `measureSurface` and reports the reading with its largest contributors
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+- [ ] SC-2797: The consumer budget is read from rungate config, defaults to `SURFACE_BUDGET_BYTES`, and a budget more than 35% above the measured surface is refused
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+- [ ] SC-2798: The generated conformity test refuses an over-budget consumer surface, and an unreadable one as UNMEASURED
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+- [ ] SC-2799: CI renders the full scaffold into fixture consumers, and every lint below reads that rendered tree
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+- [ ] SC-2800: Every file, heading or table a rendered brief or rule tells its agent to read exists in the rendered tree
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+- [ ] SC-2801: No rendered file carries an unexpanded `${…}`, the brief templates' test-only marker string, or a numbered list that skips, and the SC-354 test edits a copy, never the shipped template
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+- [ ] SC-2802: No always-loaded rendered rule states a count of files that adding one file would change
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+- [ ] SC-2803: Pull requests touching `templates/`, `lib/generators/` or `lib/doc-routing.ts` get a prompt-audit review lens that posts findings as threads, proven by a planted-cruft subject it flags and a clean control it does not
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+- [ ] SC-2804: A pull request that removes a line from `templates/agent-briefs/<name>.md` runs that brief's evals, and aditi and discovery have at least one eval each
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+- [ ] SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus pressure-density and dangling-path lints on a consumer, labels each finding consumer-owned or harness-owned, and writes harness-owned findings as `reporting-upstream.md` bodies without filing them
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+
 ## Proving it
 
 Two acceptance runs, both required.

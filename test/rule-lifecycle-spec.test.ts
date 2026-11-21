@@ -41,6 +41,8 @@ const SC_RANGES = [
   // #2104: ADR-015 promoted #1553's marked-section criterion into this spec,
   // allocated by finding-promotion in the pull request that consumes it.
   { owner: "#2104 (ADR-015, #1553)", lo: 2769, hi: 2769 },
+  // #2568: ADR-024's criteria, reserved in specs/sc-reservations.json.
+  { owner: "#2568 (ADR-024)", lo: 2796, hi: 2805 },
 ] as const;
 
 function specBody(): string {
@@ -70,8 +72,9 @@ describe("RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC: document integrity", () => {
     // 19 -> 27 on 2026-10-21: #1009's eight, SC-2440..SC-2447. #544 ticks
     // five of the original nineteen rather than adding any, so the count is
     // unchanged and the enumeration below is what moved. 27 -> 28 on
-    // 2026-11-13: ADR-015's promotion of #1553 (#2104).
-    expect(scs.length).toBe(28);
+    // 2026-11-13: ADR-015's promotion of #1553 (#2104). 28 -> 38 on
+    // 2026-11-20: ADR-024's ten, SC-2796..SC-2805 (#2568).
+    expect(scs.length).toBe(38);
   });
 
   test("SC ids are unique", () => {
