@@ -1605,17 +1605,131 @@ export function reviewThreadRequests(
  */
 export function threadBody(finding: Record<string, unknown>, key?: string | null): string {
   const f = AI_REVIEW_FINDING_FIELDS;
-  const severity = finding[f.severity] !== undefined ? String(finding[f.severity]) : null;
+  // The model's text is written from a diff anyone can author, so an HTML
+  // comment opener in it is shown, not hidden: a marker spelled there must
+  // never read back as one this function wrote (#2570 review). `&lt;!--`
+  // renders as the same characters a reader would have seen.
+  const shown = (t: string): string => t.split("<!--").join("&lt;!--");
+  const severity = finding[f.severity] !== undefined ? shown(String(finding[f.severity])) : null;
   const summary =
-    finding[f.summary] !== undefined ? String(finding[f.summary]) : "(no summary recorded)";
+    finding[f.summary] !== undefined ? shown(String(finding[f.summary])) : "(no summary recorded)";
   const scenario =
-    finding[f.failureScenario] !== undefined ? String(finding[f.failureScenario]) : null;
+    finding[f.failureScenario] !== undefined ? shown(String(finding[f.failureScenario])) : null;
 
   const head = severity === null ? summary : `**${severity}** — ${summary}`;
-  const prose = scenario === null ? head : `${head}\n\n${scenario}`;
+  const said = scenario === null ? head : `${head}\n\n${scenario}`;
+  // CRC-N7 (#1818): a finding naming a class of two or more carries its
+  // population, so a later round can ask whether the author stated theirs.
+  // Before the key marker, which stays last for `threadKeyFrom`.
+  const population = declaredPopulation(finding[f.population]);
+  const prose =
+    population !== null && population >= 2
+      ? `${said}\n\n<!-- ${AI_REVIEW_THREAD_POPULATION_MARKER} ${population} -->`
+      : said;
   if (typeof key !== "string" || key === "") return prose;
   const payload = Buffer.from(key, "utf-8").toString("base64");
   return `${prose}\n\n<!-- ${AI_REVIEW_THREAD_KEY_MARKER} ${payload} -->`;
+}
+
+/**
+ * CRC-N7 (#1818): the marker a class thread carries, followed by the
+ * population its finding declared. A class finding is the one an author can
+ * "resolve" by fixing the single cited line — measured seven times on one
+ * pull request — so its thread has to say it was a class.
+ */
+export const AI_REVIEW_THREAD_POPULATION_MARKER = "rungate:ai-review-population:v1";
+
+/** The population a thread was posted under, or `null` when it names no class. */
+export function threadPopulationFrom(body: unknown): number | null {
+  if (typeof body !== "string") return null;
+  const at = body.lastIndexOf(`<!-- ${AI_REVIEW_THREAD_POPULATION_MARKER} `);
+  if (at === -1) return null;
+  const m = /^(\d+) -->/.exec(body.slice(at + `<!-- ${AI_REVIEW_THREAD_POPULATION_MARKER} `.length));
+  if (m === null) return null;
+  const n = Number(m[1]);
+  return Number.isSafeInteger(n) && n >= 2 ? n : null;
+}
+
+/**
+ * CRC-N7: whether a reply states the population — N sites, M defective — and
+ * the search that found them, as
+ * `population: N sites, M defective — search: <what was searched>`.
+ *
+ * N is at least 1 and M at most N; any dash. A count with no search is not a
+ * statement: the search is what lets the next reader re-run it.
+ */
+export function populationDeclared(text: unknown): boolean {
+  if (typeof text !== "string") return false;
+  const m = /population:\s*(\d+)\s+sites?\s*,\s*(\d+)\s+defective\s*(?:—|–|-{1,2})\s*search:\s*\S/i.exec(text);
+  if (m === null) return false;
+  const sites = Number(m[1]);
+  const defective = Number(m[2]);
+  return sites >= 1 && defective <= sites;
+}
+
+/** One prior review thread as CRC-N7 reads it. */
+export interface PopulationThread {
+  body: unknown;
+  /**
+   * The replies after the finding, or `undefined` when the thread list
+   * carried none at all — a carry step generated before #1818.
+   */
+  replies: readonly { body: unknown; bot: boolean }[] | undefined;
+}
+
+/**
+ * Which earlier class threads still owe a population, one sentence each.
+ *
+ * Resolved threads count: resolving is the step the criterion says cannot
+ * come first. Read thread by thread: a thread whose replies were not read is
+ * unknown, and only it. Any thread known to owe refuses, whatever else the
+ * list holds; only when none is known to owe does an unread one make the
+ * reading UNMEASURED, so a consumer on an older carry step is warned, not
+ * blocked (#2570 review).
+ */
+export type PopulationOwedReading =
+  | { status: "MEASURED"; owed: string[] }
+  | { status: "UNMEASURED"; reason: string };
+
+export const POPULATION_REPLIES_NOT_READ =
+  "carried no replies — a carry step older than CRC-N7 writes none — " +
+  "so whether their population was stated cannot be read";
+
+export function populationOwed(threads: readonly PopulationThread[]): PopulationOwedReading {
+  const owed: string[] = [];
+  let classes = 0;
+  let unread = 0;
+  for (const t of threads) {
+    const population = threadPopulationFrom(t.body);
+    if (population === null) continue;
+    classes++;
+    if (t.replies === undefined) {
+      unread++;
+      continue;
+    }
+    if (t.replies.some(r => !r.bot && populationDeclared(r.body))) continue;
+    const first = String(t.body).split("\n")[0]!.replace(/^\*\*[^*]+\*\* — /, "");
+    owed.push(`"${first.length > 160 ? `${first.slice(0, 157)}...` : first}" (declared population ${population})`);
+  }
+  if (owed.length === 0 && unread > 0) {
+    return { status: "UNMEASURED", reason: `${unread} of ${classes} class thread(s): ${POPULATION_REPLIES_NOT_READ}` };
+  }
+  return { status: "MEASURED", owed };
+}
+
+/** The annotation title a population owed is refused under (CRC-N7). */
+export const AI_REVIEW_POPULATION_OWED_TITLE = "AI review population owed";
+/** The title the owed reading's UNMEASURED state is named under. */
+export const AI_REVIEW_POPULATION_OWED_UNMEASURED_TITLE = "AI review population owed UNMEASURED";
+
+/** The refusal's one sentence, naming every owing thread. */
+export function populationOwedRefusal(owed: readonly string[]): string {
+  return (
+    `${owed.length} class finding(s) from an earlier round have no reply stating their population: ` +
+    `${owed.join("; ")}. A finding that names a class is not resolved by fixing the one cited line ` +
+    `(CRC-N7). Reply on each thread with "population: N sites, M defective — search: <what you ` +
+    `searched>", then re-run this check.`
+  );
 }
 
 /**
@@ -2962,8 +3076,17 @@ export function main(
   // #1357: bound by the wrapper from the environment, like the ballot and
   // never as a third positional — see the ballot's paragraph below.
   lineCounts: AiReviewLineCountReading = lineCountsNotSupplied(),
+  // CRC-N7 (#1818): which earlier class threads still owe a population, read
+  // by the wrapper from the carry step's thread list. `null` when no list is
+  // plumbed — nothing is asked, and nothing is claimed to have been.
+  owed: PopulationOwedReading | null = null,
 ): number {
-  const reading = readArgv(argv, suppress, citedLines, lineCounts);
+  const read = readArgv(argv, suppress, citedLines, lineCounts);
+  // A population owed refuses a round that would otherwise pass. It decides
+  // through the outcome, so the outcome line and the exit code still agree.
+  const owing = owed !== null && owed.status === "MEASURED" && owed.owed.length > 0 ? owed.owed : null;
+  const reading: AiReviewFindingsReading =
+    owing !== null && read.outcome === "CLEAN" ? { ...read, outcome: "BLOCKED" } : read;
 
   // CRC-B4, AFTER the reading and feeding nothing back into it.
   //
@@ -3063,9 +3186,19 @@ export function main(
   // here — `renderFinding`, every `detail` sentence, `aiReviewRefusal` — builds
   // plain text and leaves escaping alone, so there is one binding to mutate and
   // no path where two escapers run in sequence and turn `%` into `%2525`.
-  const refusal = aiReviewRefusal(reading);
+  const refusal = aiReviewRefusal(read);
   if (refusal !== null) {
     console.error(`::error title=${AI_REVIEW_FINDINGS_TITLE}::${escapeAnnotation(refusal)}`);
+  }
+  if (owing !== null) {
+    console.error(`::error title=${AI_REVIEW_POPULATION_OWED_TITLE}::${escapeAnnotation(populationOwedRefusal(owing))}`);
+  } else if (owed !== null && owed.status === "UNMEASURED") {
+    console.log(
+      `::warning title=${AI_REVIEW_POPULATION_OWED_UNMEASURED_TITLE}::${escapeAnnotation(
+        `Whether earlier class findings had their population stated is UNMEASURED: ${owed.reason}. ` +
+          `Nothing was refused for it.`,
+      )}`,
+    );
   }
 
   // AFTER the refusal and BEFORE the exit code, and on its own title. A

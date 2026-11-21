@@ -1751,7 +1751,6 @@ instance of it.
 - **CRC-N6** **Named because it was measured, with nothing built.** Five consecutive rounds on #1614 re-raised one already-fixed defect: four consecutive rounds from a docblock that QUOTED the removed regex, and the FINAL round — after the quotation was deleted — from the PARAPHRASE that replaced it, reconstructing a regex literal that appears nowhere in the tree. CRC-N4's dedupe cannot absorb it, because the suppression key is `file \0 line-text \0 summary` and a regenerated finding carries a new summary: it is not a repeat, it is a new finding about code that does not exist. The near-miss is *"do not quote dead code in comments"*, which was applied and then defeated. The reading is in *Measured non-obvious facts*. **It is deliberately NOT a request for new machinery** — the prior-art section above found that a verification gate re-checking each finding against the real code at the cited line is the documented mitigation for the wider class it belongs to, and that gate is CRC-B4. This criterion names the case so a verifier can be held to it; it does not ask for a second mechanism beside one already planned.
 - **CRC-H2** Risky code requires a human. There is no `CODEOWNERS` and no required approval, so nothing does.
 - **CRC-M16** Added 2026-11-12 (ADR-015, #1816). `AI_REVIEW_ROUND_CAP` in `lib/ai-review-rounds.ts` counts the reviewer's rounds; nothing reads what the author does after the round-three step-back.
-- **CRC-N7** Added 2026-11-12 (ADR-015, #1818). The author-side half of the population rule: a class finding can be resolved by fixing the one named instance, which happened seven times on one pull request.
 
 ### Shipped since this audit was taken
 
@@ -1759,6 +1758,8 @@ A criterion the audit counted as remaining and that no longer is. Kept as a
 section rather than deleted: the analysis is the record of what the item cost
 and why the shape it shipped in is the right one, and the six states above are
 states of an UNTICKED box, so a ticked one belongs in none of them.
+
+- **CRC-N7** — **shipped in #1818**, and the open-item line is kept here as the record. It read: *Added 2026-11-12 (ADR-015, #1818). The author-side half of the population rule: a class finding can be resolved by fixing the one named instance, which happened seven times on one pull request.* What changed: a finding declaring a population of two or more posts its thread with that population in a marker, the carry step now fetches each thread's replies, and from the next round on the adjudicator refuses until a person's reply on the thread reads `population: N sites, M defective — search: <what was searched>`. A resolved thread still owes it. A thread list with no replies at all, from a carry step generated before this, reads UNMEASURED and refuses nothing. It reaches a consumer after a release and a re-scaffold.
 
 - **CRC-F6** — **shipped in #2286 (#1571)**, and the open-item line is kept here as the record. It read: *Added 2026-11-12 (ADR-015, #1495, #1571). The waiver's auto-merge disarm has never succeeded (0 of 65 on #1571) and re-arming after a waiver is not caught; nothing yet reports either.* What changed: the Actions token cannot disable auto-merge at all (live test, 2026-11-16), so Jason reworded the criterion and the refusal moved to arming time. `scripts/verify-merge-ref.ts` reads `WAIVED_REVIEW` for an open pull request labelled `ai-review-override` and prints no SHA (`--by-hand` pins it for a person merging without `--auto`). The review job's last step reads auto-merge and never acts on it: an armed waived review fails it under `AI_REVIEW_WAIVER_ARMED_TITLE`, and that red required check is what stops it landing unread.
 
@@ -2994,8 +2995,10 @@ Recorded because each one invalidates a naive reading of the criteria above.
       fingerprint: e1fa585f
 - [ ] CRC-M16: lib/ai-review-rounds.ts contains [repairedPastStepBack] — a pull request repaired a fourth time after the round-three step-back is reported, distinguishable from one whose author re-scoped
       needs: measurement
-- [ ] CRC-N7: lib/scaffold/ai-review-findings.ts contains [populationDeclared] — a review finding tagged as a class cannot be resolved until the author states the population — N sites, M defective — and the search that found them
+- [x] CRC-N7: lib/scaffold/ai-review-findings.ts contains [populationDeclared] — a review finding tagged as a class cannot be resolved until the author states the population — N sites, M defective — and the search that found them
       needs: test
+      proved-by: test/ai-review-population-declared.test.ts
+      fingerprint: dd5e26d5
 - [x] CRC-M17: every AI review prints which changed files it saw only at their base version — count and list, explicit zero included (shipped, #2215, #2218)
       needs: test
       proved-by: test/ai-review-finding-scope.test.ts (#1887 / CRC-M17) — 22 pass, 0 fail, 2026-11-15

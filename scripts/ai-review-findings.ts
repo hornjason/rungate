@@ -116,7 +116,8 @@ const jury =
 const checkoutRoot = process.env[AI_REVIEW_CHECKOUT_ROOT_VAR];
 const root = checkoutRoot !== undefined && checkoutRoot !== "" ? checkoutRoot : process.cwd();
 // #1883: `linesOf` reads the same checkout, so a finding's population is counted by its search.
-const { gate: suppress, linesOf: citedLines } = productionSuppression(process.env[AI_REVIEW_THREADS_PATH_VAR], root);
+// CRC-N7 (#1818): `populationOwed` reads the same thread list.
+const { gate: suppress, linesOf: citedLines, populationOwed } = productionSuppression(process.env[AI_REVIEW_THREADS_PATH_VAR], root);
 
 // One line, and `process.exit(main(` is load-bearing text: AC-4 in
 // `test/ai-review-findings-command.test.ts` reads it to prove this file
@@ -129,4 +130,4 @@ const { gate: suppress, linesOf: citedLines } = productionSuppression(process.en
 // NOT_SUPPLIED and nothing is judged on its line.
 const lineCounts = readAiReviewLineCounts(process.env[AI_REVIEW_LINE_COUNTS_PATH_VAR]);
 
-process.exit(main(process.argv.slice(2), jury, suppress, citedLines, lineCounts));
+process.exit(main(process.argv.slice(2), jury, suppress, citedLines, lineCounts, populationOwed));

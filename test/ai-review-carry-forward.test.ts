@@ -1410,9 +1410,10 @@ describe("AC-T1 (AC-1): the carry step writes the review threads", () => {
         ],
       ],
     });
+    // `replies` since #1818 (CRC-N7): each thread's later comments, none here.
     expect(JSON.parse(r.threads!)).toEqual([
-      { isResolved: true, body: keyed(`${KEY} one`) },
-      { isResolved: false, body: keyed(`${KEY} two`) },
+      { isResolved: true, body: keyed(`${KEY} one`), replies: [] },
+      { isResolved: false, body: keyed(`${KEY} two`), replies: [] },
     ]);
   });
 
@@ -1872,7 +1873,7 @@ describe("AC-T3 (AC-4): the end of pagination is read as a value, not an exit co
   test("AC-T3a: the control — hasNextPage false ends the walk and WRITES", () => {
     const r = runCarry({ threadsRaw: JSON.stringify(page(one, { hasNextPage: false, endCursor: null })) });
     expect(r.threads, `${r.stdout}${r.stderr}`).not.toBeNull();
-    expect(JSON.parse(r.threads!)).toEqual([{ isResolved: false, body: "k" }]);
+    expect(JSON.parse(r.threads!)).toEqual([{ isResolved: false, body: "k", replies: [] }]);
   });
 
   test("AC-T3b: an ABSENT pageInfo is UNMEASURED, not a complete read", () => {

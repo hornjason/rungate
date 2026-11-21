@@ -75,7 +75,8 @@ import {
   AI_REVIEW_CARRY_UNMEASURED,
   AI_REVIEW_SNAPSHOT_ROUND_KEY,
 } from "./scaffold/ai-review-step";
-import type { AiReviewSuppressionGate } from "./scaffold/ai-review-findings";
+import type { AiReviewSuppressionGate, PopulationOwedReading, PopulationThread } from "./scaffold/ai-review-findings";
+import { populationOwed } from "./scaffold/ai-review-findings";
 
 /** What the gate reads, so a test can drive it without a filesystem. */
 export interface SuppressionInputs {
@@ -342,8 +343,11 @@ export function productionSuppression(
   lineTextFor: (finding: ReviewFinding) => string | undefined;
   /** #1883: the same bounded reader's lines, for counting a finding's population search. */
   linesOf: (file: string) => readonly string[] | null;
+  /** CRC-N7 (#1818): the class threads that still owe a population, from the same list; `null` when none is plumbed. */
+  populationOwed: PopulationOwedReading | null;
 } {
   const reader = checkoutLineReader(root);
+  const owed = threadsPath === undefined || threadsPath === "" ? null : populationOwedFromThreads(readOrNull(threadsPath));
   const gate =
     threadsPath === undefined || threadsPath === ""
       ? null
@@ -352,7 +356,34 @@ export function productionSuppression(
           lineTextFor: reader.lineTextFor,
           anchorOccurrences: reader.occurrencesOf,
         });
-  return { gate, lineTextFor: reader.lineTextFor, linesOf: reader.linesOf };
+  return { gate, lineTextFor: reader.lineTextFor, linesOf: reader.linesOf, populationOwed: owed };
+}
+
+/**
+ * CRC-N7 (#1818): the owed reading, from the bytes the carry step wrote.
+ *
+ * The parse and its three refusals are `threadReadingFromJson`'s, so an
+ * unreadable list is UNMEASURED here for the same named reason it is
+ * UNMEASURED to the suppression gate. A thread whose `replies` is absent or
+ * not a list reads as a list with no replies, which `populationOwed` names
+ * UNMEASURED rather than owing.
+ */
+export function populationOwedFromThreads(text: string | null): PopulationOwedReading {
+  const reading = threadReadingFromJson(text);
+  if (reading.status !== "MEASURED") return { status: "UNMEASURED", reason: reading.reason };
+  const raw = JSON.parse(text as string) as unknown[];
+  const threads: PopulationThread[] = [];
+  for (const t of raw) {
+    if (t === null || typeof t !== "object") continue;
+    const node = t as { body?: unknown; replies?: unknown };
+    const replies = Array.isArray(node.replies)
+      ? node.replies
+          .filter((r): r is { body?: unknown; bot?: unknown } => r !== null && typeof r === "object")
+          .map(r => ({ body: r.body, bot: r.bot === true }))
+      : undefined;
+    threads.push({ body: node.body, replies });
+  }
+  return populationOwed(threads);
 }
 
 /**
