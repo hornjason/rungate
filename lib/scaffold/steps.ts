@@ -3174,6 +3174,10 @@ export function testSecrets(ci: unknown): string[] {
  * Each path is interpolated into a YAML block and into `hashFiles('…')`, so
  * this REFUSES anything that is not a plain relative path inside the checkout:
  * absolute, `..`, a quote, a newline, an expression, a glob, a duplicate.
+ * And every SEGMENT must name something: `.`, `./x`, `a//b` and `dir/` are
+ * refused, because `path: .` would restore an old snapshot over the whole
+ * checkout before the suite runs (#2608 review). Name files git does not
+ * track: a restore writes over whatever is at the path.
  */
 export function persistPaths(ci: unknown): string[] {
   const raw = (ci as { persistPaths?: unknown } | null | undefined)?.persistPaths;
@@ -3182,7 +3186,8 @@ export function persistPaths(ci: unknown): string[] {
   const paths: string[] = [];
   for (const entry of raw) {
     const p = typeof entry === "string" ? entry.trim() : "";
-    if (!/^[A-Za-z0-9._][A-Za-z0-9._/-]*$/.test(p) || p.split("/").includes("..")) {
+    const segments = p.split("/");
+    if (!/^[A-Za-z0-9._][A-Za-z0-9._/-]*$/.test(p) || segments.some((seg) => seg === "" || seg === "." || seg === "..")) {
       throw new Error(
         `ci.persistPaths has ${JSON.stringify(entry)}, which is not a plain relative path inside the checkout ` +
           `(letters, digits, . _ - and /, no ..). It is written into the generated workflow, so this refuses rather than emitting it.`,

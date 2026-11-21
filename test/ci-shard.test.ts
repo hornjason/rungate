@@ -622,7 +622,9 @@ describe("#2595: ci.persistPaths", () => {
   });
 
   test("a path that could escape the checkout or the YAML is REFUSED", () => {
-    for (const bad of [P, [7], [""], ["/etc/passwd"], ["../outside"], ["a/../../b"], ["it's"], ["a\nb"], ["${{ secrets.X }}"], ["x*"], [P, P]]) {
+    // "." and its spellings would restore an old snapshot over the whole
+    // checkout before the suite runs (#2608 review); a segment must name something.
+    for (const bad of [P, [7], [""], ["/etc/passwd"], ["../outside"], ["a/../../b"], ["it's"], ["a\nb"], ["${{ secrets.X }}"], ["x*"], [P, P], ["."], ["./x"], ["a/./b"], ["a//b"], ["dir/"]]) {
       expect(() => persistPaths({ persistPaths: bad }), `${JSON.stringify(bad)} was accepted`).toThrow();
     }
   });
