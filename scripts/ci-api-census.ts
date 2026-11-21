@@ -1,0 +1,244 @@
+#!/usr/bin/env bun
+/**
+ * Count the external API calls a CI run recorded (#2596).
+ *
+ *   bun scripts/ci-api-census.ts <record-or-job-log>… [--json]
+ *   bun scripts/ci-api-census.ts --install-gh-tap <dir> [--real-gh <path>]
+ *
+ * Jason, on 2026-11-21: "we shouldn't be spamming API endpoints if we can find
+ * a better method to batch." Nobody had counted. This reads what a run itself
+ * wrote down — never an estimate — so the number describes the run it came
+ * from, and the biggest caller can be named rather than guessed.
+ *
+ * Two taps write the record, one line per HTTP request:
+ *
+ * - `scripts/api-call-tap.ts`, a Bun preload, for every `fetch` — Octokit and
+ *   the hand-rolled readers alike.
+ * - The `gh` this script writes with `--install-gh-tap`: it runs the real gh
+ *   with `GH_DEBUG=1`, moves gh's `* Request to <url>` lines into the record,
+ *   and passes everything else through unchanged — stdout, the rest of stderr,
+ *   the exit code. `--paginate` is counted page by page, because each page is
+ *   a request.
+ *
+ * The record may be read raw or from inside a CI job log: a tap line is found
+ * wherever `API-TAP` appears on a line, behind the runner's timestamps.
+ *
+ * **A record with no `API-TAP-START` line is UNMEASURED, never zero.** The
+ * step that installs the taps writes that line first, so a tap that never
+ * started and a run that made no calls stay different facts. An unreadable
+ * file is UNMEASURED too. Either exits `CENSUS_UNMEASURED_EXIT`, naming the
+ * file. A line that does not parse, and a request the preload could not write
+ * down (`API-TAP-LOST`), are counted and printed, never dropped.
+ *
+ * Imports nothing relative, so a mutant copy of this file still loads.
+ */
+
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
+import { dirname, join, resolve } from "path";
+
+/** The one exit code for every refusal: an unreadable or never-started record, or nothing to read. */
+export const CENSUS_UNMEASURED_EXIT = 1;
+
+/** Written by the step that installs the taps, before the first request. */
+export const TAP_START = "API-TAP-START";
+
+const TAP_LINE = "API-TAP ";
+const TAP_LOST = "API-TAP-LOST";
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+const ENDPOINTS_SHOWN = 15;
+
+export interface TapCall {
+  via: string;
+  method: string;
+  url: string;
+}
+
+export type TapReading =
+  | { status: "measured"; calls: TapCall[]; starts: number; unparsed: number; lost: number }
+  | { status: "unmeasured"; reason: string };
+
+export function readTap(text: string): TapReading {
+  let starts = 0;
+  let unparsed = 0;
+  let lost = 0;
+  const calls: TapCall[] = [];
+  for (const line of text.split("\n")) {
+    if (line.includes(TAP_START)) {
+      starts++;
+      continue;
+    }
+    if (line.includes(TAP_LOST)) {
+      lost++;
+      continue;
+    }
+    const at = line.indexOf(TAP_LINE);
+    if (at < 0) continue;
+    const parts = line.slice(at + TAP_LINE.length).trim().split(/\s+/);
+    if (parts.length !== 3 || !/^https?:\/\//.test(parts[2])) {
+      unparsed++;
+      continue;
+    }
+    calls.push({ via: parts[0], method: parts[1], url: parts[2] });
+  }
+  if (starts === 0) {
+    return {
+      status: "unmeasured",
+      reason: `the tap never started: no ${TAP_START} line, so this record cannot say how many calls the run made`,
+    };
+  }
+  return { status: "measured", calls, starts, unparsed, lost };
+}
+
+/** Which API a call went to, and its endpoint with numbers and commit SHAs folded. */
+export function classifyCall(url: string): { api: string; endpoint: string } {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return { api: "unparseable URL", endpoint: url.split("?")[0] };
+  }
+  const endpoint = u.pathname
+    .split("/")
+    .map(seg => (/^\d+$/.test(seg) ? "{n}" : /^[0-9a-f]{40}$/i.test(seg) ? "{sha}" : seg))
+    .join("/");
+  if (LOOPBACK.has(u.hostname)) return { api: "loopback (not external)", endpoint };
+  if (u.hostname === "api.github.com") {
+    return { api: u.pathname === "/graphql" ? "GitHub GraphQL" : "GitHub REST", endpoint };
+  }
+  return { api: u.hostname, endpoint };
+}
+
+export interface Census {
+  records: number;
+  unmeasured: string[];
+  external: number;
+  loopback: number;
+  unparsed: number;
+  lost: number;
+  apis: { api: string; calls: number; endpoints: { endpoint: string; calls: number }[] }[];
+}
+
+export function countCalls(readings: TapReading[]): Census {
+  const byApi = new Map<string, Map<string, number>>();
+  const census: Census = { records: readings.length, unmeasured: [], external: 0, loopback: 0, unparsed: 0, lost: 0, apis: [] };
+  for (const r of readings) {
+    if (r.status === "unmeasured") {
+      census.unmeasured.push(r.reason);
+      continue;
+    }
+    census.unparsed += r.unparsed;
+    census.lost += r.lost;
+    for (const call of r.calls) {
+      const { api, endpoint } = classifyCall(call.url);
+      if (api === "loopback (not external)") {
+        census.loopback++;
+        continue;
+      }
+      census.external++;
+      const endpoints = byApi.get(api) ?? new Map<string, number>();
+      endpoints.set(endpoint, (endpoints.get(endpoint) ?? 0) + 1);
+      byApi.set(api, endpoints);
+    }
+  }
+  census.apis = [...byApi.entries()]
+    .map(([api, endpoints]) => ({
+      api,
+      calls: [...endpoints.values()].reduce((s, n) => s + n, 0),
+      endpoints: [...endpoints.entries()]
+        .map(([endpoint, calls]) => ({ endpoint, calls }))
+        .sort((a, b) => b.calls - a.calls || a.endpoint.localeCompare(b.endpoint)),
+    }))
+    .sort((a, b) => b.calls - a.calls || a.api.localeCompare(b.api));
+  return census;
+}
+
+export function renderCensus(c: Census): string {
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const out = [
+    `External API calls recorded: ${c.external} (plus ${c.loopback} to loopback, not external), over ${plural(c.records, "record")}`,
+  ];
+  for (const a of c.apis) {
+    out.push(`  ${a.api}: ${a.calls}`);
+    for (const e of a.endpoints.slice(0, ENDPOINTS_SHOWN)) out.push(`    ${String(e.calls).padStart(5)}  ${e.endpoint}`);
+    if (a.endpoints.length > ENDPOINTS_SHOWN) out.push(`    … ${a.endpoints.length - ENDPOINTS_SHOWN} more endpoints`);
+  }
+  if (c.unparsed > 0) out.push(`${plural(c.unparsed, "tap line")} did not parse, and ${c.unparsed === 1 ? "is" : "are"} not in the count above`);
+  if (c.lost > 0) out.push(`${plural(c.lost, "request")} went out but could not be written down (API-TAP-LOST), so the count above is short by at least that`);
+  for (const u of c.unmeasured) out.push(`UNMEASURED: ${u}`);
+  return out.join("\n");
+}
+
+/** The `gh` the tap installs: the real one, with each request moved into the record. */
+export function ghTapScript(realGh: string): string {
+  const quoted = `'${realGh.replace(/'/g, `'\\''`)}'`;
+  return [
+    "#!/bin/sh",
+    "# Written by scripts/ci-api-census.ts --install-gh-tap (#2596). It is the real gh,",
+    "# plus one record line per HTTP request gh makes. With RUNGATE_API_TAP unset it is",
+    "# exactly the real gh.",
+    `real=${quoted}`,
+    'tap="${RUNGATE_API_TAP:-}"',
+    '[ -n "$tap" ] || exec "$real" "$@"',
+    'err="$(mktemp "${TMPDIR:-/tmp}/gh-tap.XXXXXX")" || exec "$real" "$@"',
+    'GH_DEBUG=1 "$real" "$@" 2>"$err"',
+    "status=$?",
+    'while IFS= read -r line || [ -n "$line" ]; do',
+    '  case "$line" in',
+    `    "* Request to "*) printf 'API-TAP gh - %s\\n' "\${line#\\* Request to }" >> "$tap" ;;`,
+    '    "* Request at "*|"* Request took "*|"[git "*|"[]") ;;',
+    "    *) printf '%s\\n' \"$line\" >&2 ;;",
+    "  esac",
+    'done < "$err"',
+    'rm -f "$err"',
+    "exit $status",
+    "",
+  ].join("\n");
+}
+
+function refuse(message: string): never {
+  console.error(`UNMEASURED: ${message}`);
+  process.exit(CENSUS_UNMEASURED_EXIT);
+}
+
+function installGhTap(dir: string, realGhArg: string | undefined): void {
+  const target = resolve(dir);
+  const found = realGhArg ?? Bun.which("gh") ?? undefined;
+  if (!found) refuse("gh is not on PATH, so there is no gh to tap");
+  const realGh = realpathSync(found);
+  if (dirname(realGh) === realpathSync(existsSync(target) ? target : dirname(target))) {
+    refuse(`the gh found (${realGh}) is the tap itself; pass --real-gh <path>`);
+  }
+  mkdirSync(target, { recursive: true });
+  const shim = join(target, "gh");
+  writeFileSync(shim, ghTapScript(realGh));
+  chmodSync(shim, 0o755);
+  console.log(`gh tap written to ${shim}, running ${realGh}`);
+}
+
+if (import.meta.main) {
+  const args = process.argv.slice(2);
+  const tapAt = args.indexOf("--install-gh-tap");
+  if (tapAt >= 0) {
+    const dir = args[tapAt + 1];
+    if (!dir || dir.startsWith("--")) refuse("--install-gh-tap needs a directory");
+    const realAt = args.indexOf("--real-gh");
+    installGhTap(dir, realAt >= 0 ? args[realAt + 1] : undefined);
+    process.exit(0);
+  }
+  const json = args.includes("--json");
+  const files = args.filter(a => !a.startsWith("--"));
+  if (files.length === 0) refuse("name at least one record or CI job log to count");
+  const readings: TapReading[] = files.map(f => {
+    let text: string;
+    try {
+      text = readFileSync(f, "utf-8");
+    } catch (e) {
+      return { status: "unmeasured", reason: `${f}: unreadable (${e instanceof Error ? e.message.split("\n")[0] : String(e)})` };
+    }
+    const r = readTap(text);
+    return r.status === "unmeasured" ? { status: "unmeasured", reason: `${f}: ${r.reason}` } : r;
+  });
+  const census = countCalls(readings);
+  console.log(json ? JSON.stringify(census, null, 2) : renderCensus(census));
+  if (census.unmeasured.length > 0) process.exit(CENSUS_UNMEASURED_EXIT);
+}
