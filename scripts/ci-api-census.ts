@@ -66,6 +66,10 @@ export const TAP_START = "API-TAP-START";
 const TAP_LINE = "API-TAP ";
 const TAP_LOST = "API-TAP-LOST";
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+const LOOPBACK_API = "loopback (not external)";
+const LOCAL_FILE_API = "local file (not external)";
+/** The APIs a call can be filed under that leave no machine. Counted, never in the external total. */
+export const NOT_EXTERNAL: ReadonlySet<string> = new Set([LOOPBACK_API, LOCAL_FILE_API]);
 const ENDPOINTS_SHOWN = 15;
 
 export interface TapCall {
@@ -95,7 +99,7 @@ export function readTap(text: string): TapReading {
     const at = line.indexOf(TAP_LINE);
     if (at < 0) continue;
     const parts = line.slice(at + TAP_LINE.length).trim().split(/\s+/);
-    if (parts.length !== 3 || !/^https?:\/\//.test(parts[2])) {
+    if (parts.length !== 3 || !/^[a-z][a-z0-9+.-]*:\/\//i.test(parts[2])) {
       unparsed++;
       continue;
     }
@@ -122,7 +126,8 @@ export function classifyCall(url: string): { api: string; endpoint: string } {
     .split("/")
     .map(seg => (/^\d+$/.test(seg) ? "{n}" : /^[0-9a-f]{40}$/i.test(seg) ? "{sha}" : seg))
     .join("/");
-  if (LOOPBACK.has(u.hostname)) return { api: "loopback (not external)", endpoint };
+  if (u.protocol === "file:") return { api: LOCAL_FILE_API, endpoint };
+  if (LOOPBACK.has(u.hostname)) return { api: LOOPBACK_API, endpoint };
   if (u.hostname === "api.github.com") {
     return { api: u.pathname === "/graphql" ? "GitHub GraphQL" : "GitHub REST", endpoint };
   }
@@ -133,7 +138,8 @@ export interface Census {
   records: number;
   unmeasured: string[];
   external: number;
-  loopback: number;
+  /** Calls to loopback or to local files: recorded, and never in `external`. */
+  notExternal: number;
   unparsed: number;
   lost: number;
   apis: { api: string; calls: number; endpoints: { endpoint: string; calls: number }[] }[];
@@ -141,7 +147,7 @@ export interface Census {
 
 export function countCalls(readings: TapReading[]): Census {
   const byApi = new Map<string, Map<string, number>>();
-  const census: Census = { records: readings.length, unmeasured: [], external: 0, loopback: 0, unparsed: 0, lost: 0, apis: [] };
+  const census: Census = { records: readings.length, unmeasured: [], external: 0, notExternal: 0, unparsed: 0, lost: 0, apis: [] };
   for (const r of readings) {
     if (r.status === "unmeasured") {
       census.unmeasured.push(r.reason);
@@ -151,8 +157,8 @@ export function countCalls(readings: TapReading[]): Census {
     census.lost += r.lost;
     for (const call of r.calls) {
       const { api, endpoint } = classifyCall(call.url);
-      if (api === "loopback (not external)") {
-        census.loopback++;
+      if (NOT_EXTERNAL.has(api)) {
+        census.notExternal++;
         continue;
       }
       census.external++;
@@ -176,7 +182,7 @@ export function countCalls(readings: TapReading[]): Census {
 export function renderCensus(c: Census): string {
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const out = [
-    `External API calls recorded: ${c.external} (plus ${c.loopback} to loopback, not external), over ${plural(c.records, "record")}`,
+    `External API calls recorded: ${c.external} (plus ${c.notExternal} to loopback or local files, not external), over ${plural(c.records, "record")}`,
   ];
   for (const a of c.apis) {
     out.push(`  ${a.api}: ${a.calls}`);

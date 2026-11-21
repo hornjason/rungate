@@ -90,6 +90,8 @@ describe("#2596: each call is put under its API, and loopback is not external", 
     expect(classifyCall("https://api.github.com/repos/o/r/pulls/7").api).toBe("GitHub REST");
     expect(classifyCall("http://127.0.0.1:4567/repos/o/r").api).toBe("loopback (not external)");
     expect(classifyCall("http://localhost:4567/x").api).toBe("loopback (not external)");
+    // A test reading a fixture through fetch("file://…") leaves no machine.
+    expect(classifyCall("file:///tmp/rungate-relreg-x/rungate").api).toBe("local file (not external)");
     expect(classifyCall("https://registry.npmjs.org/agnix").api).toBe("registry.npmjs.org");
   });
 
@@ -112,13 +114,15 @@ describe("#2596: each call is put under its API, and loopback is not external", 
         "API-TAP fetch GET https://api.github.com/repos/o/r/issues/2",
         "API-TAP gh - https://api.github.com/graphql",
         "API-TAP fetch GET http://127.0.0.1:9/x",
+        "API-TAP fetch GET file:///tmp/fixture/rungate",
       ].join("\n"),
     );
     const two = readTap([TAP_START, "API-TAP gh - https://api.github.com/graphql"].join("\n"));
     const census = countCalls([one, two]);
     expect(census.records).toBe(2);
     expect(census.external).toBe(4);
-    expect(census.loopback).toBe(1);
+    expect(census.notExternal).toBe(2);
+    expect(census.unparsed).toBe(0);
     const byApi = Object.fromEntries(census.apis.map(a => [a.api, a.calls]));
     expect(byApi).toEqual({ "GitHub GraphQL": 2, "GitHub REST": 2 });
     expect(census.apis.reduce((s, a) => s + a.calls, 0)).toBe(census.external);
@@ -208,6 +212,22 @@ describe("#2596: the fetch tap records what Octokit and hand-rolled readers send
       server.stop(true);
     }
   }, 30_000);
+
+  test("a file: fetch is written scheme-first, not as the string null", async () => {
+    const dir = mkdtempSync(join(scratch, "fixture-"));
+    writeFileSync(join(dir, "body.txt"), "local");
+    const record = file("file-tap.log", `${TAP_START}\n`);
+    const script = file("client3.ts", `await (await fetch("file://${dir}/body.txt")).text();\n`);
+    const run = Bun.spawn([process.execPath, script], {
+      env: { ...process.env, BUN_OPTIONS: tapBunOptions(TAP), RUNGATE_API_TAP: record },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await run.exited, await new Response(run.stderr).text()).toBe(0);
+    expect(readFileSync(record, "utf-8")).toBe(`${TAP_START}\nAPI-TAP fetch GET file://${dir}/body.txt\n`);
+    const reading = readTap(readFileSync(record, "utf-8"));
+    expect(countCalls([reading])).toMatchObject({ external: 0, notExternal: 1, unparsed: 0 });
+  });
 
   test("with no record named, the tap writes nothing and changes nothing", async () => {
     const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("body-7") });

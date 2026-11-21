@@ -40,7 +40,9 @@ if (record) {
     let where = raw;
     try {
       const u = new URL(raw);
-      where = `${u.origin}${u.pathname}`;
+      // `origin` is the string "null" for file: and other non-network schemes,
+      // so those are written scheme-first and the census files them as local.
+      where = u.protocol === "http:" || u.protocol === "https:" ? `${u.origin}${u.pathname}` : `${u.protocol}//${u.host}${u.pathname}`;
     } catch (e) {
       where = `unparseable:${raw.split("?")[0]}`;
       console.error(`API-TAP-LOST fetch ${method}: the URL did not parse (${e instanceof Error ? e.message : String(e)})`);
