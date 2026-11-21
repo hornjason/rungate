@@ -276,8 +276,9 @@ describe("SC-2783: consumer-intake reads an unanswered consumer issue as short",
 /**
  * SC-2795: `criteria-named` gives a consumer-filed issue the same two days
  * `consumer-intake` gives it (#2589). Inside the window an issue that names
- * nothing is out of both sides and named apart; past it, it is counted
- * exactly as before. An intake that could not be read graces nobody.
+ * nothing is not counted short and is named apart, over a denominator that
+ * stays every open issue; past it, it is counted exactly as before. An intake
+ * that could not be read graces nobody.
  */
 describe("SC-2795: criteria-named leaves a consumer issue out for its first two days", () => {
   const named = (b: BoardSnapshot) => takeReading(READINGS.find(r => r.name === "criteria-named")!, b);
@@ -290,11 +291,14 @@ describe("SC-2795: criteria-named leaves a consumer issue out for its first two 
     return b;
   };
 
-  test("a consumer issue filed a day ago is out of both sides, named apart, and the reading is met", () => {
+  test("a consumer issue filed a day ago is not counted short, is named apart, and the reading is met", () => {
     const b = withConsumerIssue("2026-11-19T00:00:00.000Z");
     const r = named(b);
     expect(r.status).toBe("met");
-    expect(r.target).toBe(b.repoIssues!.length - 1);
+    // The denominator stays every open issue (#2592 round 1): the young
+    // issue is not a refusal, and it does not shrink the population either.
+    expect(r.target).toBe(b.repoIssues!.length);
+    expect(r.measured).toBe(b.repoIssues!.length);
     expect(r.graced).toEqual(["#40"]);
     expect(formatReading(r)).toContain("in their first two days, not yet counted (1): #40");
   });
@@ -347,6 +351,18 @@ describe("SC-2795: criteria-named leaves a consumer issue out for its first two 
 
     const noAge = withConsumerIssue("not a date");
     expect(named(noAge).status).toBe("short");
+  });
+
+  test("a board whose only open issue is inside the window is met 1 of 1, never 0 of 0", () => {
+    // #2592 round 1: denominating over the ungraced issues alone made this
+    // board 0 of 0, which this frame reads as UNMEASURED — a failing gate.
+    const b = completeBoard();
+    b.repoIssues = [{ number: 40, names: [], servesNone: false }];
+    b.consumerIntake!.issues = [{ number: 40, createdAt: "2026-11-19T00:00:00.000Z", milestone: null, verdict: null }];
+    const r = named(b);
+    expect(r.status).toBe("met");
+    expect([r.measured, r.target]).toEqual([1, 1]);
+    expect(r.graced).toEqual(["#40"]);
   });
 
   test("a met reading with nobody in the window prints no grace line", () => {

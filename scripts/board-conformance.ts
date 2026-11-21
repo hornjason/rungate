@@ -283,8 +283,8 @@ export function consumerIntakeOverdue(intake: ConsumerIntake): ConsumerIntakeIss
 
 /**
  * The consumer-filed issues still inside {@link CONSUMER_INTAKE_GRACE_MS},
- * by number — SC-2795, #2589. `criteria-named` leaves the ones that name
- * nothing out of both sides: triage has the same two days to give them a
+ * by number — SC-2795, #2589. `criteria-named` does not count the ones that
+ * name nothing as short: triage has the same two days to give them a
  * criterion that `consumer-intake` gives it to give them a verdict, and one
  * constant decides both, so the two readings start counting an issue at the
  * same millisecond.
@@ -549,10 +549,11 @@ export interface Reading {
    */
   planned?: string[];
   /**
-   * Rows left out of BOTH sides because they are still inside a grace window
-   * — SC-2795: a consumer-filed issue in its first two days that names no
-   * criterion. Named apart like {@link declared}, so an issue that left the
-   * count is never one nobody can see.
+   * Rows not counted short because they are still inside a grace window —
+   * SC-2795: a consumer-filed issue in its first two days that names no
+   * criterion. They stay in the denominator, so a board of nothing else is
+   * met rather than 0 of 0, and they are named apart like {@link declared},
+   * so an issue the grace held back is never one nobody can see.
    */
   graced?: string[];
 }
@@ -616,6 +617,11 @@ const onBoard = (b: BoardSnapshot): Set<number> => new Set(b.issues.map(i => i.n
  * consumer's grace window AND naming nothing. One predicate for the measure,
  * the offenders and the named-apart list, so the three cannot disagree.
  */
+/** The open issues `criteria-named` counts short: naming nothing, declaring nothing, not held back. */
+const namesNothing = (b: BoardSnapshot): RepoIssueCriteria[] => {
+  const held = heldBack(b);
+  return b.repoIssues!.filter(i => i.names.length === 0 && !i.servesNone && !held(i));
+};
 const heldBack = (b: BoardSnapshot) => {
   const young = consumerGrace(b);
   return (i: RepoIssueCriteria): boolean => young.has(i.number) && i.names.length === 0 && !i.servesNone;
@@ -879,21 +885,17 @@ export const READINGS: readonly ReadingSpec[] = [
           "`issues` above is the engine milestone only, which is a different population"
         : null,
     //
-    // SC-2795: a consumer-filed issue that names nothing is out of BOTH
-    // sides for its first two days (`consumerGrace`) and named apart. One
-    // that names a criterion or declares none is counted as covered, as any
-    // issue is, so the grace only ever holds back a would-be offender.
-    measure: b => {
-      const counted = b.repoIssues!.filter(i => !heldBack(b)(i));
-      return {
-        measured: counted.filter(i => i.names.length > 0 || i.servesNone).length,
-        target: counted.length,
-      };
-    },
+    // SC-2795: a consumer-filed issue that names nothing is not counted
+    // short for its first two days (`consumerGrace`) and is named apart.
+    // The denominator stays EVERY open issue, as `consumer-intake`'s does:
+    // shrinking it to the ungraced ones made a board of nothing but young
+    // consumer issues 0 of 0, which this frame reads as UNMEASURED (#2592).
+    measure: b => ({
+      measured: b.repoIssues!.length - namesNothing(b).length,
+      target: b.repoIssues!.length,
+    }),
     offenders: b =>
-      b.repoIssues!
-        .filter(i => i.names.length === 0 && !i.servesNone && !heldBack(b)(i))
-        .map(i => `#${i.number} — names no criterion and does not declare that it serves none`),
+      namesNothing(b).map(i => `#${i.number} — names no criterion and does not declare that it serves none`),
     graced: b => b.repoIssues!.filter(heldBack(b)).map(i => `#${i.number}`),
   },
   {
@@ -1137,7 +1139,7 @@ export function formatReading(r: Reading): string {
   // #2323: work an unmerged ADR plans, whose issues its merge files.
   const plans = r.planned ?? [];
   const planned = plans.length === 0 ? "" : `\n             planned by an ADR this change accepts (${plans.length}): ${plans.join(", ")}`;
-  // SC-2795: issues still inside a grace window, out of both sides.
+  // SC-2795: issues still inside a grace window, not counted short.
   const young = r.graced ?? [];
   const graced = young.length === 0 ? "" : `\n             in their first two days, not yet counted (${young.length}): ${young.join(", ")}`;
   const head = `${mark} ${r.name.padEnd(20)} ${r.why}\n             ${r.what}  [${r.item}]${declared}${planned}${graced}`;
