@@ -2242,7 +2242,7 @@ export const AI_REVIEW_FINDINGS_DIR_OUTPUT = "dir";
  * - **No `--disallowedTools`.** An allow-list is only half the statement when
  *   the agent can reach anything the action's defaults hand it. The denial is
  *   written out so the refusal is a line somebody can read, and it is the
- *   same list `.github/workflows/claude-review.yml` carries.
+ *   same list the trial reviewer's workflow carried (deleted, #2627).
  * - **`Write` was unscoped.** The reviewer is told to write one file; nothing
  *   stopped it writing any other, including the workflow reviewing it and the
  *   script that reads its verdict. The `git diff --exit-code` step below is
@@ -2294,8 +2294,9 @@ export const AI_REVIEW_DENY_RULES: ReadonlyArray<{ rule: string; inert?: string 
   {
     rule: "SlashCommand",
     // #732's diagnosis named this entry as the cause of a reviewer that posted
-    // nothing, and `test/claude-review-executable-prompt.test.ts` records the
-    // measurement showing it was not — a slash command supplied as the CLI
+    // nothing, and the trial reviewer's executable-prompt test (deleted with
+    // the trial, #2627) recorded the measurement showing it was not — a slash
+    // command supplied as the CLI
     // PROMPT is expanded before the model ever sees it. That history is worth
     // not losing, and a bare deletion loses it. What is new is that the entry
     // now resolves to no tool at all.
@@ -4229,9 +4230,9 @@ const TOKEN = /[A-Za-z0-9][A-Za-z0-9._-]*/g;
  * The part of a workflow that can actually select a model: everything that is
  * not a comment.
  *
- * Measured on `.github/workflows/claude-review.yml`, which pins
- * `claude-sonnet-5` correctly at its one value position and explains WHY in a
- * comment — a comment that necessarily names the alias it is warning about.
+ * Measured on the trial reviewer's workflow (deleted, #2627), which pinned
+ * `claude-sonnet-5` correctly at its one value position and explained WHY in
+ * a comment — a comment that necessarily named the alias it was warning about.
  * Scanning the whole document reported that file as two violations, both of
  * them the documentation of the fix. A document that quotes the thing it
  * demands is `.claude/rules/checks-must-be-able-to-fail.md`'s "search the
