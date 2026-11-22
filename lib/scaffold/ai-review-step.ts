@@ -3397,8 +3397,13 @@ export function buildThreadsScript(version: string): string {
     `# \`run:\` is \`bash -e\`, so the assignment consumes its own status with a`,
     `# top-level \`||\` — see buildThreadsScript. Without it the step aborts`,
     `# here and the version-skew branch below never runs.`,
+    `#`,
+    `# From a directory made at this moment, not the checkout (#2664): \`bunx\``,
+    `# resolves bunfig.toml by walking up from where it runs, and this step`,
+    `# holds a token that can write. The checkout is named instead, so the`,
+    `# command still reads the cited lines it keys repeats by (#2669).`,
     `threads_code=0`,
-    `threads_out="$(GITHUB_TOKEN="\${${AI_REVIEW_THREADS_TOKEN_VAR}}" ${poster} \\`,
+    `threads_out="$(${AI_REVIEW_FRESH_CWD} && ${AI_REVIEW_CHECKOUT_ROOT_VAR}="\${GITHUB_WORKSPACE:-}" GITHUB_TOKEN="\${${AI_REVIEW_THREADS_TOKEN_VAR}}" ${poster} \\`,
     `  "\${${AI_REVIEW_FINDINGS_PATH_VAR}}" \\`,
     `  --repo "\${${AI_REVIEW_THREADS_REPO_VAR}}" \\`,
     `  --pr "\${${AI_REVIEW_THREADS_PR_VAR}}" \\`,
@@ -6242,6 +6247,32 @@ export const AI_REVIEW_APP_INSTALL_CAUSE =
  * here rather than in a rules file because the people who hit it are the
  * people these annotations have just sent to the log.
  */
+/**
+ * Where every `bunx` that runs AFTER the reviewer runs from (#2664): a
+ * directory made at that moment, empty, outside the findings directory. Two
+ * steps run one: the adjudicator, below, and the threads poster
+ * (`buildThreadsScript`). Both name the checkout in
+ * `AI_REVIEW_CHECKOUT_ROOT`, which is where they read cited lines (#2669).
+ *
+ * `bunx` resolves `bunfig.toml`, `.npmrc`, `package.json` and
+ * `node_modules` by walking up from its working directory. The checkout is
+ * the tree under review, so it is out. The findings directory looked safe —
+ * it is under `RUNNER_TEMP`, outside the checkout — but the reviewer is
+ * handed it with `--add-dir` and holds `Write`, so a reviewer the branch
+ * has prompt-injected can put a `bunfig.toml` naming its own registry
+ * there, and the credentialed job would then execute whatever that registry
+ * serves as `rungate`. A fresh directory holds nothing anyone wrote.
+ *
+ * The directory is assigned before the `cd`, and that order is the guard. A
+ * failed `mktemp` makes the assignment non-zero, so nothing after the `&&`
+ * runs, and the caller reads a run that produced no reading. Written as
+ * `cd "$(mktemp …)"`, a failed `mktemp` is `cd ""`, which bash runs as a
+ * successful no-op. The chain then carried on, and `bunx` ran wherever the
+ * step started, which is the checkout (#2668 round 2).
+ */
+export const AI_REVIEW_FRESH_CWD =
+  'rungate_bunx_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && cd "$rungate_bunx_dir"';
+
 export function buildReviewRunScript(version: string): string {
   // The exact command the success branch runs. Built here so the comments
   // below and the bash are one string, and so a test can name it.
@@ -7205,7 +7236,7 @@ if [ "\${AI_REVIEW_ACTION_OUTCOME:-}" = success ]; then
     # and escaping it twice turns \`%\` into \`%2525\` and the annotation into
     # noise.
     #
-    # RUN FROM THE PAYLOAD'S OWN DIRECTORY, not from the checkout. \`bunx\`
+    # RUN FROM A FRESH EMPTY DIRECTORY (#2664), not from the checkout. \`bunx\`
     # resolves \`bunfig.toml\`, \`.npmrc\`, \`package.json\` and \`node_modules\`
     # by walking UP from the working directory, and a step's working directory
     # is \${GITHUB_WORKSPACE} — the tree under review. A branch that adds a
@@ -7216,11 +7247,13 @@ if [ "\${AI_REVIEW_ACTION_OUTCOME:-}" = success ]; then
     # job it writes lands in consumer repositories whose trigger and trust
     # settings nobody here can see. The consumer is the threat model.
     #
-    # The payload's directory is the right cwd and needs no new wiring: the
-    # prepare step puts it under \${RUNNER_TEMP} and REFUSES the run if that
-    # is unset, so it is outside the checkout by construction rather than by
-    # convention. A \`cd\` that fails takes the subshell non-zero with no
-    # outcome line, which the reading below fails closed on.
+    # Not the payload's directory either, which is what this ran from until
+    # #2664: the reviewer is handed that directory with \`--add-dir\` and
+    # holds \`Write\`, so a prompt-injected reviewer could plant the same
+    # \`bunfig.toml\` there. A directory made at this moment holds nothing
+    # anyone wrote (\`AI_REVIEW_FRESH_CWD\`). A \`cd\` that fails takes the
+    # subshell non-zero with no outcome line, which the reading below fails
+    # closed on.
     #
     # \`|| adjudicated=\$?\` AND NOT A PLAIN ASSIGNMENT (#1110). The module
     # header says "No \`set -e\`", and that is true of what this generator
@@ -7270,7 +7303,7 @@ if [ "\${AI_REVIEW_ACTION_OUTCOME:-}" = success ]; then
     # command, not exported. \`:-\` because the step runs under \`set -u\`; an
     # empty value is the adjudicator's own fallback to its working directory,
     # which it reports as unable to read any cited line.
-    adjudication=\$(cd "\$(dirname "\${${AI_REVIEW_FINDINGS_PATH_VAR}}")" && ${AI_REVIEW_CHECKOUT_ROOT_VAR}="\${GITHUB_WORKSPACE:-}" ${adjudicator} "\${${AI_REVIEW_FINDINGS_PATH_VAR}}" "\${${AI_REVIEW_CHANGED_FILES_PATH_VAR}:-}" 2>&1) || adjudicated=\$?
+    adjudication=\$(${AI_REVIEW_FRESH_CWD} && ${AI_REVIEW_CHECKOUT_ROOT_VAR}="\${GITHUB_WORKSPACE:-}" ${adjudicator} "\${${AI_REVIEW_FINDINGS_PATH_VAR}}" "\${${AI_REVIEW_CHANGED_FILES_PATH_VAR}:-}" 2>&1) || adjudicated=\$?
     printf '%s\\n' "\${adjudication}"
 
     # DID IT RUN, asked before WHAT IT SAID. Without this line a registry that
