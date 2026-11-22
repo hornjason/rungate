@@ -20,7 +20,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findingIdentity, mergeDrafts, mergeReport, severityStrictness } from "../lib/ai-review-drafts";
+import { findingIdentity, mergeDrafts, mergeReport, roundRepresentative, severityStrictness } from "../lib/ai-review-drafts";
 import { advisoryKey, severityBlocks, summaryReading } from "../lib/scaffold/ai-review-findings";
 import { MERGE_DRAFTS_REFUSED_EXIT } from "../scripts/ai-review-merge-drafts";
 
@@ -183,6 +183,10 @@ describe("#2648: one identity, one ranking", () => {
       ["severity differs", f("lib/a.ts", 10, "Token logged"), { ...f("lib/a.ts", 10, "Token logged"), severity: "low" }, true],
       ["line differs", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", 200, "Token logged"), false],
       ["file differs", f("lib/a.ts", 10, "Token logged"), f("lib/b.ts", 10, "Token logged"), false],
+      // PR #2662: a path is compared as written; two files differing only by
+      // case are two files on a case-sensitive checkout.
+      ["file differs only by case", f("lib/Parser.ts", 10, "Token logged"), f("lib/parser.ts", 10, "Token logged"), false],
+      ["file differs only by surrounding space", f("lib/a.ts", 10, "Token logged"), f(" lib/a.ts ", 10, "Token logged"), true],
       ["summary differs", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", 10, "Error swallowed"), false],
       ["line absent on one", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", undefined, "Token logged"), false],
       ["line as a string and a number", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", "10", "Token logged"), false],
@@ -300,6 +304,17 @@ describe("#2648: the merge's contract, over generated drafts", () => {
       const m = mergeDrafts(all.map((d, i) => ({ path: `d${i}`, text: d === null ? null : draft(d) })));
       const at = `seed ${seed}`;
       const blocksSomewhere = drafts.flat().some(x => severityBlocks(x.severity) === true);
+      const outcomes = ["success", "failure", "cancelled", "skipped"];
+      const runs = all.map((_, i) => ({ outcome: pick(r, outcomes), execution: `/x/e${i}.json` }));
+      const rep = roundRepresentative(m, runs);
+      const firstHeard = all.findIndex(d => d !== null);
+      const firstSilent = all.findIndex(d => d === null);
+      if (m.payload !== null) {
+        expect(rep, `${at}: a written payload is reported by the first run heard, as a success`).toEqual({ run: firstHeard, outcome: "success", execution: runs[firstHeard].execution });
+      } else {
+        const gap = firstSilent === -1 ? 0 : firstSilent;
+        expect(rep, `${at}: a withheld payload is reported by the first run not heard`).toEqual({ run: gap, ...runs[gap] });
+      }
       if (drafts.length === 0 || (drafts.length < planned && !blocksSomewhere)) {
         expect(m.payload, `${at}: ${drafts.length} of ${planned} heard and nothing blocks — no payload`).toBeNull();
         withheld += drafts.length > 0 ? 1 : 0;
@@ -335,6 +350,49 @@ describe("#2648: the merge's contract, over generated drafts", () => {
     }
     expect(collisions, "the generator produced no cross-draft duplicates, so the strictness rule was never exercised").toBeGreaterThan(100);
     expect(withheld, "no generated round was partial and blocked nothing, so the partial rule was never exercised").toBeGreaterThan(5);
+  });
+});
+
+// #2661: the steps after the review read ONE action outcome and ONE
+// execution file. Which run supplies them is decided here, once: a written
+// payload is reported by the first run whose draft parsed, as a success; a
+// withheld one by the first run whose draft did not, with its own outcome —
+// so a partial round is reported by the run that made it partial.
+describe("#2661: the run a round reports", () => {
+  const runs = [
+    { outcome: "success", execution: "/x/execution-1.json" },
+    { outcome: "failure", execution: "" },
+    { outcome: "success", execution: "/x/execution-3.json" },
+  ];
+  const pass = draft([], "PASS");
+  const block = draft([finding("lib/a.ts", "One", "critical")]);
+
+  test("each row names the run and the outcome the round reports", () => {
+    const rows: [string, (string | null)[], { run: number; outcome: string; execution: string }][] = [
+      ["every draft parsed: the first, as a success", [pass, pass, pass], { run: 0, outcome: "success", execution: "/x/execution-1.json" }],
+      ["run 1 silent, the rest block: the first parsed run, run 2's slot", [null, block, pass], { run: 1, outcome: "success", execution: "" }],
+      ["partial and nothing blocks: the first run that did not parse", [pass, null, pass], { run: 1, outcome: "failure", execution: "" }],
+      ["partial and nothing blocks, run 1 the gap", [null, pass, pass], { run: 0, outcome: "success", execution: "/x/execution-1.json" }],
+      ["no draft parsed: run 1, as today", [null, null, null], { run: 0, outcome: "success", execution: "/x/execution-1.json" }],
+      ["unreadable counts as not parsed", [pass, pass, "{nope"], { run: 2, outcome: "success", execution: "/x/execution-3.json" }],
+    ];
+    for (const [name, texts, want] of rows) {
+      const m = mergeDrafts(texts.map((text, i) => ({ path: `d${i}`, text })));
+      expect(roundRepresentative(m, runs), name).toEqual(want);
+    }
+  });
+
+  test("a written payload is never reported as anything but a success, and a withheld one never as a success it did not earn", () => {
+    const failing = runs.map(r => ({ ...r, outcome: "failure" }));
+    const written = mergeDrafts([pass, pass, pass].map((text, i) => ({ path: `d${i}`, text })));
+    expect(roundRepresentative(written, failing).outcome).toBe("success");
+    const withheld = mergeDrafts([pass, null, pass].map((text, i) => ({ path: `d${i}`, text })));
+    expect(roundRepresentative(withheld, failing).outcome).toBe("failure");
+  });
+
+  test("a run list that does not match the drafts is refused, not guessed", () => {
+    const m = mergeDrafts([pass, pass].map((text, i) => ({ path: `d${i}`, text })));
+    expect(() => roundRepresentative(m, runs)).toThrow(/2 drafts and 3 runs/);
   });
 });
 
@@ -440,6 +498,55 @@ describe("#2648: rungate ai-review-merge-drafts", () => {
 
   test("the usage names every planned path, written or not, as the plan", () => {
     expect(run([]).stderr).toContain("every planned draft path, written or not");
+  });
+
+  test("#2661: --outcome, --execution and --github-output append the run the round reports", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-merge-drafts-"));
+    try {
+      writeFileSync(join(dir, "d1.json"), draft([], "PASS"));
+      const gh = join(dir, "github-output");
+      writeFileSync(gh, "earlier=kept\n");
+      const r = run([
+        "--out", join(dir, "payload.json"),
+        "--outcome", "success", "--outcome", "failure", "--outcome", "success",
+        "--execution", join(dir, "e1.json"), "--execution", "", "--execution", join(dir, "e3.json"),
+        "--github-output", gh,
+        join(dir, "d1.json"), join(dir, "d2.json"), join(dir, "d3.json"),
+      ]);
+      expect(r.status).toBe(0);
+      expect(readFileSync(gh, "utf-8")).toBe("earlier=kept\noutcome=failure\nexecution_file=\n");
+      expect(r.stdout).toContain("reports run 2: outcome failure");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2661: each malformed run list refuses through the one constant, and writes no output", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-merge-drafts-"));
+    try {
+      writeFileSync(join(dir, "d1.json"), draft([], "PASS"));
+      const gh = join(dir, "github-output");
+      const base = ["--out", join(dir, "payload.json")];
+      const d = [join(dir, "d1.json"), join(dir, "d2.json")];
+      const cases: [string, string[]][] = [
+        ["fewer outcomes than drafts", [...base, "--outcome", "success", "--execution", "a", "--execution", "b", "--github-output", gh, ...d]],
+        ["an outcome GitHub does not report", [...base, "--outcome", "success", "--outcome", "maybe", "--execution", "a", "--execution", "b", "--github-output", gh, ...d]],
+        ["a newline in an execution path", [...base, "--outcome", "success", "--outcome", "success", "--execution", "a\nexecution_file=evil", "--execution", "b", "--github-output", gh, ...d]],
+        ["outcomes with no output file", [...base, "--outcome", "success", "--outcome", "success", "--execution", "a", "--execution", "b", ...d]],
+        ["an output file with no outcomes", [...base, "--github-output", gh, ...d]],
+      ];
+      for (const [name, args] of cases) {
+        const r = run(args);
+        expect(r.status, name).toBe(MERGE_DRAFTS_REFUSED_EXIT);
+        expect(existsSync(gh), `${name}: wrote the output anyway`).toBe(false);
+      }
+      const unwritable = run([...base, "--outcome", "success", "--outcome", "success", "--execution", "a", "--execution", "b",
+        "--github-output", join(dir, "missing-dir", "out"), ...d]);
+      expect(unwritable.status, "an output file it cannot append to").toBe(MERGE_DRAFTS_REFUSED_EXIT);
+      expect(unwritable.stderr).toContain("could not append the round's run to");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("a call it cannot read refuses through its one exit constant", () => {

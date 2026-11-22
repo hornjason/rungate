@@ -10,6 +10,14 @@
  * partial round into a full one, and the partial rule cannot see it (PR #2656
  * round 8). The generated workflow passes its fixed paths, never a glob.
  *
+ * **The run the round reports** (#2661). With `--outcome`, `--execution` and
+ * `--github-output` — all three or none, one `--outcome` and one
+ * `--execution` per draft, in the drafts' order — it appends
+ * `outcome=` and `execution_file=` for the steps after the review, which
+ * read one of each. `roundRepresentative` decides which run; this only
+ * checks the values are ones GitHub writes and carry no newline, because a
+ * newline in a value is a second output line nobody meant.
+ *
  * Every decision is `mergeDrafts`'s in `lib/ai-review-drafts.ts`; this reads
  * the drafts, writes the payload to `--out` when there is one, and prints the
  * counts and, when nothing was written, why. Withholding a payload exits 0,
@@ -19,29 +27,59 @@
  * because a block that stands would then read as no payload, UNMEASURED.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { type DraftInput, mergeDrafts, mergeReport } from "../lib/ai-review-drafts";
+import { type DraftInput, mergeDrafts, mergeReport, type RoundRun, roundRepresentative } from "../lib/ai-review-drafts";
 
 /** The one non-zero exit: a call this script cannot read, or a payload it could not write. */
 export const MERGE_DRAFTS_REFUSED_EXIT = 2;
 
-/** The call read: where to write the union, and the drafts — or why it could not be read. */
-function readCall(argv: readonly string[]): { out: string; drafts: string[] } | { refused: string } {
+/** The outcomes a GitHub step reports. Anything else is not a step's outcome. */
+export const STEP_OUTCOMES: readonly string[] = ["success", "failure", "cancelled", "skipped"];
+
+const USAGE =
+  "usage: --out <payload.json> [--outcome <o> --execution <path> ... --github-output <path>] <draft.json> [<draft.json> ...] — " +
+  "every planned draft path, written or not; a path left out is a run the round did not plan";
+
+interface Call {
+  out: string;
+  drafts: string[];
+  /** Present when the run the round reports was asked for. */
+  report?: { runs: RoundRun[]; githubOutput: string };
+}
+
+/** The call read — or why it could not be read. */
+function readCall(argv: readonly string[]): Call | { refused: string } {
   try {
     const { values, positionals } = parseArgs({
       args: [...argv],
-      options: { out: { type: "string" } },
+      options: {
+        out: { type: "string" },
+        outcome: { type: "string", multiple: true },
+        execution: { type: "string", multiple: true },
+        "github-output": { type: "string" },
+      },
       allowPositionals: true,
     });
     const out = values.out?.trim() ?? "";
-    return out === "" || positionals.length === 0
-      ? {
-          refused:
-            "usage: --out <payload.json> <draft.json> [<draft.json> ...] — every planned draft path, written or not; " +
-            "a path left out is a run the round did not plan",
-        }
-      : { out, drafts: positionals };
+    if (out === "" || positionals.length === 0) return { refused: USAGE };
+    const outcomes = values.outcome ?? [];
+    const executions = values.execution ?? [];
+    const githubOutput = values["github-output"]?.trim() ?? "";
+    if (outcomes.length === 0 && executions.length === 0 && githubOutput === "") return { out, drafts: positionals };
+    if (githubOutput === "" || outcomes.length !== positionals.length || executions.length !== positionals.length) {
+      return {
+        refused:
+          `the run the round reports needs --github-output and one --outcome and one --execution per draft: ` +
+          `${positionals.length} draft(s), ${outcomes.length} outcome(s), ${executions.length} execution path(s)`,
+      };
+    }
+    const unknown = outcomes.find(o => !STEP_OUTCOMES.includes(o));
+    if (unknown !== undefined) return { refused: `${JSON.stringify(unknown)} is not a step outcome (${STEP_OUTCOMES.join(", ")})` };
+    const broken = [...executions, githubOutput].find(v => /[\r\n]/.test(v));
+    if (broken !== undefined) return { refused: `a value carries a newline, which would be a second output line: ${JSON.stringify(broken)}` };
+    const runs = outcomes.map((outcome, i) => ({ outcome, execution: executions[i] }));
+    return { out, drafts: positionals, report: { runs, githubOutput } };
   } catch (e) {
     return { refused: (e as Error).message };
   }
@@ -69,14 +107,27 @@ export function main(argv: readonly string[]): number {
     console.error(`ai-review-merge-drafts: ${call.refused}`);
     return MERGE_DRAFTS_REFUSED_EXIT;
   }
-  const { out, drafts } = call;
+  const { out, drafts, report } = call;
   const merged = mergeDrafts(drafts.map(readDraft));
   for (const line of mergeReport(merged)) console.log(`ai-review-merge-drafts: ${line}`);
-  if (merged.payload === null) return 0;
+  if (merged.payload !== null) {
+    try {
+      writeFileSync(out, `${JSON.stringify(merged.payload, null, 2)}\n`);
+    } catch (e) {
+      console.error(`ai-review-merge-drafts: could not write the payload to ${out} — ${(e as Error).message}`);
+      return MERGE_DRAFTS_REFUSED_EXIT;
+    }
+  }
+  if (report === undefined) return 0;
+  const rep = roundRepresentative(merged, report.runs);
+  console.log(
+    `ai-review-merge-drafts: the round reports run ${rep.run + 1}: outcome ${rep.outcome}, ` +
+      `execution file ${rep.execution === "" ? "(none)" : rep.execution}`,
+  );
   try {
-    writeFileSync(out, `${JSON.stringify(merged.payload, null, 2)}\n`);
+    appendFileSync(report.githubOutput, `outcome=${rep.outcome}\nexecution_file=${rep.execution}\n`);
   } catch (e) {
-    console.error(`ai-review-merge-drafts: could not write the payload to ${out} — ${(e as Error).message}`);
+    console.error(`ai-review-merge-drafts: could not append the round's run to ${report.githubOutput} — ${(e as Error).message}`);
     return MERGE_DRAFTS_REFUSED_EXIT;
   }
   return 0;
