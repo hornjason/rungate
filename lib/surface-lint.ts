@@ -277,13 +277,15 @@ export function templateArtifacts(): SurfaceLint {
     check(surface) {
       const findings: SurfaceFinding[] = [];
       for (const [file, text] of surface.files) {
-        let prev: { n: number; indent: number } | null = null;
+        // The last number seen at each indent, so a nested list is checked
+        // against itself and the list around it resumes where it left off.
+        const lastAt = new Map<number, number>();
         const lines = text.split("\n");
         const { roles } = readFences(lines);
         lines.forEach((ln, i) => {
           const at = `line ${i + 1}`;
           if (TEST_ONLY_MARKER.test(ln)) findings.push({ file, message: `${at} carries the test-only marker ${ln.match(TEST_ONLY_MARKER)![0]}` });
-          if (roles[i] !== "prose") { prev = null; return; }
+          if (roles[i] !== "prose") { lastAt.clear(); return; }
           for (const v of ln.match(TEMPLATE_VARIABLE) ?? []) {
             findings.push({ file, message: `${at} carries ${v}, a template variable the render never filled` });
           }
@@ -291,13 +293,16 @@ export function templateArtifacts(): SurfaceLint {
           if (item) {
             const n = Number(item[2]);
             const indent = item[1].length;
-            if (prev !== null && prev.indent === indent && n !== prev.n + 1 && !(n === 1 && prev.n === 1) && n !== 1) {
-              findings.push({ file, message: `${at} numbers a list item ${n} straight after ${prev.n}` });
+            const before = lastAt.get(indent);
+            if (before !== undefined && n !== before + 1 && n !== 1) {
+              findings.push({ file, message: `${at} numbers a list item ${n} straight after ${before}` });
             }
-            if (prev === null || indent <= prev.indent) prev = { n, indent };
+            lastAt.set(indent, n);
+            // Back at this depth, any deeper list has ended.
+            for (const d of [...lastAt.keys()]) if (d > indent) lastAt.delete(d);
           } else if (ln.trim() !== "" && !/^\s/.test(ln)) {
             // An unindented line that is not a list item ends the list.
-            prev = null;
+            lastAt.clear();
           }
         });
       }

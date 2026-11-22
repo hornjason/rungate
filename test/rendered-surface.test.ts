@@ -278,8 +278,13 @@ describe("SC-2801: no rendered file carries an unexpanded template variable, the
   test("a list numbered 1, 3 is a finding; restarts, all-1 lists and continuation lines are not", () => {
     const skip = findingsFor(".claude/agents/rook.md", "## Steps\n\n1. Read the diff.\n3. Report.");
     expect(skip.map(f => f.message)).toEqual(["line " + (readFileSync(join(rendered[0].root, ".claude/agents/rook.md"), "utf-8").split("\n").length + 4) + " numbers a list item 3 straight after 1"]);
+    // A skip inside a nested list is a skip (review, PR #2629).
+    const nested = findingsFor(".claude/agents/rook.md", "## Nested\n\n1. one\n   1. Alpha\n   3. Bravo\n2. two");
+    expect(nested.map(f => f.message)).toHaveLength(1);
+    expect(nested[0].message).toContain("numbers a list item 3 straight after 1");
     for (const ok of [
       "## A\n\n1. one\n1. two\n1. three",
+      "## N\n\n1. one\n   1. a\n   2. b\n2. two\n   1. c\n3. three",
       "## B\n\n1. one\n   continued here\n\n2. two\n   - a sub point\n3. three",
       "## C\n\n1. one\n2. two\n\nA paragraph between lists.\n\n1. again\n2. and again",
       // A paragraph ends a list, so the next one is new, whatever it starts at.
