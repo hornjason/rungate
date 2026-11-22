@@ -71,13 +71,25 @@ export class NotRenderedSurface extends Error {
   }
 }
 
+/**
+ * Every `.md` file under `dir`, at any depth (review, PR #2632). Claude Code
+ * discovers rules and commands in subdirectories, and the surface measurement
+ * walks `.claude/rules` recursively, so a top-level listing skipped a nested
+ * rule for every lint while the measurement counted it. Agents are walked
+ * the same way, so no lint depends on which directory it is reading.
+ */
 function mdIn(root: string, dir: string): string[] {
   const at = join(root, dir);
   if (!existsSync(at) || !statSync(at).isDirectory()) return [];
-  return readdirSync(at)
-    .filter(f => f.endsWith(".md"))
-    .sort()
-    .map(f => `${dir}/${f}`);
+  const out: string[] = [];
+  const walk = (abs: string, rel: string): void => {
+    for (const e of readdirSync(abs, { withFileTypes: true }).sort((x, y) => x.name.localeCompare(y.name))) {
+      if (e.isDirectory()) walk(join(abs, e.name), `${rel}/${e.name}`);
+      else if (e.isFile() && e.name.endsWith(".md")) out.push(`${rel}/${e.name}`);
+    }
+  };
+  walk(at, dir);
+  return out;
 }
 
 /**

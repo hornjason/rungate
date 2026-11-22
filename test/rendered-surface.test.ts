@@ -343,6 +343,24 @@ describe("SC-2802: no always-loaded rendered rule states a count of files that a
     expect(findingsFor("CLAUDE.md", "Decisions live in docs/adr/ (1 directory), routing in 2 directories.").map(x => x.message.match(/"([^"]+)"/)![1])).toEqual(["1 directory", "2 directories"]);
   });
 
+  test("a rule in a subdirectory of .claude/rules is read, as Claude Code loads it (review, PR #2632)", () => {
+    // Claude Code discovers rules recursively, and so does the surface
+    // measurement (`scripts/check-instruction-surface.ts`). A reader that
+    // listed only the top level skipped a nested rule for every lint.
+    const root = join(scratch, `nested-${Math.random().toString(36).slice(2)}`);
+    cpSync(rendered[0].root, root, { recursive: true });
+    mkdirSync(join(root, ".claude", "rules", "project", "deeper"), { recursive: true });
+    writeFileSync(join(root, ".claude", "rules", "project", "structure.md"), "# Structure\n\nDecisions live in docs/adr/ (3 files).\n");
+    writeFileSync(join(root, ".claude", "rules", "project", "deeper", "scoped.md"), "---\npaths:\n  - \"src/**\"\n---\n\nThis project keeps 12 specs.\n");
+    // The view first: both nested files are on the surface the lints read.
+    expect([...readRenderedSurface(root).files.keys()]).toEqual(expect.arrayContaining([
+      ".claude/rules/project/structure.md",
+      ".claude/rules/project/deeper/scoped.md",
+    ]));
+    // The always-loaded one is a finding; the path-scoped one is not.
+    expect(lintRenderedTree(root, [lint]).map(f => f.file)).toEqual([".claude/rules/project/structure.md"]);
+  });
+
   test("a count where nothing loads it always, in a fenced example, or of something that is not files, is not a finding", () => {
     // harness-managed.md declares `paths:`, so it loads only beside a matching file.
     expect(findingsFor(".claude/rules/harness-managed.md", "This project keeps 12 specs.")).toEqual([]);
