@@ -277,13 +277,13 @@ export function templateArtifacts(): SurfaceLint {
     check(surface) {
       const findings: SurfaceFinding[] = [];
       for (const [file, text] of surface.files) {
-        let fenced = false;
         let prev: { n: number; indent: number } | null = null;
-        text.split("\n").forEach((ln, i) => {
+        const lines = text.split("\n");
+        const { roles } = readFences(lines);
+        lines.forEach((ln, i) => {
           const at = `line ${i + 1}`;
-          if (/^\s*(```|~~~)/.test(ln)) { fenced = !fenced; prev = null; return; }
           if (TEST_ONLY_MARKER.test(ln)) findings.push({ file, message: `${at} carries the test-only marker ${ln.match(TEST_ONLY_MARKER)![0]}` });
-          if (fenced) return;
+          if (roles[i] !== "prose") { prev = null; return; }
           for (const v of ln.match(TEMPLATE_VARIABLE) ?? []) {
             findings.push({ file, message: `${at} carries ${v}, a template variable the render never filled` });
           }
