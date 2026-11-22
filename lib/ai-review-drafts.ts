@@ -97,10 +97,16 @@ export function findingIdentity(finding: Record<string, unknown>): string {
  */
 export function severityStrictness(finding: Record<string, unknown>): number {
   const sev = finding[AI_REVIEW_FINDING_FIELDS.severity];
-  const blocks = severityBlocks(sev);
   const declared = Object.keys(AI_REVIEW_SEVERITIES);
-  if (blocks === null) return declared.length;
-  return (blocks ? 0 : declared.length + 1) + declared.indexOf(sev as string);
+  const at = typeof sev === "string" ? declared.indexOf(sev) : -1;
+  const blocks = severityBlocks(sev);
+  // Ranked by the table only when the word is one of its OWN keys and the
+  // answer is a boolean. `severityBlocks` reads the table by plain property
+  // access, so a name every object inherits — `constructor`, `__proto__` —
+  // comes back as a function or an object, not null, and ranked stricter
+  // than `critical` (round 4). Everything else is the one undeclared rank.
+  if (at === -1 || typeof blocks !== "boolean") return declared.length;
+  return (blocks ? 0 : declared.length + 1) + at;
 }
 
 function parseDraft(d: DraftInput): { reading: DraftReading; obj: Record<string, unknown> | null } {

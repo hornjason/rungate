@@ -164,8 +164,10 @@ describe("#2648: one identity, one ranking", () => {
     for (let i = 1; i < ranks.length; i++) {
       expect(ranks[i - 1], `${String(strictestFirst[i - 1])} before ${String(strictestFirst[i])}`).toBeLessThan(ranks[i]);
     }
-    // Every undeclared spelling, and no severity at all, is one rank.
-    for (const sev of ["urgent", "", 3, null, undefined]) {
+    // Every undeclared spelling, and no severity at all, is one rank — the
+    // names every object inherits too, which a plain property read of the
+    // severity table returns as functions rather than undefined (round 4).
+    for (const sev of ["urgent", "", 3, null, undefined, "constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"]) {
       expect(severityStrictness({ severity: sev }), String(sev)).toBe(severityStrictness({ severity: "Critical" }));
     }
   });
