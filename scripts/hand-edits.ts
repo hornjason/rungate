@@ -16,9 +16,11 @@
  * the account has written at least once since then. Exit 0 only when the
  * window is open and holds no hand edit; UNMEASURED and SHORT both refuse.
  *
- * Not part of `board-conformance`'s default verdict: it reads UNMEASURED until
- * the pipeline account has written, and joining the verdict before then would
- * turn the board check red. Whether it joins later is Jason's call.
+ * Not part of `board-conformance`'s readings. The stage ladder runs that
+ * command inside the required `test` check, so a reading there would let one
+ * hand edit block every merge. Jason chose on 2026-11-22 (#1722) to run it in
+ * `.github/workflows/board-conformance.yml` instead, after the board reading,
+ * where a SHORT run is red and gates nothing.
  *
  * What it cannot see, because GitHub records no issue event for it: a project
  * field other than Status (the Criteria column), and an edit to a milestone

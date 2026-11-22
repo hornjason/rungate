@@ -105,6 +105,9 @@ function runBody(): string {
 /** What the command printed on 2026-11-07, the state #1892 was filed in. */
 const SHORT_LINE = "board-conformance: 1 of 5 readings SHORT — criterion-coverage: 23 of 26 (target 26)";
 
+/** What hand-edits printed on 2026-11-22 before its second run opened (#2639). */
+const HAND_LINE = "hand-edits: SHORT — 1 hand edit(s) since 2026-11-19T12:11:50Z on the Convergence family:";
+
 /** The command's own argv, echoed by the stub so a case can read it back. */
 const ARGV_MARKER = "STUB-ARGV";
 
@@ -121,13 +124,18 @@ interface Run {
  * `bash -c`, and not with `-u`/`-o pipefail` supplied from outside, which
  * would hide a body that forgot to set them itself.
  */
-function exec(body: string, opts: { commandExit: number; token?: string }): Run {
+function exec(body: string, opts: { commandExit: number; handEditsExit?: number; token?: string }): Run {
   const dir = mkdtempSync(join(tmpdir(), "rg-board-conf-job-"));
   try {
     const stub = join(dir, "bun");
+    // `handEditsExit` defaults to `commandExit`, so a case written before
+    // SC-2625 sees both readings agree and keeps its meaning.
+    const hand = opts.handEditsExit ?? opts.commandExit;
     writeFileSync(
       stub,
-      `#!/bin/sh\necho "${ARGV_MARKER} $*"\necho "${SHORT_LINE}"\nexit ${opts.commandExit}\n`,
+      `#!/bin/sh\necho "${ARGV_MARKER} $*"\n` +
+        `case "$*" in *hand-edits*) [ ${hand} -eq 0 ] || echo "${HAND_LINE}"; exit ${hand};; esac\n` +
+        `echo "${SHORT_LINE}"\nexit ${opts.commandExit}\n`,
     );
     chmodSync(stub, 0o755);
 
@@ -208,7 +216,7 @@ describe("#1892: the board reading is taken by a job, not by a person", () => {
 
   test("the command is invoked with no arguments — every reading, not one", () => {
     const r = exec(runBody(), { commandExit: 0, token: "pat" });
-    const argv = r.out.split("\n").find(l => l.startsWith(ARGV_MARKER));
+    const argv = r.out.split("\n").find(l => l.startsWith(ARGV_MARKER) && l.includes("board-conformance"));
     expect(argv, `the stub was never reached\n${r.out}${r.err}`).toBeDefined();
     expect(argv).toBe(`${ARGV_MARKER} scripts/board-conformance.ts`);
   });
@@ -303,5 +311,74 @@ describe("#1892: it reports, and it gates nothing", () => {
         "ProjectV2 board (lib/stage-ladder.ts, the `credentialed` scope). A fallback to it " +
         "would report an empty board where the honest answer is UNMEASURED.",
     ).not.toContain("secrets.GITHUB_TOKEN");
+  });
+});
+
+/**
+ * SC-2625 (#1722): the same job takes the hand-edit reading.
+ *
+ * Not one of board-conformance's readings, because the stage ladder runs that
+ * command inside the required `test` check and a hand edit would then block
+ * every merge (Jason's choice, 2026-11-22). So the step runs
+ * `scripts/hand-edits.ts` after the board reading, and either one short makes
+ * the job red. `test/hand-edits.test.ts` and `test/hand-edits-script.test.ts`
+ * cover the reading; these cover whether the job forwards it.
+ *
+ * What was broken to prove it: the last case deletes the line that hands the
+ * hand-edit status to the job, and a hand edit alone then ships green.
+ */
+describe("SC-2625: a hand edit on the payload's board turns the board job red", () => {
+  const handArgv = (out: string) => out.split("\n").find(l => l.startsWith(ARGV_MARKER) && l.includes("hand-edits"));
+
+  test("the step reads the payload family, on this repository", () => {
+    const r = exec(runBody(), { commandExit: 0, token: "pat" });
+    expect(handArgv(r.out), `the hand-edit reading was never taken\n${r.out}${r.err}`).toBe(
+      `${ARGV_MARKER} scripts/hand-edits.ts --prefix Convergence --repo hornjason/rungate`,
+    );
+  });
+
+  // The prefix is spelled in the workflow because a run: body cannot read a
+  // spec's frontmatter. This binds the spelling to the payload's own
+  // declaration, so renaming the payload's milestones cannot leave the job
+  // reading an empty family.
+  test("the prefix the step passes is the payload spec's board.prefix", () => {
+    const engine = read("specs/SPEC-TO-BOARD-PIPELINE-SPEC.md");
+    const payload = engine.match(/^governs:.*Payload: (\S+\.md)/m)?.[1];
+    expect(payload, "the engine spec no longer names its payload in governs:").toBeDefined();
+    const prefix = read(`specs/${payload}`).match(/^board:\n(?:\s+.*\n)*?\s+prefix: (\S+)/m)?.[1];
+    expect(prefix, `specs/${payload} declares no board.prefix`).toBeDefined();
+    expect(runBody()).toContain(`bun scripts/hand-edits.ts --prefix ${prefix} `);
+  });
+
+  test("a hand edit alone makes the job red, and names itself", () => {
+    const r = exec(runBody(), { commandExit: 0, handEditsExit: 1, token: "pat" });
+    expect(r.code, `a hand edit left the job green\n${r.out}${r.err}`).toBe(1);
+    expect(r.out).toContain("::error title=Hand edits");
+    expect(r.out, "the board reading was met, so it must not be blamed").not.toContain("::error title=Board conformance");
+    expect(r.out, "the reading's own words, which name the edit, did not survive").toContain(HAND_LINE);
+  });
+
+  test("a short board with no hand edit is still red", () => {
+    const r = exec(runBody(), { commandExit: 1, handEditsExit: 0, token: "pat" });
+    expect(r.code).toBe(1);
+    expect(r.out).toContain("::error title=Board conformance");
+    expect(r.out).not.toContain("::error title=Hand edits");
+  });
+
+  test("a short board does not stop the hand-edit reading being taken", () => {
+    const r = exec(runBody(), { commandExit: 1, handEditsExit: 1, token: "pat" });
+    expect(handArgv(r.out), "a short board skipped the hand-edit reading").toBeDefined();
+    expect(r.code).toBe(1);
+  });
+
+  test("the mutant — the hand-edit status never reaches the job — ships a hand edit green", () => {
+    const body = runBody();
+    const mutant = body.replace(/^\s*\[ "\$status" -ne 0 \] \|\| status=\$edits$/m, "");
+    expect(mutant, "the mutation did not apply, so this case witnesses nothing").not.toBe(body);
+    expect(exec(body, { commandExit: 0, handEditsExit: 1, token: "pat" }).code).toBe(1);
+    expect(
+      exec(mutant, { commandExit: 0, handEditsExit: 1, token: "pat" }).code,
+      "the mutant still refused, so the hand-edit case is not witnessing the status being forwarded",
+    ).toBe(0);
   });
 });
