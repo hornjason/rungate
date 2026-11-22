@@ -112,7 +112,9 @@ added. CRC-M18 is retired with the trial that proved it.
 Written into `specs/CODE-REVIEW-CONVERGENCE-SPEC.md` as drafted (#2642). The
 four reviewer criteria are placed in Phase 2, the next open Convergence phase
 with reviewer work in it, so they reach Ready before the instruments; CRC-M19
-sits in Phase 5 beside CRC-M18.
+sits in Phase 5 beside CRC-M18. CRC-B13 names the guide as plain text, not as a
+code path, until row 4 creates it: the spec's citation test requires every
+quoted path to exist.
 
 - CRC-B10: The generated AI review runs on `AI_REVIEW_MODEL`, which is Haiku 5.5, unless the consumer's config names an exact model.
 - CRC-B11: Each AI review round is three separate reviewer invocations, and the round's findings are their union with duplicates removed; no finding is dropped for being raised by one run.

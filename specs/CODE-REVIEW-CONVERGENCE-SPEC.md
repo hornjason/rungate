@@ -3030,7 +3030,7 @@ Recorded because each one invalidates a naive reading of the criteria above.
       needs: test
 - [ ] CRC-B12: The generated AI review passes the job's own token to the review action, so a consumer runs it without installing the Claude GitHub App.
       needs: test
-- [ ] CRC-B13: `docs/guides/AI-REVIEW.md` states every credential the generated job resolves, who pays for each, the per-pull-request cost on the default model, and that a tree with no credential spends nothing.
+- [ ] CRC-B13: docs/guides/AI-REVIEW.md states every credential the generated job resolves, who pays for each, the per-pull-request cost on the default model, and that a tree with no credential spends nothing.
       needs: test
 - [ ] CRC-M19: CRC-M18 is retired, and the diff-budget script it named is deleted. The reading module CRC-M13 needs is kept.
       needs: test
