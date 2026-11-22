@@ -486,7 +486,12 @@ const UNCLAIMED_RATCHET = 150;
 // rendered rule states a count of files that adding one file would change, a reading
 // of the fixture renders that no registered pattern expresses; the `SC-2802` describe
 // in test/rendered-surface.test.ts names it (2026-11-21).
-const CLAIMED_UNBINDABLE = 202;
+// 203: SC-2805 (#2606) ticked by `sync-sc-status --only SC-2805` — `rungate
+// prompt-audit` runs the surface lints plus two more on a consumer, labels each
+// finding by owner and drafts rungate's without filing, a reading of a rendered
+// consumer that no registered pattern expresses; the `SC-2805` describe in
+// test/prompt-audit-command.test.ts names it (2026-11-22).
+const CLAIMED_UNBINDABLE = 203;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
