@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: c8d803a1f13402e1
+generated-sha: 9ef55cab05f3f378
 ---
 
 ## Command Routing
@@ -50,4 +50,5 @@ Generated from the CLI's command registry. Run one as
 | `claim-files` | Claim the files an issue will change, so parallel agents do not collide |
 | `ai-review-findings` | Adjudicate an AI review's findings payload — exits non-zero on a blocking finding |
 | `ai-review-threads` | Post an AI review's findings onto the pull request's diff as review threads |
+| `ai-review-merge-drafts` | Merge an AI review round's drafts into one payload — their union, duplicates removed |
 | `record-ai-review-unmeasured` | Record WHICH kind of unmeasured each unmeasured AI-review round was |

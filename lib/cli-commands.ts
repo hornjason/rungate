@@ -534,6 +534,11 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
       "rungate ai-review-threads <path-to-findings.json> --repo <owner/name> " +
       "--pr <n> --commit <sha> [--changed-files <path>]",
   },
+  "ai-review-merge-drafts": {
+    script: "scripts/ai-review-merge-drafts.ts",
+    summary: "Merge an AI review round's drafts into one payload — their union, duplicates removed",
+    usage: "rungate ai-review-merge-drafts --out <payload.json> <draft.json> [<draft.json> ...]",
+  },
   "record-ai-review-unmeasured": {
     script: "scripts/record-ai-review-unmeasured.ts",
     summary: "Record WHICH kind of unmeasured each unmeasured AI-review round was",
