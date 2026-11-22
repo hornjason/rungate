@@ -21,7 +21,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findingIdentity, mergeDrafts, mergeReport, severityStrictness } from "../lib/ai-review-drafts";
-import { advisoryKey, summaryReading } from "../lib/scaffold/ai-review-findings";
+import { advisoryKey, severityBlocks, summaryReading } from "../lib/scaffold/ai-review-findings";
 import { MERGE_DRAFTS_USAGE_EXIT } from "../scripts/ai-review-merge-drafts";
 
 const finding = (file: string, summary: string, severity = "high", line = 1) => ({
@@ -217,6 +217,80 @@ describe("#2648: the union keeps every occurrence any one run reported", () => {
     ]);
     expect((m.payload!.findings as unknown[]).length).toBe(2);
     expect(m.duplicates).toBe(3);
+  });
+});
+
+// PR #2656 round 6: every defect rounds 1 to 5 found was one rule of the
+// merge answered wrongly for an input no row had written. So the merge's
+// whole contract is asserted here over generated drafts, not row by row:
+// the union holds each identity as many times as the most any one draft
+// listed it, its n-th copy is the strictest n-th copy any draft gave, it
+// holds nothing no draft listed, and one draft merges to itself.
+describe("#2648: the merge's contract, over generated drafts", () => {
+  // A seeded generator, so a failure names a draft that reproduces.
+  const prng = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) >>> 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const pick = <T,>(r: () => number, xs: readonly T[]): T => xs[Math.floor(r() * xs.length)];
+  // Small pools, so collisions — the cases the rules are about — are common.
+  const FILES = ["lib/a.ts", "lib/b.ts"];
+  const LINES = [1, 2];
+  const SUMMARIES = ["Token logged", "  token LOGGED ", "Error swallowed"];
+  const SEVERITIES = ["critical", "high", "medium", "low", "info", "urgent", "constructor"];
+  const genDraft = (r: () => number) =>
+    Array.from({ length: Math.floor(r() * 6) }, () => ({
+      severity: pick(r, SEVERITIES),
+      file: pick(r, FILES),
+      line: pick(r, LINES),
+      summary: pick(r, SUMMARIES),
+      failure_scenario: `scenario ${Math.floor(r() * 1000)}`,
+    }));
+  const occurrences = (list: Record<string, unknown>[]) => {
+    const by = new Map<string, Record<string, unknown>[]>();
+    for (const x of list) by.set(findingIdentity(x), [...(by.get(findingIdentity(x)) ?? []), x]);
+    return by;
+  };
+
+  test("400 generated rounds keep every rule of the union", () => {
+    let collisions = 0;
+    for (let seed = 1; seed <= 400; seed++) {
+      const r = prng(seed);
+      const drafts = Array.from({ length: 1 + Math.floor(r() * 3) }, () => genDraft(r));
+      const m = mergeDrafts(drafts.map((d, i) => ({ path: `d${i}`, text: draft(d) })));
+      const merged = m.payload!.findings as Record<string, unknown>[];
+      const at = `seed ${seed}`;
+
+      if (drafts.length === 1) expect(merged, `${at}: one draft merges to itself`).toEqual(drafts[0]);
+
+      const inputs = new Set(drafts.flat().map(x => JSON.stringify(x)));
+      for (const x of merged) expect(inputs.has(JSON.stringify(x)), `${at}: a merged finding no draft listed`).toBe(true);
+
+      const mergedBy = occurrences(merged);
+      const perDraft = drafts.map(occurrences);
+      const keys = new Set(perDraft.flatMap(d => [...d.keys()]));
+      expect(new Set(mergedBy.keys()), `${at}: the identities kept are the identities listed`).toEqual(keys);
+      for (const k of keys) {
+        const most = Math.max(...perDraft.map(d => d.get(k)?.length ?? 0));
+        const kept = mergedBy.get(k) ?? [];
+        expect(kept.length, `${at}: ${k} kept as often as the most any draft listed it`).toBe(most);
+        if (perDraft.filter(d => d.has(k)).length > 1) collisions++;
+        for (let n = 0; n < most; n++) {
+          const strictest = Math.min(
+            ...perDraft.filter(d => (d.get(k)?.length ?? 0) > n).map(d => severityStrictness(d.get(k)![n])),
+          );
+          expect(severityStrictness(kept[n]), `${at}: copy ${n} of ${k} is the strictest any draft gave`).toBe(strictest);
+        }
+      }
+      // The blocking findings are what decide a round, so say it directly too.
+      const blockingIn = new Set(drafts.flat().filter(x => severityBlocks(x.severity) === true).map(findingIdentity));
+      const blockingOut = new Set(merged.filter(x => severityBlocks(x.severity) === true).map(findingIdentity));
+      expect(blockingOut, `${at}: every identity some run blocked on still blocks`).toEqual(blockingIn);
+    }
+    expect(collisions, "the generator produced no cross-draft duplicates, so the strictness rule was never exercised").toBeGreaterThan(100);
   });
 });
 
