@@ -59,6 +59,7 @@
     "scripts/prompt-audit.ts",
     "scripts/ai-review-findings.ts",
     "scripts/ai-review-threads.ts",
+    "scripts/ai-review-merge-drafts.ts",
     "scripts/record-ai-review-unmeasured.ts",
     "scripts/finding-promotion.ts",
     "scripts/claim-files.ts",
