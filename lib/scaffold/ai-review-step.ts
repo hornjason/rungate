@@ -3380,6 +3380,16 @@ export const AI_REVIEW_FORK_VAR = "RUNGATE_PR_IS_FORK";
  * knowing what depended on it. The initialiser above the assignment is what
  * keeps `set -u` happy on the success path.
  */
+/**
+ * The line `bin/rungate.ts` prints for a command its registry does not have.
+ * The threads step matches it whole. `test/ai-review-threads.test.ts` runs the
+ * CLI and holds this to what it prints, so neither side can be reworded alone
+ * (#2675 round 4).
+ */
+export function aiReviewUnknownCommandLine(name: string): string {
+  return `rungate: unknown command "${name}"`;
+}
+
 export function buildThreadsScript(version: string): string {
   const poster =
     `bunx ${AI_REVIEW_ADJUDICATOR_PACKAGE}@${version} ${AI_REVIEW_THREADS_COMMAND}`;
@@ -3390,7 +3400,7 @@ export function buildThreadsScript(version: string): string {
   // command prints from a finding is escaped and prefixed
   // `ai-review-threads: `, so no finding text can BE this line. Inside SINGLE
   // quotes below, where the double quotes are literal.
-  const missing = `rungate: unknown command "${AI_REVIEW_THREADS_COMMAND}"`;
+  const missing = aiReviewUnknownCommandLine(AI_REVIEW_THREADS_COMMAND);
   return [
     `set -uo pipefail`,
     ``,

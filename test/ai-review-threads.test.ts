@@ -37,6 +37,7 @@ import {
   AI_REVIEW_CHECKOUT_ROOT_VAR,
   AI_REVIEW_FORK_VAR,
   AI_REVIEW_THREADS_STEP_ID,
+  aiReviewUnknownCommandLine,
   buildThreadsScript,
 } from "../lib/scaffold/ai-review-step";
 
@@ -809,7 +810,27 @@ describe("#2203: the generated threads step", () => {
     }
   }
 
-  const SKEW_LINE = 'rungate: unknown command "ai-review-threads"';
+  // Built by the generator's own function, which the case below holds to the
+  // line bin/rungate.ts prints (#2675 round 4).
+  const SKEW_LINE = aiReviewUnknownCommandLine("ai-review-threads");
+
+  test("the line the step matches is the line bin/rungate.ts prints for an unknown command", () => {
+    // Without this, rewording either side leaves every case here green while
+    // the annotation naming the cause stops being printed.
+    const name = "no-such-command-2666";
+    const r = Bun.spawnSync(["bun", "bin/rungate.ts", name], {
+      cwd: new URL("..", import.meta.url).pathname,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    // Whole lines, anywhere in the output: the same reading the step's
+    // `grep -qxF` takes. The CLI prints a version banner first.
+    const lines = new TextDecoder().decode(r.stderr).split("\n");
+    expect(r.exitCode, "an unknown command did not refuse").not.toBe(0);
+    expect(lines, `bin/rungate.ts no longer prints the line the step matches:\n${lines.join("\n")}`).toContain(
+      aiReviewUnknownCommandLine(name),
+    );
+  });
   // The warning this step printed until #2666, kept so the cases below can
   // assert it is gone rather than merely reworded.
   const SKEW_WARNING = "does not carry the ai-review-threads command yet";
@@ -848,6 +869,9 @@ describe("#2203: the generated threads step", () => {
   test("the bare phrase without the 'rungate: ' prefix is a refusal, not skew", () => {
     const r = runThreads('unknown command "ai-review-threads"\n', 1);
     expect(r.stdout).not.toContain(SKEW_WARNING);
+    // #2675 round 4: and not the missing-command annotation either, so a match
+    // that dropped the `rungate: ` prefix goes red here.
+    expect(r.stdout, "the bare phrase was read as a missing command").not.toContain(MISSING_COMMAND);
     expect(r.code).toBe(1);
   });
 
