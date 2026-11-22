@@ -1,4 +1,4 @@
-# generated-sha: 8a0d5b68458e67b9
+# generated-sha: 669d6e6b7e2efc6a
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -4154,7 +4154,7 @@ jobs:
           printf '%s\n' "$threads_out"
 
           if [ "$threads_code" -ne 0 ] && printf '%s\n' "$threads_out" | grep -qxF 'rungate: unknown command "ai-review-threads"'; then
-            echo "::error title=AI review threads::rungate@0.8.45 does not carry the ai-review-threads command this workflow calls. This step is generated only by versions that have it, so either the package published for that version is missing it (a files[] omission, #446) or the pin was edited by hand. No review threads were posted."
+            echo "::error title=AI review threads::rungate@0.8.45 does not carry the ai-review-threads command this workflow calls. Its command registry has no such name, and only versions that have it generate this step, so either the pin was edited by hand to an older version or that version's lib/cli-commands.ts lost the registration. No review threads were posted."
           fi
 
           exit "$threads_code"

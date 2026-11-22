@@ -3348,11 +3348,13 @@ export const AI_REVIEW_FORK_VAR = "RUNGATE_PR_IS_FORK";
  * **A published package that lacks the command is a failure, named as one
  * (#2666).** The generated job runs `bunx rungate@<version>`, and the
  * scaffold writes the pin as the version doing the generating. A version
- * without this command does not generate this step at all. So
- * `bin/rungate.ts` answering `unknown command "<name>"` leaves two causes,
- * and neither is a release still to come: the package published for that
- * version is missing the command (the #446 class of `files[]` omission), or
- * the pin was edited by hand to a version that predates it. This step cannot
+ * without this command does not generate this step at all. `bin/rungate.ts`
+ * prints `unknown command "<name>"` only when its command registry
+ * (`lib/cli-commands.ts`) has no such name. A script left out of `files[]`
+ * is a different line, the incomplete-install message, which already exits
+ * non-zero on its own. So this line leaves two causes, and neither is a
+ * release still to come: the pin was edited by hand to a version that
+ * predates the command, or that version's registry lost it. This step cannot
  * tell those apart, so the annotation names both. Until #2666 the line read
  * as version skew: a warning, exit 0, no threads posted, so either cause read
  * as a green job. Now it prints an error naming the version and the command,
@@ -3414,7 +3416,7 @@ export function buildThreadsScript(version: string): string {
     `printf '%s\\n' "$threads_out"`,
     ``,
     `if [ "$threads_code" -ne 0 ] && printf '%s\\n' "$threads_out" | grep -qxF '${missing}'; then`,
-    `  echo "::error title=AI review threads::rungate@${version} does not carry the ${AI_REVIEW_THREADS_COMMAND} command this workflow calls. This step is generated only by versions that have it, so either the package published for that version is missing it (a files[] omission, #446) or the pin was edited by hand. No review threads were posted."`,
+    `  echo "::error title=AI review threads::rungate@${version} does not carry the ${AI_REVIEW_THREADS_COMMAND} command this workflow calls. Its command registry has no such name, and only versions that have it generate this step, so either the pin was edited by hand to an older version or that version's lib/cli-commands.ts lost the registration. No review threads were posted."`,
     `fi`,
     ``,
     `exit "$threads_code"`,

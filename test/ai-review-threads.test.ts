@@ -829,6 +829,9 @@ describe("#2203: the generated threads step", () => {
     expect(annotation, `no error annotation was printed:\n${r.stdout}`).toBeDefined();
     expect(annotation!, "the annotation does not name the missing command").toContain("ai-review-threads");
     expect(annotation!, "the annotation does not name the version that lacks it").toContain("rungate@0.8.21");
+    // #2675 round 2: a script missing from files[] prints the incomplete-install
+    // message, never this line, so blaming files[] here names the wrong cause.
+    expect(annotation!, "the annotation blames files[], which prints a different line").not.toContain("files[]");
     expect(r.code, "the step went green over a package that cannot post threads").not.toBe(0);
   });
 
