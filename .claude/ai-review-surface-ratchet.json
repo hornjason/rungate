@@ -46,6 +46,18 @@
       "to": "AC-9d: THE PAIR \u2014 no credential warns, an unread payload does not",
       "issue": 1013,
       "why": "#1013 shipped this case asserting that RUNGATE_REQUIRE_AI_REVIEW covers a payload nothing adjudicated \u2014 warn by default, refuse only on opt-in. The team lead's review of #1076 caught that as a FAIL-OPEN: a payload exists, so a review WAS attempted and its result is on disk, and 'nobody read it' is then indistinguishable from 'adjudicated clean' on a required check. The flag is for a tree with no credential, where nothing was attempted at all. So the state the old case was about no longer exists \u2014 it refuses unconditionally now \u2014 and the replacement is the PAIR that keeps the two apart: no credential still warns and exits 0, an unread payload refuses, and the third run shows the flag does not change the second. The case got STRONGER: it now fails if the refusal stops firing AND if the no-credential path starts firing, where the old one only checked the opt-in path. AC-9c asserts the refusal directly and AC-9e runs the mutant that would undo it."
+    },
+    {
+      "from": "the annotation names the remedy, the URL, and the string to search for",
+      "to": "the annotation names the likely cause, and since #2649 it does not send anyone to install the app",
+      "issue": 2649,
+      "why": "The case asserted the declined route named the Claude Code GitHub App, its install URL and its 401 string as the usual cause (#803). #2649 hands the review action the job's own token, so the App exchange cannot happen and that remedy names a state the job no longer reaches (found in review of #2654). The case keeps its subject and route and now asserts the cause that is still reachable there, and asserts the App URL and the 401 are absent, so restoring the old sentence turns it red."
+    },
+    {
+      "from": "the URL and the 401 string each have one declaring position",
+      "to": "#2649: no route of the report step sends a consumer to install the app",
+      "issue": 2649,
+      "why": "The case guarded one declaring position for the App install URL and its 401 string. #2649 deleted both constants, because nothing prints them once the job hands the action its own token. What replaces it is the stronger property: no route of the generated report script contains either string, and the declined route still carries its cause."
     }
   ],
   "titles": [
@@ -253,8 +265,8 @@
     "restore THEN baseline: no drift, exit 0",
     "the PAIR: one thing varies \u2014 whether a credential was there",
     "the PAIR: one thing varies \u2014 whether the baseline was edited",
-    "the URL and the 401 string each have one declaring position",
-    "the annotation names the remedy, the URL, and the string to search for",
+    "#2649: no route of the report step sends a consumer to install the app",
+    "the annotation names the likely cause, and since #2649 it does not send anyone to install the app",
     "the attack the finding describes: hide a write by adding it to the baseline",
     "the auth step impersonates no service account",
     "the auth step pins the declared action and carries the two WIF inputs",
