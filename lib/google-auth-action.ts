@@ -7,7 +7,7 @@
  *
  * | Position | Pin | Comment | What it actually was |
  * |---|---|---|---|
- * | `.github/workflows/claude-review.yml` | `c200f369` | `# v2` | v2 |
+ * | the trial reviewer's workflow (deleted, #2627) | `c200f369` | `# v2` | v2 |
  * | agentgrit's generated `.github/workflows/ai-review.yml` | `7c6bc770` | `# v3` | v3 |
  *
  * Two positions, two values, nothing comparing them — which is #689 exactly.
@@ -23,9 +23,10 @@
  * v3 is the latest release (`gh api .../releases/latest` → `v3`, read
  * 2026-10-20). It is not the measured one.
  *
- * `c200f369` is the pin on `.github/workflows/claude-review.yml`, which is the
- * only configuration in this fleet that has ever authenticated to Vertex at
- * all: verified 2026-10-19 against the project named by this repository's own
+ * `c200f369` was the pin on the trial reviewer's workflow, then the only
+ * configuration in this fleet that had ever authenticated to Vertex at all,
+ * and it is the pin `.github/workflows/ai-review.yml` authenticates with
+ * today: verified 2026-10-19 against the project named by this repository's own
  * `ci.vertex` block, `claude-sonnet-5` returning HTTP 200 from `rawPredict` at
  * location `global`, with no service-account key. The project is not named
  * here on purpose — `SC-A1` refuses a consumer's name in the harness and a

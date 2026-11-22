@@ -5,13 +5,12 @@
  * ## What these cases read, and why it is not this repository's own files
  *
  * Every case here generates a workflow into a temp directory and reads THAT.
- * None of them opens `.github/workflows/ai-review.yml` or
- * `.github/workflows/claude-review.yml` in this checkout.
+ * None of them opens `.github/workflows/ai-review.yml` in this checkout.
  *
  * That is the whole design of the file, and it is
  * `.claude/rules/checks-must-be-able-to-fail.md`'s fifth shape applied before
  * the repair rather than after it. **The cheapest wrong fix is to put the WIF
- * provider in `claude-review.yml` and stop.** It is the 5pm repair: the one
+ * provider in the checked-in workflow and stop.** It is the 5pm repair: the one
  * file anybody looks at stops naming a service-account key, the symptom is
  * gone, and `lib/scaffold/ai-review-step.ts` still emits
  * `credentials_json: ${{ … secrets.GCP_SA_KEY … }}` into every consumer's
@@ -56,7 +55,7 @@
  * | M5 `id-token: write` granted unconditionally | 2 | **2 of 161** | the UNCONFIGURED workflow: the original grants `contents: read` alone |
  * | M6 the auth action's row deleted from `PINNED_ACTIONS` | 14 | **11 of 161** | `pinnedAction("google-github-actions/auth")` — the original returns the row, the mutant throws; and a tree with a disagreeing auth pin goes FAIL to PASS |
  * | M7 `actionPinViolations` short-circuited to `return []` | 7 | **7 of 161** | a tree pinning the auth action at `7c6bc770`: one violation against none |
- * | M8 `GOOGLE_AUTH_ACTION_SHA` moved to forty zeroes | 2 | **1 of 161** | this repository's own `claude-review.yml`. See below |
+ * | M8 `GOOGLE_AUTH_ACTION_SHA` moved to forty zeroes | 2 | **1 of 161** | this repository's own checked-in workflow, then the trial reviewer's. See below |
  * | M9 **the cheapest wrong fix**: accept any resolved mode and return early | 3 | **3 of 161** | a federated script beside a job with no auth step: the original refuses, the mutant returns `[]` |
  * | M10 the `ai-review.yml` row renamed in `OWNED_FILES` — the one-sided edit | 2 | **5 of 161** | the shipped prose table against the generated one |
  * | M11 the baseline step moved BELOW the review action | 1 | **1 of 161** | the generated job's step order |
@@ -79,7 +78,9 @@
  * design — every position is compared to the declaration, never to another
  * position — and its consequence is that only a position which does NOT
  * derive from the declaration can witness the declaration changing. There is
- * one such position in the tree: the checked-in `claude-review.yml`.
+ * one such position in the tree: the checked-in `ai-review.yml`, which
+ * `test/action-pin-parity.test.ts` reads. When M8 was measured it was the trial
+ * reviewer's workflow; #2626 moved the read so the trial could be deleted.
  *
  * **M4 is 1 and not 3, and the two halves are covered one case each.** The
  * migration is an `env:` entry the runner computes from `secrets.X != ''` and
