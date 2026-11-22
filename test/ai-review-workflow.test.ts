@@ -941,16 +941,18 @@ describe("AC-9 (#1013): the job's exit code comes from the adjudicator's reading
     );
   });
 
-  test("AC-9g: the adjudicator does not run from the checkout", () => {
+  test("AC-9g: the adjudicator does not run from the checkout, nor from the payload's directory", () => {
     // #1013 review. `bunx` resolves `bunfig.toml`, `.npmrc`, `package.json`
     // and `node_modules` by walking UP from the working directory, and a
-    // step's working directory is the tree under review. The generated job
-    // runs it from the payload's own directory instead, which the prepare
-    // step guarantees is under RUNNER_TEMP.
+    // step's working directory is the tree under review. The job ran it from
+    // the payload's own directory instead — until #2664: the reviewer is
+    // handed that directory with `--add-dir` and holds `Write`, so it could
+    // plant the same files there. It now runs from a directory made at that
+    // moment (`AI_REVIEW_FRESH_CWD`).
     //
     // Driven rather than grepped: the planted `bunx` reports its own `pwd`,
-    // and the case asserts it is the payload's directory and not the one
-    // bash was started in.
+    // and the case asserts it is a fresh `rungate-bunx.*` directory — not the
+    // payload's, and not the one bash was started in.
     const script = buildReviewRunScript(FIXTURE_VERSION);
     const run = runAuthScript(script, {
       AI_REVIEW_MODE: "vertex",
@@ -960,11 +962,8 @@ describe("AC-9 (#1013): the job's exit code comes from the adjudicator's reading
 
     const cwd = /cwd=(.*)/.exec(run.stdout)?.[1];
     expect(cwd, `the planted bunx never reported a cwd:\n${run.stdout}`).toBeDefined();
-    const payloadDir = /ai-review-run-[^\n]*/.exec(cwd!)?.[0];
-    expect(
-      payloadDir,
-      `the adjudicator ran from ${cwd}, which is not the payload's directory`,
-    ).toBeDefined();
+    expect(cwd!, `the adjudicator ran from ${cwd}, the payload's directory, which the reviewer can write`).not.toMatch(/ai-review-run-/);
+    expect(cwd!, `the adjudicator ran from ${cwd}, which is not a directory made for it`).toMatch(/\/rungate-bunx\.[A-Za-z0-9]+$/);
     expect(run.code).toBe(0);
   });
 

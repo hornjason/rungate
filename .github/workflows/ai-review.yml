@@ -1,4 +1,4 @@
-# generated-sha: 6206c01a6978f84d
+# generated-sha: dc00d20b467be822
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -4710,7 +4710,7 @@ jobs:
               # and escaping it twice turns `%` into `%2525` and the annotation into
               # noise.
               #
-              # RUN FROM THE PAYLOAD'S OWN DIRECTORY, not from the checkout. `bunx`
+              # RUN FROM A FRESH EMPTY DIRECTORY (#2664), not from the checkout. `bunx`
               # resolves `bunfig.toml`, `.npmrc`, `package.json` and `node_modules`
               # by walking UP from the working directory, and a step's working directory
               # is ${GITHUB_WORKSPACE} — the tree under review. A branch that adds a
@@ -4721,11 +4721,13 @@ jobs:
               # job it writes lands in consumer repositories whose trigger and trust
               # settings nobody here can see. The consumer is the threat model.
               #
-              # The payload's directory is the right cwd and needs no new wiring: the
-              # prepare step puts it under ${RUNNER_TEMP} and REFUSES the run if that
-              # is unset, so it is outside the checkout by construction rather than by
-              # convention. A `cd` that fails takes the subshell non-zero with no
-              # outcome line, which the reading below fails closed on.
+              # Not the payload's directory either, which is what this ran from until
+              # #2664: the reviewer is handed that directory with `--add-dir` and
+              # holds `Write`, so a prompt-injected reviewer could plant the same
+              # `bunfig.toml` there. A directory made at this moment holds nothing
+              # anyone wrote (`AI_REVIEW_FRESH_CWD`). A `cd` that fails takes the
+              # subshell non-zero with no outcome line, which the reading below fails
+              # closed on.
               #
               # `|| adjudicated=$?` AND NOT A PLAIN ASSIGNMENT (#1110). The module
               # header says "No `set -e`", and that is true of what this generator
@@ -4775,7 +4777,7 @@ jobs:
               # command, not exported. `:-` because the step runs under `set -u`; an
               # empty value is the adjudicator's own fallback to its working directory,
               # which it reports as unable to read any cited line.
-              adjudication=$(cd "$(dirname "${AI_REVIEW_FINDINGS_PATH}")" && AI_REVIEW_CHECKOUT_ROOT="${GITHUB_WORKSPACE:-}" bunx rungate@0.8.45 ai-review-findings "${AI_REVIEW_FINDINGS_PATH}" "${AI_REVIEW_CHANGED_FILES_PATH:-}" 2>&1) || adjudicated=$?
+              adjudication=$(cd "$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && AI_REVIEW_CHECKOUT_ROOT="${GITHUB_WORKSPACE:-}" bunx rungate@0.8.45 ai-review-findings "${AI_REVIEW_FINDINGS_PATH}" "${AI_REVIEW_CHANGED_FILES_PATH:-}" 2>&1) || adjudicated=$?
               printf '%s\n' "${adjudication}"
 
               # DID IT RUN, asked before WHAT IT SAID. Without this line a registry that
