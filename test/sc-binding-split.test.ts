@@ -496,7 +496,12 @@ const UNCLAIMED_RATCHET = 150;
 // live board that no registered pattern expresses; the `SC-2625` describe in
 // test/board-conformance-job.test.ts names it, and the job it covers takes the
 // reading on every push to main (2026-11-22).
-const CLAIMED_UNBINDABLE = 204;
+// 205: CRC-M19 (#2651) ticked by `sync-sc-status --only CRC-M19` while CRC-M18
+// was unticked and retired (ADR-025) — the diff-budget script is gone and the
+// census half kept, a reading of the tree that no registered pattern expresses;
+// the `CRC-M19` describe in test/review-execution-reading.test.ts names it
+// (2026-11-22).
+const CLAIMED_UNBINDABLE = 205;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

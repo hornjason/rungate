@@ -44,12 +44,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   REVIEW_UNMEASURED_EXIT,
-  reviewCoverage,
   reviewExecutionReading,
   reviewReadingReport,
 } from "../lib/review-execution-reading";
@@ -207,9 +206,10 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
    * every over-budget diff was DIFF_TRUNCATED, which made the job red on every
    * DA state-record pull request (#1932: 2 files, 168 KB).
    *
-   * Covers CRC-M18 (CODE-REVIEW-CONVERGENCE-SPEC.md).
+   * The "n of m files read" statement that CRC-M18 named went with it in #2651
+   * (ADR-025): the budget belonged to the trial reviewer deleted in #2627.
    */
-  test("AC-15: some files reviewed whole is MEASURED, and the report states the scope", () => {
+  test("AC-15: some files reviewed whole is MEASURED", () => {
     const r = reviewExecutionReading({
       executionFileRaw: executionFile(["mcp__github__submit_pending_pull_request_review"]),
       reviewsPosted: 1,
@@ -218,16 +218,6 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
     expect(r.reading).toBe("MEASURED");
     expect(r.reasons).toEqual([]);
     expect(r.diffScope).toEqual({ filesRead: 1, filesSeen: 2 });
-    expect(reviewReadingReport(r)).toContain("coverage: 1 of 2 files read");
-    expect(reviewCoverage(r)).toBe("1 of 2 files read");
-    // The whole-diff control says so too, so a partial report is not just
-    // "a report with a scope in it".
-    const whole = reviewExecutionReading({
-      executionFileRaw: executionFile(["mcp__github__submit_pending_pull_request_review"]),
-      reviewsPosted: 1,
-      diffScope: { filesRead: 2, filesSeen: 2 },
-    });
-    expect(reviewReadingReport(whole)).toContain("coverage: 2 of 2 files read");
   });
 
   test("AC-16: a scope nobody reported, or one that cannot be true, is UNMEASURED by name — not zero, not whole", () => {
@@ -238,8 +228,6 @@ describe("a review that produced no output is UNMEASURED, not success (#732)", (
         diffScope,
       });
       expect(r.reasons, JSON.stringify(diffScope)).toEqual(["DIFF_SCOPE_UNAVAILABLE"]);
-      expect(reviewReadingReport(r)).toContain("coverage: UNREPORTED");
-      expect(reviewCoverage(r)).toBe("UNREPORTED");
     }
   });
 
@@ -396,14 +384,14 @@ describe("the script's refusal is load-bearing (#732)", () => {
    * workflow that passed no scope refuses, because what the agent saw is then
    * unestablished.
    */
-  test("AC-18: part of the diff reviewed whole exits zero with a warning naming the scope", () => {
+  test("AC-18: part of the diff reviewed whole exits zero, and states no coverage since CRC-M18 retired", () => {
     const partial = run(build(false), [
       "--execution-file", workingRun, "--reviews-before", "0", "--reviews-after", "1",
       "--files-read", "1", "--files-seen", "2",
     ]);
     expect(partial.code).toBe(0);
-    expect(partial.out).toContain("::warning title=Claude review covered part of the diff::");
-    expect(partial.out).toContain("1 of 2 files read");
+    expect(partial.out).not.toContain("covered part of the diff");
+    expect(partial.out).not.toContain("files read");
 
     const whole = run(build(false), ["--execution-file", workingRun, "--reviews-before", "0", "--reviews-after", "1", ...SCOPE]);
     expect(whole.out).not.toContain("::warning");
@@ -434,5 +422,52 @@ describe("the script's refusal is load-bearing (#732)", () => {
     expect(unknown.out).toContain("REVIEW_COUNT_UNAVAILABLE");
     expect(unknown.out).not.toContain("NO_REVIEW_POSTED");
     expect(unknown.code).not.toBe(0);
+  });
+});
+
+/**
+ * CRC-M19 (#2651, ADR-025 decision 5): CRC-M18 is retired, and the
+ * diff-budget script it named is deleted. The reading module CRC-M13 needs is
+ * kept.
+ *
+ * What was broken to prove it: restoring `reviewCoverage` or the script
+ * reddens the first two cases; dropping the tool-call census reddens the
+ * third; leaving CRC-M18 ticked or in Phase 5 reddens the last.
+ */
+describe("CRC-M19: CRC-M18 is retired with its diff-budget script, and the census half stays", () => {
+  const repo = (p: string) => join(import.meta.dir, "..", p);
+
+  test("the diff-budget script and its suite are gone", () => {
+    expect(existsSync(repo("scripts/review-diff-subject.ts"))).toBe(false);
+    expect(existsSync(repo("test/review-diff-subject.test.ts"))).toBe(false);
+  });
+
+  test("the reading module no longer states coverage as n of m files read", async () => {
+    const mod = await import("../lib/review-execution-reading");
+    expect("reviewCoverage" in mod, "the coverage statement CRC-M18 named is still exported").toBe(false);
+    const r = reviewExecutionReading({
+      executionFileRaw: executionFile(["mcp__github__submit_pending_pull_request_review"]),
+      reviewsPosted: 1,
+      diffScope: { filesRead: 1, filesSeen: 2 },
+    });
+    expect(reviewReadingReport(r)).not.toContain("coverage:");
+  });
+
+  test("the tool-call census CRC-M13 needs is still computed and reported", () => {
+    const r = reviewExecutionReading({
+      executionFileRaw: executionFile(["Read", "Read", "mcp__github__submit_pending_pull_request_review"]),
+      reviewsPosted: 1,
+      diffScope: { filesRead: 1, filesSeen: 1 },
+    });
+    expect(r.toolCallsByName["Read"]).toBe(2);
+    expect(reviewReadingReport(r)).toContain("Read×2");
+  });
+
+  test("the spec carries CRC-M18 unticked and placed as not adopted, not in Phase 5", () => {
+    const spec = readFileSync(repo("specs/CODE-REVIEW-CONVERGENCE-SPEC.md"), "utf-8");
+    expect(spec).toMatch(/^- \[ \] CRC-M18:/m);
+    const row = (label: string) => spec.split("\n").find(l => l.startsWith(`| **${label}`)) ?? "";
+    expect(row("Not adopted — deliberate").split("|")[2]).toContain("CRC-M18");
+    expect(row("Phase 5").split("|")[2]).not.toContain("CRC-M18");
   });
 });

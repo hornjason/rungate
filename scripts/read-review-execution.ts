@@ -36,7 +36,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   REVIEW_UNMEASURED_EXIT,
-  reviewCoverage,
   reviewExecutionReading,
   reviewReadingReport,
 } from "../lib/review-execution-reading";
@@ -69,16 +68,6 @@ const reading = reviewExecutionReading({
 
 const report = reviewReadingReport(reading);
 console.log(report);
-
-// A review of part of the diff is a reading, and the part is on the run page,
-// not only in this log (#1934).
-const scope = reading.diffScope;
-if (reading.reading === "MEASURED" && scope !== null && scope.filesRead < scope.filesSeen) {
-  console.log(
-    `::warning title=Claude review covered part of the diff::coverage ${reviewCoverage(reading)} whole; ` +
-      "the rest were over the diff budget",
-  );
-}
 
 if (reading.reading === "UNMEASURED") {
   // A GitHub annotation, so the state is visible on the run page and not only

@@ -82,7 +82,7 @@ added. CRC-M18 is retired with the trial that proved it.
    reviewer's byte budget is still reviewed, with coverage stated as "n of m
    files read". The byte budget belonged to the trial, which pasted the diff
    into its prompt. The AI review reads files itself and has no such
-   ceiling. The diff-budget script kept for it, `scripts/review-diff-subject.ts`,
+   ceiling. The diff-budget script kept for it, scripts/review-diff-subject.ts (deleted in #2651),
    is deleted with it. If a measured miss on a large diff turns up, it is a
    new criterion with its own evidence.
 
