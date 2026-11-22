@@ -15,7 +15,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { PHASE_VALUE, parsePhaseHeadings, parsePlacementRows } from "../lib/spec-placement";
 import { parseCriteria } from "../lib/spec-evidence";
@@ -351,34 +351,42 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
   });
 
   /**
-   * SC-2625 is the engine's terminal condition and NOTHING can check it yet:
-   * no mechanism distinguishes a tool-made edit from a hand edit through the
-   * GitHub API. Raised three times in review against CLAUDE.md's "SCs
-   * without tests are wishes".
+   * SC-2625 is the engine's terminal condition. Until #2388 nothing could check
+   * it, and this case held it unticked: no mechanism told a tool-made edit from
+   * a hand edit through the GitHub API, and a behavioural test would have been
+   * one that cannot fail.
    *
-   * Writing a behavioural test would mean writing one that cannot fail,
-   * which `.claude/rules/checks-must-be-able-to-fail.md` refuses by name. So
-   * this binds the only property that IS checkable today and is the one that
-   * actually goes wrong: that the criterion stays declared-unmeasured until
-   * somebody builds the detector, rather than being quietly ticked.
+   * The detector is `scripts/hand-edits.ts`, and since #1722 the board job
+   * runs it on every push to main. So the property this binds moved with it:
+   * SC-2625 may be ticked only while that detector exists AND the job runs it.
+   * A tick that outlives its detector, or a job that stops taking the reading,
+   * is the wish this case was written against, arriving from the other side.
    *
-   * It is not decoration. It fails in both directions a wish would drift in:
-   * tick SC-2625 with no detector and it goes red; delete the generator's
-   * `REVIEW: unmatched` marker — the mechanical record that no registry
-   * pattern matches it — and it goes red. The marker is emitted by
-   * `scaffold . --fix`, not typed here, so it cannot be satisfied by writing
-   * a comment that says so.
+   * It fails in both directions a wish would drift in. Tick SC-2625 with the
+   * detector gone or unrun and it goes red. Delete the generator's
+   * `REVIEW: unmatched` marker, the mechanical record that no registry pattern
+   * matches it, and it goes red. The marker is emitted by `scaffold . --fix`,
+   * not typed here, so it cannot be satisfied by writing a comment that says so.
    */
-  test("SC-2625 is declared unmeasured, and cannot be ticked without a detector", () => {
+  test("SC-2625 is ticked only while its detector runs on every push to main", () => {
     const line = SPEC.split("\n").findIndex(l => l.includes("SC-2625:"));
     expect(line, "SC-2625 is the acceptance test and must be present").toBeGreaterThan(-1);
 
     const lines = SPEC.split("\n");
-    expect(
-      lines[line].startsWith("- [ ]"),
-      "SC-2625 is ticked, but no mechanism yet distinguishes a tool edit from a hand " +
-        "edit on the GitHub API. Build that detector (Stage D of ADR-009) before ticking it.",
-    ).toBe(true);
+    const job = readFileSync(join(ROOT, ".github/workflows/board-conformance.yml"), "utf-8")
+      .split("\n")
+      .filter(l => !/^\s*#/.test(l))
+      .join("\n");
+    const detectorRuns =
+      existsSync(join(ROOT, "scripts/hand-edits.ts")) && /^\s*bun scripts\/hand-edits\.ts /m.test(job);
+    if (lines[line].startsWith("- [x]")) {
+      expect(
+        detectorRuns,
+        "SC-2625 is ticked, but its detector is not taken on main: scripts/hand-edits.ts is " +
+          "missing, or .github/workflows/board-conformance.yml no longer runs it. Restore the " +
+          "reading, or untick the criterion.",
+      ).toBe(true);
+    }
 
     expect(
       lines[line + 1] ?? "",

@@ -106,4 +106,17 @@ jobs:
           if [ "$status" -ne 0 ]; then
             echo "::error title=Board conformance::board-conformance exited ${status}. Every reading it took is named in the log above, and a reading short of target is reported there separately from a reading it could not take. THIS RUN REPORTS AND GATES NOTHING — no pull request waits on it."
           fi
+          # SC-2625 (#1722): has anybody edited the payload's board by hand?
+          # Taken here and NOT added to board-conformance's own readings: the
+          # stage ladder runs that command inside the required `test` check,
+          # so one hand edit would block every merge. Here it reports and
+          # gates nothing, like the reading above. The prefix is the payload
+          # spec's `board.prefix`; test/board-conformance-job.test.ts binds
+          # the two. A run that is short names every hand edit in the log.
+          edits=0
+          bun scripts/hand-edits.ts --prefix Convergence --repo hornjason/rungate || edits=$?
+          if [ "$edits" -ne 0 ]; then
+            echo "::error title=Hand edits::hand-edits exited ${edits}. It names every board write a person made on the payload's issues since board.pipelineSince, or says why it could not read them. SC-2625 fails on any hand edit; a new run starts only by moving board.pipelineSince, with the reason recorded on #1722. THIS RUN REPORTS AND GATES NOTHING — no pull request waits on it."
+            [ "$status" -ne 0 ] || status=$edits
+          fi
           exit $status
