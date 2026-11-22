@@ -1761,7 +1761,6 @@ instance of it.
 - **CRC-H2** Risky code requires a human. There is no `CODEOWNERS` and no required approval, so nothing does.
 - **CRC-M16** Added 2026-11-12 (ADR-015, #1816). `AI_REVIEW_ROUND_CAP` in `lib/ai-review-rounds.ts` counts the reviewer's rounds; nothing reads what the author does after the round-three step-back.
 - **CRC-B11** Added 2026-11-22 (ADR-025, #2628, #1885). Each round is one reviewer invocation. Two Sonnet runs at the same commits agreed on 2 of the 6 defects they found between them, on 2026-11-22; three Haiku runs together found 9 of 11. #1885 is the same shape at five runs.
-- **CRC-B12** Added 2026-11-22 (ADR-025, #2628). The generated job passes the review action no `github_token`, so a consumer must install the Claude GitHub App with its whole permission set, write access to workflows included, read on 2026-11-22. The threads are already posted by a later step with `GITHUB_TOKEN`.
 - **CRC-B13** Added 2026-11-22 (ADR-025, #2628). No consumer document names the credentials the generated job resolves, who pays for each, or what a pull request costs. The audit's figure on 2026-11-22 was about $1.88 a pull request on Sonnet 5.
 
 ### Shipped since this audit was taken
@@ -1770,6 +1769,8 @@ A criterion the audit counted as remaining and that no longer is. Kept as a
 section rather than deleted: the analysis is the record of what the item cost
 and why the shape it shipped in is the right one, and the six states above are
 states of an UNTICKED box, so a ticked one belongs in none of them.
+
+- **CRC-B12** — **shipped by the pull request that closes #2649 (ADR-025 decision 3)**, and the open-item line is kept here as the record. It read: *Added 2026-11-22 (ADR-025, #2628). The generated job passes the review action no `github_token`, so a consumer must install the Claude GitHub App with its whole permission set, write access to workflows included, read on 2026-11-22. The threads are already posted by a later step with `GITHUB_TOKEN`.* What changed: the generated action step passes `github_token: ${{ secrets.GITHUB_TOKEN }}`, so the action skips the App token exchange, and the token reaches only as far as the job's own `permissions:` (contents read, id-token write, actions read, pull-requests write). The regenerated `.github/workflows/ai-review.yml` carries it.
 
 - **CRC-M19** — **shipped by the pull request that closes #2651 (ADR-025 decision 5)**, and the open-item line is kept here as the record. It read: *Added 2026-11-22 (ADR-025, #2628). CRC-M18 is ticked, and the budget it measured belonged to the trial reviewer deleted in #2627, which pasted the diff into its prompt. scripts/review-diff-subject.ts and the coverage half of `lib/review-execution-reading.ts` are still in the tree.* What changed: scripts/review-diff-subject.ts and its suite are deleted in #2651; `reviewCoverage` and the "n of m files read" statement are gone from `lib/review-execution-reading.ts` and `scripts/read-review-execution.ts`; CRC-M18 is unticked and placed under *Not adopted — deliberate*. The tool-call census CRC-M13 needs (`toolCallsByName`, `NO_TOOL_CALLS`) is kept, and so is the diff-scope gate, which nothing feeds now.
 - **CRC-B10** — **shipped by the pull request that closes #2647 (ADR-025 decision 1)**, and the open-item line is kept here as the record. It read: *Added 2026-11-22 (ADR-025, #2628). `AI_REVIEW_MODEL` in `lib/scaffold/ai-review-step.ts` names Sonnet 5. Replayed at the commits behind 11 known defects on 2026-11-22, it found 5 and then 3; the same prompt on Haiku 5.5 found 8, 8 and 8 (`docs/research/ai-review-audit.md`).* What changed: `AI_REVIEW_MODEL` is `claude-haiku-5-5`, this repository's config names no model so it follows the default, and the regenerated `.github/workflows/ai-review.yml` passes `--model claude-haiku-5-5`. A consumer's exact `ci.vertex.model` still wins.
@@ -3030,8 +3031,10 @@ Recorded because each one invalidates a naive reading of the criteria above.
       fingerprint: af4b2b34
 - [ ] CRC-B11: Each AI review round is three separate reviewer invocations, and the round's findings are their union with duplicates removed; no finding is dropped for being raised by one run.
       needs: test
-- [ ] CRC-B12: The generated AI review passes the job's own token to the review action, so a consumer runs it without installing the Claude GitHub App.
+- [x] CRC-B12: The generated AI review passes the job's own token to the review action, so a consumer runs it without installing the Claude GitHub App.
       needs: test
+      proved-by: test/ai-review-credentialed-job.test.ts "CRC-B12: the review action is handed the job's own token, so no Claude GitHub App is needed"
+      fingerprint: ac7c066d
 - [ ] CRC-B13: docs/guides/AI-REVIEW.md states every credential the generated job resolves, who pays for each, the per-pull-request cost on the default model, and that a tree with no credential spends nothing.
       needs: test
 - [x] CRC-M19: CRC-M18 is retired, and the diff-budget script it named is deleted. The reading module CRC-M13 needs is kept.

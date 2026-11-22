@@ -11593,6 +11593,13 @@ export function buildReviewRunStep(
     `    use_vertex: \${{ ${modeIs("vertex")} }}`,
     `    claude_code_oauth_token: ${credential("oauth", "CLAUDE_CODE_OAUTH_TOKEN")}`,
     `    anthropic_api_key: ${credential("api-key", "ANTHROPIC_API_KEY")}`,
+    // CRC-B12 (#2649, ADR-025 decision 3): the job's own token. Without it the
+    // action exchanges the job's OIDC token for a Claude GitHub App token, so
+    // a consumer had to install the App with its whole permission set. Given
+    // one, it skips that exchange, and the token reaches only as far as this
+    // job's `permissions:`. The reviewer posts nothing itself; the threads
+    // step already posts with GITHUB_TOKEN.
+    `    github_token: \${{ secrets.GITHUB_TOKEN }}`,
     `    claude_args: ${aiReviewClaudeArgs(vertex)}`,
     `    prompt: |`,
     ...buildReviewPrompt().trimEnd().split("\n").map(l => (l ? `      ${l}` : "")),

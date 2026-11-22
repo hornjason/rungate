@@ -505,7 +505,12 @@ const UNCLAIMED_RATCHET = 150;
 // AI review defaults to Haiku 5.5 unless the consumer names an exact model, a
 // reading of the generated workflow that no registered pattern expresses; the
 // `CRC-B10` describe in test/ai-review-model-alias.test.ts names it (2026-11-22).
-const CLAIMED_UNBINDABLE = 206;
+// 207: CRC-B12 (#2649) ticked by `sync-sc-status --only CRC-B12` — the generated
+// review action is handed the job's own token, so no Claude GitHub App is
+// needed, a reading of the generated workflow that no registered pattern
+// expresses; the `CRC-B12` describe in test/ai-review-credentialed-job.test.ts
+// names it (2026-11-22).
+const CLAIMED_UNBINDABLE = 207;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
