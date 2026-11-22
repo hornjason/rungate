@@ -55,6 +55,7 @@ import {
   buildReviewRunScript,
   vertexCiConfig,
   type VertexCiDecision,
+  AI_REVIEW_RUNS,
 } from "../lib/scaffold/ai-review-step";
 import { stubBunxAbsent } from "./helpers/stub-bunx";
 
@@ -176,8 +177,9 @@ describe("AC-3: the generated workflow carries the declared budget", () => {
     const args = (doc.jobs[AI_REVIEW_JOB].steps as any[])
       .map(s => String(s?.with?.claude_args ?? ""))
       .filter(a => a.includes("--max-turns"));
-    expect(args.length, "no step hands the action a turn budget").toBe(1);
-    expect(args[0]).toContain(`--max-turns ${AI_REVIEW_MAX_TURNS}`);
+    // One per run (#2667), and every one is the constant's.
+    expect(args.length, "the steps handing the action a turn budget are not one per run").toBe(AI_REVIEW_RUNS);
+    for (const a of args) expect(a).toContain(`--max-turns ${AI_REVIEW_MAX_TURNS}`);
   });
 });
 
@@ -231,10 +233,15 @@ describe("AC-5: the committed reviewer workflow runs on the declared budget (#19
 
     expect(
       budgets.length,
-      `no --max-turns outside a comment in the committed ${AI_REVIEW_WORKFLOW_FILE} — this case would pass ` +
-        "vacuously, and a reviewer with no turn budget is a job with no bound",
-    ).toBe(1);
+      `the committed ${AI_REVIEW_WORKFLOW_FILE} does not carry one --max-turns per run outside a comment — ` +
+        "with none this case would pass vacuously, and a reviewer with no turn budget is a job with no bound",
+    ).toBe(AI_REVIEW_RUNS);
 
+    // Every run's budget, not only the first (#2667).
+    expect(
+      new Set(budgets).size,
+      `the runs in the committed ${AI_REVIEW_WORKFLOW_FILE} disagree on their budget: ${budgets.join(", ")}`,
+    ).toBe(1);
     expect(
       budgets[0],
       `the committed ${AI_REVIEW_WORKFLOW_FILE} runs on ${budgets[0]} turns and AI_REVIEW_MAX_TURNS says ` +

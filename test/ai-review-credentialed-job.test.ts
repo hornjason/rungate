@@ -64,6 +64,7 @@ import {
   modelAliasViolations,
   vertexCiConfig,
   type VertexCiDecision,
+  AI_REVIEW_RUNS,
 } from "../lib/scaffold/ai-review-step";
 import { CLAUDE_CODE_ACTION, CLAUDE_CODE_ACTION_SHA } from "../lib/claude-code-action";
 import { GOOGLE_AUTH_ACTION, GOOGLE_AUTH_ACTION_SHA } from "../lib/google-auth-action";
@@ -249,11 +250,13 @@ describe("AC-1: the job authenticates vertex and runs the review, both SHA-pinne
     const hits = generated()
       .split("\n")
       .filter(l => marker.test(l));
+    // One auth step for the job; each run (#2667) carries its own pinned
+    // action line and use_vertex input. At one run that is the AC's three.
     expect(
       hits.length,
-      `expected one pinned auth line, one pinned action line and one use_vertex ` +
-        `input:\n${hits.join("\n")}`,
-    ).toBe(3);
+      `expected one pinned auth line, and one pinned action line and one use_vertex ` +
+        `input for each of ${AI_REVIEW_RUNS} run(s):\n${hits.join("\n")}`,
+    ).toBe(1 + 2 * AI_REVIEW_RUNS);
   });
 });
 
@@ -304,11 +307,11 @@ describe("AC-2/AC-3: each resolved mode supplies its own repository secret", () 
       const lines = generated()
         .split("\n")
         .filter(l => l.includes(`secrets.${secret}`));
-      // One in the auth step's env:, and one in the action's with:. Vertex is
-      // not in this list any more — it resolves from ci.vertex, not from a
-      // secret, and the job holds no key at all (#677 AC-15).
+      // One in the auth step's env:, and one in each run's with: (#2667).
+      // Vertex is not in this list any more — it resolves from ci.vertex, not
+      // from a secret, and the job holds no key at all (#677 AC-15).
       expect(lines.length, `${secret} is read on ${lines.length} lines:\n${lines.join("\n")}`).toBe(
-        2,
+        1 + AI_REVIEW_RUNS,
       );
     }
   });
@@ -359,8 +362,9 @@ describe("AC-6: exactly one pinned model identifier, declared once in the module
     expect(String(run.with?.claude_args ?? ""), "the model is not handed to the action").toContain(
       `--model ${AI_REVIEW_MODEL}`,
     );
+    // Once per run (#2667): each run is handed the model, and nothing else is.
     const hits = generated().split(AI_REVIEW_MODEL).length - 1;
-    expect(hits, `${AI_REVIEW_MODEL} appears ${hits} times in the generated workflow`).toBe(1);
+    expect(hits, `${AI_REVIEW_MODEL} appears ${hits} times in the generated workflow`).toBe(AI_REVIEW_RUNS);
   });
 
   test("AC-6: the identifier is assigned exactly once in this module", () => {

@@ -80,6 +80,7 @@ import {
   GOOGLE_AUTH_ACTION_VERSION,
   googleAuthActionRef,
 } from "../lib/google-auth-action";
+import { AI_REVIEW_RUNS } from "../lib/scaffold/ai-review-step";
 import {
   CLAUDE_CODE_ACTION as CLAUDE_CODE_ACTION_NAME,
   CLAUDE_CODE_ACTION_SHA,
@@ -408,10 +409,13 @@ describe("#689 AC-4: finding nothing is not agreement, and matching by hand is n
   test("AC-4: the per-file extractor reads the line, the comment and the position", () => {
     // The instrument. Every case above is a claim about what this returned.
     const found = actionPinsNamedByWorkflow(readFileSync(join(REPO_ROOT, ACTION_PIN_WORKFLOW), "utf-8"), ACTION_PIN_WORKFLOW);
-    expect(found.length).toBe(1);
-    expect(found[0].sha).toBe(CLAUDE_CODE_ACTION_SHA);
-    expect(found[0].comment).toBe(CLAUDE_CODE_ACTION_VERSION);
-    expect(found[0].line).toBeGreaterThan(0);
+    // One position per run (#2667), each read in full.
+    expect(found.length).toBe(AI_REVIEW_RUNS);
+    for (const f of found) {
+      expect(f.sha).toBe(CLAUDE_CODE_ACTION_SHA);
+      expect(f.comment).toBe(CLAUDE_CODE_ACTION_VERSION);
+      expect(f.line).toBeGreaterThan(0);
+    }
 
     // A file that names the action in prose is not a pin — a commented-out
     // step and a sentence about the action must not be read as positions.
