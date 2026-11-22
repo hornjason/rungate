@@ -395,8 +395,9 @@ holds the decisions and the decomposition.
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2804: A pull request that removes a line from `templates/agent-briefs/<name>.md` runs that brief's evals, and aditi and discovery have at least one eval each
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus pressure-density and dangling-path lints on a consumer, labels each finding consumer-owned or harness-owned, and writes harness-owned findings as `reporting-upstream.md` bodies without filing them
+- [x] SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus pressure-density and dangling-path lints on a consumer, labels each finding consumer-owned or harness-owned, and writes harness-owned findings as `reporting-upstream.md` bodies without filing them
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      proved-by: test/prompt-audit-command.test.ts "SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus pressure-density and dangling-path lints on a consumer, labels each finding consumer-owned or harness-owned, and writes harness-owned findings as reporting-upstream.md bodies without filing them"
 
 ## Proving it
 

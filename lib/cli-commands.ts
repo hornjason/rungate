@@ -108,6 +108,14 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     usage: "rungate create-success [--owner <name>] [--force]",
     projectRootFlag: true,
   },
+  // #2606 / ADR-024 decision 7: the consumer-side audit. It drafts upstream
+  // reports and never files one, so it needs no repository argument.
+  "prompt-audit": {
+    script: "scripts/prompt-audit.ts",
+    summary: "Lint what this project's agents load, sort findings by owner, and draft rungate's as upstream reports",
+    usage: "rungate prompt-audit [--out <dir>]",
+    projectRootFlag: true,
+  },
   "create-sc": {
     script: "scripts/create-sc.ts",
     summary: "Generate a matchable success-criterion line from a registered pattern",
