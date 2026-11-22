@@ -3308,6 +3308,12 @@ export const AI_REVIEW_PERSIST_STEP_NAME = "Persist this round's findings to the
  * read-only whatever this workflow declares, degrades with a warning instead:
  * the annotation still carries the review, and reddening every fork for
  * something a contributor cannot fix would teach everyone to ignore the red.
+ *
+ * One exception (#2666): when the pinned package has no `ai-review-threads`
+ * command at all, the step fails whether or not there were comments. Nothing
+ * read the payload, so nothing can say there were none, and that broken tool
+ * reading green is the defect #2666 removed. `buildThreadsScript` names the
+ * two causes.
  */
 export const AI_REVIEW_THREADS_STEP_ID = "ai-review-threads";
 
