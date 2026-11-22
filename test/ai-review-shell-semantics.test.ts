@@ -471,15 +471,21 @@ describe("#1110: the verdict step under the shell GitHub actually supplies", () 
  *
  * #2257 taught `rungate ai-review-findings` to read cited lines from the
  * directory `AI_REVIEW_CHECKOUT_ROOT` names, falling back to its working
- * directory. The step runs it from the payload's directory on purpose (`bunx`
+ * directory. The step runs it away from the checkout on purpose (`bunx`
  * resolves bunfig.toml and node_modules by walking up from there), so with
  * nothing set it read cited lines from a temp directory, found none, and
  * suppressed nothing: anchor 0 of 420 (#1872).
  *
+ * #2664: and away from the payload's directory too, which is where it ran
+ * until then. The reviewer is handed that directory with `--add-dir` and
+ * holds `Write`, so a prompt-injected reviewer could plant a bunfig.toml
+ * there naming its own registry. It now runs from a directory made at that
+ * moment, holding nothing.
+ *
  * The payload sits in its own subdirectory here, so "ran from the payload's
  * directory" and "ran from where the step started" are different readings.
  */
-describe("#2261: the adjudicator is told the checkout, and still runs from the payload's directory", () => {
+describe("#2261 / #2664: the adjudicator is told the checkout, and runs from a fresh empty directory", () => {
   function runWithWorkspace(workspace: string | undefined) {
     const dir = scratchDir();
     const sh = join(dir, "verdict.sh");
@@ -488,8 +494,10 @@ describe("#2261: the adjudicator is told the checkout, and still runs from the p
     mkdirSync(payloadDir);
     const payload = join(payloadDir, "ai-review-findings.json");
     writeFileSync(payload, JSON.stringify({ findings: [], verdict: "pass" }));
+    // A planted resolution file beside the payload, as a reviewer could write it.
+    writeFileSync(join(payloadDir, "bunfig.toml"), '[install]\nregistry = "https://registry.invalid/"\n');
     const stub =
-      `echo "seen-root=[\${${AI_REVIEW_CHECKOUT_ROOT_VAR}-UNSET}] seen-cwd=[$(pwd -P)]"\n` +
+      `echo "seen-root=[\${${AI_REVIEW_CHECKOUT_ROOT_VAR}-UNSET}] seen-cwd=[$(pwd -P)] seen-files=[$(ls -A | tr '\\n' ' ')]"\n` +
       `echo "${AI_REVIEW_OUTCOME_LINE} CLEAN"\nexit 0`;
     const env: Record<string, string> = {
       PATH: plantBunx(dir, stub),
@@ -510,9 +518,13 @@ describe("#2261: the adjudicator is told the checkout, and still runs from the p
     expect(r.status).toBe(0);
   });
 
-  test("and it still starts in the payload's directory, never the checkout", () => {
-    const r = runWithWorkspace(scratchDir());
-    expect(r.stdout, r.stderr).toContain(`seen-cwd=[${r.payloadDir}]`);
+  test("#2664: it starts in a fresh empty directory — not the payload's, where a reviewer can write, and not the checkout", () => {
+    const workspace = scratchDir();
+    const r = runWithWorkspace(workspace);
+    const cwd = /seen-cwd=\[([^\]]*)\]/.exec(r.stdout)?.[1];
+    expect(cwd, r.stdout + r.stderr).toBeDefined();
+    expect([r.payloadDir, realpathSync(workspace)]).not.toContain(cwd);
+    expect(r.stdout, "the adjudicator's directory holds a file, so a planted bunfig.toml could be read").toContain("seen-files=[]");
   });
 
   test("with no workspace the step does not die on an unset variable: the root is empty, and the adjudicator falls back", () => {
