@@ -106,6 +106,40 @@ describe("#2648: the drafts merge into their union", () => {
     expect(report.join("\n")).toContain("draft d3: UNREADABLE");
   });
 
+  // PR #2656 round 7: a round that planned three runs and heard from fewer
+  // may establish a block, never a pass. One silent run already reads
+  // UNMEASURED today; three runs must not turn two silent ones into a pass.
+  test("a partial round with nothing that blocks writes no payload, and says why", () => {
+    for (const listed of [[], [finding("lib/a.ts", "One", "low")]]) {
+      const m = mergeDrafts([
+        { path: "d1", text: draft(listed, "PASS") },
+        { path: "d2", text: null },
+        { path: "d3", text: "{not json" },
+      ]);
+      expect(m.payload).toBeNull();
+      expect(mergeReport(m)[0]).toContain("no payload written");
+      expect(mergeReport(m)[0]).toContain("1 of 3 drafts parsed and none of them blocks");
+    }
+  });
+
+  test("a partial round with a blocking finding still writes the union, so the block stands", () => {
+    const m = mergeDrafts([
+      { path: "d1", text: draft([finding("lib/a.ts", "One", "low")], "PASS") },
+      { path: "d2", text: draft([finding("lib/b.ts", "Two", "critical")]) },
+      { path: "d3", text: null },
+    ]);
+    expect((m.payload!.findings as { file: string }[]).map(x => x.file)).toEqual(["lib/a.ts", "lib/b.ts"]);
+  });
+
+  test("a full round that blocks nothing writes its payload — every planned run was heard", () => {
+    const m = mergeDrafts([
+      { path: "d1", text: draft([], "PASS") },
+      { path: "d2", text: draft([finding("lib/a.ts", "One", "low")], "PASS") },
+    ]);
+    expect(m.payload).not.toBeNull();
+    expect(m.payload!.verdict).toBe("PASS");
+  });
+
   test("no draft parsed: no payload, so the job's no-payload routes decide the round", () => {
     const m = mergeDrafts([{ path: "d1", text: null }, { path: "d2", text: "[]" }]);
     expect(m.payload).toBeNull();
@@ -257,14 +291,23 @@ describe("#2648: the merge's contract, over generated drafts", () => {
 
   test("400 generated rounds keep every rule of the union", () => {
     let collisions = 0;
+    let withheld = 0;
     for (let seed = 1; seed <= 400; seed++) {
       const r = prng(seed);
-      const drafts = Array.from({ length: 1 + Math.floor(r() * 3) }, () => genDraft(r));
-      const m = mergeDrafts(drafts.map((d, i) => ({ path: `d${i}`, text: draft(d) })));
-      const merged = m.payload!.findings as Record<string, unknown>[];
+      const planned = 1 + Math.floor(r() * 3);
+      const all = Array.from({ length: planned }, () => (r() < 0.2 ? null : genDraft(r)));
+      const drafts = all.filter((d): d is ReturnType<typeof genDraft> => d !== null);
+      const m = mergeDrafts(all.map((d, i) => ({ path: `d${i}`, text: d === null ? null : draft(d) })));
       const at = `seed ${seed}`;
+      const blocksSomewhere = drafts.flat().some(x => severityBlocks(x.severity) === true);
+      if (drafts.length === 0 || (drafts.length < planned && !blocksSomewhere)) {
+        expect(m.payload, `${at}: ${drafts.length} of ${planned} heard and nothing blocks — no payload`).toBeNull();
+        withheld += drafts.length > 0 ? 1 : 0;
+        continue;
+      }
+      const merged = m.payload!.findings as Record<string, unknown>[];
 
-      if (drafts.length === 1) expect(merged, `${at}: one draft merges to itself`).toEqual(drafts[0]);
+      if (drafts.length === 1 && planned === 1) expect(merged, `${at}: one draft merges to itself`).toEqual(drafts[0]);
 
       const inputs = new Set(drafts.flat().map(x => JSON.stringify(x)));
       for (const x of merged) expect(inputs.has(JSON.stringify(x)), `${at}: a merged finding no draft listed`).toBe(true);
@@ -291,6 +334,7 @@ describe("#2648: the merge's contract, over generated drafts", () => {
       expect(blockingOut, `${at}: every identity some run blocked on still blocks`).toEqual(blockingIn);
     }
     expect(collisions, "the generator produced no cross-draft duplicates, so the strictness rule was never exercised").toBeGreaterThan(100);
+    expect(withheld, "no generated round was partial and blocked nothing, so the partial rule was never exercised").toBeGreaterThan(5);
   });
 });
 
@@ -347,6 +391,20 @@ describe("#2648: rungate ai-review-merge-drafts", () => {
       expect(r.stdout).not.toContain("ABSENT");
     } finally {
       chmodSync(locked, 0o700);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a partial round that blocks nothing: exits 0 and writes no payload", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-merge-drafts-"));
+    try {
+      writeFileSync(join(dir, "d1.json"), draft([], "PASS"));
+      const out = join(dir, "payload.json");
+      const r = run(["--out", out, join(dir, "d1.json"), join(dir, "d2.json"), join(dir, "d3.json")]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("1 of 3 drafts parsed and none of them blocks");
+      expect(existsSync(out)).toBe(false);
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });

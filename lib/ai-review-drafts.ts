@@ -36,11 +36,21 @@
  *
  * ## What a draft that did not parse means
  *
- * Absent and unreadable drafts are NAMED, never skipped silently, and the
- * union is taken over the drafts that parsed. A round with at least one
- * parsed draft has a payload; a round with none has no payload at all, so
- * the job's existing no-payload routes decide it exactly as they did when a
- * round was one run. The counts are always printed, so "2 of 3" is visible.
+ * Absent and unreadable drafts are NAMED, never skipped silently. A round
+ * that heard from fewer runs than it planned may establish a BLOCK, never a
+ * pass (PR #2656 round 7):
+ *
+ * - every draft parsed: the union is the payload, whatever it holds;
+ * - some did not, and a parsed draft carries a blocking finding: the union of
+ *   the parsed drafts is the payload, because a finding one run raised blocks
+ *   however many runs were heard;
+ * - some did not, and nothing parsed blocks: NO payload, so the job's
+ *   existing no-payload routes read the round UNMEASURED — exactly what one
+ *   silent run reads today. Writing the union here would turn two silent
+ *   runs into a measured pass, a check passing on review that never ran.
+ *
+ * No draft parsed is the last case with nothing at all. The counts are
+ * always printed, so "1 of 3" is visible either way.
  */
 
 import {
@@ -64,8 +74,10 @@ export interface DraftReading {
 }
 
 export interface MergedDrafts {
-  /** The union payload, or `null` when no draft parsed. */
+  /** The union payload, or `null` when it is withheld — see `withheld`. */
   payload: Record<string, unknown> | null;
+  /** Why no payload was written, for the log. Present exactly when `payload` is `null`. */
+  withheld?: string;
   drafts: DraftReading[];
   /** Findings in the union. */
   kept: number;
@@ -144,7 +156,9 @@ export function mergeDrafts(inputs: readonly DraftInput[]): MergedDrafts {
   const parsed = inputs.map(parseDraft);
   const drafts = parsed.map(p => p.reading);
   const objs = parsed.map(p => p.obj).filter((o): o is Record<string, unknown> => o !== null);
-  if (objs.length === 0) return { payload: null, drafts, kept: 0, duplicates: 0 };
+  if (objs.length === 0) {
+    return { payload: null, withheld: "no draft parsed", drafts, kept: 0, duplicates: 0 };
+  }
 
   // Identity → the indices in `kept` holding its occurrences, so the union
   // holds as many as the most any one draft listed, and a stricter copy can
@@ -179,6 +193,24 @@ export function mergeDrafts(inputs: readonly DraftInput[]): MergedDrafts {
     }
   }
 
+  // A partial round establishes a block or nothing. `severityBlocks` is the
+  // one answer to whether a finding blocks; a finding that is not an object
+  // cannot block, and the adjudicator would refuse it anyway.
+  const blocks = kept.some(
+    f => f !== null && typeof f === "object" && severityBlocks((f as Record<string, unknown>)[AI_REVIEW_FINDING_FIELDS.severity]) === true,
+  );
+  if (objs.length < inputs.length && !blocks) {
+    return {
+      payload: null,
+      withheld:
+        `${objs.length} of ${inputs.length} drafts parsed and none of them blocks, ` +
+        "and a pass is never measured from fewer runs than the round planned",
+      drafts,
+      kept: kept.length,
+      duplicates,
+    };
+  }
+
   // The strictest verdict word any parsed draft carried. The adjudicator
   // derives the verdict from severities and reads this word only to report a
   // disagreement, so this keeps that report meaningful rather than deciding.
@@ -207,7 +239,7 @@ export function mergeReport(m: MergedDrafts): string[] {
   const head =
     `drafts: ${parsedCount} of ${m.drafts.length} parsed; ` +
     (m.payload === null
-      ? "no payload written, so the round is decided by the no-payload routes"
+      ? `no payload written: ${m.withheld}, so the round is decided by the no-payload routes`
       : `${m.kept} finding(s) kept, ${m.duplicates} duplicate(s) removed`);
   const rest = m.drafts
     .filter(d => d.status !== "parsed")
