@@ -675,6 +675,27 @@ export function headroomWarning(reading: ConcurrentLoadReading): string {
 // to keep the remedy correct, and the launch surface is no longer a thing
 // this script refuses separately.
 
+/**
+ * Whether a reading's peak is over its budget: the ONE comparison, against
+ * `ceiling(budget)`. This script's own refusal and the conformity test
+ * rungate generates into consumers (#2599) both ask it, so they cannot
+ * disagree about where the line is.
+ */
+export function overPeakBudget(reading: ConcurrentLoadReading): boolean {
+  return reading.peakBytes > ceiling(reading.budgetBytes);
+}
+
+/**
+ * Whether an error from the measurement means the tree could not be read: the
+ * measurement's own `SurfaceUnmeasured`, or a file-system error from one of
+ * its reads (a rule symlinked to nothing, a rule the user cannot read). Any
+ * other error is a defect in the measurement. One predicate, so the scaffold's
+ * report (#2597) and the generated conformity test (#2599) classify alike.
+ */
+export function isSurfaceUnreadable(e: unknown): e is Error {
+  return e instanceof SurfaceUnmeasured || (e instanceof Error && "syscall" in e && "code" in e);
+}
+
 /** How many of the largest launch files the report names (#2597). */
 export const SURFACE_REPORT_LARGEST = 3;
 
@@ -848,7 +869,7 @@ function main(argv: string[]): number {
   // than adding a second test below it, for the same reason: a floor and a
   // ceiling over one measurement are two deciders, and the stronger one would
   // mask every mutation of the weaker.
-  if (peak.peakBytes > ceiling(peak.budgetBytes)) {
+  if (overPeakBudget(peak)) {
     console.error("");
     console.error(overPeakReport(peak));
     return REFUSE_EXIT;
