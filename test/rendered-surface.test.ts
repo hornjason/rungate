@@ -23,6 +23,12 @@
  * rendered AGENTS.md does not have. Building this lint found a second one,
  * #2621 — three briefs sent a monolith consumer's agent to
  * `.claude/rungate/config.json`, a file it does not have.
+ *
+ * Covers SC-2801 (RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md) as well.
+ *
+ * #2602: no rendered file carries an unexpanded `${…}`, the brief templates'
+ * test-only marker, or a numbered list that skips — the three #2567 shipped —
+ * and the SC-354 case edits a copy of the templates, never the shipped ones.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -41,6 +47,7 @@ import {
   lintRenderedTree,
   readRenderedSurface,
   readTargets,
+  templateArtifacts,
   type RenderedSurface,
   type SurfaceLint,
 } from "../lib/surface-lint";
@@ -240,5 +247,53 @@ describe("SC-2800: every file, heading or table a rendered brief or rule tells i
     const text = "Name a path with its directory (`lib/scaffold/emit.ts`), not its bare name.\n\n```\nRead `docs/example-only.md`\n```";
     const root = plantedCopy(rendered[0].root, ".claude/rules/agent-principles.md", text);
     expect(lintRenderedTree(root, [danglingReadTargets()])).toEqual([]);
+  });
+});
+
+describe("SC-2801: no rendered file carries an unexpanded template variable, the test-only marker, or a numbered list that skips", () => {
+  const lint = templateArtifacts();
+  const findingsFor = (rel: string, text: string) => lintRenderedTree(plantedCopy(rendered[0].root, rel, text), [lint]);
+
+  test("both fixture consumers render clean, and the registry runs the lint", () => {
+    for (const r of rendered) expect(lintRenderedTree(r.root, [lint]), r.consumer.name).toEqual([]);
+    expect(SURFACE_LINTS.map(l => l.name)).toContain("template-artifact");
+  });
+
+  test("an unexpanded variable is a finding, bare or in inline code; one in a fenced example is not", () => {
+    for (const line of ["The source lives in ${SOURCE_DIRS}.", "Read `${CONFIG_FILE}` and check the pages field."]) {
+      const f = findingsFor(".claude/agents/marcus.md", line);
+      expect(f.map(x => x.message), line).toHaveLength(1);
+      expect(f[0].message, line).toContain("a template variable the render never filled");
+    }
+    expect(findingsFor(".claude/agents/marcus.md", "```bash\necho \"${HOME}\"\n```")).toEqual([]);
+  });
+
+  test("the test-only marker is a finding wherever it lands", () => {
+    const f = findingsFor(".claude/agents/marcus.md", "## CANARY_MARKER_FOR_SC354\n\nThis line verifies template updates propagate.");
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatchObject({ lint: "template-artifact", file: ".claude/agents/marcus.md" });
+    expect(f[0].message).toContain("CANARY_MARKER_FOR_SC354");
+  });
+
+  test("a list numbered 1, 3 is a finding; restarts, all-1 lists and continuation lines are not", () => {
+    const skip = findingsFor(".claude/agents/rook.md", "## Steps\n\n1. Read the diff.\n3. Report.");
+    expect(skip.map(f => f.message)).toEqual(["line " + (readFileSync(join(rendered[0].root, ".claude/agents/rook.md"), "utf-8").split("\n").length + 4) + " numbers a list item 3 straight after 1"]);
+    for (const ok of [
+      "## A\n\n1. one\n1. two\n1. three",
+      "## B\n\n1. one\n   continued here\n\n2. two\n   - a sub point\n3. three",
+      "## C\n\n1. one\n2. two\n\nA paragraph between lists.\n\n1. again\n2. and again",
+      // A paragraph ends a list, so the next one is new, whatever it starts at.
+      "## D\n\n1. one\n2. two\n\nSteps four to six run after review:\n\n4. four\n5. five",
+    ]) {
+      expect(findingsFor(".claude/agents/rook.md", ok), ok).toEqual([]);
+    }
+  });
+
+  test("the SC-354 case edits a copy of the templates, never the shipped ones", () => {
+    const source = readFileSync(join(ROOT, "test", "agent-brief-template.test.ts"), "utf-8");
+    expect(source).toContain("generateAgentBriefsStep(OUTPUT, [], { templatesDir: copy })");
+    expect(source).toMatch(/const copy = mkdtempSync\(/);
+    // Nothing in that file writes into the shipped template directory.
+    expect(source).not.toMatch(/writeFileSync\(\s*(?:shipped|join\(\s*TEMPLATES_DIR)/);
   });
 });
