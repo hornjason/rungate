@@ -1,4 +1,4 @@
-# generated-sha: dc00d20b467be822
+# generated-sha: 89cc8390a9ad7230
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -4139,8 +4139,13 @@ jobs:
           # `run:` is `bash -e`, so the assignment consumes its own status with a
           # top-level `||` — see buildThreadsScript. Without it the step aborts
           # here and the version-skew branch below never runs.
+          #
+          # From a directory made at this moment, not the checkout (#2664): `bunx`
+          # resolves bunfig.toml by walking up from where it runs, and this step
+          # holds a token that can write. The checkout is named instead, so the
+          # command still reads the cited lines it keys repeats by (#2669).
           threads_code=0
-          threads_out="$(GITHUB_TOKEN="${AI_REVIEW_THREADS_TOKEN}" bunx rungate@0.8.45 ai-review-threads \
+          threads_out="$(cd "$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && AI_REVIEW_CHECKOUT_ROOT="${GITHUB_WORKSPACE:-}" GITHUB_TOKEN="${AI_REVIEW_THREADS_TOKEN}" bunx rungate@0.8.45 ai-review-threads \
             "${AI_REVIEW_FINDINGS_PATH}" \
             --repo "${AI_REVIEW_THREADS_REPO}" \
             --pr "${AI_REVIEW_THREADS_PR}" \

@@ -30,10 +30,11 @@ import {
 } from "../lib/ai-review-threads";
 import type { AiReviewFindingsReading } from "../lib/scaffold/ai-review-findings";
 import { threadBody } from "../lib/scaffold/ai-review-findings";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
+  AI_REVIEW_CHECKOUT_ROOT_VAR,
   AI_REVIEW_FORK_VAR,
   AI_REVIEW_THREADS_STEP_ID,
   buildThreadsScript,
@@ -662,6 +663,68 @@ describe("#1992: no detail line reaches the workflow-command channel unescaped",
     const out = new TextDecoder().decode(r.stdout);
     expect(out, "the warning was never printed, so nothing was tested").toContain("::warning title=AI review threads::");
     expect(out.split("\n").some(l => l.startsWith("::notice::forged"))).toBe(false);
+  });
+});
+
+/**
+ * #2664: the poster holds a token that can write, and `bunx` resolves
+ * bunfig.toml, .npmrc and package.json by walking up from where it runs. So
+ * it must not run in the checkout, which the branch under review wrote. The
+ * AI review on #2668 found it still did. Driven, not grepped: the planted
+ * `bunx` reports where it ran, what that directory held, and which checkout
+ * it was told to read.
+ */
+describe("#2664: the generated threads step runs bunx from a fresh empty directory", () => {
+  test("not the checkout, nothing in it, and the checkout named for the cited lines", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-threads-cwd-"));
+    try {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      writeFileSync(
+        join(bin, "bunx"),
+        `#!/bin/sh\necho "cwd=$(pwd -P)"\necho "seen-files=[$(ls -A)]"\necho "root=$${AI_REVIEW_CHECKOUT_ROOT_VAR}"\nexit 0\n`,
+      );
+      chmodSync(join(bin, "bunx"), 0o755);
+      // The checkout carries what a branch could commit: a bunfig.toml naming
+      // its own registry. Run from here, bunx would read it.
+      const workspace = join(dir, "workspace");
+      mkdirSync(workspace);
+      writeFileSync(join(workspace, "bunfig.toml"), '[install]\nregistry = "https://registry.invalid/"\n');
+      const runnerTemp = join(dir, "runner-temp");
+      mkdirSync(runnerTemp);
+      const findings = join(runnerTemp, "findings.json");
+      writeFileSync(findings, "{}");
+      const script = join(dir, "threads.sh");
+      writeFileSync(script, buildThreadsScript("0.8.21"));
+      const r = Bun.spawnSync(["bash", "-e", script], {
+        cwd: workspace,
+        env: {
+          PATH: `${bin}:/usr/bin:/bin`,
+          GITHUB_WORKSPACE: workspace,
+          RUNNER_TEMP: runnerTemp,
+          AI_REVIEW_THREADS_PR: "7",
+          AI_REVIEW_FINDINGS_PATH: findings,
+          AI_REVIEW_THREADS_REPO: "o/r",
+          AI_REVIEW_THREADS_SHA: "abc",
+          AI_REVIEW_THREADS_TOKEN: "t",
+          AI_REVIEW_CHANGED_FILES_PATH: join(runnerTemp, "changed.txt"),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = new TextDecoder().decode(r.stdout);
+      const cwd = /^cwd=(.*)$/m.exec(out)?.[1];
+      expect(cwd, `the planted bunx never ran:\n${out}`).toBeDefined();
+      expect(cwd!, "the poster ran bunx in the checkout, where the branch's bunfig.toml decides the registry").not.toBe(
+        realpathSync(workspace),
+      );
+      expect(cwd!, `the poster ran from ${cwd}, which is not a directory made for it`).toMatch(/\/rungate-bunx\.[A-Za-z0-9]+$/);
+      expect(out, "the directory bunx ran from held files").toContain("seen-files=[]");
+      expect(out, "the poster was not told where the checkout is, so it reads no cited line").toContain(`root=${workspace}`);
+      expect(r.exitCode).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -3397,8 +3397,13 @@ export function buildThreadsScript(version: string): string {
     `# \`run:\` is \`bash -e\`, so the assignment consumes its own status with a`,
     `# top-level \`||\` — see buildThreadsScript. Without it the step aborts`,
     `# here and the version-skew branch below never runs.`,
+    `#`,
+    `# From a directory made at this moment, not the checkout (#2664): \`bunx\``,
+    `# resolves bunfig.toml by walking up from where it runs, and this step`,
+    `# holds a token that can write. The checkout is named instead, so the`,
+    `# command still reads the cited lines it keys repeats by (#2669).`,
     `threads_code=0`,
-    `threads_out="$(GITHUB_TOKEN="\${${AI_REVIEW_THREADS_TOKEN_VAR}}" ${poster} \\`,
+    `threads_out="$(${AI_REVIEW_FRESH_CWD} && ${AI_REVIEW_CHECKOUT_ROOT_VAR}="\${GITHUB_WORKSPACE:-}" GITHUB_TOKEN="\${${AI_REVIEW_THREADS_TOKEN_VAR}}" ${poster} \\`,
     `  "\${${AI_REVIEW_FINDINGS_PATH_VAR}}" \\`,
     `  --repo "\${${AI_REVIEW_THREADS_REPO_VAR}}" \\`,
     `  --pr "\${${AI_REVIEW_THREADS_PR_VAR}}" \\`,
@@ -6244,7 +6249,10 @@ export const AI_REVIEW_APP_INSTALL_CAUSE =
  */
 /**
  * Where every `bunx` that runs AFTER the reviewer runs from (#2664): a
- * directory made at that moment, empty, outside the findings directory.
+ * directory made at that moment, empty, outside the findings directory. Two
+ * steps run one: the adjudicator, below, and the threads poster
+ * (`buildThreadsScript`). Both name the checkout in
+ * `AI_REVIEW_CHECKOUT_ROOT`, which is where they read cited lines (#2669).
  *
  * `bunx` resolves `bunfig.toml`, `.npmrc`, `package.json` and
  * `node_modules` by walking up from its working directory. The checkout is
