@@ -837,13 +837,12 @@ describe("#2203: the generated threads step", () => {
   const MISSING_COMMAND = "::error title=AI review threads::";
 
   // #2666. This line used to read as version skew: a workflow ahead of the
-  // published package, UNMEASURED, exit 0. That cannot be true any more. The
-  // pin always names the version that generated the workflow, and every
-  // release since the command shipped carries it, so the line means the
-  // published package lost a command it should have, which is a packaging
-  // defect (#446's class). A warning on a green job, with no threads posted,
-  // hid exactly that.
-  test("an unknown-command line means the published package lost the command: the step fails, naming it", () => {
+  // published package, UNMEASURED, exit 0. That cannot be true any more: only
+  // a version that has the command generates this step, and it pins itself.
+  // So the pinned package lacks the command, either because the pin was edited
+  // by hand or because that version's registry lost it. A warning on a green
+  // job, with no threads posted, hid both.
+  test("an unknown-command line is a command the pinned package lacks: the step fails, naming it", () => {
     const r = runThreads(`rungate-version: 0.8.20 (resolved at runtime, not the pin)\n${SKEW_LINE}\n\nUsage: …\n`, 1);
     expect(r.stdout, "the old reading survives: a missing command read as a release still to come").not.toContain(SKEW_WARNING);
     const annotation = r.stdout.split("\n").find(l => l.startsWith(MISSING_COMMAND));
