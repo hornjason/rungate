@@ -273,6 +273,9 @@ describe("SC-2801: no rendered file carries an unexpanded template variable, the
     expect(f).toHaveLength(1);
     expect(f[0]).toMatchObject({ lint: "template-artifact", file: ".claude/agents/marcus.md" });
     expect(f[0].message).toContain("CANARY_MARKER_FOR_SC354");
+    // Two markers on one line are two findings (review, PR #2629).
+    const two = findingsFor(".claude/agents/marcus.md", "## CANARY_MARKER_FOR_SC354 CANARY_MARKER_FOR_SC999");
+    expect(two.map(x => x.message.match(/CANARY_MARKER_FOR_\w+/)![0])).toEqual(["CANARY_MARKER_FOR_SC354", "CANARY_MARKER_FOR_SC999"]);
   });
 
   test("a list numbered 1, 3 is a finding; restarts, all-1 lists and continuation lines are not", () => {
@@ -282,6 +285,15 @@ describe("SC-2801: no rendered file carries an unexpanded template variable, the
     const nested = findingsFor(".claude/agents/rook.md", "## Nested\n\n1. one\n   1. Alpha\n   3. Bravo\n2. two");
     expect(nested.map(f => f.message)).toHaveLength(1);
     expect(nested[0].message).toContain("numbers a list item 3 straight after 1");
+    // A fenced example inside a step does not end the list, indented or not (review, PR #2629).
+    for (const fenced of [
+      "## F\n\n1. Run this:\n\n   ```\n   some command\n   ```\n\n3. Done.",
+      "## G\n\n1. Run this:\n\n```\nsome command\n```\n\n3. Done.",
+    ]) {
+      const f = findingsFor(".claude/agents/rook.md", fenced);
+      expect(f.map(x => x.message), fenced).toHaveLength(1);
+      expect(f[0].message, fenced).toContain("numbers a list item 3 straight after 1");
+    }
     for (const ok of [
       "## A\n\n1. one\n1. two\n1. three",
       "## N\n\n1. one\n   1. a\n   2. b\n2. two\n   1. c\n3. three",
@@ -289,6 +301,7 @@ describe("SC-2801: no rendered file carries an unexpanded template variable, the
       "## C\n\n1. one\n2. two\n\nA paragraph between lists.\n\n1. again\n2. and again",
       // A paragraph ends a list, so the next one is new, whatever it starts at.
       "## D\n\n1. one\n2. two\n\nSteps four to six run after review:\n\n4. four\n5. five",
+      "## H\n\n1. Run this:\n\n   ```\n   some command\n   ```\n\n2. Done.",
     ]) {
       expect(findingsFor(".claude/agents/rook.md", ok), ok).toEqual([]);
     }

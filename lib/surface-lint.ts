@@ -254,7 +254,7 @@ export function danglingReadTargets(packageRoot: string = PACKAGE_ROOT): Surface
 const TEMPLATE_VARIABLE = /\$\{[A-Z_][A-Z0-9_]*\}/g;
 
 /** The test-only marker SC-354 used to append to the shipped template (#2567). */
-const TEST_ONLY_MARKER = /CANARY_MARKER_FOR_\w+/;
+const TEST_ONLY_MARKER = /CANARY_MARKER_FOR_\w+/g;
 
 /**
  * SC-2801: no rendered file carries an unexpanded `${…}`, the brief
@@ -268,8 +268,10 @@ const TEST_ONLY_MARKER = /CANARY_MARKER_FOR_\w+/;
  * A fenced block is an example and is not read, so a shell `${HOME}` in
  * one is not a finding. Inline code is read: "Read `${CONFIG_FILE}`" is
  * the unexpanded variable an agent would be handed. A list may restart at 1
- * or number every item 1; what it may not do is jump. A paragraph or a fence
- * ends a list, so the list after it is a new one, whatever it starts at.
+ * or number every item 1; what it may not do is jump. A paragraph ends a
+ * list, so the list after it is a new one, whatever it starts at. A fence
+ * does not: an example command inside a step is part of that step, so a
+ * list numbered 1, 3 around one is still a skip.
  */
 export function templateArtifacts(): SurfaceLint {
   return {
@@ -284,8 +286,8 @@ export function templateArtifacts(): SurfaceLint {
         const { roles } = readFences(lines);
         lines.forEach((ln, i) => {
           const at = `line ${i + 1}`;
-          if (TEST_ONLY_MARKER.test(ln)) findings.push({ file, message: `${at} carries the test-only marker ${ln.match(TEST_ONLY_MARKER)![0]}` });
-          if (roles[i] !== "prose") { lastAt.clear(); return; }
+          for (const m of ln.match(TEST_ONLY_MARKER) ?? []) findings.push({ file, message: `${at} carries the test-only marker ${m}` });
+          if (roles[i] !== "prose") return;
           for (const v of ln.match(TEMPLATE_VARIABLE) ?? []) {
             findings.push({ file, message: `${at} carries ${v}, a template variable the render never filled` });
           }
