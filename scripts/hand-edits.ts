@@ -8,11 +8,13 @@
  * milestone and label changes, blocked-by and blocking links, title renames,
  * body edits, and project-board adds, removals and status moves, on every
  * issue in the family now and every issue that left it since the window
- * opened. The window opens at `board.pipelineSince`, when the pipeline started
- * signing as `board.pipelineAccount`. Any write a person made after that is a
- * hand edit, and each is named. It reads UNMEASURED until the account has
- * written at least once since then. Exit 0 only when the window is open and
- * holds no hand edit; UNMEASURED and SHORT both refuse.
+ * opened. The window opens at `board.pipelineSince`, the start of the current
+ * run, which is after the pipeline began signing as `board.pipelineAccount`.
+ * The first run failed on one forced edit, and the second opened when that
+ * edit's cause was fixed (#2639); the record is on #1722. Any write a person
+ * made after that is a hand edit, and each is named. It reads UNMEASURED until
+ * the account has written at least once since then. Exit 0 only when the
+ * window is open and holds no hand edit; UNMEASURED and SHORT both refuse.
  *
  * Not part of `board-conformance`'s default verdict: it reads UNMEASURED until
  * the pipeline account has written, and joining the verdict before then would

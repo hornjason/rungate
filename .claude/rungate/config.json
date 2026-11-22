@@ -29,7 +29,7 @@
     "engineSpec": "specs/SPEC-TO-BOARD-PIPELINE-SPEC.md",
     "milestonePrefix": "Engine",
     "pipelineAccount": "rungate-bot",
-    "pipelineSince": "2026-11-19T12:11:50Z"
+    "pipelineSince": "2026-11-20T12:36:43Z"
   },
   "ship": {
     "mode": "direct",

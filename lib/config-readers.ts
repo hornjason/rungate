@@ -298,9 +298,11 @@ export function readPipelineAccount(projectRoot: string): string | null {
 }
 
 /**
- * When the pipeline started signing as `board.pipelineAccount`, as an ISO time,
- * or `null` (#1722). The hand-edit window opens here. The reader refuses a
- * value that is not a time, so this returns the string as written.
+ * When the current run started, as an ISO time, or `null` (#1722). The
+ * hand-edit window opens here. The first run opened when the pipeline began
+ * signing as `board.pipelineAccount`; it failed on one forced edit, and the
+ * second opened when that edit's cause was fixed (#2639). The reader refuses
+ * a value that is not a time, so this returns the string as written.
  */
 export function readPipelineSince(projectRoot: string): string | null {
   return readBoardLabel(projectRoot, "pipelineSince");
