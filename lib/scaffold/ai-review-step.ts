@@ -1251,6 +1251,53 @@ export const AI_REVIEW_ACTION_STEP_ID = "ai-review-action";
 export const AI_REVIEW_ACTION_STEP_NAME = "Run the AI review";
 
 /**
+ * CRC-B11 (#2648, ADR-025 decision 2): one round is this many separate
+ * reviewer invocations, merged into their union by `ai-review-merge-drafts`.
+ * Two Sonnet runs at the same commits agreed on 2 of the 6 defects they found
+ * between them; three Haiku runs together found 9 of 11 (2026-11-22).
+ */
+export const AI_REVIEW_RUNS = 3;
+
+/**
+ * One step id per run. Run 1 keeps the id every reader knew before #2648, so
+ * a step reading `steps.ai-review-action` from an older generator still
+ * names a step that exists.
+ */
+export const AI_REVIEW_ACTION_STEP_IDS: readonly string[] = Object.freeze(
+  Array.from({ length: AI_REVIEW_RUNS }, (_, i) => (i === 0 ? AI_REVIEW_ACTION_STEP_ID : `${AI_REVIEW_ACTION_STEP_ID}-${i + 1}`)),
+);
+
+/** The step after each run that keeps its execution file under the run's own name. */
+export const AI_REVIEW_KEEP_EXECUTION_STEP_IDS: readonly string[] = Object.freeze(
+  Array.from({ length: AI_REVIEW_RUNS }, (_, i) => `ai-review-keep-execution-${i + 1}`),
+);
+
+/** Where run `k` (1-based) writes its draft, under the prepare step's directory. */
+export function aiReviewDraftBasename(k: number): string {
+  return `ai-review-draft-${k}.json`;
+}
+
+/** Where run `k`'s execution file is kept, under the prepare step's directory. */
+export function aiReviewExecutionCopyBasename(k: number): string {
+  return `ai-review-execution-${k}.json`;
+}
+
+/** The variable the keep step copies run k's execution file to. */
+export const AI_REVIEW_EXECUTION_COPY_PATH_VAR = "AI_REVIEW_EXECUTION_COPY_PATH";
+
+export const AI_REVIEW_MERGE_STEP_ID = "ai-review-merge";
+
+export const AI_REVIEW_MERGE_STEP_NAME = "Merge the review runs' drafts into this round's payload";
+
+/** The command the merge step runs, published in 0.8.43 and given its run outputs in 0.8.44 (#2661). */
+export const AI_REVIEW_MERGE_COMMAND = "ai-review-merge-drafts";
+
+/** The merge step's env name for run `k`'s outcome (1-based). */
+export function aiReviewRunOutcomeVar(k: number): string {
+  return `AI_REVIEW_RUN_${k}_OUTCOME`;
+}
+
+/**
  * The two action references the generated job pins, supplied by the caller.
  *
  * Strings rather than imports, for the no-relative-imports property above.
@@ -3399,6 +3446,82 @@ export function buildThreadsScript(version: string): string {
     `fi`,
     ``,
     `exit "$threads_code"`,
+  ].join("\n");
+}
+
+/**
+ * Keep one run's execution file under that run's own name (#2648).
+ *
+ * The action writes its execution file to ONE fixed path, so without this the
+ * next run overwrites it and every later reader sees run 3's transcript under
+ * run 1's name. The copy is taken, and then the fixed path is CLEARED: a run
+ * that crashes before writing can still report that path as its output, and a
+ * file left there from the previous run would be kept as this run's.
+ *
+ * It never fails the job. A copy it cannot make is a warning and leaves no
+ * partial copy, so the run reads as having written none — which is what the
+ * merge and the report already know how to say.
+ */
+export function buildKeepExecutionScript(): string {
+  return [
+    `set -uo pipefail`,
+    `src="\${${AI_REVIEW_EXECUTION_FILE_VAR}:-}"`,
+    `dest="\${${AI_REVIEW_EXECUTION_COPY_PATH_VAR}}"`,
+    `if [ -n "${"$"}src" ] && [ -f "${"$"}src" ]; then`,
+    `  if cp "${"$"}src" "${"$"}dest"; then`,
+    `    echo "kept this run's execution file as ${"$"}dest"`,
+    `  else`,
+    `    rm -f "${"$"}dest"`,
+    `    echo "::warning title=AI review execution file::could not keep this run's execution file at ${"$"}dest, so this run reads as having written none"`,
+    `  fi`,
+    `  rm -f "${"$"}src"`,
+    `else`,
+    `  echo "this run wrote no execution file"`,
+    `fi`,
+    `exit 0`,
+  ].join("\n");
+}
+
+/**
+ * Merge the round's drafts into its one payload, and say which run the round
+ * reports (#2648, #2661). Every decision is `ai-review-merge-drafts`'s: the
+ * union, whether a partial round may write a payload at all, and which run's
+ * outcome and execution file the later steps read. This passes it every run's
+ * outcome, kept file and draft, in run order, and nothing else.
+ *
+ * It runs from the findings directory, never the checkout, for the reason the
+ * adjudicator does: `bunx` in the checkout would resolve the command through
+ * the branch's own package files.
+ *
+ * A run with no outcome is passed as `failure`. The only route this script
+ * decides itself is a merge that refused or could not run: then no payload
+ * stands, the round reports run 1 as failed, and the annotation says the
+ * round is UNMEASURED — the report step's existing no-payload route.
+ */
+export function buildMergeDraftsScript(version: string): string {
+  const merger = `bunx ${AI_REVIEW_ADJUDICATOR_PACKAGE}@${version} ${AI_REVIEW_MERGE_COMMAND}`;
+  const runs = Array.from({ length: AI_REVIEW_RUNS }, (_, i) => i + 1);
+  return [
+    `set -uo pipefail`,
+    `payload="\${${AI_REVIEW_FINDINGS_PATH_VAR}}"`,
+    `dir="$(dirname "${"$"}payload")"`,
+    `args=(--out "${"$"}payload" --github-output "\${GITHUB_OUTPUT}")`,
+    `drafts=()`,
+    ...runs.flatMap(k => [
+      `kept="${"$"}dir/${aiReviewExecutionCopyBasename(k)}"; [ -f "${"$"}kept" ] || kept=""`,
+      `args+=(--outcome "\${${aiReviewRunOutcomeVar(k)}:-failure}" --execution "${"$"}kept")`,
+      `drafts+=("${"$"}dir/${aiReviewDraftBasename(k)}")`,
+    ]),
+    `merge_code=0`,
+    `merge_out="$(cd "${"$"}dir" && ${merger} "\${args[@]}" "\${drafts[@]}" 2>&1)" || merge_code=$?`,
+    `printf '%s\\n' "${"$"}merge_out"`,
+    `if [ "${"$"}merge_code" -ne 0 ]; then`,
+    `  rm -f "${"$"}payload"`,
+    `  first="${"$"}dir/${aiReviewExecutionCopyBasename(1)}"; [ -f "${"$"}first" ] || first=""`,
+    `  echo "::error title=AI review drafts::UNMEASURED - the review runs' drafts could not be merged (exit ${"$"}merge_code), so this round has no findings payload and reports run 1 as failed. This is not a review that found nothing."`,
+    `  printf 'outcome=failure\\nexecution_file=%s\\n' "${"$"}first" >> "\${GITHUB_OUTPUT}"`,
+    `fi`,
+    `exit 0`,
   ].join("\n");
 }
 
@@ -11579,6 +11702,42 @@ export function buildReviewRunStep(
     ...buildCarryScript().trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
   ];
 
+  // CRC-B11 (#2648): the same reviewer three times, each writing its own
+  // draft. The ONLY difference between the runs is the findings path, in the
+  // env and in the prompt, so no run is told the round's payload path and
+  // only the merge writes it.
+  const reviewRun = (k: number) => {
+    const draft = `\${{ steps.${AI_REVIEW_PREPARE_STEP_ID}.outputs.${AI_REVIEW_FINDINGS_DIR_OUTPUT} }}/${aiReviewDraftBasename(k)}`;
+    const paths = { ...AI_REVIEW_PROMPT_PATH_EXPRESSIONS, [AI_REVIEW_FINDINGS_PATH_VAR]: draft };
+    return review
+      .map(l => (l === `- name: ${AI_REVIEW_ACTION_STEP_NAME}` && k > 1 ? `- name: ${AI_REVIEW_ACTION_STEP_NAME} (run ${k} of ${AI_REVIEW_RUNS})` : l))
+      .map(l => (l === `  id: ${AI_REVIEW_ACTION_STEP_ID}` ? `  id: ${AI_REVIEW_ACTION_STEP_IDS[k - 1]}` : l))
+      .map(l => (l === `    ${AI_REVIEW_FINDINGS_PATH_VAR}: ${AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_FINDINGS_PATH_VAR]}` ? `    ${AI_REVIEW_FINDINGS_PATH_VAR}: ${draft}` : l))
+      .slice(0, review.length - promptLines.length)
+      .concat(buildReviewPrompt(paths).trimEnd().split("\n").map(l => (l ? `      ${l}` : "")));
+  };
+
+  const keepExecution = (k: number) => [
+    `- name: Keep run ${k}'s execution file before the next run overwrites it`,
+    `  id: ${AI_REVIEW_KEEP_EXECUTION_STEP_IDS[k - 1]}`,
+    `  env:`,
+    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_ACTION_STEP_IDS[k - 1]}.outputs.execution_file }}`,
+    `    ${AI_REVIEW_EXECUTION_COPY_PATH_VAR}: \${{ steps.${AI_REVIEW_PREPARE_STEP_ID}.outputs.${AI_REVIEW_FINDINGS_DIR_OUTPUT} }}/${aiReviewExecutionCopyBasename(k)}`,
+    `  run: |`,
+    ...buildKeepExecutionScript().trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
+  ];
+
+  const merge = [
+    `- name: ${AI_REVIEW_MERGE_STEP_NAME}`,
+    `  id: ${AI_REVIEW_MERGE_STEP_ID}`,
+    `  env:`,
+    `    ${AI_REVIEW_FINDINGS_PATH_VAR}: ${AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_FINDINGS_PATH_VAR]}`,
+    ...AI_REVIEW_ACTION_STEP_IDS.map((id, i) => `    ${aiReviewRunOutcomeVar(i + 1)}: \${{ steps.${id}.outcome }}`),
+    `  run: |`,
+    ...buildMergeDraftsScript(version).trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
+  ];
+
+  const promptLines = buildReviewPrompt().trimEnd().split("\n");
   const review = [
     `- name: ${AI_REVIEW_ACTION_STEP_NAME}`,
     `  id: ${AI_REVIEW_ACTION_STEP_ID}`,
@@ -11723,7 +11882,9 @@ export function buildReviewRunStep(
     `  id: ${AI_REVIEW_RUN_STEP_ID}`,
     `  env:`,
     `    AI_REVIEW_MODE: \${{ steps.${AI_REVIEW_AUTH_STEP_ID}.outputs.mode }}`,
-    `    AI_REVIEW_ACTION_OUTCOME: \${{ steps.${AI_REVIEW_ACTION_STEP_ID}.outcome }}`,
+    // #2648: the round's outcome, from the merge — the run the round reports,
+    // which is not always run 1 (`roundRepresentative`, #2661).
+    `    AI_REVIEW_ACTION_OUTCOME: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.outcome }}`,
     // #826. The script has branched on the payload since #816 and this step
     // was never handed its path — a step's `env:` does not carry to a later
     // step, so `[ -s "" ]` was false on every run that has ever executed and
@@ -11760,7 +11921,7 @@ export function buildReviewRunStep(
     // same prepare output the carry step wrote it to — and an absent file is
     // a NAMED refusal in the adjudicator, not an empty prior set.
     `    ${AI_REVIEW_THREADS_PATH_VAR}: \${{ steps.${AI_REVIEW_PREPARE_STEP_ID}.outputs.${AI_REVIEW_FINDINGS_DIR_OUTPUT} }}/${AI_REVIEW_THREADS_BASENAME}`,
-    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_ACTION_STEP_ID}.outputs.execution_file }}`,
+    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_file }}`,
     // CRC-B1. The PATH, so the read-check can look for that exact string in
     // the transcript. #826 is why this is restated rather than inherited: a
     // step's `env:` does not carry to a later step, and the findings path
@@ -11803,7 +11964,7 @@ export function buildReviewRunStep(
     `  id: ${AI_REVIEW_EXECUTION_STAGE_STEP_ID}`,
     `  env:`,
     `    ${AI_REVIEW_FINDINGS_PATH_VAR}: \${{ steps.${AI_REVIEW_PREPARE_STEP_ID}.outputs.path }}`,
-    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_ACTION_STEP_ID}.outputs.execution_file }}`,
+    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_file }}`,
     // THE OPT-IN. `vars` is empty on a tree that never set it, and the
     // script compares against the literal `true` — so the default is off and
     // nothing is published by a consumer who never asked. The staging path
@@ -11879,7 +12040,7 @@ export function buildReviewRunStep(
     // missing from the report step for every run that ever executed because
     // of exactly that. The commit the reviewer READ needs no binding — it is
     // `GITHUB_SHA`, which the runner sets on every step.
-    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_ACTION_STEP_ID}.outputs.execution_file }}`,
+    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_file }}`,
     `    ${AI_REVIEW_LEDGER_REPO_VAR}: \${{ github.repository }}`,
     `    ${AI_REVIEW_LEDGER_API_VAR}: \${{ github.api_url }}`,
     `    ${AI_REVIEW_LEDGER_TOKEN_VAR}: \${{ secrets.GITHUB_TOKEN }}`,
@@ -11985,7 +12146,12 @@ export function buildReviewRunStep(
     indented(changedFiles, indent) +
     indented(carry, indent) +
     indented(baseline, indent) +
-    indented(review, indent) +
+    // CRC-B11 (#2648): run, keep its execution file, three times; then the
+    // merge writes the round's payload. All BEFORE the drift check, which
+    // compares the tree before run 1 with the tree after run 3 — so a run that
+    // edited the checkout is refused whichever run it was.
+    AI_REVIEW_ACTION_STEP_IDS.map((_, i) => indented(reviewRun(i + 1), indent) + indented(keepExecution(i + 1), indent)).join("") +
+    indented(merge, indent) +
     // #1395. BEFORE the ledger, and that is the whole of this ordering. The
     // ledger quotes a line out of a reviewer-cited file, and #1383 made that
     // read come from the INDEX rather than the working tree — correct, and a
