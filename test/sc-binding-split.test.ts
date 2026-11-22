@@ -501,7 +501,11 @@ const UNCLAIMED_RATCHET = 150;
 // census half kept, a reading of the tree that no registered pattern expresses;
 // the `CRC-M19` describe in test/review-execution-reading.test.ts names it
 // (2026-11-22).
-const CLAIMED_UNBINDABLE = 205;
+// 206: CRC-B10 (#2647) ticked by `sync-sc-status --only CRC-B10` — the generated
+// AI review defaults to Haiku 5.5 unless the consumer names an exact model, a
+// reading of the generated workflow that no registered pattern expresses; the
+// `CRC-B10` describe in test/ai-review-model-alias.test.ts names it (2026-11-22).
+const CLAIMED_UNBINDABLE = 206;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
