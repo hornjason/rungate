@@ -1301,7 +1301,7 @@ export { CLAUDE_CODE_ACTION, GOOGLE_AUTH_ACTION };
  *
  * #689 found the defect in `anthropics/claude-code-action` and fixed it for
  * that action. The same defect was then found in `google-github-actions/auth`
- * — `c200f369 # v2` in this repo's `claude-review.yml`, `7c6bc770 # v3` in
+ * — `c200f369 # v2` in this repo's trial reviewer (deleted, #2627), `7c6bc770 # v3` in
  * agentgrit's generated `ai-review.yml` — and a check scoped to one action
  * reports that tree clean.
  *

@@ -2,7 +2,9 @@
 /**
  * Read what the Claude review run actually did, and refuse on UNMEASURED.
  *
- * Used by `.github/workflows/claude-review.yml`'s post-step (#732 AC-1/AC-2).
+ * Written for the trial reviewer's post-step (#732 AC-1/AC-2). The trial was
+ * deleted in #2627, and this script is kept for CRC-M18 until ADR-025 decides
+ * whether the AI review adopts it.
  * Every decision is `reviewExecutionReading`'s; this file reads argv, reads a
  * file, prints, and exits. There is exactly ONE `process.exit` with a non-zero
  * argument in it and that argument is `REVIEW_UNMEASURED_EXIT`, declared once

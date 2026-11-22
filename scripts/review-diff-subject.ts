@@ -3,10 +3,11 @@
  * The review's subject: the pull request's diff, chosen whole files at a time
  * under a byte budget (#1934).
  *
- * `.github/workflows/claude-review.yml` hands the agent its diff inside the
- * `prompt:` input, and the action marshals every input into one environment
- * variable, so the subject has a hard ceiling (`MAX_BYTES` there, and AC-6 in
- * `test/claude-review-diff-gather.test.ts` for why). The step used to cut the
+ * The trial reviewer (deleted, #2627; kept here for CRC-M18 until ADR-025
+ * decides) handed the agent its diff inside the `prompt:` input, and the
+ * action marshals every input into one environment variable, so the subject
+ * had a hard ceiling (`MAX_BYTES` in that workflow, and AC-6 of its
+ * diff-gather test for why). The step used to cut the
  * diff at a byte. A cut diff makes the run UNMEASURED / DIFF_TRUNCATED, and on
  * a DA state-record pull request that is permanent: #1932 changed 142 lines in
  * 2 files and its diff was 168 KB, because `project-state.json` keeps each
