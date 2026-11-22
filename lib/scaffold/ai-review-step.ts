@@ -6261,11 +6261,17 @@ export const AI_REVIEW_APP_INSTALL_CAUSE =
  * handed it with `--add-dir` and holds `Write`, so a reviewer the branch
  * has prompt-injected can put a `bunfig.toml` naming its own registry
  * there, and the credentialed job would then execute whatever that registry
- * serves as `rungate`. A fresh directory holds nothing anyone wrote. A
- * `mktemp` that fails takes the `cd` and the subshell non-zero, which the
- * caller reads as a run that produced no reading.
+ * serves as `rungate`. A fresh directory holds nothing anyone wrote.
+ *
+ * The directory is assigned before the `cd`, and that order is the guard. A
+ * failed `mktemp` makes the assignment non-zero, so nothing after the `&&`
+ * runs, and the caller reads a run that produced no reading. Written as
+ * `cd "$(mktemp …)"`, a failed `mktemp` is `cd ""`, which bash runs as a
+ * successful no-op. The chain then carried on, and `bunx` ran wherever the
+ * step started, which is the checkout (#2668 round 2).
  */
-export const AI_REVIEW_FRESH_CWD = 'cd "$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")"';
+export const AI_REVIEW_FRESH_CWD =
+  'rungate_bunx_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && cd "$rungate_bunx_dir"';
 
 export function buildReviewRunScript(version: string): string {
   // The exact command the success branch runs. Built here so the comments

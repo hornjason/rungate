@@ -675,6 +675,45 @@ describe("#1992: no detail line reaches the workflow-command channel unescaped",
  * it was told to read.
  */
 describe("#2664: the generated threads step runs bunx from a fresh empty directory", () => {
+  test("when the fresh directory cannot be made, bunx does not run, and the step fails", () => {
+    // #2668 round 2: `cd ""` succeeds in bash, so a failed mktemp must stop
+    // the chain itself rather than through the cd.
+    const dir = mkdtempSync(join(tmpdir(), "rg-threads-nomktemp-"));
+    try {
+      const bin = join(dir, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "bunx"), `#!/bin/sh\necho "bunx-ran cwd=$(pwd -P)"\nexit 0\n`);
+      chmodSync(join(bin, "bunx"), 0o755);
+      const workspace = join(dir, "workspace");
+      mkdirSync(workspace);
+      const findings = join(dir, "findings.json");
+      writeFileSync(findings, "{}");
+      const script = join(dir, "threads.sh");
+      writeFileSync(script, buildThreadsScript("0.8.21"));
+      const r = Bun.spawnSync(["bash", "-e", script], {
+        cwd: workspace,
+        env: {
+          PATH: `${bin}:/usr/bin:/bin`,
+          GITHUB_WORKSPACE: workspace,
+          RUNNER_TEMP: join(dir, "no-such-runner-temp"),
+          AI_REVIEW_THREADS_PR: "7",
+          AI_REVIEW_FINDINGS_PATH: findings,
+          AI_REVIEW_THREADS_REPO: "o/r",
+          AI_REVIEW_THREADS_SHA: "abc",
+          AI_REVIEW_THREADS_TOKEN: "t",
+          AI_REVIEW_CHANGED_FILES_PATH: join(dir, "changed.txt"),
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const out = new TextDecoder().decode(r.stdout);
+      expect(out, "bunx ran in the checkout although no fresh directory was made").not.toContain("bunx-ran");
+      expect(r.exitCode, "the step posted nothing and still passed").not.toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("not the checkout, nothing in it, and the checkout named for the cited lines", () => {
     const dir = mkdtempSync(join(tmpdir(), "rg-threads-cwd-"));
     try {

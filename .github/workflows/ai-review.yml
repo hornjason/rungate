@@ -1,4 +1,4 @@
-# generated-sha: 89cc8390a9ad7230
+# generated-sha: ca77daa2092c7110
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -4145,7 +4145,7 @@ jobs:
           # holds a token that can write. The checkout is named instead, so the
           # command still reads the cited lines it keys repeats by (#2669).
           threads_code=0
-          threads_out="$(cd "$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && AI_REVIEW_CHECKOUT_ROOT="${GITHUB_WORKSPACE:-}" GITHUB_TOKEN="${AI_REVIEW_THREADS_TOKEN}" bunx rungate@0.8.45 ai-review-threads \
+          threads_out="$(rungate_bunx_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && cd "$rungate_bunx_dir" && AI_REVIEW_CHECKOUT_ROOT="${GITHUB_WORKSPACE:-}" GITHUB_TOKEN="${AI_REVIEW_THREADS_TOKEN}" bunx rungate@0.8.45 ai-review-threads \
             "${AI_REVIEW_FINDINGS_PATH}" \
             --repo "${AI_REVIEW_THREADS_REPO}" \
             --pr "${AI_REVIEW_THREADS_PR}" \
@@ -4782,7 +4782,7 @@ jobs:
               # command, not exported. `:-` because the step runs under `set -u`; an
               # empty value is the adjudicator's own fallback to its working directory,
               # which it reports as unable to read any cited line.
-              adjudication=$(cd "$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && AI_REVIEW_CHECKOUT_ROOT="${GITHUB_WORKSPACE:-}" bunx rungate@0.8.45 ai-review-findings "${AI_REVIEW_FINDINGS_PATH}" "${AI_REVIEW_CHANGED_FILES_PATH:-}" 2>&1) || adjudicated=$?
+              adjudication=$(rungate_bunx_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && cd "$rungate_bunx_dir" && AI_REVIEW_CHECKOUT_ROOT="${GITHUB_WORKSPACE:-}" bunx rungate@0.8.45 ai-review-findings "${AI_REVIEW_FINDINGS_PATH}" "${AI_REVIEW_CHANGED_FILES_PATH:-}" 2>&1) || adjudicated=$?
               printf '%s\n' "${adjudication}"
 
               # DID IT RUN, asked before WHAT IT SAID. Without this line a registry that

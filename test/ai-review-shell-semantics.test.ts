@@ -486,7 +486,7 @@ describe("#1110: the verdict step under the shell GitHub actually supplies", () 
  * directory" and "ran from where the step started" are different readings.
  */
 describe("#2261 / #2664: the adjudicator is told the checkout, and runs from a fresh empty directory", () => {
-  function runWithWorkspace(workspace: string | undefined) {
+  function runWithWorkspace(workspace: string | undefined, runnerTemp?: string) {
     const dir = scratchDir();
     const sh = join(dir, "verdict.sh");
     writeFileSync(sh, committedRunScript());
@@ -507,6 +507,7 @@ describe("#2261 / #2664: the adjudicator is told the checkout, and runs from a f
       [AI_REVIEW_FINDINGS_PATH_VAR]: payload,
     };
     if (workspace !== undefined) env.GITHUB_WORKSPACE = workspace;
+    if (runnerTemp !== undefined) env.RUNNER_TEMP = runnerTemp;
     const r = spawnSync("bash", [...RUNNER_SHELL_FLAGS, sh], { encoding: "utf-8", cwd: dir, timeout: 60_000, env });
     return { ...r, payloadDir: realpathSync(payloadDir), stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
   }
@@ -525,6 +526,17 @@ describe("#2261 / #2664: the adjudicator is told the checkout, and runs from a f
     expect(cwd, r.stdout + r.stderr).toBeDefined();
     expect([r.payloadDir, realpathSync(workspace)]).not.toContain(cwd);
     expect(r.stdout, "the adjudicator's directory holds a file, so a planted bunfig.toml could be read").toContain("seen-files=[]");
+  });
+
+  test("#2664: when the fresh directory cannot be made, bunx does not run at all, and the step fails", () => {
+    // #2668 round 2. `cd "$(mktemp …)"` with a failing mktemp is `cd ""`,
+    // which bash runs as a successful no-op: the chain went on, and bunx ran
+    // from wherever the step started. A RUNNER_TEMP that does not exist makes
+    // mktemp fail here.
+    const workspace = scratchDir();
+    const r = runWithWorkspace(workspace, join(scratchDir(), "no-such-runner-temp"));
+    expect(r.stdout, "bunx ran although no fresh directory was made, so it ran where the step started").not.toContain("seen-cwd=");
+    expect(r.status, "the step read no verdict and still passed").not.toBe(0);
   });
 
   test("with no workspace the step does not die on an unset variable: the root is empty, and the adjudicator falls back", () => {
