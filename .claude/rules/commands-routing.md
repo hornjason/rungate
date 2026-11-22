@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: 9c0b3fdd78a8c7d1
+generated-sha: c8d803a1f13402e1
 ---
 
 ## Command Routing
@@ -13,6 +13,7 @@ Generated from the CLI's command registry. Run one as
 | `scaffold` | Generate or refresh a project's agent files, rules and conformity suite |
 | `create-spec` | Create a spec file with the required frontmatter |
 | `create-success` | Seed SUCCESS.md — what this project is for, and the claims that prove it |
+| `prompt-audit` | Lint what this project's agents load, sort findings by owner, and draft rungate's as upstream reports |
 | `create-sc` | Generate a matchable success-criterion line from a registered pattern |
 | `convert-spec` | Convert an existing document into a testable spec |
 | `audit-specs` | Report which success criteria are matched, unmatched or uncovered |
