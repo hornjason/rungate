@@ -17,7 +17,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mergeDrafts, mergeReport } from "../lib/ai-review-drafts";
@@ -168,6 +168,27 @@ describe("#2648: rungate ai-review-merge-drafts", () => {
       expect(r.stdout).toMatch(/d2\.json: UNREADABLE — could not be read/);
       expect((JSON.parse(readFileSync(out, "utf-8")).findings as unknown[]).length).toBe(1);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // PR #2656 round 2: existsSync answers false when stat fails, so a draft in
+  // a directory nobody can search read as ABSENT — "that run wrote no
+  // payload" about a file that run did write. Only ENOENT is absent.
+  test("a draft in a directory that cannot be searched is UNREADABLE, not ABSENT", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-merge-drafts-"));
+    const locked = join(dir, "locked");
+    try {
+      writeFileSync(join(dir, "d1.json"), draft([finding("lib/a.ts", "One")]));
+      mkdirSync(locked);
+      writeFileSync(join(locked, "d2.json"), draft([finding("lib/b.ts", "Two")]));
+      chmodSync(locked, 0o000);
+      const r = run(["--out", join(dir, "payload.json"), join(dir, "d1.json"), join(locked, "d2.json")]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toMatch(/d2\.json: UNREADABLE — could not be read/);
+      expect(r.stdout).not.toContain("ABSENT");
+    } finally {
+      chmodSync(locked, 0o700);
       rmSync(dir, { recursive: true, force: true });
     }
   });

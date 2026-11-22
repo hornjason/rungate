@@ -12,7 +12,7 @@
  * path — and it goes through `MERGE_DRAFTS_USAGE_EXIT`.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { type DraftInput, mergeDrafts, mergeReport } from "../lib/ai-review-drafts";
 
@@ -36,13 +36,19 @@ function readCall(argv: readonly string[]): { out: string; drafts: string[] } | 
   }
 }
 
-/** A draft path read: absent, its text, or why a path that exists could not be read. */
+/**
+ * A draft path read: its text, absent, or why it could not be read. Only
+ * ENOENT is absent. `existsSync` is not asked first because it answers false
+ * whenever stat fails, so a draft in a directory nobody can search would read
+ * "that run wrote no payload" about a file that run did write.
+ */
 function readDraft(path: string): DraftInput {
-  if (!existsSync(path)) return { path, text: null };
   try {
     return { path, text: readFileSync(path, "utf-8") };
   } catch (e) {
-    return { path, text: null, readError: (e as Error).message };
+    return (e as NodeJS.ErrnoException).code === "ENOENT"
+      ? { path, text: null }
+      : { path, text: null, readError: (e as Error).message };
   }
 }
 
