@@ -1759,6 +1759,11 @@ instance of it.
 - **CRC-N6** **Named because it was measured, with nothing built.** Five consecutive rounds on #1614 re-raised one already-fixed defect: four consecutive rounds from a docblock that QUOTED the removed regex, and the FINAL round — after the quotation was deleted — from the PARAPHRASE that replaced it, reconstructing a regex literal that appears nowhere in the tree. CRC-N4's dedupe cannot absorb it, because the suppression key is `file \0 line-text \0 summary` and a regenerated finding carries a new summary: it is not a repeat, it is a new finding about code that does not exist. The near-miss is *"do not quote dead code in comments"*, which was applied and then defeated. The reading is in *Measured non-obvious facts*. **It is deliberately NOT a request for new machinery** — the prior-art section above found that a verification gate re-checking each finding against the real code at the cited line is the documented mitigation for the wider class it belongs to, and that gate is CRC-B4. This criterion names the case so a verifier can be held to it; it does not ask for a second mechanism beside one already planned.
 - **CRC-H2** Risky code requires a human. There is no `CODEOWNERS` and no required approval, so nothing does.
 - **CRC-M16** Added 2026-11-12 (ADR-015, #1816). `AI_REVIEW_ROUND_CAP` in `lib/ai-review-rounds.ts` counts the reviewer's rounds; nothing reads what the author does after the round-three step-back.
+- **CRC-B10** Added 2026-11-22 (ADR-025, #2628). `AI_REVIEW_MODEL` in `lib/scaffold/ai-review-step.ts` names Sonnet 5. Replayed at the commits behind 11 known defects on 2026-11-22, it found 5 and then 3; the same prompt on Haiku 5.5 found 8, 8 and 8 (`docs/research/ai-review-audit.md`).
+- **CRC-B11** Added 2026-11-22 (ADR-025, #2628, #1885). Each round is one reviewer invocation. Two Sonnet runs at the same commits agreed on 2 of the 6 defects they found between them, on 2026-11-22; three Haiku runs together found 9 of 11. #1885 is the same shape at five runs.
+- **CRC-B12** Added 2026-11-22 (ADR-025, #2628). The generated job passes the review action no `github_token`, so a consumer must install the Claude GitHub App with its whole permission set, write access to workflows included, read on 2026-11-22. The threads are already posted by a later step with `GITHUB_TOKEN`.
+- **CRC-B13** Added 2026-11-22 (ADR-025, #2628). No consumer document names the credentials the generated job resolves, who pays for each, or what a pull request costs. The audit's figure on 2026-11-22 was about $1.88 a pull request on Sonnet 5.
+- **CRC-M19** Added 2026-11-22 (ADR-025, #2628). CRC-M18 is ticked, and the budget it measured belonged to the trial reviewer deleted in #2627, which pasted the diff into its prompt. `scripts/review-diff-subject.ts` and the coverage half of `lib/review-execution-reading.ts` are still in the tree.
 
 ### Shipped since this audit was taken
 
@@ -2052,10 +2057,10 @@ CRC-E8's withdrawal from Phase 0 already records once.
 |---|---|---|
 | **Phase 0** | CRC-C3 | settings, no engineering — the one of the original three that survived contact. E8 is withdrawn and F1 is contested, so both are placed outside every phase, below |
 | **Phase 1** | CRC-B7, CRC-N2, CRC-N3, CRC-N4, CRC-N7 | stop the repeats |
-| **Phase 2** | CRC-B3, CRC-B4, CRC-B6, CRC-N6 | stop the false findings |
+| **Phase 2** | CRC-B3, CRC-B4, CRC-B6, CRC-N6, CRC-B10, CRC-B11, CRC-B12, CRC-B13 | stop the false findings |
 | **Phase 3** | CRC-A4, CRC-A7, CRC-B1, CRC-B2, CRC-B9 | what the reviewer is told |
 | **Phase 4** | CRC-A1, CRC-A2, CRC-A3, CRC-A8, CRC-B8 | findings get answered, repeats fixed at the source |
-| **Phase 5** | CRC-E3, CRC-E9, CRC-M1, CRC-M2, CRC-M3, CRC-M4, CRC-M5, CRC-M6, CRC-M7, CRC-M10, CRC-M11, CRC-M12, CRC-M13, CRC-M14, CRC-M16, CRC-M17, CRC-M18 | the instruments |
+| **Phase 5** | CRC-E3, CRC-E9, CRC-M1, CRC-M2, CRC-M3, CRC-M4, CRC-M5, CRC-M6, CRC-M7, CRC-M10, CRC-M11, CRC-M12, CRC-M13, CRC-M14, CRC-M16, CRC-M17, CRC-M18, CRC-M19 | the instruments |
 | **Phase 6** | CRC-C1, CRC-C2, CRC-F2, CRC-F3, CRC-F4, CRC-F5, CRC-H2, CRC-M15, CRC-N5, CRC-F6 | release and detection — nothing here moves rounds-to-pass |
 | **Done** | CRC-A5, CRC-A6, CRC-B5, CRC-C4, CRC-E1, CRC-E2, CRC-E4, CRC-N1 | ticked and bound. Not *no work ever again* — CRC-B7 and CRC-M11 are also ticked and are **not** here, because an open issue contradicts each |
 | **Blocked — needs a second person** | CRC-E5, CRC-E6, CRC-E7, CRC-E8, CRC-M9 | one account plus `enforce_admins: true` means an approval cannot exist, so E6 and M9 are **vacuous rather than unbuilt** — there is nothing to count. The blocker is CRC-E8's withdrawal, which Phase 0 records. E8 itself sits here because requiring an approval it cannot get would deadlock the repository |
@@ -3019,3 +3024,13 @@ Recorded because each one invalidates a naive reading of the criteria above.
       needs: measurement
       proved-by: the live reading — claude-review run 44833194200, dispatched on #1932 (2 files, 168,434-byte diff, which read DIFF_TRUNCATED before #2585), 2026-11-20, printed "MEASURED — …; reviews added by this run: 1; coverage: 1 of 2 files read" and handed the agent a first line naming PROJECT-STATE.md as left out, which its posted review repeated. Its tests: test/review-execution-reading.test.ts AC-15..AC-19 and test/review-diff-subject.test.ts, 0 fail. Ticked by `sync-sc-status --only CRC-M18` (#2587).
       fingerprint: 0eea1bb6
+- [ ] CRC-B10: The generated AI review runs on `AI_REVIEW_MODEL`, which is Haiku 5.5, unless the consumer's config names an exact model.
+      needs: test
+- [ ] CRC-B11: Each AI review round is three separate reviewer invocations, and the round's findings are their union with duplicates removed; no finding is dropped for being raised by one run.
+      needs: test
+- [ ] CRC-B12: The generated AI review passes the job's own token to the review action, so a consumer runs it without installing the Claude GitHub App.
+      needs: test
+- [ ] CRC-B13: docs/guides/AI-REVIEW.md states every credential the generated job resolves, who pays for each, the per-pull-request cost on the default model, and that a tree with no credential spends nothing.
+      needs: test
+- [ ] CRC-M19: CRC-M18 is retired, and the diff-budget script it named is deleted. The reading module CRC-M13 needs is kept.
+      needs: test

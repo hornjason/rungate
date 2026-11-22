@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-22
 updated: 2026-11-22
 ---
@@ -9,11 +9,13 @@ updated: 2026-11-22
 
 ## Status
 
-**Proposed, 2026-11-22 (#2628).** Jason decides and merges. The evidence is
-`docs/research/ai-review-audit.md`, the audit he approved on 2026-11-21. The
-criteria this ADR needs are proposed below as wording for Jason to write into
-`specs/CODE-REVIEW-CONVERGENCE-SPEC.md`. The DA does not write criterion text,
-so none is in the spec yet, and the plan is placed once they are.
+**Accepted, 2026-11-22 (#2642).** Proposed in #2634 (#2628) and merged by Jason
+the same day with its criteria unwritten. The evidence is
+`docs/research/ai-review-audit.md`, the audit he approved on 2026-11-21. Jason
+then asked for the five criteria below to be written into
+`specs/CODE-REVIEW-CONVERGENCE-SPEC.md` as drafted, for him to merge. They are
+CRC-B10 to CRC-B13 and CRC-M19, and the Decomposition places one issue each
+when this merges.
 
 ## Context
 
@@ -105,41 +107,34 @@ added. CRC-M18 is retired with the trial that proved it.
   by every setup in every run. That is mutation testing's job, not the
   reviewer's.
 
-## Proposed criteria (for Jason to write)
+## Criteria
 
-Proposed wording, one line each, for `specs/CODE-REVIEW-CONVERGENCE-SPEC.md`.
-Ids are allocated when they are written.
+Written into `specs/CODE-REVIEW-CONVERGENCE-SPEC.md` as drafted (#2642). The
+four reviewer criteria are placed in Phase 2, the next open Convergence phase
+with reviewer work in it, so they reach Ready before the instruments; CRC-M19
+sits in Phase 5 beside CRC-M18. CRC-B13 names the guide as plain text, not as a
+code path, until row 4 creates it: the spec's citation test requires every
+quoted path to exist.
 
-- The generated AI review runs on `AI_REVIEW_MODEL`, which is Haiku 5.5, unless the consumer's config names an exact model.
-- Each AI review round is three separate reviewer invocations, and the round's findings are their union with duplicates removed; no finding is dropped for being raised by one run.
-- The generated AI review passes the job's own token to the review action, so a consumer runs it without installing the Claude GitHub App.
-- `docs/guides/AI-REVIEW.md` states every credential the generated job resolves, who pays for each, the per-pull-request cost on the default model, and that a tree with no credential spends nothing.
-- CRC-M18 is retired, and the diff-budget script it named is deleted. The reading module CRC-M13 needs is kept.
+- CRC-B10: The generated AI review runs on `AI_REVIEW_MODEL`, which is Haiku 5.5, unless the consumer's config names an exact model.
+- CRC-B11: Each AI review round is three separate reviewer invocations, and the round's findings are their union with duplicates removed; no finding is dropped for being raised by one run.
+- CRC-B12: The generated AI review passes the job's own token to the review action, so a consumer runs it without installing the Claude GitHub App.
+- CRC-B13: `docs/guides/AI-REVIEW.md` states every credential the generated job resolves, who pays for each, the per-pull-request cost on the default model, and that a tree with no credential spends nothing.
+- CRC-M19: CRC-M18 is retired, and the diff-budget script it named is deleted. The reading module CRC-M13 needs is kept.
 
 ## Decomposition
 
-Placed by `plan-issues --decompose` once the criteria above have ids. Until
-then the rows are written as a list, so no tool reads a criterion that does
-not exist.
+Filed by `adr-accepted.yml` when this merges, one issue per row, each into the
+phase its criterion is placed in. Rows 1 and 3 change the generated
+`ai-review.yml`, which the reviewer refuses to review on its own pull request,
+so those two need the `ai-review-override` label and Jason merges them. Row 2
+absorbs #1885, and its pull request closes both. Row 5 was blocked by #2627,
+which is merged; the spec edit that retires CRC-M18's own line goes with it.
 
-1. **The AI review defaults to Haiku 5.5.** `lib/scaffold/ai-review-step.ts`,
-   `.claude/rungate/config.json`, `.github/workflows/ai-review.yml`,
-   `test/ai-review-model-alias.test.ts`. Editing the generated workflow needs
-   the `ai-review-override` label, because the reviewer refuses a branch that
-   changes its own workflow; Jason merges that PR.
-2. **Three reviewer runs per round, merged.** `lib/scaffold/ai-review-step.ts`,
-   `lib/scaffold/ai-review-findings.ts`, `.github/workflows/ai-review.yml`,
-   `test/ai-review-workflow.test.ts`. Blocked by row 1. Absorbs #1885.
-3. **The review needs no Claude GitHub App.** `lib/scaffold/ai-review-step.ts`,
-   `.github/workflows/ai-review.yml`, `test/ai-review-credentialed-job.test.ts`.
-   The same override label applies.
-4. **The consumer AI review guide.** `docs/guides/AI-REVIEW.md`,
-   `docs/guides/HOW-WORK-FLOWS.md`, `test/agents-md-refs.test.ts`.
-   Blocked by rows 1 to 3, so it states what shipped.
-5. **CRC-M18 and its diff-budget script retired.** `scripts/review-diff-subject.ts`,
-   `test/review-diff-subject.test.ts`, `.claude/spec-write-opaque-ratchet.json`
-   (two entries name the diff script), and the coverage-statement half of
-   `lib/review-execution-reading.ts` with its cases in
-   `test/review-execution-reading.test.ts` (AC-15 to AC-19). The census half,
-   which CRC-M13 needs, stays. Five files. The spec edit is Jason's. Blocked
-   by #2627.
+| Criterion | Outcome | Files | Milestone | Blocked by |
+|---|---|---|---|---|
+| CRC-B10 | The AI review defaults to Haiku 5.5 | lib/scaffold/ai-review-step.ts, .claude/rungate/config.json, .github/workflows/ai-review.yml, test/ai-review-model-alias.test.ts | — | — |
+| CRC-B11 | Three reviewer runs merged into one round | lib/scaffold/ai-review-step.ts, lib/scaffold/ai-review-findings.ts, .github/workflows/ai-review.yml, test/ai-review-workflow.test.ts | — | The AI review defaults to Haiku 5.5 |
+| CRC-B12 | The AI review needs no Claude GitHub App | lib/scaffold/ai-review-step.ts, .github/workflows/ai-review.yml, test/ai-review-credentialed-job.test.ts | — | — |
+| CRC-B13 | The consumer AI review guide | docs/guides/AI-REVIEW.md, docs/guides/HOW-WORK-FLOWS.md, test/agents-md-refs.test.ts | — | The AI review defaults to Haiku 5.5, Three reviewer runs merged into one round, The AI review needs no Claude GitHub App |
+| CRC-M19 | CRC-M18 and its diff-budget script retired | scripts/review-diff-subject.ts, test/review-diff-subject.test.ts, .claude/spec-write-opaque-ratchet.json, lib/review-execution-reading.ts, test/review-execution-reading.test.ts, specs/CODE-REVIEW-CONVERGENCE-SPEC.md | — | — |
