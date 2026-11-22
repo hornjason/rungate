@@ -6,8 +6,9 @@
  * and AGENT-BRIEF-TEMPLATE-SPEC (SC-348).
  */
 import { existsSync, readFileSync, readdirSync } from "fs";
-import { join, dirname } from "path";
+import { join, dirname, relative, sep } from "path";
 import type { ProjectScan, AgentMeta } from "./types";
+import { RUNGATE_CONFIG_RELATIVE_PATH, resolveConfig } from "../config-loader";
 import { buildAgentMeta, DEFAULT_AGENT_META } from "../create-brief";
 
 /**
@@ -30,6 +31,22 @@ function resolveTemplatesDir(scan: ProjectScan): string {
  * Returns a record mapping agent name to generated brief content.
  * Does NOT write files — caller decides where to write.
  */
+/**
+ * #2621: the rungate config file this consumer has, as a path from its root —
+ * the one a brief tells its agent to read. The monolith's own path when that
+ * is the layout in use (the scaffold keeps it and never rewrites it), the
+ * directory layout's file otherwise, including a project with no config yet,
+ * which the scaffold gives the directory layout. Asked of the loader, so no
+ * generator spells either path.
+ */
+export function briefConfigFile(root: string): string {
+  const resolved = resolveConfig(root);
+  const rel = resolved.status === "resolved" && resolved.source === "monolith"
+    ? relative(root, resolved.path)
+    : RUNGATE_CONFIG_RELATIVE_PATH;
+  return rel.split(sep).join("/");
+}
+
 export function generateAgentBriefs(scan: ProjectScan): Record<string, string> {
   const templatesDir = resolveTemplatesDir(scan);
   const result: Record<string, string> = {};
@@ -72,6 +89,7 @@ export function generateAgentBriefs(scan: ProjectScan): Record<string, string> {
   // puts `dev.testCmd` on its first rung, so re-asking here was a second
   // ladder that could disagree with the first and never be noticed.
   const testCmd = scan.testCmd || "bun test";
+  const configFile = briefConfigFile(scan.root);
   const typeCheck = harness?.dev?.typeCheck || "bunx tsc --noEmit";
   const pages = harness?.pages || {};
   const pagesTable = Object.keys(pages).length > 0
@@ -101,8 +119,9 @@ export function generateAgentBriefs(scan: ProjectScan): Record<string, string> {
     content = content.replace(/\$\{SOURCE_DIRS\}/g, dirList);
     content = content.replace(/\$\{CONSUMERS\}/g, consumerNote);
     content = content.replace(/\$\{PROMPT_PREFIX\}/g, scan.promptPrefix);
-    content = content.replace(/\$\{DEV_UI_LINE\}/g, devUi ? `- **Dev UI:** ${devUi}` : "- **Dev UI:** not configured — check .claude/rungate/config.json");
-    content = content.replace(/\$\{DEV_API_LINE\}/g, devApi ? `- **Dev API:** ${devApi}` : "- **Dev API:** not configured — check .claude/rungate/config.json");
+    content = content.replace(/\$\{DEV_UI_LINE\}/g, devUi ? `- **Dev UI:** ${devUi}` : `- **Dev UI:** not configured — check ${configFile}`);
+    content = content.replace(/\$\{DEV_API_LINE\}/g, devApi ? `- **Dev API:** ${devApi}` : `- **Dev API:** not configured — check ${configFile}`);
+    content = content.replace(/\$\{CONFIG_FILE\}/g, configFile);
     content = content.replace(/\$\{PAGES_TABLE\}/g, pagesTable);
     content = content.replace(/\$\{TEST_CMD\}/g, testCmd);
     content = content.replace(/\$\{TYPE_CHECK\}/g, typeCheck);

@@ -23,7 +23,7 @@ For CLI/library projects (no UI pages configured):
 
 ## UI Testing Mode
 
-For web apps (`.claude/rungate/config.json` has `pages` entries):
+For web apps (`${CONFIG_FILE}` has `pages` entries):
 
 ### Environment
 

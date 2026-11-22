@@ -46,6 +46,7 @@ The AGENTS-MD-TEMPLATE-SPEC solved this for AGENTS.md (D-3: template in `prompts
 | `${DEV_API_LINE}` | rungate.json dev.apiBase | `- **Dev API:** http://localhost:8080` |
 | `${PAGES_TABLE}` | rungate.json pages map | Markdown table |
 | `${TEST_CMD}` | rungate.json or package.json | `bun test` |
+| `${CONFIG_FILE}` | the config file the consumer has, from `resolveConfig` (#2621) | `.claude/rungate/config.json`; `.claude/rungate.json` for a consumer still on that layout |
 
 Removed (D-8): `${PROJECT_IDENTITY}` (in AGENTS.md), `${SHARED_RULES}` (in `.claude/rules/agent-principles.md`)
 
