@@ -6,31 +6,33 @@
  * findings are the union of the drafts with duplicates removed: a finding one
  * run raised blocks exactly as it would have alone, and nothing is voted away.
  *
- * ## The identity is `advisoryKey`, not a second one
+ * ## Two rules, one function each
  *
- * A duplicate is a finding whose `advisoryKey` — file plus whitespace- and
- * case-normalised summary — equals one already kept. That is the identity the
- * adjudicator already counts advisories by, so this adds no second decider
- * about what "the same finding" means. It collapses a finding two runs worded
- * identically; it keeps two wordings of one defect apart, which costs a
- * repeated thread and never a dropped finding. The other choice — keying on
- * the anchor line — would merge two different defects on one line, which
- * drops a finding, and dropping is what this must never do.
+ * Review rounds 1 to 3 of PR #2656 each found a defect in a rule that lived
+ * in a different line of the loop. So each rule is now one exported function,
+ * and the tests read each as a table:
  *
- * ## A duplicate keeps the strictest severity any run gave it
+ * - `findingIdentity` is the only answer to "are these the same finding":
+ *   file, line, and whitespace- and case-normalised summary. The line is in
+ *   it because without it two defects worded alike on different lines were
+ *   one finding, and the second was dropped (round 3). The cost of the line
+ *   is the other direction: two runs anchoring one defect on different lines
+ *   are kept apart, which costs a repeated thread and never a dropped one.
+ * - `severityStrictness` is the only answer to "which of two copies is
+ *   stricter": a blocking severity, then one the table does not declare,
+ *   then an advisory one, and the order of `AI_REVIEW_SEVERITIES` within a
+ *   tier. Whether a severity blocks is read through `severityBlocks`, so
+ *   this adds no second answer to that. Undeclared sits between because the
+ *   adjudicator reads it `SEVERITY_UNRECOGNISED`, UNMEASURED: weaker than a
+ *   block (round 1), stronger than a pass.
  *
- * `advisoryKey` carries no severity, so one run's `low` and another's `high`
- * on the same finding share a key. Keeping whichever came first would drop a
- * blocking finding whenever an advisory run was listed before it — a merged
- * round passing a pull request one of its runs blocked. So the kept entry is
- * replaced, in place, by a stricter duplicate. Strictness is three tiers,
- * read through `severityBlocks` so this adds no second answer to "does this
- * block": a blocking severity, then one the table does not declare, then an
- * advisory one; within a tier, the order of `AI_REVIEW_SEVERITIES`. An
- * undeclared severity sits between because that is what it does to a round:
- * the adjudicator reads it `SEVERITY_UNRECOGNISED`, UNMEASURED — weaker than
- * a block, so it must never displace one (PR #2656 round 1), and stronger
- * than a pass, so an advisory duplicate must never hide it.
+ * ## The union is of occurrences, and nothing within one run is merged
+ *
+ * A finding is kept as many times as the most any one draft listed it. So a
+ * draft's own list is never collapsed — one draft merges to itself unchanged
+ * — and a finding two runs both reported is kept once. When a later draft's
+ * copy is stricter it takes the earlier copy's place, so a blocking finding
+ * is never lost behind an advisory one listed first.
  *
  * ## What a draft that did not parse means
  *
@@ -49,7 +51,7 @@ import {
   AI_REVIEW_PASS_VERDICT,
   AI_REVIEW_VERDICT_KEY,
 } from "./scaffold/ai-review-findings";
-import { AI_REVIEW_SEVERITIES, AI_REVIEW_SUMMARY_KEY } from "./scaffold/ai-review-step";
+import { AI_REVIEW_FINDING_FIELDS, AI_REVIEW_SEVERITIES, AI_REVIEW_SUMMARY_KEY } from "./scaffold/ai-review-step";
 
 export type DraftStatus = "parsed" | "absent" | "unreadable";
 
@@ -84,13 +86,21 @@ export interface DraftInput {
   readError?: string;
 }
 
-/** Lower is stricter: blocking, then undeclared, then advisory; table order within a tier. */
-function strictness(finding: Record<string, unknown>): number {
-  const sev = finding.severity;
+/** Whether two findings are one: file, line and normalised summary. The only place this is decided. */
+export function findingIdentity(finding: Record<string, unknown>): string {
+  return JSON.stringify([advisoryKey(finding), finding[AI_REVIEW_FINDING_FIELDS.line] ?? null]);
+}
+
+/**
+ * Lower is stricter: blocking, then undeclared, then advisory; table order
+ * within a tier. Every undeclared value is one rank. The only place this is decided.
+ */
+export function severityStrictness(finding: Record<string, unknown>): number {
+  const sev = finding[AI_REVIEW_FINDING_FIELDS.severity];
   const blocks = severityBlocks(sev);
-  const tier = blocks === true ? 0 : blocks === null ? 1 : 2;
   const declared = Object.keys(AI_REVIEW_SEVERITIES);
-  return tier * declared.length + Math.max(0, typeof sev === "string" ? declared.indexOf(sev) : 0);
+  if (blocks === null) return declared.length;
+  return (blocks ? 0 : declared.length + 1) + declared.indexOf(sev as string);
 }
 
 function parseDraft(d: DraftInput): { reading: DraftReading; obj: Record<string, unknown> | null } {
@@ -125,11 +135,14 @@ export function mergeDrafts(inputs: readonly DraftInput[]): MergedDrafts {
   const objs = parsed.map(p => p.obj).filter((o): o is Record<string, unknown> => o !== null);
   if (objs.length === 0) return { payload: null, drafts, kept: 0, duplicates: 0 };
 
-  // Key → index in `kept`, so a stricter duplicate can take its place.
-  const seen = new Map<string, number>();
+  // Identity → the indices in `kept` holding its occurrences, so the union
+  // holds as many as the most any one draft listed, and a stricter copy can
+  // take an earlier one's place.
+  const slots = new Map<string, number[]>();
   const kept: unknown[] = [];
   let duplicates = 0;
   for (const obj of objs) {
+    const inThisDraft = new Map<string, number>();
     for (const finding of obj[AI_REVIEW_FINDINGS_KEY] as unknown[]) {
       // A finding that is not an object has no key; it is kept as written so
       // the adjudicator refuses it by name, as it would in a single draft.
@@ -138,14 +151,19 @@ export function mergeDrafts(inputs: readonly DraftInput[]): MergedDrafts {
         continue;
       }
       const record = finding as Record<string, unknown>;
-      const key = advisoryKey(record);
-      const at = seen.get(key);
-      if (at !== undefined) {
+      const key = findingIdentity(record);
+      const nth = inThisDraft.get(key) ?? 0;
+      inThisDraft.set(key, nth + 1);
+      const held = slots.get(key) ?? [];
+      if (nth < held.length) {
+        // An earlier draft already holds this occurrence.
         duplicates++;
-        if (strictness(record) < strictness(kept[at] as Record<string, unknown>)) kept[at] = finding;
+        const at = held[nth];
+        if (severityStrictness(record) < severityStrictness(kept[at] as Record<string, unknown>)) kept[at] = finding;
         continue;
       }
-      seen.set(key, kept.length);
+      held.push(kept.length);
+      slots.set(key, held);
       kept.push(finding);
     }
   }

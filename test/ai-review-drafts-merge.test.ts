@@ -20,14 +20,14 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mergeDrafts, mergeReport } from "../lib/ai-review-drafts";
+import { findingIdentity, mergeDrafts, mergeReport, severityStrictness } from "../lib/ai-review-drafts";
 import { summaryReading } from "../lib/scaffold/ai-review-findings";
 import { MERGE_DRAFTS_USAGE_EXIT } from "../scripts/ai-review-merge-drafts";
 
-const finding = (file: string, summary: string, severity = "high") => ({
+const finding = (file: string, summary: string, severity = "high", line = 1) => ({
   severity,
   file,
-  line: 1,
+  line,
   summary,
   failure_scenario: "given x, y happens",
 });
@@ -133,6 +133,71 @@ describe("#2648: the drafts merge into their union", () => {
     const list = [finding("lib/a.ts", "One"), finding("lib/b.ts", "Two"), finding("lib/c.ts", "Three")];
     const m = mergeDrafts([{ path: "d1", text: draft(list) }]);
     expect(m.payload!.findings).toEqual(list);
+  });
+});
+
+// PR #2656 round 3, re-scoped under rule 5: rounds 1 to 3 each found a
+// defect in a rule that lived in a different line, so "same finding" and
+// "stricter" are now one function each, and these cases read them as tables.
+describe("#2648: one identity, one ranking", () => {
+  const f = (file: string, line: unknown, summary: string) => ({ file, line, summary, severity: "high" });
+
+  test("the identity is file, line and normalised summary — each row says whether two findings are one", () => {
+    const rows: [string, Record<string, unknown>, Record<string, unknown>, boolean][] = [
+      ["same everything", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", 10, "Token logged"), true],
+      ["summary differs only in case and spacing", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", 10, "  token   LOGGED "), true],
+      ["severity differs", f("lib/a.ts", 10, "Token logged"), { ...f("lib/a.ts", 10, "Token logged"), severity: "low" }, true],
+      ["line differs", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", 200, "Token logged"), false],
+      ["file differs", f("lib/a.ts", 10, "Token logged"), f("lib/b.ts", 10, "Token logged"), false],
+      ["summary differs", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", 10, "Error swallowed"), false],
+      ["line absent on one", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", undefined, "Token logged"), false],
+      ["line as a string and a number", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", "10", "Token logged"), false],
+    ];
+    for (const [name, a, b, same] of rows) {
+      expect(findingIdentity(a) === findingIdentity(b), name).toBe(same);
+    }
+  });
+
+  test("the ranking is one order, strictest first: blocking, then undeclared, then advisory", () => {
+    const strictestFirst: unknown[] = ["critical", "high", "Critical", "medium", "low", "info"];
+    const ranks = strictestFirst.map(sev => severityStrictness({ severity: sev }));
+    for (let i = 1; i < ranks.length; i++) {
+      expect(ranks[i - 1], `${String(strictestFirst[i - 1])} before ${String(strictestFirst[i])}`).toBeLessThan(ranks[i]);
+    }
+    // Every undeclared spelling, and no severity at all, is one rank.
+    for (const sev of ["urgent", "", 3, null, undefined]) {
+      expect(severityStrictness({ severity: sev }), String(sev)).toBe(severityStrictness({ severity: "Critical" }));
+    }
+  });
+});
+
+describe("#2648: the union keeps every occurrence any one run reported", () => {
+  test("two defects one run raised with the same words on different lines are both kept", () => {
+    const m = mergeDrafts([
+      { path: "d1", text: draft([finding("lib/a.ts", "Token logged", "critical", 10), finding("lib/a.ts", "Token logged", "critical", 200)]) },
+    ]);
+    expect((m.payload!.findings as { line: number }[]).map(x => x.line)).toEqual([10, 200]);
+    expect(m.duplicates).toBe(0);
+  });
+
+  test("the same words on different lines from different runs are both kept", () => {
+    const m = mergeDrafts([
+      { path: "d1", text: draft([finding("lib/a.ts", "Token logged", "critical", 10)]) },
+      { path: "d2", text: draft([finding("lib/a.ts", "Token logged", "critical", 200)]) },
+    ]);
+    expect((m.payload!.findings as { line: number }[]).map(x => x.line)).toEqual([10, 200]);
+    expect(m.duplicates).toBe(0);
+  });
+
+  test("a finding one run listed twice and another once is kept twice — the most any one run reported", () => {
+    const x = finding("lib/a.ts", "Token logged", "critical", 10);
+    const m = mergeDrafts([
+      { path: "d1", text: draft([x, x]) },
+      { path: "d2", text: draft([x]) },
+      { path: "d3", text: draft([x, x]) },
+    ]);
+    expect((m.payload!.findings as unknown[]).length).toBe(2);
+    expect(m.duplicates).toBe(3);
   });
 });
 
