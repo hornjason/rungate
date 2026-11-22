@@ -388,8 +388,9 @@ holds the decisions and the decomposition.
 - [x] SC-2801: No rendered file carries an unexpanded `${…}`, the brief templates' test-only marker string, or a numbered list that skips, and the SC-354 test edits a copy, never the shipped template
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       proved-by: test/rendered-surface.test.ts "SC-2801: no rendered file carries an unexpanded template variable, the test-only marker, or a numbered list that skips"
-- [ ] SC-2802: No always-loaded rendered rule states a count of files that adding one file would change
+- [x] SC-2802: No always-loaded rendered rule states a count of files that adding one file would change
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      proved-by: test/rendered-surface.test.ts "SC-2802: no always-loaded rendered rule states a count of files that adding one file would change"
 - [ ] SC-2803: Pull requests touching `templates/`, `lib/generators/` or `lib/doc-routing.ts` get a prompt-audit review lens that posts findings as threads, proven by a planted-cruft subject it flags and a clean control it does not
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2804: A pull request that removes a line from `templates/agent-briefs/<name>.md` runs that brief's evals, and aditi and discovery have at least one eval each
