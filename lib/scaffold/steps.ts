@@ -60,7 +60,7 @@ import { buildBoardIntakeWorkflow } from "./board-intake-workflow";
 import { CI_SUITE_FETCH_DEPTH, baseRefFetchDepth } from "../ci-history-depth";
 import { CLAUDE_CODE_ACTION } from "../claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../google-auth-action";
-import { RUNGATE_CONFIG_RELATIVE_PATH, loadComplianceConfig, tryLoadRungateConfig } from "../config-loader";
+import { RUNGATE_CONFIG_RELATIVE_PATH, configuredSurfaceBudget, loadComplianceConfig, tryLoadRungateConfig } from "../config-loader";
 import { readBoardInputs } from "../config-readers";
 import { organizeProjectReport } from "../organize";
 import type { ProjectScan, ProjectType, SpecEntry, TestFile, RefFile, DocRoute, Category } from "../generators/types";
@@ -109,7 +109,7 @@ import {
 import { readPreservedSection, type SectionSpec } from "../agents-md-sections";
 import { executedHookPath, hookRegistrationPath } from "../hook-trees";
 // #2597: the consumer's surface, measured by the one check this repository runs on itself.
-import { measureConcurrentLoad, surfaceReport, SurfaceUnmeasured } from "../../scripts/check-instruction-surface";
+import { judgeConsumerBudget, measureConcurrentLoad, surfaceReport, SurfaceUnmeasured } from "../../scripts/check-instruction-surface";
 
 /**
  * Look for a declared health route in the places a server declares one.
@@ -5918,7 +5918,14 @@ export function reportInstructionSurfaceStep(
     actions.push(`UNMEASURED: instruction surface — ${e.message}`);
     return;
   }
-  actions.push(...surfaceReport(reading));
+  // #2598 / SC-2797: held to the consumer's own budget when its config sets
+  // one; a refused one is a REFUSED line, which fails the scaffold run, and
+  // the reading is reported against the default it falls back to. The config
+  // was read once already by the run's first check, so a malformed one never
+  // reaches here.
+  const budget = judgeConsumerBudget(configuredSurfaceBudget(root), reading.peakBytes);
+  if (budget.refused !== null) actions.push(`REFUSED: instruction surface budget — ${budget.refused}`);
+  actions.push(...surfaceReport({ ...reading, budgetBytes: budget.budgetBytes }, undefined, budget.source));
 }
 
 export function reportExternalAdoptionStep(root: string, actions: string[]): void {

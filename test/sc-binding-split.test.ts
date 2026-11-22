@@ -462,7 +462,12 @@ const UNCLAIMED_RATCHET = 150;
 // scaffold into fixture consumers and lints read that rendered tree, a reading of
 // a scaffold run and the surface reader that no registered pattern expresses; the
 // `SC-2799` describe in test/rendered-surface.test.ts names it (2026-11-21).
-const CLAIMED_UNBINDABLE = 197;
+// 198: SC-2797 (#2598) ticked by `sync-sc-status --only SC-2797` — the consumer's
+// budget comes from its rungate config, defaults to SURFACE_BUDGET_BYTES and may sit
+// at most 35% above the measured peak, a reading of the config and the scaffold's
+// report that no registered pattern expresses; the `SC-2797` describe in
+// test/consumer-instruction-surface.test.ts names it (2026-11-21).
+const CLAIMED_UNBINDABLE = 198;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

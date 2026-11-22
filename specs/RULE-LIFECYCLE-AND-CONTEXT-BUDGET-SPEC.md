@@ -373,8 +373,9 @@ holds the decisions and the decomposition.
 - [x] SC-2796: A scaffold or re-scaffold run measures the consumer's launch and peak surface with `measureSurface` and reports the reading with its largest contributors
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       proved-by: test/consumer-instruction-surface.test.ts "SC-2796: a scaffold run reports the consumer's instruction surface"
-- [ ] SC-2797: The consumer budget is read from rungate config, defaults to `SURFACE_BUDGET_BYTES`, and a budget more than 35% above the measured surface is refused
+- [x] SC-2797: The consumer budget is read from rungate config, defaults to `SURFACE_BUDGET_BYTES`, and a budget more than 35% above the measured surface is refused
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      proved-by: test/consumer-instruction-surface.test.ts "SC-2797: the consumer's budget comes from its rungate config, defaults to SURFACE_BUDGET_BYTES, and may not sit more than 35% above what it measures"
 - [ ] SC-2798: The generated conformity test refuses an over-budget consumer surface, and an unreadable one as UNMEASURED
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [x] SC-2799: CI renders the full scaffold into fixture consumers, and every lint below reads that rendered tree
