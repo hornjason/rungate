@@ -491,7 +491,12 @@ const UNCLAIMED_RATCHET = 150;
 // finding by owner and drafts rungate's without filing, a reading of a rendered
 // consumer that no registered pattern expresses; the `SC-2805` describe in
 // test/prompt-audit-command.test.ts names it (2026-11-22).
-const CLAIMED_UNBINDABLE = 203;
+// 204: SC-2625 (#1722) ticked by hand from the live `hand-edits` reading, MET
+// since the second run opened — the engine's acceptance test, a reading of the
+// live board that no registered pattern expresses; the `SC-2625` describe in
+// test/board-conformance-job.test.ts names it, and the job it covers takes the
+// reading on every push to main (2026-11-22).
+const CLAIMED_UNBINDABLE = 204;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
