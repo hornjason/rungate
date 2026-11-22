@@ -3346,15 +3346,18 @@ export const AI_REVIEW_FORK_VAR = "RUNGATE_PR_IS_FORK";
  * behavioural test can tell apart.
  *
  * **A published package that lacks the command is a failure, named as one
- * (#2666).** The generated job runs `bunx rungate@<version>`, and the pin is
- * always the version that generated the workflow. Every release since the
- * command shipped carries it, so `bin/rungate.ts` answering `unknown command
- * "<name>"` means the published package lost a command it should have: the
- * #446 class of `files[]` omission. Until #2666 this line read as version
- * skew, a workflow ahead of its release. That printed a warning, exited 0, and
- * posted no threads, so a broken package read as a green job. Now it prints
- * an error naming the version and the command, and the step exits with the
- * command's own non-zero status, like every other refusal.
+ * (#2666).** The generated job runs `bunx rungate@<version>`, and the
+ * scaffold writes the pin as the version doing the generating. A version
+ * without this command does not generate this step at all. So
+ * `bin/rungate.ts` answering `unknown command "<name>"` leaves two causes,
+ * and neither is a release still to come: the package published for that
+ * version is missing the command (the #446 class of `files[]` omission), or
+ * the pin was edited by hand to a version that predates it. This step cannot
+ * tell those apart, so the annotation names both. Until #2666 the line read
+ * as version skew: a warning, exit 0, no threads posted, so either cause read
+ * as a green job. Now it prints an error naming the version and the command,
+ * and the step exits with the command's own non-zero status, like every other
+ * refusal.
  *
  * The capture consumes its own status with a top-level `|| threads_code=$?`,
  * which is #1110's lesson and the form the rest of this file uses. A
@@ -3411,7 +3414,7 @@ export function buildThreadsScript(version: string): string {
     `printf '%s\\n' "$threads_out"`,
     ``,
     `if [ "$threads_code" -ne 0 ] && printf '%s\\n' "$threads_out" | grep -qxF '${missing}'; then`,
-    `  echo "::error title=AI review threads::rungate@${version} does not carry the ${AI_REVIEW_THREADS_COMMAND} command this workflow calls. The pin is the version that generated this workflow, so the published package is missing a command it should have (a files[] omission, #446). No review threads were posted."`,
+    `  echo "::error title=AI review threads::rungate@${version} does not carry the ${AI_REVIEW_THREADS_COMMAND} command this workflow calls. This step is generated only by versions that have it, so either the package published for that version is missing it (a files[] omission, #446) or the pin was edited by hand. No review threads were posted."`,
     `fi`,
     ``,
     `exit "$threads_code"`,
