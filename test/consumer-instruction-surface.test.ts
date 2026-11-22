@@ -16,11 +16,10 @@
  * #2598, ADR-024 decision 3: the budget that reading is held to is the
  * consumer's own when its rungate config sets one, and `SURFACE_BUDGET_BYTES`
  * when it does not, and the report says which. A budget the consumer could
- * raise freely would constrain nothing, so a configured budget above the
- * default may sit at most 35% above the measured peak — the rule rungate holds
- * its own budget to — and one past that is REFUSED, which fails the scaffold
- * run. A budget at or below the default is never refused: it constrains at
- * least as much as the default it replaces.
+ * set freely would constrain nothing, so a configured budget may sit at most
+ * 35% above the measured peak — the rule rungate holds its own budget to —
+ * and one past that is REFUSED, which fails the scaffold run. That holds below
+ * the default as well as above it (review, PR #2622).
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -193,13 +192,16 @@ describe("SC-2797: the consumer's budget comes from its rungate config, defaults
     }
   });
 
-  test("a budget at or below the default is never refused, however far above the peak it sits", () => {
-    // 50,000 against a 2,950-byte peak is 1,595% above it, and still below the default.
+  test("a set budget more than 35% above the peak is refused even below the default", () => {
+    // 50,000 against a 2,950-byte peak is 1,595% above it, though below 64,000.
     const root = withConfig(consumer(), "directory", { project: "c", instructionSurface: { budgetBytes: 50_000 } });
     const actions: string[] = [];
     reportInstructionSurfaceStep(root, actions);
-    expect(surfaceLine(actions)).toContain("budget 50,000 (rungate config)");
-    expect(refusal(actions)).toBeUndefined();
+    const why = refusal(actions);
+    expect(why, actions.join(" | ")).toBeDefined();
+    // 2,950 × 1.35 is 3,982.5, so 3,983 is the most allowed.
+    for (const figure of ["50,000", "2,950", "3,983"]) expect(why).toContain(figure);
+    expect(surfaceLine(actions)).toContain("budget 64,000 (default)");
   });
 
   test("raising it is allowed to 35% above the measured peak, and refused one byte past that", () => {

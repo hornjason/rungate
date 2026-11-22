@@ -710,16 +710,16 @@ export interface ConsumerBudget {
  *
  * `configured` is what the consumer's rungate config sets, or null when it
  * sets none; reading the config is `lib/config-loader.ts`'s, so this file
- * keeps no relative import. No setting means `SURFACE_BUDGET_BYTES`. A
- * setting at or below the default is taken as it is: it constrains at least
- * as much as the default, however far above the peak it sits. A setting
- * above the default must sit within `CONSUMER_BUDGET_SLACK` of the measured
- * peak, or it is refused — a budget a consumer can raise freely constrains
- * nothing — and the reading falls back to the default.
+ * keeps no relative import. No setting means `SURFACE_BUDGET_BYTES`, the
+ * default the criterion names. Any setting must sit within
+ * `CONSUMER_BUDGET_SLACK` of the measured peak, below the default as much as
+ * above it: a budget that far above what it governs cannot go red, whoever
+ * chose the number. One past that is refused and the reading falls back to
+ * the default.
  */
 export function judgeConsumerBudget(configured: number | null, peakBytes: number): ConsumerBudget {
   if (configured === null) return { budgetBytes: SURFACE_BUDGET_BYTES, source: "default", refused: null };
-  const allowed = Math.max(SURFACE_BUDGET_BYTES, Math.round(peakBytes * CONSUMER_BUDGET_SLACK));
+  const allowed = Math.round(peakBytes * CONSUMER_BUDGET_SLACK);
   if (configured <= allowed) return { budgetBytes: configured, source: "rungate config", refused: null };
   return {
     budgetBytes: SURFACE_BUDGET_BYTES,
