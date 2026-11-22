@@ -1,4 +1,4 @@
-# generated-sha: 62ad08a43c54f33e
+# generated-sha: fd88888d8a0ebd5f
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -2615,7 +2615,7 @@ jobs:
         run: |
           set -uo pipefail
           payload="${AI_REVIEW_FINDINGS_PATH}"
-          dir="$(dirname "$payload")"
+          dir="${payload%/*}"
           kept="${dir}.kept"
           kept_draft="$kept/ai-review-draft-1.json"
           kept_exec="$kept/ai-review-execution-1.json"
@@ -2625,14 +2625,14 @@ jobs:
           if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then
             rm -f "$kept_draft" "$kept_exec"
             if [ -f "$payload" ] && cp "$payload" "$kept_draft"; then
-              draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"
+              draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)" || draft_sha=""
               echo "kept run 1's draft as $kept_draft"
             else
               echo "run 1 wrote no draft"
             fi
             if [ -n "$src" ] && [ -f "$src" ]; then
               if cp "$src" "$kept_exec"; then
-                execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)"
+                execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)" || execution_sha=""
                 echo "kept run 1's execution file as $kept_exec"
               else
                 rm -f "$kept_exec"
@@ -3011,7 +3011,7 @@ jobs:
         run: |
           set -uo pipefail
           payload="${AI_REVIEW_FINDINGS_PATH}"
-          dir="$(dirname "$payload")"
+          dir="${payload%/*}"
           kept="${dir}.kept"
           kept_draft="$kept/ai-review-draft-2.json"
           kept_exec="$kept/ai-review-execution-2.json"
@@ -3021,14 +3021,14 @@ jobs:
           if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then
             rm -f "$kept_draft" "$kept_exec"
             if [ -f "$payload" ] && cp "$payload" "$kept_draft"; then
-              draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"
+              draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)" || draft_sha=""
               echo "kept run 2's draft as $kept_draft"
             else
               echo "run 2 wrote no draft"
             fi
             if [ -n "$src" ] && [ -f "$src" ]; then
               if cp "$src" "$kept_exec"; then
-                execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)"
+                execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)" || execution_sha=""
                 echo "kept run 2's execution file as $kept_exec"
               else
                 rm -f "$kept_exec"
@@ -3407,7 +3407,7 @@ jobs:
         run: |
           set -uo pipefail
           payload="${AI_REVIEW_FINDINGS_PATH}"
-          dir="$(dirname "$payload")"
+          dir="${payload%/*}"
           kept="${dir}.kept"
           kept_draft="$kept/ai-review-draft-3.json"
           kept_exec="$kept/ai-review-execution-3.json"
@@ -3417,14 +3417,14 @@ jobs:
           if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then
             rm -f "$kept_draft" "$kept_exec"
             if [ -f "$payload" ] && cp "$payload" "$kept_draft"; then
-              draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"
+              draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)" || draft_sha=""
               echo "kept run 3's draft as $kept_draft"
             else
               echo "run 3 wrote no draft"
             fi
             if [ -n "$src" ] && [ -f "$src" ]; then
               if cp "$src" "$kept_exec"; then
-                execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)"
+                execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)" || execution_sha=""
                 echo "kept run 3's execution file as $kept_exec"
               else
                 rm -f "$kept_exec"
@@ -3456,7 +3456,7 @@ jobs:
         run: |
           set -uo pipefail
           payload="${AI_REVIEW_FINDINGS_PATH}"
-          dir="$(dirname "$payload")"
+          dir="${payload%/*}"
           kept="${dir}.kept"
           # Only the merge writes the round's payload; anything already there is not it.
           rm -f "$payload"

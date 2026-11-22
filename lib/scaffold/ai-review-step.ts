@@ -3478,7 +3478,9 @@ export function buildThreadsScript(version: string): string {
  *
  * The digest of each kept file is this step's output. A step's outputs are
  * fixed when it ends, so the merge can tell a kept file from one changed
- * after its run, wherever that change came from.
+ * after its run, wherever that change came from. A digest that could not be
+ * taken is empty, and the merge reads a kept file with no digest as not
+ * written — the direction this is allowed to be wrong in.
  *
  * It never fails the job. What it cannot keep is a warning, and the run then
  * reads as having written nothing — a route the merge and the report already
@@ -3488,7 +3490,7 @@ export function buildKeepExecutionScript(k: number): string {
   return [
     `set -uo pipefail`,
     `payload="\${${AI_REVIEW_FINDINGS_PATH_VAR}}"`,
-    `dir="$(dirname "$payload")"`,
+    `dir="\${payload%/*}"`,
     `kept="\${dir}${AI_REVIEW_KEPT_DIR_SUFFIX}"`,
     `kept_draft="$kept/${aiReviewDraftBasename(k)}"`,
     `kept_exec="$kept/${aiReviewExecutionCopyBasename(k)}"`,
@@ -3498,14 +3500,14 @@ export function buildKeepExecutionScript(k: number): string {
     `if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then`,
     `  rm -f "$kept_draft" "$kept_exec"`,
     `  if [ -f "$payload" ] && cp "$payload" "$kept_draft"; then`,
-    `    draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"`,
+    `    draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)" || draft_sha=""`,
     `    echo "kept run ${k}'s draft as $kept_draft"`,
     `  else`,
     `    echo "run ${k} wrote no draft"`,
     `  fi`,
     `  if [ -n "$src" ] && [ -f "$src" ]; then`,
     `    if cp "$src" "$kept_exec"; then`,
-    `      execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)"`,
+    `      execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)" || execution_sha=""`,
     `      echo "kept run ${k}'s execution file as $kept_exec"`,
     `    else`,
     `      rm -f "$kept_exec"`,
@@ -3553,7 +3555,7 @@ export function buildMergeDraftsScript(version: string): string {
   return [
     `set -uo pipefail`,
     `payload="\${${AI_REVIEW_FINDINGS_PATH_VAR}}"`,
-    `dir="$(dirname "$payload")"`,
+    `dir="\${payload%/*}"`,
     `kept="\${dir}${AI_REVIEW_KEPT_DIR_SUFFIX}"`,
     `# Only the merge writes the round's payload; anything already there is not it.`,
     `rm -f "$payload"`,

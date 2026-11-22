@@ -190,7 +190,7 @@ const outputs = (file: string) =>
 
 describe("#2648: keeping a run's draft and execution file out of the next run's reach", () => {
   const runKeep = (k: number, f: ReturnType<typeof findingsDir>, src: string) =>
-    spawnSync("bash", ["-c", buildKeepExecutionScript(k)], {
+    spawnSync("bash", ["-e", "-c", buildKeepExecutionScript(k)], {
       env: { PATH: process.env.PATH ?? "", AI_REVIEW_FINDINGS_PATH: f.payload, AI_REVIEW_EXECUTION_FILE: src, GITHUB_OUTPUT: f.out },
       encoding: "utf-8",
     });
@@ -280,7 +280,7 @@ describe("#2648: the merge step", () => {
     return { ...f, env };
   };
   const runMerge = (path: string, f: ReturnType<typeof kept>, extra: Record<string, string> = {}) =>
-    spawnSync("bash", ["-c", buildMergeDraftsScript(VERSION)], {
+    spawnSync("bash", ["-e", "-c", buildMergeDraftsScript(VERSION)], {
       env: { PATH: path, AI_REVIEW_FINDINGS_PATH: f.payload, GITHUB_OUTPUT: f.out, ...f.env, ...extra },
       encoding: "utf-8",
       cwd: REPO_ROOT,
