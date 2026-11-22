@@ -1310,19 +1310,20 @@ export interface AiReviewActionRefs {
  * refuses one, in the default and in a consumer's override alike.
  *
  * It carries no `-YYYYMMDD` suffix because the current generation has none:
- * the exact ids ARE `claude-sonnet-5` and friends, and appending a date
+ * the exact ids ARE `claude-haiku-5-5` and friends, and appending a date
  * produces a model identifier that does not resolve.
  *
- * **Why `claude-sonnet-5` and not `claude-opus-5-5`,** which an earlier wave
- * of this issue chose: this is the only model identifier anybody has measured
- * against a federated identity on Vertex. Verified 2026-10-19 — HTTP 200 from
- * `publishers/anthropic/models/claude-sonnet-5:rawPredict` at location
- * `global`, with no service-account key of any kind. `claude-opus-5-5` was an
- * exact id, which is the property the guard checks, and an unmeasured one,
- * which is the property that matters on the first run. A consumer who wants
- * the larger model sets `ci.vertex.model` and measures it themselves.
+ * **Why `claude-haiku-5-5` (CRC-B10, ADR-025, #2647).** The audit in
+ * docs/research/ai-review-audit.md replayed this job's prompt at the commits
+ * behind 11 known defects on 2026-11-22, through Vertex in project jhorn-pai
+ * at location `global`. `claude-sonnet-5`, the default until then, found 5
+ * and then 3. `claude-haiku-5-5` found 8, 8 and 8, agreeing with itself on 7
+ * or 8 each time, at about a fortieth of the price. So it is measured on
+ * Vertex, which was the reason Sonnet held the default since 2026-10-19
+ * (HTTP 200 from `rawPredict` with a federated identity). A consumer who
+ * wants a larger model sets `ci.vertex.model` to an exact id.
  */
-export const AI_REVIEW_MODEL = "claude-sonnet-5";
+export const AI_REVIEW_MODEL = "claude-haiku-5-5";
 
 /**
  * The Vertex location this job addresses when the consumer names none.

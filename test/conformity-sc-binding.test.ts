@@ -92,6 +92,8 @@ const CHECKED_SC_BASELINE = 261;
  * `test/review-execution-reading.test.ts`, took it to 361. The split's halves
  * then summed to 355 (150 + 205). 380 is 19 above the live 361 and 25 above
  * that sum, the margin #1718, #2045 and #2495 chose.
+ * Ticking CRC-B10 (#2647), proved by `test/ai-review-model-alias.test.ts`,
+ * then took the live count to 362, inside the same bound.
  */
 const UNMATCHED_BACKSTOP = 380;
 function specFiles(): string[] {

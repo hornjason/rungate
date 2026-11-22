@@ -389,3 +389,52 @@ describe("#685: what the alias guard does NOT cover", () => {
     // Recorded, not closed.
   });
 });
+
+/**
+ * CRC-B10 (#2647, ADR-025 decision 1): the generated AI review runs on Haiku
+ * 5.5 unless the consumer's config names an exact model.
+ *
+ * The audit behind it (docs/research/ai-review-audit.md, 2026-11-22) replayed
+ * the reviewer at the commits behind 11 known defects: Sonnet 5 found 5 and
+ * then 3, and the same prompt on Haiku 5.5 found 8, 8 and 8 at about a
+ * fortieth of the price, through Vertex in project jhorn-pai at `global`.
+ */
+describe("CRC-B10: the generated AI review defaults to Haiku 5.5", () => {
+  const HAIKU = "claude-haiku-5-5";
+
+  test("the default is the exact Haiku 5.5 id, and the alias guard accepts it", () => {
+    expect(AI_REVIEW_MODEL).toBe(HAIKU);
+    expect(modelAliasViolations(`--model ${AI_REVIEW_MODEL}`)).toEqual([]);
+  });
+
+  test("a project with no config reviews on it", () => {
+    const { text, cleanup } = generatedReviewWorkflow();
+    try {
+      expect(text).toContain(`--model ${HAIKU} `);
+    } finally { cleanup(); }
+  });
+
+  test("a Vertex block that names no model reviews on it too", () => {
+    const { text, cleanup } = generatedReviewWorkflow(VERTEX_CI);
+    try {
+      expect(text).toContain(`--model ${HAIKU} `);
+    } finally { cleanup(); }
+  });
+
+  test("a consumer's exact model still wins over the default", () => {
+    const { text, cleanup } = generatedReviewWorkflow(withModel("claude-sonnet-5"));
+    try {
+      expect(text).toContain("--model claude-sonnet-5 ");
+      expect(text).not.toContain(`--model ${HAIKU} `);
+    } finally { cleanup(); }
+  });
+
+  test("this repository follows the default: its config names no model, and its committed job reviews on Haiku", () => {
+    const config = JSON.parse(readFileSync(join(import.meta.dir, "..", ".claude/rungate/config.json"), "utf-8"));
+    expect(config.ci?.vertex, "the Vertex block is gone, so this case reads nothing").toBeDefined();
+    expect(config.ci.vertex.model, "the repository pins a model, so it does not follow the default").toBeUndefined();
+    const committed = readFileSync(join(import.meta.dir, "..", ".github/workflows/ai-review.yml"), "utf-8");
+    expect(committed).toContain(`--model ${HAIKU} `);
+    expect(committed).not.toContain("--model claude-sonnet-5");
+  });
+});
