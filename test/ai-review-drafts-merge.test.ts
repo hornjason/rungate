@@ -183,6 +183,10 @@ describe("#2648: one identity, one ranking", () => {
       ["severity differs", f("lib/a.ts", 10, "Token logged"), { ...f("lib/a.ts", 10, "Token logged"), severity: "low" }, true],
       ["line differs", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", 200, "Token logged"), false],
       ["file differs", f("lib/a.ts", 10, "Token logged"), f("lib/b.ts", 10, "Token logged"), false],
+      // PR #2662: a path is compared as written; two files differing only by
+      // case are two files on a case-sensitive checkout.
+      ["file differs only by case", f("lib/Parser.ts", 10, "Token logged"), f("lib/parser.ts", 10, "Token logged"), false],
+      ["file differs only by surrounding space", f("lib/a.ts", 10, "Token logged"), f(" lib/a.ts ", 10, "Token logged"), true],
       ["summary differs", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", 10, "Error swallowed"), false],
       ["line absent on one", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", undefined, "Token logged"), false],
       ["line as a string and a number", f("lib/a.ts", 10, "Token logged"), f("lib/a.ts", "10", "Token logged"), false],

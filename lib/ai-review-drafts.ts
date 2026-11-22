@@ -101,13 +101,16 @@ export interface DraftInput {
  * Whether two findings are one: file, line and normalised summary, compared
  * as TEXT. The only place this is decided. Not `advisoryKey`: that is a
  * 32-bit hash, so two different findings could collide and the second be
- * dropped with no line naming it (PR #2656 round 5). The normalisation —
- * trimmed, whitespace collapsed, lower-cased — is the same one it hashes.
+ * dropped with no line naming it (PR #2656 round 5). The SUMMARY is
+ * normalised — trimmed, whitespace collapsed, lower-cased — because two runs
+ * word one defect with different spacing and case. The FILE is only trimmed:
+ * `lib/Parser.ts` and `lib/parser.ts` are two files on a case-sensitive
+ * checkout, and folding them merged two findings into one (PR #2662).
  */
 export function findingIdentity(finding: Record<string, unknown>): string {
   const text = (v: unknown): string => String(v ?? "").trim().replace(/\s+/g, " ").toLowerCase();
   const f = AI_REVIEW_FINDING_FIELDS;
-  return JSON.stringify([text(finding[f.file]), finding[f.line] ?? null, text(finding[f.summary])]);
+  return JSON.stringify([String(finding[f.file] ?? "").trim(), finding[f.line] ?? null, text(finding[f.summary])]);
 }
 
 /**
