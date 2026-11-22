@@ -22,6 +22,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "path";
 
 import { resolveConfig } from "./config-loader";
 import { readFences } from "./markdown-fence";
+import { isPathScoped } from "../scripts/check-instruction-surface";
 
 /** The files a consumer's agents load or are pointed at, read whole, when the scaffold rendered them. */
 export const SURFACE_FILES = ["CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md"] as const;
@@ -70,13 +71,25 @@ export class NotRenderedSurface extends Error {
   }
 }
 
+/**
+ * Every `.md` file under `dir`, at any depth (review, PR #2632). Claude Code
+ * discovers rules and commands in subdirectories, and the surface measurement
+ * walks `.claude/rules` recursively, so a top-level listing skipped a nested
+ * rule for every lint while the measurement counted it. Agents are walked
+ * the same way, so no lint depends on which directory it is reading.
+ */
 function mdIn(root: string, dir: string): string[] {
   const at = join(root, dir);
   if (!existsSync(at) || !statSync(at).isDirectory()) return [];
-  return readdirSync(at)
-    .filter(f => f.endsWith(".md"))
-    .sort()
-    .map(f => `${dir}/${f}`);
+  const out: string[] = [];
+  const walk = (abs: string, rel: string): void => {
+    for (const e of readdirSync(abs, { withFileTypes: true }).sort((x, y) => x.name.localeCompare(y.name))) {
+      if (e.isDirectory()) walk(join(abs, e.name), `${rel}/${e.name}`);
+      else if (e.isFile() && e.name.endsWith(".md")) out.push(`${rel}/${e.name}`);
+    }
+  };
+  walk(at, dir);
+  return out;
 }
 
 /**
@@ -313,10 +326,55 @@ export function templateArtifacts(): SurfaceLint {
   };
 }
 
+// ── SC-2802: no always-loaded rule bakes in a count of files ──────────────
+
+/** A count of something a commit adds one of: "(3 files)", "12 specs", "4 ADRs". */
+const FILE_COUNT = /\b\d[\d,]*\s+(?:markdown\s+|source\s+|test\s+)?(?:files?|specs?|docs?|documents?|rules?|tests?|ADRs?|briefs?|agents?|commands?|workflows?|director(?:y|ies))\b/g;
+
+/** The rendered files every session loads: CLAUDE.md, AGENTS.md, and each rule that declares no `paths:`. */
+function alwaysLoaded(file: string, text: string): boolean {
+  if (file === "CLAUDE.md" || file === "AGENTS.md") return true;
+  return file.startsWith(".claude/rules/") && !isPathScoped(text);
+}
+
+/**
+ * SC-2802: no always-loaded rendered rule states a count of files that adding
+ * one file would change.
+ *
+ * #2566: docs-routing loads in every session and baked `(N files)` in at
+ * scaffold time, so it was right on the day it was written and wrong after the
+ * next commit that added a doc. One consumer's table read `specs/ (1 files)`.
+ *
+ * Only the always-loaded surface: a path-scoped rule loads beside a matching
+ * file and a brief loads when its agent runs, and `isPathScoped` — the same
+ * reading the surface measurement uses — decides which rules are which.
+ * Fenced examples are not read.
+ */
+export function staleCounts(): SurfaceLint {
+  return {
+    name: "stale-count",
+    check(surface) {
+      const findings: SurfaceFinding[] = [];
+      for (const [file, text] of surface.files) {
+        if (!alwaysLoaded(file, text)) continue;
+        const lines = text.split("\n");
+        const { roles } = readFences(lines);
+        lines.forEach((ln, i) => {
+          if (roles[i] !== "prose") return;
+          for (const m of ln.matchAll(FILE_COUNT)) {
+            findings.push({ file, message: `line ${i + 1} states "${m[0]}", a count the next commit can make wrong, in a rule every session loads` });
+          }
+        });
+      }
+      return findings;
+    },
+  };
+}
+
 /**
  * Every rendered-surface lint, in one list. CI runs the list over its fixture
  * renders (`test/rendered-surface.test.ts`), and the consumer-side audit
  * (SC-2805) runs it over a consumer's tree. A lint added here is a lint both
  * run.
  */
-export const SURFACE_LINTS: readonly SurfaceLint[] = [danglingReadTargets(), templateArtifacts()];
+export const SURFACE_LINTS: readonly SurfaceLint[] = [danglingReadTargets(), templateArtifacts(), staleCounts()];

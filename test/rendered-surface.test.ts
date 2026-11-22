@@ -29,6 +29,13 @@
  * #2602: no rendered file carries an unexpanded `${…}`, the brief templates'
  * test-only marker, or a numbered list that skips — the three #2567 shipped —
  * and the SC-354 case edits a copy of the templates, never the shipped ones.
+ *
+ * Covers SC-2802 (RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md) as well.
+ *
+ * #2603: no always-loaded rendered rule states a count of files that adding
+ * one file would change. #2566 is the case: docs-routing loads in every
+ * session and baked `(N files)` in at scaffold time, so one consumer's table
+ * read `specs/ (1 files)` over a directory that had grown.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -47,6 +54,7 @@ import {
   lintRenderedTree,
   readRenderedSurface,
   readTargets,
+  staleCounts,
   templateArtifacts,
   type RenderedSurface,
   type SurfaceLint,
@@ -313,5 +321,52 @@ describe("SC-2801: no rendered file carries an unexpanded template variable, the
     expect(source).toMatch(/const copy = mkdtempSync\(/);
     // Nothing in that file writes into the shipped template directory.
     expect(source).not.toMatch(/writeFileSync\(\s*(?:shipped|join\(\s*TEMPLATES_DIR)/);
+  });
+});
+
+describe("SC-2802: no always-loaded rendered rule states a count of files that adding one file would change", () => {
+  const lint = staleCounts();
+  const findingsFor = (rel: string, text: string) => lintRenderedTree(plantedCopy(rendered[0].root, rel, text), [lint]);
+
+  test("both fixture consumers render clean, and the registry runs the lint", () => {
+    for (const r of rendered) expect(lintRenderedTree(r.root, [lint]), r.consumer.name).toEqual([]);
+    expect(SURFACE_LINTS.map(l => l.name)).toContain("stale-count");
+  });
+
+  test("#2566 again: a count of files baked into an always-loaded rule is a finding", () => {
+    const f = findingsFor(".claude/rules/docs-routing.md", "| Decisions | `docs/adr/` (3 files) |");
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatchObject({ lint: "stale-count", file: ".claude/rules/docs-routing.md" });
+    expect(f[0].message).toContain("3 files");
+    expect(findingsFor("CLAUDE.md", "This project keeps 12 specs and 4 ADRs.").map(x => x.message)).toHaveLength(2);
+    // Every noun in both numbers, "directory" included (review, PR #2632).
+    expect(findingsFor("CLAUDE.md", "Decisions live in docs/adr/ (1 directory), routing in 2 directories.").map(x => x.message.match(/"([^"]+)"/)![1])).toEqual(["1 directory", "2 directories"]);
+  });
+
+  test("a rule in a subdirectory of .claude/rules is read, as Claude Code loads it (review, PR #2632)", () => {
+    // Claude Code discovers rules recursively, and so does the surface
+    // measurement (`scripts/check-instruction-surface.ts`). A reader that
+    // listed only the top level skipped a nested rule for every lint.
+    const root = join(scratch, `nested-${Math.random().toString(36).slice(2)}`);
+    cpSync(rendered[0].root, root, { recursive: true });
+    mkdirSync(join(root, ".claude", "rules", "project", "deeper"), { recursive: true });
+    writeFileSync(join(root, ".claude", "rules", "project", "structure.md"), "# Structure\n\nDecisions live in docs/adr/ (3 files).\n");
+    writeFileSync(join(root, ".claude", "rules", "project", "deeper", "scoped.md"), "---\npaths:\n  - \"src/**\"\n---\n\nThis project keeps 12 specs.\n");
+    // The view first: both nested files are on the surface the lints read.
+    expect([...readRenderedSurface(root).files.keys()]).toEqual(expect.arrayContaining([
+      ".claude/rules/project/structure.md",
+      ".claude/rules/project/deeper/scoped.md",
+    ]));
+    // The always-loaded one is a finding; the path-scoped one is not.
+    expect(lintRenderedTree(root, [lint]).map(f => f.file)).toEqual([".claude/rules/project/structure.md"]);
+  });
+
+  test("a count where nothing loads it always, in a fenced example, or of something that is not files, is not a finding", () => {
+    // harness-managed.md declares `paths:`, so it loads only beside a matching file.
+    expect(findingsFor(".claude/rules/harness-managed.md", "This project keeps 12 specs.")).toEqual([]);
+    // A brief loads when its agent runs, not in every session.
+    expect(findingsFor(".claude/agents/marcus.md", "This project keeps 12 specs.")).toEqual([]);
+    expect(findingsFor("CLAUDE.md", "```\nls specs | wc -l   # 12 specs\n```")).toEqual([]);
+    expect(findingsFor("CLAUDE.md", "Retry 3 times, and keep each rule under 200 words.")).toEqual([]);
   });
 });

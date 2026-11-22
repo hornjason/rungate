@@ -482,7 +482,11 @@ const UNCLAIMED_RATCHET = 150;
 // list that skips, a reading of the fixture renders that no registered pattern
 // expresses; the `SC-2801` describe in test/rendered-surface.test.ts names it
 // (2026-11-21).
-const CLAIMED_UNBINDABLE = 201;
+// 202: SC-2802 (#2603) ticked by `sync-sc-status --only SC-2802` — no always-loaded
+// rendered rule states a count of files that adding one file would change, a reading
+// of the fixture renders that no registered pattern expresses; the `SC-2802` describe
+// in test/rendered-surface.test.ts names it (2026-11-21).
+const CLAIMED_UNBINDABLE = 202;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

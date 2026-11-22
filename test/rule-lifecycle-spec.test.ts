@@ -160,8 +160,13 @@ describe("RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC: document integrity", () => {
     // template variable, the test-only marker or a numbered list that skips,
     // driven by `test/rendered-surface.test.ts` over both fixture renders and
     // planted copies, with a nine-mutation battery recorded on its pull request.
+    //
+    // SC-2802 joins them (#2603): no always-loaded rendered rule states a
+    // count of files that adding one file would change, driven by
+    // `test/rendered-surface.test.ts` over both fixture renders and planted
+    // copies, with a seven-mutation battery recorded on its pull request.
     expect(checked.sort((a, b) => a - b)).toEqual([
-      1933, 1934, 1935, 1936, 1937, 1939, 1941, 1947, 2440, 2441, 2442, 2443, 2444, 2445, 2446, 2447, 2769, 2796, 2797, 2798, 2799, 2800, 2801,
+      1933, 1934, 1935, 1936, 1937, 1939, 1941, 1947, 2440, 2441, 2442, 2443, 2444, 2445, 2446, 2447, 2769, 2796, 2797, 2798, 2799, 2800, 2801, 2802,
     ]);
   });
 
