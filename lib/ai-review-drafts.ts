@@ -44,7 +44,6 @@
  */
 
 import {
-  advisoryKey,
   severityBlocks,
   AI_REVIEW_BLOCK_VERDICT,
   AI_REVIEW_FINDINGS_KEY,
@@ -86,9 +85,17 @@ export interface DraftInput {
   readError?: string;
 }
 
-/** Whether two findings are one: file, line and normalised summary. The only place this is decided. */
+/**
+ * Whether two findings are one: file, line and normalised summary, compared
+ * as TEXT. The only place this is decided. Not `advisoryKey`: that is a
+ * 32-bit hash, so two different findings could collide and the second be
+ * dropped with no line naming it (PR #2656 round 5). The normalisation —
+ * trimmed, whitespace collapsed, lower-cased — is the same one it hashes.
+ */
 export function findingIdentity(finding: Record<string, unknown>): string {
-  return JSON.stringify([advisoryKey(finding), finding[AI_REVIEW_FINDING_FIELDS.line] ?? null]);
+  const text = (v: unknown): string => String(v ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+  const f = AI_REVIEW_FINDING_FIELDS;
+  return JSON.stringify([text(finding[f.file]), finding[f.line] ?? null, text(finding[f.summary])]);
 }
 
 /**
@@ -98,15 +105,13 @@ export function findingIdentity(finding: Record<string, unknown>): string {
 export function severityStrictness(finding: Record<string, unknown>): number {
   const sev = finding[AI_REVIEW_FINDING_FIELDS.severity];
   const declared = Object.keys(AI_REVIEW_SEVERITIES);
-  const at = typeof sev === "string" ? declared.indexOf(sev) : -1;
+  // `severityBlocks` is the one answer to "is this declared, and does it
+  // block", and nothing here asks it again. Since #2657 it reads the table's
+  // own keys, so `null` is every undeclared value — inherited names such as
+  // `constructor` included, which round 4 found ranked above `critical`.
   const blocks = severityBlocks(sev);
-  // Ranked by the table only when the word is one of its OWN keys and the
-  // answer is a boolean. `severityBlocks` reads the table by plain property
-  // access, so a name every object inherits — `constructor`, `__proto__` —
-  // comes back as a function or an object, not null, and ranked stricter
-  // than `critical` (round 4). Everything else is the one undeclared rank.
-  if (at === -1 || typeof blocks !== "boolean") return declared.length;
-  return (blocks ? 0 : declared.length + 1) + at;
+  if (blocks === null) return declared.length;
+  return (blocks ? 0 : declared.length + 1) + declared.indexOf(sev as string);
 }
 
 function parseDraft(d: DraftInput): { reading: DraftReading; obj: Record<string, unknown> | null } {

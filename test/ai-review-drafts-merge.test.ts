@@ -21,7 +21,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findingIdentity, mergeDrafts, mergeReport, severityStrictness } from "../lib/ai-review-drafts";
-import { summaryReading } from "../lib/scaffold/ai-review-findings";
+import { advisoryKey, summaryReading } from "../lib/scaffold/ai-review-findings";
 import { MERGE_DRAFTS_USAGE_EXIT } from "../scripts/ai-review-merge-drafts";
 
 const finding = (file: string, summary: string, severity = "high", line = 1) => ({
@@ -156,6 +156,23 @@ describe("#2648: one identity, one ranking", () => {
     for (const [name, a, b, same] of rows) {
       expect(findingIdentity(a) === findingIdentity(b), name).toBe(same);
     }
+  });
+
+  // PR #2656 round 5: the identity compares the normalised TEXT. Keyed on
+  // advisoryKey, a 32-bit hash, two different findings that collide were one,
+  // and the second was dropped with no line naming it. This pair was found by
+  // brute force and collides today; the first assertion proves it still does.
+  test("two summaries whose 32-bit advisoryKey collides are two findings", () => {
+    const a = f("lib/a.ts", 10, "token logged 4978");
+    const b = f("lib/a.ts", 10, "token logged 374420");
+    expect(advisoryKey(a), "the fixture no longer collides, so this case witnesses nothing").toBe(advisoryKey(b));
+    expect(findingIdentity(a)).not.toBe(findingIdentity(b));
+    const m = mergeDrafts([
+      { path: "d1", text: draft([{ ...a, failure_scenario: "x" }]) },
+      { path: "d2", text: draft([{ ...b, failure_scenario: "x" }]) },
+    ]);
+    expect((m.payload!.findings as unknown[]).length).toBe(2);
+    expect(m.duplicates).toBe(0);
   });
 
   test("the ranking is one order, strictest first: blocking, then undeclared, then advisory", () => {
