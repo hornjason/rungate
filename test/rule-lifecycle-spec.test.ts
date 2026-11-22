@@ -150,8 +150,13 @@ describe("RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC: document integrity", () => {
     // driven by `test/scaffold-conformity-surface.test.ts` through the real
     // check spawned over planted consumers, with a six-mutation battery
     // recorded on its pull request.
+    //
+    // SC-2800 joins them (#2601): every file or table a rendered brief or rule
+    // tells its agent to read exists in the rendered tree, driven by
+    // `test/rendered-surface.test.ts` over both fixture renders and planted
+    // copies of them, with a six-mutation battery recorded on its pull request.
     expect(checked.sort((a, b) => a - b)).toEqual([
-      1933, 1934, 1935, 1936, 1937, 1939, 1941, 1947, 2440, 2441, 2442, 2443, 2444, 2445, 2446, 2447, 2769, 2796, 2797, 2798, 2799,
+      1933, 1934, 1935, 1936, 1937, 1939, 1941, 1947, 2440, 2441, 2442, 2443, 2444, 2445, 2446, 2447, 2769, 2796, 2797, 2798, 2799, 2800,
     ]);
   });
 

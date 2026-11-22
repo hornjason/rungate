@@ -472,7 +472,12 @@ const UNCLAIMED_RATCHET = 150;
 // UNMEASURED, a reading of a spawned conformity check that no registered pattern
 // expresses; the `SC-2798` describe in test/scaffold-conformity-surface.test.ts
 // names it (2026-11-21).
-const CLAIMED_UNBINDABLE = 199;
+// 200: SC-2800 (#2601) ticked by `sync-sc-status --only SC-2800` — every file,
+// heading or table a rendered brief or rule tells its agent to read exists in the
+// rendered tree, a reading of the fixture renders that no registered pattern
+// expresses; the `SC-2800` describe in test/rendered-surface.test.ts names it
+// (2026-11-21).
+const CLAIMED_UNBINDABLE = 200;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

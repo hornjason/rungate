@@ -14,6 +14,15 @@
  * not rewrite. ADR-024 left the fixture set to this issue; SUCCESS.md's
  * "Done, for a consumer" names the monolith consumer as one a reader must not
  * get wrong.
+ *
+ * Covers SC-2800 (RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC.md) as well.
+ *
+ * #2601: every file, and every table in a file, that a rendered brief or rule
+ * tells its agent to read exists in the rendered tree. #2565 is the case: the
+ * discovery brief sent its agent to "the AGENTS.md Specs table", which the
+ * rendered AGENTS.md does not have. Building this lint found a second one,
+ * #2621 — three briefs sent a monolith consumer's agent to
+ * `.claude/rungate/config.json`, a file it does not have.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -27,8 +36,11 @@ import { DEFAULT_AGENT_META } from "../lib/create-brief";
 import { OWNED_FILES } from "../lib/scaffold/owned-files";
 import {
   NotRenderedSurface,
+  SURFACE_LINTS,
+  danglingReadTargets,
   lintRenderedTree,
   readRenderedSurface,
+  readTargets,
   type RenderedSurface,
   type SurfaceLint,
 } from "../lib/surface-lint";
@@ -183,5 +195,50 @@ describe("SC-2799: CI renders the full scaffold into fixture consumers, and lint
       const reader: SurfaceLint = { name: "reads-the-template", check: () => [{ file, message: "x" }] };
       expect(() => lintRenderedTree(r.root, [reader]), file).toThrow(/lint reads-the-template reported on .* not in the rendered tree/);
     }
+  });
+});
+
+/** A copy of a rendered consumer with `text` appended to one of its surface files. */
+function plantedCopy(from: string, rel: string, text: string): string {
+  const root = join(scratch, `planted-${Math.random().toString(36).slice(2)}`);
+  cpSync(from, root, { recursive: true });
+  writeFileSync(join(root, rel), readFileSync(join(root, rel), "utf-8") + "\n" + text + "\n");
+  return root;
+}
+
+describe("SC-2800: every file, heading or table a rendered brief or rule tells its agent to read exists in the rendered tree", () => {
+  test("both fixture consumers render clean, and the lint read real instructions to say so", () => {
+    for (const r of rendered) {
+      const targets = readTargets(readRenderedSurface(r.root));
+      // The config read, the specs-routing table and the two shipped prompts at
+      // least: a detector that stopped matching would make the next line vacuous.
+      expect(targets.length, `${r.consumer.name}: ${targets.map(t => t.target).join(", ")}`).toBeGreaterThanOrEqual(5);
+      expect(targets.some(t => t.table !== null), r.consumer.name).toBe(true);
+      expect(lintRenderedTree(r.root, SURFACE_LINTS), r.consumer.name).toEqual([]);
+    }
+    expect(SURFACE_LINTS.map(l => l.name)).toContain("dangling-read-target");
+  });
+
+  test("#2565 again: a brief sending its agent to a table AGENTS.md does not have is a finding", () => {
+    const root = plantedCopy(rendered[0].root, ".claude/agents/discovery.md", "Look up the governing spec in the AGENTS.md Specs table.");
+    const findings = lintRenderedTree(root, [danglingReadTargets()]);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ lint: "dangling-read-target", file: ".claude/agents/discovery.md" });
+    expect(findings[0].message).toContain("Specs table in AGENTS.md");
+  });
+
+  test("a file it is told to read that is not there is a finding, backticked or bare, here or in the shipped package", () => {
+    for (const line of ["Read `docs/missing-guide.md` first.", "Check docs/missing-guide.md before sizing.", "Read `node_modules/rungate/prompts/no-such-prompt.md`."]) {
+      const root = plantedCopy(rendered[0].root, ".claude/agents/aditi.md", line);
+      const findings = lintRenderedTree(root, [danglingReadTargets()]);
+      expect(findings.map(f => f.message), line).toHaveLength(1);
+      expect(findings[0].message, line).toContain("not in the rendered tree");
+    }
+  });
+
+  test("a mention that is not an instruction to read, or sits in a fenced example, is not a finding", () => {
+    const text = "Name a path with its directory (`lib/scaffold/emit.ts`), not its bare name.\n\n```\nRead `docs/example-only.md`\n```";
+    const root = plantedCopy(rendered[0].root, ".claude/rules/agent-principles.md", text);
+    expect(lintRenderedTree(root, [danglingReadTargets()])).toEqual([]);
   });
 });
