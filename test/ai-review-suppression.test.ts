@@ -72,6 +72,7 @@ import {
   productionSuppression,
   priorKeysFrom,
   readOrNull,
+  suppressionCheckoutRoot,
 } from "../lib/ai-review-suppression";
 import {
   THREADS_NOT_A_LIST,
@@ -1190,6 +1191,108 @@ describe("#2257: the adjudicator reads the checkout it is told, not the director
     expect(out).not.toContain("read as the same finding restated");
     expect(out).toContain(AI_REVIEW_SUPPRESSED_UNMEASURED_TITLE);
     expect(out).toContain("no cited line could be read");
+  });
+});
+
+// ── #2669: the poster reads the checkout it is told, too ───────────────────
+//
+// #2664 moves the generated steps' `bunx` out of every directory a branch or
+// the reviewer can write, because `bunx` resolves bunfig.toml by walking up
+// from where it runs. The adjudicator could move: it reads the checkout from
+// AI_REVIEW_CHECKOUT_ROOT (#2257, above). The poster could not, because it
+// read cited lines from its working directory, so from an empty directory it
+// could no longer see a restated finding and posted it again. This is the
+// poster driven end to end from outside the checkout, against a local API.
+describe("#2669: the poster reads the checkout it is told, not the directory it runs in", () => {
+  async function postOutsideCheckout(name: string, checkoutRoot: string | null) {
+    const root = checkout(`poster-${name}`);
+    const payloadDir = mkdtempSync(join(SCRATCH, `poster-payload-${name}-`));
+    const payload = join(payloadDir, "findings.json");
+    // The same finding at the same line, worded differently: only the anchor
+    // rule can match it, and the anchor rule needs the cited line's text.
+    writeFileSync(payload, payloadOf("PASS", [advisory({ summary: "this name says nothing about what it holds" })]));
+    const threads = join(payloadDir, "threads.json");
+    writeFileSync(threads, raisedBefore());
+
+    const posted: string[] = [];
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      async fetch(req) {
+        const url = new URL(req.url);
+        const json = (body: unknown, status = 200) =>
+          new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+        if (req.method === "POST" && url.pathname === "/repos/o/r/pulls/1/comments") {
+          posted.push(String(((await req.json()) as { path?: string }).path));
+          return json({ id: posted.length }, 201);
+        }
+        if (req.method === "GET" && url.pathname === "/repos/o/r/issues/1/comments") return json([]);
+        if (req.method === "POST" && url.pathname === "/graphql") {
+          return json({
+            data: { repository: { pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } },
+          });
+        }
+        return json({ message: "Not Found" }, 404);
+      },
+    });
+    try {
+      const env: Record<string, string | undefined> = {
+        ...process.env,
+        [AI_REVIEW_THREADS_PATH_VAR]: threads,
+        GITHUB_TOKEN: "stub-token",
+        GH_TOKEN: "stub-token",
+        GITHUB_API_URL: `http://127.0.0.1:${server.port}`,
+      };
+      delete env[AI_REVIEW_CHECKOUT_ROOT_VAR];
+      if (checkoutRoot === "the checkout") env[AI_REVIEW_CHECKOUT_ROOT_VAR] = root;
+      const child = Bun.spawn(
+        ["bun", join(ROOT, "bin", "rungate.ts"), "ai-review-threads", payload, "--repo", "o/r", "--pr", "1", "--commit", "a".repeat(40)],
+        { cwd: payloadDir, env: env as Record<string, string>, stdout: "pipe", stderr: "pipe" },
+      );
+      // A hang is a failure, not a wait.
+      const killer = setTimeout(() => child.kill(), 30_000);
+      const [stdout, stderr] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      clearTimeout(killer);
+      return { out: `${stdout}${stderr}`, posted };
+    } finally {
+      server.stop(true);
+    }
+  }
+
+  test("run from outside the checkout with the checkout named, the reworded repeat is not posted again", async () => {
+    const r = await postOutsideCheckout("named", "the checkout");
+    // The run reached the poster and finished: its summary line is printed.
+    expect(r.out).toContain("ai-review-threads:");
+    expect(r.out).toContain("attempted 0");
+    expect(r.posted, `the poster re-posted a finding already raised:\n${r.out}`).toEqual([]);
+  });
+
+  test("CONTROL: with no checkout named, the same run cannot see the repeat and posts it", async () => {
+    // The state before #2669, and what the named case is measured against: the
+    // stub does accept a thread, so an empty list above is the gate's doing.
+    const r = await postOutsideCheckout("unnamed", null);
+    expect(r.posted, `the control posted nothing, so it measures nothing:\n${r.out}`).toEqual([CITED_FILE]);
+  });
+});
+
+describe("#2669: both commands resolve the checkout through one function", () => {
+  test("each command passes suppressionCheckoutRoot() to productionSuppression, and neither reads the variable itself", () => {
+    // Two copies of "the variable, or else the working directory" is two
+    // deciders that agree until one is edited. That is the shape that left
+    // the poster on process.cwd() when the adjudicator moved (#2257).
+    for (const name of ["ai-review-findings.ts", "ai-review-threads.ts"] as const) {
+      const src = readFileSync(join(ROOT, "scripts", name), "utf-8");
+      // Booleans, so a failure names the file instead of printing its source.
+      expect(src.includes("suppressionCheckoutRoot()"), `${name} does not resolve the checkout through suppressionCheckoutRoot`).toBe(true);
+      expect(src.includes("AI_REVIEW_CHECKOUT_ROOT_VAR"), `${name} reads the checkout variable itself`).toBe(false);
+      expect(/productionSuppression\([^)]*process\.cwd\(\)/.test(src), `${name} hands productionSuppression its working directory`).toBe(false);
+    }
+  });
+
+  test("suppressionCheckoutRoot: the named checkout, else the working directory; an empty name is no name", () => {
+    expect(suppressionCheckoutRoot({ [AI_REVIEW_CHECKOUT_ROOT_VAR]: "/work/tree" }, "/elsewhere")).toBe("/work/tree");
+    expect(suppressionCheckoutRoot({}, "/elsewhere")).toBe("/elsewhere");
+    expect(suppressionCheckoutRoot({ [AI_REVIEW_CHECKOUT_ROOT_VAR]: "" }, "/elsewhere")).toBe("/elsewhere");
   });
 });
 

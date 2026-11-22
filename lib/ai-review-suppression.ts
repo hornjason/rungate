@@ -73,6 +73,7 @@ import {
   AI_REVIEW_CARRY_READ,
   AI_REVIEW_CARRY_STATE_KEY,
   AI_REVIEW_CARRY_UNMEASURED,
+  AI_REVIEW_CHECKOUT_ROOT_VAR,
   AI_REVIEW_SNAPSHOT_ROUND_KEY,
 } from "./scaffold/ai-review-step";
 import type { AiReviewSuppressionGate, PopulationOwedReading, PopulationThread } from "./scaffold/ai-review-findings";
@@ -309,6 +310,30 @@ export function aiReviewSuppressionGate(inputs: SuppressionInputs): AiReviewSupp
         : null;
     return { repeat, unmeasured };
   };
+}
+
+/**
+ * The checkout both commands read cited lines from (#2257, #2669).
+ *
+ * The generated steps run `bunx` from a directory made for it, outside the
+ * checkout and outside the reviewer's payload directory (#2664), because
+ * `bunx` resolves `bunfig.toml`, `.npmrc` and `package.json` by walking up
+ * from where it runs. So the working directory is not the checkout, and the
+ * steps name it in `AI_REVIEW_CHECKOUT_ROOT`. The working directory is the
+ * fallback only for a step generated before the variable was set. An empty
+ * value is no value, which is what `${GITHUB_WORKSPACE:-}` expands to when
+ * the runner set nothing.
+ *
+ * One function for both commands. The poster stayed on `process.cwd()` when
+ * the adjudicator learned the variable, because each held its own copy of
+ * this choice.
+ */
+export function suppressionCheckoutRoot(
+  env: Record<string, string | undefined> = process.env,
+  cwd: string = process.cwd(),
+): string {
+  const named = env[AI_REVIEW_CHECKOUT_ROOT_VAR];
+  return named !== undefined && named !== "" ? named : cwd;
 }
 
 /**

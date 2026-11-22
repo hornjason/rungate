@@ -52,7 +52,7 @@ import {
   readAiReviewFindingsFile,
 } from "../lib/scaffold/ai-review-findings";
 import { carryKey } from "../lib/ai-review-rounds";
-import { productionSuppression } from "../lib/ai-review-suppression";
+import { productionSuppression, suppressionCheckoutRoot } from "../lib/ai-review-suppression";
 import { AI_REVIEW_THREADS_PATH_VAR } from "../lib/scaffold/ai-review-step";
 
 const COMMAND = "ai-review-threads";
@@ -148,9 +148,14 @@ if (!parsed.ok) {
 // command that posts the threads, which is the half #1616's 11-threads-for-3
 // measurement is about. `productionSuppression` is now the only assembly
 // site, and AS-15 holds it that way.
+//
+// #2669: the checkout by name, through the adjudicator's own function. The
+// generated step is moving out of the checkout (#2664), and from any other
+// directory the working directory holds no cited line, so a restated finding
+// would be posted again.
 const { gate: suppress, lineTextFor } = productionSuppression(
   process.env[AI_REVIEW_THREADS_PATH_VAR],
-  process.cwd(),
+  suppressionCheckoutRoot(),
 );
 
 const reading = readAiReviewFindingsFile(
