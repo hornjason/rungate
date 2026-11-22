@@ -306,9 +306,15 @@ describe("what it produces", () => {
     // that the population is now empty because this run has no board and
     // no `--project-root`, not because the producer cannot build one. The
     // cases that prove it CAN are in `the criterion population (B2)`.
+    //
+    // `--project-root` is the scratch directory, which has no board config.
+    // Without it the producer read the config of whatever tree ran the suite
+    // — this repository, which HAS a board — and the case held only because
+    // the stub returned no engine issue. #2645 made an empty family emit a
+    // population, which is how that came to light.
     await withSpec(SPEC, async (dir, at) => {
       const { gh } = spy(CONFORMANT_LIVE);
-      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n"], gh);
+      const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
       expect(snap.criteria).toEqual([]);
     });
   });
@@ -1440,16 +1446,29 @@ describe("the refusals, and whether the API was reached", () => {
       });
     });
 
-    test("a board with no engine issues on it is still UNMEASURED, not 0 of 3", async () => {
-      // There is no column to read and nothing to invert. Emitting the
-      // population all-null would say the board was consulted and carries
-      // no coverage, which is a sentence about data nobody fetched.
+    test("#2645: a board with no engine issues emits the population all-null, and queries no column", async () => {
+      // Until #2645 this emitted NO population, so a finished engine read
+      // `criterion-coverage` 0 of 0 and every pull request went red. With no
+      // engine issue there is no column to read and nothing left unread, so
+      // "no issue names this criterion" is a fact, not a guess; whether each
+      // criterion is true still comes from the spec.
       await withSpec(SPEC, async (dir, at) => {
         writeBoardConfig(dir, BOARD);
         const { gh, calls } = spy(CONFORMANT_LIVE, { issues: [] });
         const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
-        expect(snap.criteria).toEqual([]);
+        expect(snap.criteria.map(c => c.id)).toEqual(["SC-9001", "SC-9002", "SC-9003"]);
+        expect(snap.criteria.map(c => c.satisfiedByIssue)).toEqual([null, null, null]);
         expect(calls.filter(c => c.startsWith("readField")), "it queried a column with nothing to ask about").toEqual([]);
+      });
+    });
+
+    test("#2645: with no board configured, an empty engine family still emits no population", async () => {
+      // The half of the gate #2645 keeps: a project with no board was never
+      // read, and an all-null population would say it had been.
+      await withSpec(SPEC, async (dir, at) => {
+        const { gh } = spy(CONFORMANT_LIVE, { issues: [] });
+        const snap = await emitted([at, "--prefix", "Fix", "--repo", "o/n", "--project-root", dir], gh);
+        expect(snap.criteria).toEqual([]);
       });
     });
 

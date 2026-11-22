@@ -975,12 +975,18 @@ export async function main(
   // other holding every case up.
   //
   // `columnRead` is the gate, and it is deliberately conjunctive: a board
-  // must be configured AND there must be an engine issue to ask about AND
-  // every one of them must have come back with a key. A population built
-  // from a column read for only some of them would call a criterion
-  // uncovered on the strength of a row nobody could read.
-  const columnRead =
-    board !== null && snapshotIssues.length > 0 && snapshotIssues.every(i => "criteriaField" in i);
+  // must be configured AND every engine issue must have come back with a
+  // key. A population built from a column read for only some of them would
+  // call a criterion uncovered on the strength of a row nobody could read.
+  //
+  // An engine family with NO open issue passes the second half (#2645). Until
+  // then this also demanded at least one issue, so a finished engine — every
+  // criterion ticked, its last issue closed — emitted no population and read
+  // `criterion-coverage` 0 of 0, UNMEASURED, which reddened every pull
+  // request through the stage ladder. With no issue there is no column to
+  // read and nothing unread: "no issue names this criterion" is then a fact
+  // about the family, and the spec still says which criteria are true.
+  const columnRead = board !== null && snapshotIssues.every(i => "criteriaField" in i);
 
   // ── The three REPOSITORY-WIDE populations — SC-2615, SC-2616, SC-2617 ──
   //

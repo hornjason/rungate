@@ -43,6 +43,7 @@ import {
   PRODUCE_TIMEOUT_MS,
   conformant,
   declaredWorkUnaccounted,
+  engineFinished,
   formatReading,
   produceBoard,
   readSnapshotText,
@@ -2679,5 +2680,68 @@ describe("#2323 / SC-2752: declared-work reads a criterion an unmerged ADR plans
     const text = formatReading(r);
     expect(text).toContain("declared outside phases (1): SC-9603");
     expect(text).toContain("planned by an ADR this change accepts (1): SC-9603");
+  });
+});
+
+/**
+ * #2645: a finished engine — every criterion recorded true, no engine issue
+ * open — read four readings 0 of 0, UNMEASURED, and `board-conformance`
+ * exited 1 on main the moment #1722 closed. The stage ladder runs it inside
+ * the required `test` check, so every pull request went red.
+ *
+ * What was broken to prove it: `engineFinished` answering null puts the
+ * three issue-scoped readings back to UNMEASURED, which the first case
+ * catches; the unticked case and the empty-board case hold the other side,
+ * so a reason handed out unconditionally is caught too.
+ */
+describe("#2645: a finished engine reads MET, not 0 of 0", () => {
+  const finishedBoard = (): BoardSnapshot => ({
+    ...completeBoard(),
+    issues: [],
+    criteria: [
+      { id: "SC-2618", satisfiedByIssue: null, recordedTrue: true },
+      { id: "SC-2619", satisfiedByIssue: null, recordedTrue: true },
+      { id: "SC-2620", satisfiedByIssue: null, recordedTrue: true },
+    ],
+    plannedEdges: [],
+  });
+  const engineFour = ["criterion-coverage", "blocked-by-edges", "criteria-field", "queue-label"];
+  const read = (b: BoardSnapshot) => new Map(takeReadings(b).map(r => [r.name, r]));
+
+  test("every engine reading is MET, and the issue-scoped three say the engine is finished", () => {
+    const readings = read(finishedBoard());
+    for (const name of engineFour) {
+      expect(readings.get(name)!.status, `${name}: ${readings.get(name)!.why}`).toBe("met");
+    }
+    expect(readings.get("criterion-coverage")!.why).toBe("3 of 3");
+    for (const name of ["blocked-by-edges", "criteria-field", "queue-label"]) {
+      expect(readings.get(name)!.why).toContain("the engine is finished");
+    }
+  });
+
+  test("one criterion still untrue: coverage is SHORT, and 0 of 0 stays UNMEASURED", () => {
+    const b = finishedBoard();
+    b.criteria[1] = { id: "SC-2619", satisfiedByIssue: null, recordedTrue: false };
+    const readings = read(b);
+    expect(readings.get("criterion-coverage")!.status).toBe("short");
+    for (const name of ["blocked-by-edges", "criteria-field", "queue-label"]) {
+      expect(readings.get(name)!.status, `${name} took an unfinished engine as finished`).toBe("unmeasured");
+    }
+  });
+
+  test("a criterion placed outside every phase does not hold the engine open", () => {
+    const b = finishedBoard();
+    b.criteria.push({ id: "SC-2621", satisfiedByIssue: null, recordedTrue: false, outside: "Not adopted — deliberate" });
+    expect(engineFinished(b)).not.toBeNull();
+  });
+
+  test("an empty board is still not a finished one", () => {
+    expect(engineFinished({ ...finishedBoard(), criteria: [] })).toBeNull();
+    const empty = plant("empty-2645", { issues: [], criteria: [], phases: [] });
+    refuses(["--snapshot", empty], "a board with nothing on it");
+  });
+
+  test("an open engine issue means the engine is not finished, whatever is ticked", () => {
+    expect(engineFinished({ ...finishedBoard(), issues: completeBoard().issues })).toBeNull();
   });
 });
