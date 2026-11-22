@@ -317,7 +317,7 @@ export function templateArtifacts(): SurfaceLint {
 // ── SC-2802: no always-loaded rule bakes in a count of files ──────────────
 
 /** A count of something a commit adds one of: "(3 files)", "12 specs", "4 ADRs". */
-const FILE_COUNT = /\b\d[\d,]*\s+(?:markdown\s+|source\s+|test\s+)?(?:files?|specs?|docs?|documents?|rules?|tests?|ADRs?|briefs?|agents?|commands?|workflows?|directories)\b/g;
+const FILE_COUNT = /\b\d[\d,]*\s+(?:markdown\s+|source\s+|test\s+)?(?:files?|specs?|docs?|documents?|rules?|tests?|ADRs?|briefs?|agents?|commands?|workflows?|director(?:y|ies))\b/g;
 
 /** The rendered files every session loads: CLAUDE.md, AGENTS.md, and each rule that declares no `paths:`. */
 function alwaysLoaded(file: string, text: string): boolean {

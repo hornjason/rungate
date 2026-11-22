@@ -339,6 +339,8 @@ describe("SC-2802: no always-loaded rendered rule states a count of files that a
     expect(f[0]).toMatchObject({ lint: "stale-count", file: ".claude/rules/docs-routing.md" });
     expect(f[0].message).toContain("3 files");
     expect(findingsFor("CLAUDE.md", "This project keeps 12 specs and 4 ADRs.").map(x => x.message)).toHaveLength(2);
+    // Every noun in both numbers, "directory" included (review, PR #2632).
+    expect(findingsFor("CLAUDE.md", "Decisions live in docs/adr/ (1 directory), routing in 2 directories.").map(x => x.message.match(/"([^"]+)"/)![1])).toEqual(["1 directory", "2 directories"]);
   });
 
   test("a count where nothing loads it always, in a fenced example, or of something that is not files, is not a finding", () => {
