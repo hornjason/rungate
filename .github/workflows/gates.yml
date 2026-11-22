@@ -1,4 +1,4 @@
-# generated-sha: 686969030d10f8ac
+# generated-sha: 7a378628f652925a
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: Gates
 
@@ -65,7 +65,7 @@ jobs:
         # specs/ at all is a reading not taken, said out loud, never a pass.
         run: |
           if [ -d specs ]; then
-            bunx rungate@0.8.44 audit-spec-evidence --project-root .
+            bunx rungate@0.8.45 audit-spec-evidence --project-root .
           else
             echo "::warning title=Spec evidence UNMEASURED::There is no specs/ directory, so no criterion's evidence was read."
           fi
