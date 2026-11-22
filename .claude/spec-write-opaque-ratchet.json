@@ -107,8 +107,6 @@
     "scripts/local-review-round.ts::historyPath | historyPath: parameter",
     "scripts/record-agent-timings.ts::artifact | artifact: parameter",
     "scripts/regrade-historical.ts::filepath | filepath: no-initialiser",
-    "scripts/review-diff-subject.ts::outFile | argv: parameter (nested)",
-    "scripts/review-diff-subject.ts::outputs | argv: parameter (nested)",
     "scripts/suite-flake-run.ts::log | reassignable, no readable hole",
     "scripts/sync-spec-tests.ts::OUTPUT_PATH | OUTPUT_PATH: destructured",
     "scripts/test-brief.ts::outputFile | transcriptPath: parameter (nested), agentRole: parameter (nested)",

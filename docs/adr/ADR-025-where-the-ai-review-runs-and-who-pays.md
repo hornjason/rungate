@@ -82,7 +82,7 @@ added. CRC-M18 is retired with the trial that proved it.
    reviewer's byte budget is still reviewed, with coverage stated as "n of m
    files read". The byte budget belonged to the trial, which pasted the diff
    into its prompt. The AI review reads files itself and has no such
-   ceiling. The diff-budget script kept for it, `scripts/review-diff-subject.ts`,
+   ceiling. The diff-budget script kept for it, scripts/review-diff-subject.ts (deleted in #2651),
    is deleted with it. If a measured miss on a large diff turns up, it is a
    new criterion with its own evidence.
 
@@ -112,7 +112,8 @@ added. CRC-M18 is retired with the trial that proved it.
 Written into `specs/CODE-REVIEW-CONVERGENCE-SPEC.md` as drafted (#2642). The
 four reviewer criteria are placed in Phase 2, the next open Convergence phase
 with reviewer work in it, so they reach Ready before the instruments; CRC-M19
-sits in Phase 5 beside CRC-M18. CRC-B13 names the guide as plain text, not as a
+sits in Phase 5, where CRC-M18 was until #2651 retired it to *Not adopted —
+deliberate*. CRC-B13 names the guide as plain text, not as a
 code path, until row 4 creates it: the spec's citation test requires every
 quoted path to exist.
 

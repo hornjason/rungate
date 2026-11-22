@@ -86,8 +86,14 @@ const CHECKED_SC_BASELINE = 261;
  * to 340, and ticking SC-2787, proved by `test/board-merge-workflow.test.ts`,
  * took it to 341. The split's halves then summed to 335 (150 + 185). 360 is
  * 19 above the live 341 and 25 above that sum, the margin #1718 and #2045 chose.
+ *
+ * 360 -> 380 on 2026-11-22 (#2651). Honest ticks brought the live count back
+ * to 360 (SC-2625 among them, #1722), and ticking CRC-M19, proved by
+ * `test/review-execution-reading.test.ts`, took it to 361. The split's halves
+ * then summed to 355 (150 + 205). 380 is 19 above the live 361 and 25 above
+ * that sum, the margin #1718, #2045 and #2495 chose.
  */
-const UNMATCHED_BACKSTOP = 360;
+const UNMATCHED_BACKSTOP = 380;
 function specFiles(): string[] {
   return readdirSync(SPECS_DIR).filter(f => f.endsWith(".md"));
 }

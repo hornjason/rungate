@@ -3,8 +3,9 @@
  * Read what the Claude review run actually did, and refuse on UNMEASURED.
  *
  * Written for the trial reviewer's post-step (#732 AC-1/AC-2). The trial was
- * deleted in #2627, and this script is kept for CRC-M18 until ADR-025 decides
- * whether the AI review adopts it.
+ * deleted in #2627. ADR-025 retired CRC-M18 (#2651), and this script is kept
+ * for CRC-M13: its tool-call census is what that criterion needs the required
+ * reviewer to report. Nothing invokes it yet.
  * Every decision is `reviewExecutionReading`'s; this file reads argv, reads a
  * file, prints, and exits. There is exactly ONE `process.exit` with a non-zero
  * argument in it and that argument is `REVIEW_UNMEASURED_EXIT`, declared once
@@ -18,9 +19,11 @@
  *   --files-read 2 --files-seen 2
  * ```
  *
- * The two file counts are the gather step's outputs (#1934): files whose
- * whole diff reached the agent, of the files in the pull request. Either
- * absent or non-numeric is `DIFF_SCOPE_UNAVAILABLE`, never "whole".
+ * The two file counts were the trial's gather-step outputs (#1934): files
+ * whose whole diff reached the agent, of the files in the pull request. That
+ * step, scripts/review-diff-subject.ts, was deleted in #2651, so nothing
+ * produces them now; a caller that passes none gets `DIFF_SCOPE_UNAVAILABLE`,
+ * never "whole".
  *
  * Two counts, differenced here, because a TOTAL makes the second run of any
  * reviewed PR unfalsifiable: #746's first dispatch left one review on it, and
@@ -36,7 +39,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import {
   REVIEW_UNMEASURED_EXIT,
-  reviewCoverage,
   reviewExecutionReading,
   reviewReadingReport,
 } from "../lib/review-execution-reading";
@@ -69,16 +71,6 @@ const reading = reviewExecutionReading({
 
 const report = reviewReadingReport(reading);
 console.log(report);
-
-// A review of part of the diff is a reading, and the part is on the run page,
-// not only in this log (#1934).
-const scope = reading.diffScope;
-if (reading.reading === "MEASURED" && scope !== null && scope.filesRead < scope.filesSeen) {
-  console.log(
-    `::warning title=Claude review covered part of the diff::coverage ${reviewCoverage(reading)} whole; ` +
-      "the rest were over the diff budget",
-  );
-}
 
 if (reading.reading === "UNMEASURED") {
   // A GitHub annotation, so the state is visible on the run page and not only
