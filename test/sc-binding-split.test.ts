@@ -477,7 +477,12 @@ const UNCLAIMED_RATCHET = 150;
 // rendered tree, a reading of the fixture renders that no registered pattern
 // expresses; the `SC-2800` describe in test/rendered-surface.test.ts names it
 // (2026-11-21).
-const CLAIMED_UNBINDABLE = 200;
+// 201: SC-2801 (#2602) ticked by `sync-sc-status --only SC-2801` — no rendered
+// file carries an unexpanded template variable, the test-only marker or a numbered
+// list that skips, a reading of the fixture renders that no registered pattern
+// expresses; the `SC-2801` describe in test/rendered-surface.test.ts names it
+// (2026-11-21).
+const CLAIMED_UNBINDABLE = 201;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
