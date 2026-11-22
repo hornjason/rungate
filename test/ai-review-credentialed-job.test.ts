@@ -548,3 +548,40 @@ describe("AC-6b: the review prompt interpolates the findings path and key", () =
     ).toEqual([]);
   });
 });
+
+/**
+ * CRC-B12 (#2649, ADR-025 decision 3): the generated job hands the review
+ * action the job's own token, so a consumer runs it without installing the
+ * Claude GitHub App.
+ *
+ * Without `github_token` the action exchanges the job's OIDC token for a
+ * token of the App, which a consumer can only install with its whole
+ * permission set, write access to workflows included. Given one, it skips
+ * that exchange. The reviewer has no shell and posts nothing itself; the
+ * threads step posts with `GITHUB_TOKEN` already, so the App bought the
+ * review nothing.
+ */
+describe("CRC-B12: the review action is handed the job's own token, so no Claude GitHub App is needed", () => {
+  const JOB_TOKEN = "${{ secrets.GITHUB_TOKEN }}";
+
+  test("the generated action step passes github_token from the job's GITHUB_TOKEN", () => {
+    const run = step(AI_REVIEW_ACTION_STEP_ID);
+    expect(run.with?.github_token, "no github_token reaches the action, so it falls back to the App exchange").toBe(JOB_TOKEN);
+  });
+
+  test("this repository's committed job passes it too", () => {
+    const doc = Bun.YAML.parse(
+      readFileSync(join(import.meta.dir, "..", ".github", "workflows", AI_REVIEW_WORKFLOW_FILE), "utf-8"),
+    ) as any;
+    const run = (doc.jobs?.[AI_REVIEW_JOB]?.steps ?? []).find((s: any) => s?.id === AI_REVIEW_ACTION_STEP_ID);
+    expect(run, "the committed workflow has no action step").toBeDefined();
+    expect(run.with?.github_token).toBe(JOB_TOKEN);
+  });
+
+  test("the token reaches no further than the job's own permissions, which this does not widen", () => {
+    const doc = Bun.YAML.parse(generated()) as any;
+    const perms = doc.jobs?.[AI_REVIEW_JOB]?.permissions ?? doc.permissions;
+    expect(perms, "the workflow declares no permissions, so the token would get the repository default").toBeDefined();
+    expect(perms).toEqual({ contents: "read", "id-token": "write", actions: "read", "pull-requests": "write" });
+  });
+});

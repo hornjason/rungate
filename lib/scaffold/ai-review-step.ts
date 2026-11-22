@@ -6100,18 +6100,6 @@ the job if \`git diff\` reports anything, so an edit here costs the review.
  * before bash sees it and the convention does not get to have exceptions for
  * the cases we think are safe.
  */
-/** One declaring position for the app-install remedy (#803). */
-export const AI_REVIEW_APP_INSTALL_URL = "https://github.com/apps/claude";
-
-/**
- * The 401 `anthropics/claude-code-action` prints when the Claude Code GitHub
- * App is not installed on the repository.
- *
- * Quoted from run 39456331887 rather than paraphrased: it is the string a
- * consumer will be searching their log for, and a paraphrase does not match.
- */
-export const AI_REVIEW_APP_INSTALL_401 =
-  "Claude Code is not installed on this repository";
 
 /**
  * Why a correctly-credentialed run still exits non-zero with no payload, and
@@ -6173,10 +6161,22 @@ export const AI_REVIEW_APP_INSTALL_401 =
  * is still only the likely explanation, and `${AI_REVIEW_REQUIRE_VAR}` still
  * decides refuse-or-warn identically on every route. What changed is that it
  * is no longer printed over readings that contradict it.
+ *
+ * ## What it names since #2649 (CRC-B12)
+ *
+ * The name is #803's. Since #2649 the action is handed the job's own token
+ * and skips the App token exchange, so the 401 #803 measured (run
+ * `39456331887`, "Claude Code is not installed on this repository") cannot
+ * happen, and sending a consumer to install the App would name a remedy for
+ * a state the job no longer reaches. Found in review of #2654. The route is
+ * unchanged — no execution file — and what it now names is the causes still
+ * reachable there: the model provider refusing the credential, or a
+ * permission this job does not grant.
  */
 export const AI_REVIEW_APP_INSTALL_CAUSE =
   `If every earlier step succeeded — a credential resolved and the action ` +
-  `started — the usual cause is that the Claude Code GitHub App is not ` +
+  `started — the action stopped before it wrote an execution file. It is ` +
+  `handed this job's own token, so the Claude GitHub App is not the cause. ` +
   // Single quotes around the two fragments, and the reason is narrower than
   // the first draft claimed. This sentence is interpolated into a bash
   // `echo "..."`, so a double quote CLOSES the string — and what bash then
@@ -6188,10 +6188,11 @@ export const AI_REVIEW_APP_INSTALL_CAUSE =
   // Measured, because the first draft of the comment here asserted that the
   // echo would break into three lines and a mutation row came back 0 of 54
   // against a predicted 2. It does not break. The quotes vanish.
-  `installed on this repository. Search the 'Run the AI review' step's log ` +
-  `for '${AI_REVIEW_APP_INSTALL_401}'; if it is there, install the app at ` +
-  `${AI_REVIEW_APP_INSTALL_URL} and re-run. This job cannot read that log, ` +
-  `so it is naming a likely cause and not reporting a measured one.`;
+  `The usual causes are the model provider refusing the credential (an ` +
+  `expired OAuth token or API key, or a Vertex project where the model is ` +
+  `not enabled) or a permission this job does not grant. Read the last error ` +
+  `in the 'Run the AI review' step's log. This job cannot read that log, so ` +
+  `it is naming a likely cause and not reporting a measured one.`;
 
 /**
  * The step that says which of the states above this run is in.
@@ -6235,8 +6236,8 @@ export function buildReviewRunScript(version: string): string {
     `bunx ${AI_REVIEW_ADJUDICATOR_PACKAGE}@${version} ${AI_REVIEW_FINDINGS_COMMAND}`;
 
   // The DECLINED route, and the only one of the five below on which the
-  // app-install cause can be true: no execution file means the action never
-  // got far enough to write one (#826).
+  // named cause can be true: no execution file means the action never got far
+  // enough to write one (#826). Since #2649 that cause is no longer the App.
   const pending =
     `The review action (#631) did not complete, and it wrote no execution ` +
     `file, so no AI review ran on this pull request and no findings payload ` +
@@ -11593,6 +11594,13 @@ export function buildReviewRunStep(
     `    use_vertex: \${{ ${modeIs("vertex")} }}`,
     `    claude_code_oauth_token: ${credential("oauth", "CLAUDE_CODE_OAUTH_TOKEN")}`,
     `    anthropic_api_key: ${credential("api-key", "ANTHROPIC_API_KEY")}`,
+    // CRC-B12 (#2649, ADR-025 decision 3): the job's own token. Without it the
+    // action exchanges the job's OIDC token for a Claude GitHub App token, so
+    // a consumer had to install the App with its whole permission set. Given
+    // one, it skips that exchange, and the token reaches only as far as this
+    // job's `permissions:`. The reviewer posts nothing itself; the threads
+    // step already posts with GITHUB_TOKEN.
+    `    github_token: \${{ secrets.GITHUB_TOKEN }}`,
     `    claude_args: ${aiReviewClaudeArgs(vertex)}`,
     `    prompt: |`,
     ...buildReviewPrompt().trimEnd().split("\n").map(l => (l ? `      ${l}` : "")),
