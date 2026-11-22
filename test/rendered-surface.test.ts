@@ -368,5 +368,17 @@ describe("SC-2802: no always-loaded rendered rule states a count of files that a
     expect(findingsFor(".claude/agents/marcus.md", "This project keeps 12 specs.")).toEqual([]);
     expect(findingsFor("CLAUDE.md", "```\nls specs | wc -l   # 12 specs\n```")).toEqual([]);
     expect(findingsFor("CLAUDE.md", "Retry 3 times, and keep each rule under 200 words.")).toEqual([]);
+    // An id followed by a comma is not a count (#2635): both shapes are in this
+    // repository's own always-loaded rules.
+    for (const id of [
+      "`runPromptConfigAccessValidation` (CONFIG-2, workflow prompt text) fails the suite.",
+      "Not on main first: `enforce_admins` makes that unfollowable (#1506, ADR-015).",
+      // No comma to stop it: only "not after a hyphen" keeps this an id.
+      "The Tier-2 rules apply to every pull request.",
+    ]) {
+      expect(findingsFor("CLAUDE.md", id), id).toEqual([]);
+    }
+    // A count written with thousands commas still is one.
+    expect(findingsFor("CLAUDE.md", "The scan read 1,218 files.").map(f => f.message)).toEqual([expect.stringContaining('"1,218 files"')]);
   });
 });
