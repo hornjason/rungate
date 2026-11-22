@@ -281,8 +281,8 @@ describe("AC-F1 (#826): with no execution file the app-install cause is still na
     expect(r.out, `stderr:\n${r.err}`).toContain(`::warning title=${AI_REVIEW_UNMEASURED_TITLE}`);
     expect(
       r.out,
-      "with no execution file the app-install 401 IS the usual cause, so it must still be named",
-    ).toContain("Claude Code GitHub App is not installed");
+      "with no execution file the declined route's cause must still be named (since #2649 it is not the app)",
+    ).toContain(AI_REVIEW_APP_INSTALL_CAUSE);
   });
 
   test("AC-F1b: the cause constant is reachable only from the declined route", () => {
@@ -308,7 +308,7 @@ describe("AC-F2 (#826): a reviewer that executed is not reported as an uninstall
     expect(
       r.out,
       "the agent cannot run at all without the token exchange the app-install cause is about",
-    ).not.toContain("Claude Code GitHub App is not installed");
+    ).not.toContain(AI_REVIEW_APP_INSTALL_CAUSE);
     expect(r.out, "the route that WAS measured is not named").toContain("execution file");
   });
 });
@@ -381,7 +381,7 @@ describe("AC-F5 (#826): an execution file named and not readable is its own stat
     expect(
       r.out,
       "an output that was SET names an action that got far enough to set it",
-    ).not.toContain("Claude Code GitHub App is not installed");
+    ).not.toContain(AI_REVIEW_APP_INSTALL_CAUSE);
     expect(r.out, "the unmeasured route does not say it is unmeasured").toContain("cannot say");
   });
 });
@@ -605,6 +605,6 @@ describe("AC-F7 (#826): #849's four routes on the success branch still hold", ()
     expect(
       r.out,
       "the app-install cause leaked onto the success branch, where the action exited zero",
-    ).not.toContain("Claude Code GitHub App is not installed");
+    ).not.toContain(AI_REVIEW_APP_INSTALL_CAUSE);
   });
 });

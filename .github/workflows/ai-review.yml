@@ -1,4 +1,4 @@
-# generated-sha: a5e00b5195f83055
+# generated-sha: 3bbe5603797cf46f
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -4950,7 +4950,7 @@ jobs:
             # default substituted for a reading.
             route="The review action (#631) did not complete, and it named an execution file this job could not read, so WHY it did not complete is UNMEASURED as well. The output was set, so the action got far enough to set it; beyond that this job cannot say which route produced the failure. This check is UNMEASURED, not a passing review."
           else
-            route="The review action (#631) did not complete, and it wrote no execution file, so no AI review ran on this pull request and no findings payload was written. This check is UNMEASURED, not a passing review. If every earlier step succeeded — a credential resolved and the action started — the usual cause is that the Claude Code GitHub App is not installed on this repository. Search the 'Run the AI review' step's log for 'Claude Code is not installed on this repository'; if it is there, install the app at https://github.com/apps/claude and re-run. This job cannot read that log, so it is naming a likely cause and not reporting a measured one."
+            route="The review action (#631) did not complete, and it wrote no execution file, so no AI review ran on this pull request and no findings payload was written. This check is UNMEASURED, not a passing review. If every earlier step succeeded — a credential resolved and the action started — the action stopped before it wrote an execution file. It is handed this job's own token, so the Claude GitHub App is not the cause. The usual causes are the model provider refusing the credential (an expired OAuth token or API key, or a Vertex project where the model is not enabled) or a permission this job does not grant. Read the last error in the 'Run the AI review' step's log. This job cannot read that log, so it is naming a likely cause and not reporting a measured one."
           fi
 
           echo "::warning title=AI review UNMEASURED::$(escape_annotation "${route}")"

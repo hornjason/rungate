@@ -88,10 +88,8 @@ import {
   buildExecutionStageScript,
   AI_REVIEW_OVERRIDE_VALUE,
   AI_REVIEW_OVERRIDE_VAR,
-  AI_REVIEW_APP_INSTALL_401,
   AI_REVIEW_UNMEASURED_TITLE,
   AI_REVIEW_APP_INSTALL_CAUSE,
-  AI_REVIEW_APP_INSTALL_URL,
   buildReviewRunScript,
   buildReviewRunStep,
   vertexCiConfig,
@@ -1258,7 +1256,7 @@ describe("AC-9 (#1013): the job's exit code comes from the adjudicator's reading
  * this file were confirmed byte-identical to the measured source afterwards
  * by SHA-256, never by `git checkout --`.
  */
-describe("#803: a non-zero exit with no payload names the app install", () => {
+describe("#803 / #2649: a non-zero exit with no payload names its likely cause, which is no longer the app", () => {
   const failed = (env: Record<string, string> = {}) =>
     runAuthScript(buildReviewRunScript(FIXTURE_VERSION), {
       AI_REVIEW_MODE: "vertex",
@@ -1266,11 +1264,12 @@ describe("#803: a non-zero exit with no payload names the app install", () => {
       ...env,
     });
 
-  test("the annotation names the remedy, the URL, and the string to search for", () => {
+  test("the annotation names the likely cause, and since #2649 it does not send anyone to install the app", () => {
     const run = failed();
     expect(run.stdout).toContain("UNMEASURED");
-    expect(run.stdout).toContain(AI_REVIEW_APP_INSTALL_401);
-    expect(run.stdout).toContain(AI_REVIEW_APP_INSTALL_URL);
+    expect(run.stdout).toContain(AI_REVIEW_APP_INSTALL_CAUSE);
+    expect(run.stdout, "the job is handed its own token, so the app is not a cause").not.toContain("apps/claude");
+    expect(run.stdout).not.toContain("Claude Code is not installed on this repository");
     expect(
       run.stdout,
       "the annotation does not say it is a likely cause, so it reads as a detection",
@@ -1293,8 +1292,8 @@ describe("#803: a non-zero exit with no payload names the app install", () => {
     const run = failed();
     expect(
       run.stdout,
-      "the search string lost its delimiters, so a reader cannot tell where it ends",
-    ).toContain(`'${AI_REVIEW_APP_INSTALL_401}'`);
+      "the step name lost its delimiters, so a reader cannot tell where it ends",
+    ).toContain("'Run the AI review'");
     const lines = run.stdout.trimEnd().split("\n");
     expect(lines.length, `the annotation broke into ${lines.length} lines:\n${run.stdout}`).toBe(1);
     expect(lines[0]).toStartWith(`::warning title=${AI_REVIEW_UNMEASURED_TITLE}::`);
@@ -1333,8 +1332,8 @@ describe("#803: a non-zero exit with no payload names the app install", () => {
       // would report the state that moved as carrying no annotation at all,
       // which is the non-vacuity assertion below silently going hollow.
       const annotated = `${run.stdout}${run.stderr}`;
-      expect(annotated, `${o.label} carries the app-install cause`).not.toContain(
-        AI_REVIEW_APP_INSTALL_URL,
+      expect(annotated, `${o.label} carries the declined route's cause`).not.toContain(
+        AI_REVIEW_APP_INSTALL_CAUSE,
       );
       // Non-vacuity: each of these really did annotate something, so the
       // absence above is a choice and not a state that printed nothing.
@@ -1356,8 +1355,8 @@ describe("#803: a non-zero exit with no payload names the app install", () => {
     const both = [failed(), failed({ RUNGATE_REQUIRE_AI_REVIEW: "true" })];
     for (const r of both) {
       expect(r.code, "a 401 against the review app still passes").toBe(AI_REVIEW_REQUIRED_EXIT);
-      expect(r.stdout, "the remedy is gone from the refusing path").toContain(
-        AI_REVIEW_APP_INSTALL_URL,
+      expect(r.stdout, "the cause is gone from the refusing path").toContain(
+        AI_REVIEW_APP_INSTALL_CAUSE,
       );
     }
     // And the waiver is the input that still moves it, or the equality above
@@ -1398,22 +1397,14 @@ describe("#803: a non-zero exit with no payload names the app install", () => {
     ).toContain(indented);
   });
 
-  test("the URL and the 401 string each have one declaring position", () => {
-    // Two copies of a URL is two things to update and one that gets missed.
-    const source = readFileSync(
-      join(import.meta.dir, "..", "lib", "scaffold", "ai-review-step.ts"),
-      "utf-8",
-    );
-    for (const literal of [AI_REVIEW_APP_INSTALL_URL, AI_REVIEW_APP_INSTALL_401]) {
-      const declarations = [
-        ...source.matchAll(new RegExp(`=\\s*"${literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "g")),
-      ].length;
-      expect(declarations, `${literal} is declared ${declarations} times`).toBe(1);
-    }
-    expect(
-      AI_REVIEW_APP_INSTALL_CAUSE,
-      "the cause sentence carries its own copy of the URL rather than the constant",
-    ).toContain(AI_REVIEW_APP_INSTALL_URL);
+  test("#2649: no route of the report step sends a consumer to install the app", () => {
+    // The #803 remedy named the App and its 401. With the job's own token
+    // handed to the action that exchange cannot happen, so the URL and the
+    // 401 string are gone from the generator, not only from one route.
+    const script = buildReviewRunScript(FIXTURE_VERSION);
+    expect(script).not.toContain("apps/claude");
+    expect(script).not.toContain("Claude Code is not installed on this repository");
+    expect(script, "the declined route lost its cause altogether").toContain(AI_REVIEW_APP_INSTALL_CAUSE);
   });
 });
 
