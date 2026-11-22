@@ -246,3 +246,11 @@ export function danglingReadTargets(packageRoot: string = PACKAGE_ROOT): Surface
     },
   };
 }
+
+/**
+ * Every rendered-surface lint, in one list. CI runs the list over its fixture
+ * renders (`test/rendered-surface.test.ts`), and the consumer-side audit
+ * (SC-2805) runs it over a consumer's tree. A lint added here is a lint both
+ * run.
+ */
+export const SURFACE_LINTS: readonly SurfaceLint[] = [danglingReadTargets()];
