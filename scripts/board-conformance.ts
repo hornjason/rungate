@@ -608,6 +608,34 @@ interface ReadingSpec {
   planned?: (board: BoardSnapshot) => string[];
   /** The rows inside a grace window, named — see {@link Reading.graced}. */
   graced?: (board: BoardSnapshot) => string[];
+  /**
+   * Why 0 of 0 is a PASS on this board, or null — #2645. Consulted only when
+   * the measure counts nothing, so it can never change a reading that took a
+   * number. Null keeps the frame's rule that an empty population is
+   * UNMEASURED; a reason turns it MET and is printed as the reading's why.
+   */
+  finished?: (board: BoardSnapshot) => string | null;
+}
+
+/**
+ * The engine is finished: the population was read, no engine issue is open,
+ * and every engine criterion the phases count is recorded true — #2645.
+ *
+ * The issue-scoped readings (B3, B4, B6) count open engine issues, so on a
+ * finished engine each is 0 of 0, and the frame reads that as nobody having
+ * looked. It is the opposite: the board was read, and the work is done. What
+ * separates the two is the criteria population, which the producer emits only
+ * when a board is configured and read. An empty board — no criteria, no
+ * issues — still answers null here and stays UNMEASURED.
+ */
+export function engineFinished(b: BoardSnapshot): string | null {
+  if (b.issues.length !== 0) return null;
+  const counted = b.criteria.filter(c => c.outside === undefined);
+  if (counted.length === 0 || !counted.every(c => c.recordedTrue === true)) return null;
+  return (
+    `no engine issue is open and all ${counted.length} engine criteria are recorded true — ` +
+    "the engine is finished, so there is no issue left for this reading to check"
+  );
 }
 
 /** The issue numbers actually on the board, for resolving a reference. */
@@ -766,6 +794,7 @@ export const READINGS: readonly ReadingSpec[] = [
         target: b.issues.length,
       };
     },
+    finished: engineFinished,
   },
   {
     name: "criteria-field",
@@ -784,6 +813,7 @@ export const READINGS: readonly ReadingSpec[] = [
             `(${unread.slice(0, 5).join(", ")}${unread.length > 5 ? ", …" : ""}) — that is not an empty column`;
     },
     measure: b => ({ measured: b.issues.filter(i => (i.criteriaField ?? "").trim() !== "").length, target: b.issues.length }),
+    finished: engineFinished,
   },
   {
     name: "queue-label",
@@ -809,6 +839,7 @@ export const READINGS: readonly ReadingSpec[] = [
       const label = b.queueLabel!;
       return { measured: b.issues.filter(i => i.labels.includes(label)).length, target: b.issues.length };
     },
+    finished: engineFinished,
   },
   {
     name: "spec-placement",
@@ -1095,6 +1126,10 @@ export function takeReading(spec: ReadingSpec, board: BoardSnapshot | null): Rea
   const planned = spec.planned?.(board) ?? [];
   const graced = spec.graced?.(board) ?? [];
   if (target === 0) {
+    // #2645: a reading may say why counting nothing is a pass HERE. Without a
+    // reason the frame's rule stands.
+    const done = spec.finished?.(board) ?? null;
+    if (done !== null) return { ...base, status: "met", measured, target, why: done, offenders: [], declared, planned, graced };
     return { ...base, status: "unmeasured", measured, target, why: "the board carries nothing for this reading to count, so 0 of 0 is not a pass", offenders: [], declared, planned, graced };
   }
   if (measured >= target) return { ...base, status: "met", measured, target, why: `${measured} of ${target}`, offenders: [], declared, planned, graced };
