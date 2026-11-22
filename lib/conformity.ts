@@ -34,7 +34,14 @@ import {
   behavioralReading,
   readCache,
 } from "./behavioral-cache";
-import { tryLoadRungateConfig } from "./config-loader";
+import { configuredSurfaceBudget, tryLoadRungateConfig } from "./config-loader";
+import {
+  isSurfaceUnreadable,
+  judgeConsumerBudget,
+  measureConcurrentLoad,
+  overPeakBudget,
+  overPeakReport,
+} from "../scripts/check-instruction-surface";
 import {
   type ProtectionFacts,
   type ProtectionProbe,
@@ -4533,6 +4540,57 @@ export function unmeasuredScanReason(
  * document that every "does it exist" check waves through. The second is
  * the case this check is for.
  */
+/**
+ * SURFACE-1 — the consumer's instruction surface is within its budget
+ * (#2599, ADR-024 decision 4, SC-2798).
+ *
+ * A REFUSAL, from the first release: #1069 measured a 95% warning firing on
+ * every run while the headroom fell to 37 bytes, so a warning here would be
+ * read by nobody. The budget is the consumer's own when its rungate config
+ * sets one and the 35% rule accepts it (#2598), and `SURFACE_BUDGET_BYTES`
+ * otherwise; a configured budget the rule refuses is a violation of its own.
+ * The comparison is `overPeakBudget`, the one this repository's own
+ * surface check makes.
+ *
+ * A tree the measurement cannot read is `unmeasured`, and the check refuses
+ * that too: a scaffolded consumer always has rules, so no rules or an
+ * unreadable rule means something is broken, never a surface of zero.
+ */
+export function instructionSurfaceViolations(root: string): { unmeasured: string | null; violations: string[] } {
+  let reading: ReturnType<typeof measureConcurrentLoad>;
+  try {
+    reading = measureConcurrentLoad(root);
+  } catch (e) {
+    if (!isSurfaceUnreadable(e)) throw e;
+    return { unmeasured: `UNMEASURED: the instruction surface could not be read — ${e.message}`, violations: [] };
+  }
+  const budget = judgeConsumerBudget(configuredSurfaceBudget(root), reading.peakBytes);
+  const held = { ...reading, budgetBytes: budget.budgetBytes };
+  const violations: string[] = [];
+  if (budget.refused !== null) violations.push(budget.refused);
+  if (overPeakBudget(held)) violations.push(overPeakReport(held));
+  return { unmeasured: null, violations };
+}
+
+export function runInstructionSurfaceValidation(root: string) {
+  describe("Instruction surface (ADR-024)", () => {
+    test("SURFACE-1: the instruction surface is within its budget, and was read", () => {
+      const verdict = instructionSurfaceViolations(root);
+      const refusals = verdict.unmeasured !== null ? [verdict.unmeasured] : verdict.violations;
+      for (const message of refusals) {
+        addFinding({
+          ruleId: "SURFACE-1",
+          severity: "FAIL",
+          file: ".claude/rules/",
+          message,
+          fixCommand: "Move worked records out of always-loaded rules into reference/ and route to them; narrow path-scoped globs",
+        });
+      }
+      expect(refusals, refusals.join("\n\n")).toEqual([]);
+    });
+  });
+}
+
 export function runSuccessDocValidation(root: string) {
   describe("SUCCESS.md (#485)", () => {
     test("SUCCESS-1: the project states what it is for, and how each claim fails", () => {

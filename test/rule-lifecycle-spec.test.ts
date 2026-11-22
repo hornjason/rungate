@@ -144,8 +144,14 @@ describe("RULE-LIFECYCLE-AND-CONTEXT-BUDGET-SPEC: document integrity", () => {
     // more than 35% above the measured peak is refused, driven by
     // `test/consumer-instruction-surface.test.ts` with a seven-mutation
     // battery recorded on its pull request.
+    //
+    // SC-2798 joins them (#2599): the generated conformity test refuses an
+    // over-budget consumer surface, and an unreadable one as UNMEASURED,
+    // driven by `test/scaffold-conformity-surface.test.ts` through the real
+    // check spawned over planted consumers, with a six-mutation battery
+    // recorded on its pull request.
     expect(checked.sort((a, b) => a - b)).toEqual([
-      1933, 1934, 1935, 1936, 1937, 1939, 1941, 1947, 2440, 2441, 2442, 2443, 2444, 2445, 2446, 2447, 2769, 2796, 2797, 2799,
+      1933, 1934, 1935, 1936, 1937, 1939, 1941, 1947, 2440, 2441, 2442, 2443, 2444, 2445, 2446, 2447, 2769, 2796, 2797, 2798, 2799,
     ]);
   });
 

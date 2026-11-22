@@ -109,7 +109,7 @@ import {
 import { readPreservedSection, type SectionSpec } from "../agents-md-sections";
 import { executedHookPath, hookRegistrationPath } from "../hook-trees";
 // #2597: the consumer's surface, measured by the one check this repository runs on itself.
-import { judgeConsumerBudget, measureConcurrentLoad, surfaceReport, SurfaceUnmeasured } from "../../scripts/check-instruction-surface";
+import { isSurfaceUnreadable, judgeConsumerBudget, measureConcurrentLoad, surfaceReport } from "../../scripts/check-instruction-surface";
 
 /**
  * Look for a declared health route in the places a server declares one.
@@ -790,7 +790,7 @@ export function generateConformityTest(root?: string): string {
   const from = root && isHarnessItself(root) ? "../lib/conformity" : "rungate/lib/conformity";
   return `import { resolve } from "path";
 import { afterAll, setDefaultTimeout } from "bun:test";
-import { CONFORMITY_TEST_BUDGET_MS, runScaffoldConformity, runSpecDiscovery, runSpecDrift, runDocHygiene, runFallowCheck, runAgentFileValidation, runDirectoryValidation, runPackageValidation, runTsconfigValidation, runConfigAccessValidation, runPromptConfigAccessValidation, runSuccessDocValidation, runAiReviewValidation, runBranchProtectionValidation, runWorkflowDriftValidation, writeFindingsReport } from "${from}";
+import { CONFORMITY_TEST_BUDGET_MS, runScaffoldConformity, runSpecDiscovery, runSpecDrift, runDocHygiene, runFallowCheck, runAgentFileValidation, runDirectoryValidation, runPackageValidation, runTsconfigValidation, runConfigAccessValidation, runPromptConfigAccessValidation, runSuccessDocValidation, runAiReviewValidation, runBranchProtectionValidation, runWorkflowDriftValidation, runInstructionSurfaceValidation, writeFindingsReport } from "${from}";
 
 const ROOT = resolve(import.meta.dir, "..");
 
@@ -811,6 +811,7 @@ runSuccessDocValidation(ROOT);
 runAiReviewValidation(ROOT);
 runBranchProtectionValidation(ROOT);
 runWorkflowDriftValidation(ROOT);
+runInstructionSurfaceValidation(ROOT);
 
 afterAll(() => writeFindingsReport(ROOT));
 `;
@@ -5913,8 +5914,7 @@ export function reportInstructionSurfaceStep(
   try {
     reading = measure(root);
   } catch (e) {
-    const unreadable = e instanceof SurfaceUnmeasured || (e instanceof Error && "syscall" in e && "code" in e);
-    if (!unreadable) throw e;
+    if (!isSurfaceUnreadable(e)) throw e;
     actions.push(`UNMEASURED: instruction surface — ${e.message}`);
     return;
   }
