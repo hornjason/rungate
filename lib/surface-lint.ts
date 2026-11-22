@@ -21,6 +21,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 
 import { resolveConfig } from "./config-loader";
+import { readFences } from "./markdown-fence";
 
 /** The files a consumer's agents load or are pointed at, read whole, when the scaffold rendered them. */
 export const SURFACE_FILES = ["CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md"] as const;
@@ -168,11 +169,11 @@ export function readTargets(surface: RenderedSurface): ReadTarget[] {
   const out: ReadTarget[] = [];
   for (const [file, text] of surface.files) {
     const lines = text.split("\n");
-    let fenced = false;
+    // A fenced block is an example to run or copy, not an instruction to read.
+    // Which lines are fenced is `readFences`'s to say (#2130), not this file's.
+    const { roles } = readFences(lines);
     lines.forEach((ln, i) => {
-      // A fenced block is an example to run or copy, not an instruction to read.
-      if (/^\s*(```|~~~)/.test(ln)) { fenced = !fenced; return; }
-      if (fenced) return;
+      if (roles[i] !== "prose") return;
       const seen = new Set<string>();
       for (const re of [TABLE_IN, FILE_TABLE]) {
         re.lastIndex = 0;
