@@ -464,6 +464,27 @@ describe("AC-8b: a findings file that cannot be read is UNMEASURED, and refuses"
     expect(r.unmeasuredReasons).toContain("SEVERITY_UNRECOGNISED");
     expect(severityBlocks("spicy"), "an unknown severity must not classify").toBeNull();
   });
+
+  // #2657: the table is read for its OWN keys. A plain property read hands
+  // back what every object inherits — `constructor` is the Object function,
+  // `__proto__` is Object.prototype — which is neither null nor a boolean,
+  // so the round blocked on a severity nobody declared instead of naming it.
+  test("#2657: severityBlocks answers exactly true, false or null, and an inherited name is null", () => {
+    const inherited = Object.getOwnPropertyNames(Object.prototype);
+    expect(inherited.length, "Object.prototype read no names, so the rows below witness nothing").toBeGreaterThan(5);
+    for (const name of [...inherited, "spicy", "", "CRITICAL"]) {
+      expect(severityBlocks(name), name).toBeNull();
+    }
+    for (const value of [undefined, null, 3, true, {}, []]) {
+      expect(severityBlocks(value), String(value)).toBeNull();
+    }
+    for (const declared of ["critical", "high", "medium", "low", "info"]) {
+      expect(typeof severityBlocks(declared), declared).toBe("boolean");
+    }
+    const r = readAiReviewFindings('{"verdict": "BLOCK", "findings": [{"severity": "constructor", "title": "x"}]}');
+    expect(r.outcome).toBe("UNMEASURED");
+    expect(r.unmeasuredReasons).toContain("SEVERITY_UNRECOGNISED");
+  });
 });
 
 // ── AC-8c: a PASS carrying a blocking finding is a contradiction ─────────
