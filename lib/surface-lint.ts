@@ -248,10 +248,75 @@ export function danglingReadTargets(packageRoot: string = PACKAGE_ROOT): Surface
   };
 }
 
+// ── SC-2801: no template artifact survives into a rendered file ──────────
+
+/** A template variable the brief generator substitutes: `${NAME}`. */
+const TEMPLATE_VARIABLE = /\$\{[A-Z_][A-Z0-9_]*\}/g;
+
+/** The test-only marker SC-354 used to append to the shipped template (#2567). */
+const TEST_ONLY_MARKER = /CANARY_MARKER_FOR_\w+/g;
+
+/**
+ * SC-2801: no rendered file carries an unexpanded `${…}`, the brief
+ * templates' test-only marker, or a numbered list that skips.
+ *
+ * All three reached consumers in #2567, and each was invisible in its
+ * template: a bare `${SOURCE_DIRS}` the generator never substituted, a
+ * `CANARY_MARKER_FOR_SC354` heading a test wrote into the shipped template
+ * and committed, and lists numbered 1, 3 where a template section was cut.
+ *
+ * A fenced block is an example and is not read, so a shell `${HOME}` in
+ * one is not a finding. Inline code is read: "Read `${CONFIG_FILE}`" is
+ * the unexpanded variable an agent would be handed. A list may restart at 1
+ * or number every item 1; what it may not do is jump. A paragraph ends a
+ * list, so the list after it is a new one, whatever it starts at. A fence
+ * does not: an example command inside a step is part of that step, so a
+ * list numbered 1, 3 around one is still a skip.
+ */
+export function templateArtifacts(): SurfaceLint {
+  return {
+    name: "template-artifact",
+    check(surface) {
+      const findings: SurfaceFinding[] = [];
+      for (const [file, text] of surface.files) {
+        // The last number seen at each indent, so a nested list is checked
+        // against itself and the list around it resumes where it left off.
+        const lastAt = new Map<number, number>();
+        const lines = text.split("\n");
+        const { roles } = readFences(lines);
+        lines.forEach((ln, i) => {
+          const at = `line ${i + 1}`;
+          for (const m of ln.match(TEST_ONLY_MARKER) ?? []) findings.push({ file, message: `${at} carries the test-only marker ${m}` });
+          if (roles[i] !== "prose") return;
+          for (const v of ln.match(TEMPLATE_VARIABLE) ?? []) {
+            findings.push({ file, message: `${at} carries ${v}, a template variable the render never filled` });
+          }
+          const item = ln.match(/^(\s*)(\d+)\.\s/);
+          if (item) {
+            const n = Number(item[2]);
+            const indent = item[1].length;
+            const before = lastAt.get(indent);
+            if (before !== undefined && n !== before + 1 && n !== 1) {
+              findings.push({ file, message: `${at} numbers a list item ${n} straight after ${before}` });
+            }
+            lastAt.set(indent, n);
+            // Back at this depth, any deeper list has ended.
+            for (const d of [...lastAt.keys()]) if (d > indent) lastAt.delete(d);
+          } else if (ln.trim() !== "" && !/^\s/.test(ln)) {
+            // An unindented line that is not a list item ends the list.
+            lastAt.clear();
+          }
+        });
+      }
+      return findings;
+    },
+  };
+}
+
 /**
  * Every rendered-surface lint, in one list. CI runs the list over its fixture
  * renders (`test/rendered-surface.test.ts`), and the consumer-side audit
  * (SC-2805) runs it over a consumer's tree. A lint added here is a lint both
  * run.
  */
-export const SURFACE_LINTS: readonly SurfaceLint[] = [danglingReadTargets()];
+export const SURFACE_LINTS: readonly SurfaceLint[] = [danglingReadTargets(), templateArtifacts()];
