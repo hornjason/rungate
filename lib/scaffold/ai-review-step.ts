@@ -3345,16 +3345,16 @@ export const AI_REVIEW_FORK_VAR = "RUNGATE_PR_IS_FORK";
  * two steps refusing over the same reading are a pair of deciders no
  * behavioural test can tell apart.
  *
- * **A pin that predates the command is UNMEASURED, and is told apart from a
- * failure.** The generated job runs `bunx rungate@<version>`, a PUBLISHED
- * version, and this YAML reaches every consumer the moment it is merged —
- * while the npm release happens later, from a tag. So there is a window in
- * which the live workflow asks a published package for a subcommand it does
- * not have. `bin/rungate.ts` answers that with exit 1 and the exact string
- * `unknown command "<name>"`, which is the one signal that separates *the
- * release has not landed yet* from *the producer is broken* — and they are
- * otherwise the same non-zero exit. Without this branch, merging this file
- * reds every pull request in every consumer until a release ships.
+ * **A published package that lacks the command is a failure, named as one
+ * (#2666).** The generated job runs `bunx rungate@<version>`, and the pin is
+ * always the version that generated the workflow. Every release since the
+ * command shipped carries it, so `bin/rungate.ts` answering `unknown command
+ * "<name>"` means the published package lost a command it should have: the
+ * #446 class of `files[]` omission. Until #2666 this line read as version
+ * skew, a workflow ahead of its release. That printed a warning, exited 0, and
+ * posted no threads, so a broken package read as a green job. Now it prints
+ * an error naming the version and the command, and the step exits with the
+ * command's own non-zero status, like every other refusal.
  *
  * The capture consumes its own status with a top-level `|| threads_code=$?`,
  * which is #1110's lesson and the form the rest of this file uses. A
@@ -3374,13 +3374,12 @@ export function buildThreadsScript(version: string): string {
     `bunx ${AI_REVIEW_ADJUDICATOR_PACKAGE}@${version} ${AI_REVIEW_THREADS_COMMAND}`;
   // The WHOLE line `bin/rungate.ts` prints for an unknown command, matched
   // with `grep -qxF` (#2203). A substring match let the command's own
-  // output satisfy it: a finding quoting the phrase turned a refusal into an
-  // UNMEASURED exit 0. Since 0.8.21 (#1992) every line the command prints
-  // from a finding is escaped and prefixed `ai-review-threads: `, so no
-  // finding text can BE this line. The exit code cannot separate the cases:
-  // the unknown-command path exits 1 like every refusal. Inside SINGLE
+  // output satisfy it, and a finding quoting the phrase would now be reported
+  // as a missing command it is not. Since 0.8.21 (#1992) every line the
+  // command prints from a finding is escaped and prefixed
+  // `ai-review-threads: `, so no finding text can BE this line. Inside SINGLE
   // quotes below, where the double quotes are literal.
-  const skew = `rungate: unknown command "${AI_REVIEW_THREADS_COMMAND}"`;
+  const missing = `rungate: unknown command "${AI_REVIEW_THREADS_COMMAND}"`;
   return [
     `set -uo pipefail`,
     ``,
@@ -3396,7 +3395,7 @@ export function buildThreadsScript(version: string): string {
     ``,
     `# \`run:\` is \`bash -e\`, so the assignment consumes its own status with a`,
     `# top-level \`||\` — see buildThreadsScript. Without it the step aborts`,
-    `# here and the version-skew branch below never runs.`,
+    `# here and the missing-command branch below never runs.`,
     `#`,
     `# From a directory made at this moment, not the checkout (#2664): \`bunx\``,
     `# resolves bunfig.toml by walking up from where it runs, and this step`,
@@ -3411,9 +3410,8 @@ export function buildThreadsScript(version: string): string {
     `  --changed-files "\${${AI_REVIEW_CHANGED_FILES_PATH_VAR}}" 2>&1)" || threads_code=$?`,
     `printf '%s\\n' "$threads_out"`,
     ``,
-    `if [ "$threads_code" -ne 0 ] && printf '%s\\n' "$threads_out" | grep -qxF '${skew}'; then`,
-    `  echo "::warning title=AI review threads::UNMEASURED - rungate@${version} does not carry the ${AI_REVIEW_THREADS_COMMAND} command yet, so no review threads were posted. This workflow is ahead of the published package; it resolves itself on the next release."`,
-    `  exit 0`,
+    `if [ "$threads_code" -ne 0 ] && printf '%s\\n' "$threads_out" | grep -qxF '${missing}'; then`,
+    `  echo "::error title=AI review threads::rungate@${version} does not carry the ${AI_REVIEW_THREADS_COMMAND} command this workflow calls. The pin is the version that generated this workflow, so the published package is missing a command it should have (a files[] omission, #446). No review threads were posted."`,
     `fi`,
     ``,
     `exit "$threads_code"`,

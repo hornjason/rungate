@@ -810,12 +810,26 @@ describe("#2203: the generated threads step", () => {
   }
 
   const SKEW_LINE = 'rungate: unknown command "ai-review-threads"';
+  // The warning this step printed until #2666, kept so the cases below can
+  // assert it is gone rather than merely reworded.
   const SKEW_WARNING = "does not carry the ai-review-threads command yet";
+  const MISSING_COMMAND = "::error title=AI review threads::";
 
-  test("version skew: the exact unknown-command line reads as UNMEASURED and exits 0", () => {
+  // #2666. This line used to read as version skew: a workflow ahead of the
+  // published package, UNMEASURED, exit 0. That cannot be true any more. The
+  // pin always names the version that generated the workflow, and every
+  // release since the command shipped carries it, so the line means the
+  // published package lost a command it should have, which is a packaging
+  // defect (#446's class). A warning on a green job, with no threads posted,
+  // hid exactly that.
+  test("an unknown-command line means the published package lost the command: the step fails, naming it", () => {
     const r = runThreads(`rungate-version: 0.8.20 (resolved at runtime, not the pin)\n${SKEW_LINE}\n\nUsage: …\n`, 1);
-    expect(r.stdout).toContain(SKEW_WARNING);
-    expect(r.code).toBe(0);
+    expect(r.stdout, "the old reading survives: a missing command read as a release still to come").not.toContain(SKEW_WARNING);
+    const annotation = r.stdout.split("\n").find(l => l.startsWith(MISSING_COMMAND));
+    expect(annotation, `no error annotation was printed:\n${r.stdout}`).toBeDefined();
+    expect(annotation!, "the annotation does not name the missing command").toContain("ai-review-threads");
+    expect(annotation!, "the annotation does not name the version that lacks it").toContain("rungate@0.8.21");
+    expect(r.code, "the step went green over a package that cannot post threads").not.toBe(0);
   });
 
   // The forgery the substring grep allowed: the phrase inside a line the
@@ -824,6 +838,7 @@ describe("#2203: the generated threads step", () => {
   test("the phrase mid-line in the command's own output is a refusal, not skew", () => {
     const r = runThreads(`ai-review-threads: a finding quoting ${SKEW_LINE} in its text\n`, 1);
     expect(r.stdout).not.toContain(SKEW_WARNING);
+    expect(r.stdout, "a finding's text named a missing command it is not").not.toContain(MISSING_COMMAND);
     expect(r.code).toBe(1);
   });
 

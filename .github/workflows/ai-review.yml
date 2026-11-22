@@ -1,4 +1,4 @@
-# generated-sha: ca77daa2092c7110
+# generated-sha: 0ee14f1cd1d3b7cf
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -4138,7 +4138,7 @@ jobs:
 
           # `run:` is `bash -e`, so the assignment consumes its own status with a
           # top-level `||` — see buildThreadsScript. Without it the step aborts
-          # here and the version-skew branch below never runs.
+          # here and the missing-command branch below never runs.
           #
           # From a directory made at this moment, not the checkout (#2664): `bunx`
           # resolves bunfig.toml by walking up from where it runs, and this step
@@ -4154,8 +4154,7 @@ jobs:
           printf '%s\n' "$threads_out"
 
           if [ "$threads_code" -ne 0 ] && printf '%s\n' "$threads_out" | grep -qxF 'rungate: unknown command "ai-review-threads"'; then
-            echo "::warning title=AI review threads::UNMEASURED - rungate@0.8.45 does not carry the ai-review-threads command yet, so no review threads were posted. This workflow is ahead of the published package; it resolves itself on the next release."
-            exit 0
+            echo "::error title=AI review threads::rungate@0.8.45 does not carry the ai-review-threads command this workflow calls. The pin is the version that generated this workflow, so the published package is missing a command it should have (a files[] omission, #446). No review threads were posted."
           fi
 
           exit "$threads_code"
