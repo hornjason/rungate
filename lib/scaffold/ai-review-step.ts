@@ -3533,9 +3533,10 @@ export function buildKeepExecutionScript(k: number): string {
  * outcome and execution file the later steps read. This passes it every run's
  * outcome, kept file and draft, in run order, and nothing else.
  *
- * It runs from the findings directory, never the checkout, for the reason the
- * adjudicator does: `bunx` in the checkout would resolve the command through
- * the branch's own package files.
+ * It runs from a fresh empty directory (`AI_REVIEW_FRESH_CWD`, #2664), never
+ * the checkout and never the findings directory: `bunx` resolves its config
+ * from its working directory upward, and every run can write the findings
+ * directory.
  *
  * It reads only what the keep steps kept, and only if each file's digest is
  * the one its keep step output: a kept draft or transcript changed after its
@@ -3583,7 +3584,7 @@ export function buildMergeDraftsScript(version: string): string {
       `drafts+=("$d")`,
     ]),
     `merge_code=0`,
-    `merge_out="$(cd "$dir" && ${merger} "\${args[@]}" "\${drafts[@]}" 2>&1)" || merge_code=$?`,
+    `merge_out="$(${AI_REVIEW_FRESH_CWD} && ${merger} "\${args[@]}" "\${drafts[@]}" 2>&1)" || merge_code=$?`,
     `printf '%s\\n' "$merge_out"`,
     `if [ "$merge_code" -ne 0 ]; then`,
     `  rm -f "$payload"`,

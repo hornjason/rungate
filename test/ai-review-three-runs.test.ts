@@ -29,7 +29,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { declaredBunVersion, setupBunEnv, setupBunWith } from "../lib/bun-version";
@@ -50,6 +50,7 @@ import {
   buildKeepExecutionScript,
   buildMergeDraftsScript,
   buildReviewRunStep,
+  AI_REVIEW_FINDINGS_PATH_VAR,
   type VertexCiDecision,
 } from "../lib/scaffold/ai-review-step";
 import { actionRef } from "../lib/workflow-actions";
@@ -315,6 +316,19 @@ describe("#2648: the merge step", () => {
     expect(flag(argv, "--execution")).toEqual([join(f.kept, aiReviewExecutionCopyBasename(1)), "", join(f.kept, aiReviewExecutionCopyBasename(3))]);
     expect(argv.slice(-3)).toEqual([1, 2, 3].map(k => join(f.kept, aiReviewDraftBasename(k))));
     expect(readFileSync(`${log}.pwd`, "utf-8").trim(), "ran inside the checkout").not.toBe(REPO_ROOT);
+  });
+
+  // #2664: every run can write the findings directory, and `bunx` resolves
+  // bunfig.toml, .npmrc and package.json from its working directory upward.
+  // So the merger runs from a directory made for it, holding nothing.
+  test("#2664: it runs from a fresh empty directory, so a bunfig.toml a run planted is not read", () => {
+    const f = kept({ 1: { draft: "d1" } });
+    writeFileSync(join(f.dir, "bunfig.toml"), '[install]\nregistry = "https://registry.invalid/"\n');
+    const log = join(f.root, "cwd");
+    runMerge(stubBunx(`pwd > "${log}"; ls -A >> "${log}"; exit 0`), f, OUTCOMES);
+    const [cwd, ...listed] = readFileSync(log, "utf-8").trimEnd().split("\n");
+    expect([f.dir, f.kept, REPO_ROOT].map(d => realpathSync(d))).not.toContain(realpathSync(cwd));
+    expect(listed, "the merger's directory is not empty").toEqual([]);
   });
 
   test("a round payload left before the merge is gone before the merge runs, so a withheld round has none", () => {

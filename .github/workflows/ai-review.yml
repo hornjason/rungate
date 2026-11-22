@@ -1,4 +1,4 @@
-# generated-sha: 1b3c53fcac5911f5
+# generated-sha: 6bda2f080c51b406
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -3493,7 +3493,7 @@ jobs:
           d="$kept/ai-review-draft-3.json"; if [ -z "$REPLY" ] && [ -f "$d" ]; then d="$d.withheld"; fi
           drafts+=("$d")
           merge_code=0
-          merge_out="$(cd "$dir" && bunx rungate@0.8.43 ai-review-merge-drafts "${args[@]}" "${drafts[@]}" 2>&1)" || merge_code=$?
+          merge_out="$(cd "$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && bunx rungate@0.8.43 ai-review-merge-drafts "${args[@]}" "${drafts[@]}" 2>&1)" || merge_code=$?
           printf '%s\n' "$merge_out"
           if [ "$merge_code" -ne 0 ]; then
             rm -f "$payload"
