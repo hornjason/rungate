@@ -1315,8 +1315,8 @@ export interface AiReviewActionRefs {
  *
  * **Why `claude-haiku-5-5` (CRC-B10, ADR-025, #2647).** The audit in
  * docs/research/ai-review-audit.md replayed this job's prompt at the commits
- * behind 11 known defects on 2026-11-22, through Vertex in project jhorn-pai
- * at location `global`. `claude-sonnet-5`, the default until then, found 5
+ * behind 11 known defects on 2026-11-22, through Vertex at location
+ * `global`. `claude-sonnet-5`, the default until then, found 5
  * and then 3. `claude-haiku-5-5` found 8, 8 and 8, agreeing with itself on 7
  * or 8 each time, at about a fortieth of the price. So it is measured on
  * Vertex, which was the reason Sonnet held the default since 2026-10-19
