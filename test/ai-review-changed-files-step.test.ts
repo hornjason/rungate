@@ -29,6 +29,7 @@ import {
   buildReviewRunScript,
   buildReviewRunStep,
   type VertexCiDecision,
+  AI_REVIEW_RUNS,
 } from "../lib/scaffold/ai-review-step";
 import {
   AI_REVIEW_FINDING_FIELDS,
@@ -385,24 +386,26 @@ describe("#1356 / CF: the generated job supplies the changed-file list", () => {
     const bindings = JOB.split(`${AI_REVIEW_CHANGED_FILES_PATH_VAR}: `).length - 1;
     expect(
       bindings,
-      "the env bindings for the list no longer number five. The consumers are " +
-        "`ai-review-changed-files` (writes it), `ai-review-carry` (decides " +
-        "`review_scope` from it, #1600), `ai-review-action` (the reviewer is " +
-        "handed the path in its prompt, #1600), `ai-review-run` (reports on " +
-        "it) and `ai-review-threads` (holds back a finding it cannot anchor, " +
+      "the env bindings for the list no longer number four plus one per run. " +
+        "The consumers are `ai-review-changed-files` (writes it), " +
+        "`ai-review-carry` (decides `review_scope` from it, #1600), each " +
+        "run of `ai-review-action` (the reviewer is handed the path in its " +
+        "prompt, #1600; one per run, #2667), `ai-review-run` (reports on it) " +
+        "and `ai-review-threads` (holds back a finding it cannot anchor, " +
         "#1612). If you added or removed a consumer, update this number and " +
         "name it in the comment above; if you did not, a binding has gone " +
         "missing and a step is about to read a path nothing set.",
-    ).toBe(5);
+    ).toBe(4 + AI_REVIEW_RUNS);
     // And the prompt's own mention, asserted separately rather than folded
     // into the count above: the reviewer cannot read an environment variable
     // (`--allowedTools Read,Grep,Glob,Write`), so the path has to be in the
     // text. See `test/ai-review-prompt-paths.test.ts`.
+    // One prompt per run (#2667).
     expect(
       JOB.split(AI_REVIEW_CHANGED_FILES_BASENAME).length - 1 - bindings,
       "the reviewer's prompt no longer carries the changed-file list's path, " +
         "so a narrowed round has no list it can actually open",
-    ).toBe(1);
+    ).toBe(AI_REVIEW_RUNS);
     expect(AI_REVIEW_CHANGED_FILES_STEP_NAME.length).toBeGreaterThan(0);
   });
 

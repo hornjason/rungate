@@ -65,6 +65,7 @@ import {
   buildReviewPrompt,
   vertexCiConfig,
   type VertexCiDecision,
+  AI_REVIEW_RUNS,
 } from "../lib/scaffold/ai-review-step";
 
 /**
@@ -231,8 +232,9 @@ describe("AC-2: the rule survives generation", () => {
     const args = (doc.jobs[AI_REVIEW_JOB].steps as any[])
       .map(s => String(s?.with?.claude_args ?? ""))
       .filter(a => a.includes("--disallowedTools"));
-    expect(args.length, "no step hands the action a denial list").toBe(1);
-    expect(args[0]).toContain(AI_REVIEW_WORKSPACE_WRITE_DENY);
+    // One per run (#2667), and every one carries the rule.
+    expect(args.length, "the steps handing the action a denial list are not one per run").toBe(AI_REVIEW_RUNS);
+    for (const a of args) expect(a).toContain(AI_REVIEW_WORKSPACE_WRITE_DENY);
   });
 
   test("it moves with the constant, so the generated file is not a second copy", async () => {
@@ -799,9 +801,10 @@ describe("#824 AC-2: the reviewer's settings come from the runner, not from the 
     expect(
       [..."--setting-sources user --x --setting-sources local".matchAll(/--setting-sources/g)].length,
     ).toBe(2);
+    // Per run in the file (#2667); the args above are one run's, so once.
     expect(
       [...generated().matchAll(/--setting-sources/g)].length,
-      "the generated workflow carries two setting-source declarations",
-    ).toBe(1);
+      "the generated workflow carries a setting-source declaration other than one per run",
+    ).toBe(AI_REVIEW_RUNS);
   });
 });

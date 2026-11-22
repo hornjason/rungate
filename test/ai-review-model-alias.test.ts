@@ -56,6 +56,7 @@ import {
   modelAliasScanSlice,
   modelAliasViolations,
   vertexCiConfig,
+  AI_REVIEW_RUNS,
 } from "../lib/scaffold/ai-review-step";
 import { createCiWorkflows } from "../lib/scaffold/steps";
 
@@ -261,9 +262,10 @@ describe("#685 AC-5: the model a CONFIGURED project hands the review action", ()
       expect(text, "the configured scaffold produced the unconfigured workflow")
         .not.toBe(bare.text);
       expect(text, "no --model reaches claude_args").toContain(`--model ${AI_REVIEW_MODEL}`);
-      // Once, not merely present: a second position is a second thing to
-      // forget, and no behavioural case could say which one the job used.
-      expect(text.split(AI_REVIEW_MODEL).length - 1, "the pin has more than one position").toBe(1);
+      // Once per run, not merely present: a second position is a second
+      // thing to forget, and no behavioural case could say which one the job
+      // used. Each run is handed the model (#2667), and nothing else is.
+      expect(text.split(AI_REVIEW_MODEL).length - 1, "the pin has a position other than one per run").toBe(AI_REVIEW_RUNS);
     } finally { cleanup(); bare.cleanup(); }
   });
 

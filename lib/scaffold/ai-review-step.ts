@@ -1251,6 +1251,19 @@ export const AI_REVIEW_ACTION_STEP_ID = "ai-review-action";
 export const AI_REVIEW_ACTION_STEP_NAME = "Run the AI review";
 
 /**
+ * How many separate reviewer invocations one round is: one today. #2648
+ * (CRC-B11, ADR-025 decision 2) makes it three and merges their findings.
+ *
+ * Every check that counts something each run must carry — the model, the
+ * turn budget, the credentials, the denial list, the setting sources, the
+ * action pin and the changed-files binding — counts it against this instead
+ * of a literal 1 (#2667). At one run a second occurrence is still a second
+ * spelling, and those checks still fail on it. The generator does not read
+ * this yet, so the workflow it writes is unchanged.
+ */
+export const AI_REVIEW_RUNS = 1;
+
+/**
  * The two action references the generated job pins, supplied by the caller.
  *
  * Strings rather than imports, for the no-relative-imports property above.
