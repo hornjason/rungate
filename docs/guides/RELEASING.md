@@ -250,26 +250,14 @@ reviewers, `strict: false`. So:
 | Check | On a release PR | Why | Blocks the merge? |
 |---|---|---|---|
 | `ai-review` | **red until the label** — the step exits 1 | structural: step 3 rewrites the pin inside `ai-review.yml`, so the action declines | **yes** — required |
-| `review` | should **pass** | nothing in a release touches `claude-review.yml` | no — not a required check |
 
-**An earlier revision of this table called a red `review` normal on a release
-PR. That was wrong, and the evidence is one query:** `review` succeeded on
-`#1738` (0.8.10) and `#1634` (0.8.8). It failed on `#1749` (0.8.11/0.8.12)
-with
-
-```
-An error occurred trying to start process '/usr/bin/bash' with working
-directory '/home/runner/work/rungate/rungate'. Argument list too long
-```
-
-— run `41838043364`, on the `Read what the review actually did` step. **The
-mechanism is not established.** It is not diff size: `#1749` changed +65/-66
-across six files, smaller than the pull requests whose `review` job passed
-the same day.
-
-So treat a red `review` on a release as an unexplained failure, not as
-scenery. Writing it off as expected is how a real one gets waved through,
-which is exactly what calling it "normal" here would have trained.
+Any other red check on a release pull request is an unexplained failure, not
+scenery: investigate it before merging. This table once had a second row, for
+the trial reviewer's `review` check, and an earlier revision called that check
+red-but-normal on a release. It was wrong: `review` passed on #1738 and #1634
+and failed on #1749 for a reason never established. The trial was deleted in
+#2627, and the lesson stays: writing a red check off as expected is how a real
+one gets waved through.
 
 **The outcome and the reason are different things, and this repository is
 strict about not confusing them.** `ai-review` is red, not pending and not
