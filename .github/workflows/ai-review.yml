@@ -1,4 +1,4 @@
-# generated-sha: 6bda2f080c51b406
+# generated-sha: 62ad08a43c54f33e
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -2259,7 +2259,7 @@ jobs:
         env:
           ANTHROPIC_VERTEX_PROJECT_ID: jhorn-pai
           CLOUD_ML_REGION: global
-          AI_REVIEW_FINDINGS_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-draft-1.json
+          AI_REVIEW_FINDINGS_PATH: ${{ steps.ai-review-prepare.outputs.path }}
           AI_REVIEW_ROUND_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-round.txt
           AI_REVIEW_INTENT_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-intent.txt
           AI_REVIEW_CARRY_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-carried.txt
@@ -2517,7 +2517,7 @@ jobs:
 
             Write the result to exactly this absolute path, character for character:
 
-              ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-draft-1.json
+              ${{ steps.ai-review-prepare.outputs.path }}
 
             That path is outside this checkout on purpose, and the directory it names
             already exists. Do not shorten it, do not drop a path segment, and do not
@@ -2617,7 +2617,6 @@ jobs:
           payload="${AI_REVIEW_FINDINGS_PATH}"
           dir="$(dirname "$payload")"
           kept="${dir}.kept"
-          draft="$dir/ai-review-draft-1.json"
           kept_draft="$kept/ai-review-draft-1.json"
           kept_exec="$kept/ai-review-execution-1.json"
           src="${AI_REVIEW_EXECUTION_FILE:-}"
@@ -2625,7 +2624,7 @@ jobs:
           execution_sha=""
           if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then
             rm -f "$kept_draft" "$kept_exec"
-            if [ -f "$draft" ] && cp "$draft" "$kept_draft"; then
+            if [ -f "$payload" ] && cp "$payload" "$kept_draft"; then
               draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"
               echo "kept run 1's draft as $kept_draft"
             else
@@ -2646,7 +2645,7 @@ jobs:
             echo "::warning title=AI review drafts::could not make $kept, so run 1's draft and execution file are not kept and run 1 reads as having written neither"
           fi
           if [ -n "$src" ]; then rm -f "$src"; fi
-          rm -f "$dir"/ai-review-draft-*.json "$payload"
+          rm -f "$payload"
           printf 'draft_sha=%s\nexecution_sha=%s\n' "$draft_sha" "$execution_sha" >> "${GITHUB_OUTPUT}"
           exit 0
       - name: Run the AI review (run 2 of 3)
@@ -2656,7 +2655,7 @@ jobs:
         env:
           ANTHROPIC_VERTEX_PROJECT_ID: jhorn-pai
           CLOUD_ML_REGION: global
-          AI_REVIEW_FINDINGS_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-draft-2.json
+          AI_REVIEW_FINDINGS_PATH: ${{ steps.ai-review-prepare.outputs.path }}
           AI_REVIEW_ROUND_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-round.txt
           AI_REVIEW_INTENT_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-intent.txt
           AI_REVIEW_CARRY_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-carried.txt
@@ -2914,7 +2913,7 @@ jobs:
 
             Write the result to exactly this absolute path, character for character:
 
-              ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-draft-2.json
+              ${{ steps.ai-review-prepare.outputs.path }}
 
             That path is outside this checkout on purpose, and the directory it names
             already exists. Do not shorten it, do not drop a path segment, and do not
@@ -3014,7 +3013,6 @@ jobs:
           payload="${AI_REVIEW_FINDINGS_PATH}"
           dir="$(dirname "$payload")"
           kept="${dir}.kept"
-          draft="$dir/ai-review-draft-2.json"
           kept_draft="$kept/ai-review-draft-2.json"
           kept_exec="$kept/ai-review-execution-2.json"
           src="${AI_REVIEW_EXECUTION_FILE:-}"
@@ -3022,7 +3020,7 @@ jobs:
           execution_sha=""
           if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then
             rm -f "$kept_draft" "$kept_exec"
-            if [ -f "$draft" ] && cp "$draft" "$kept_draft"; then
+            if [ -f "$payload" ] && cp "$payload" "$kept_draft"; then
               draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"
               echo "kept run 2's draft as $kept_draft"
             else
@@ -3043,7 +3041,7 @@ jobs:
             echo "::warning title=AI review drafts::could not make $kept, so run 2's draft and execution file are not kept and run 2 reads as having written neither"
           fi
           if [ -n "$src" ]; then rm -f "$src"; fi
-          rm -f "$dir"/ai-review-draft-*.json "$payload"
+          rm -f "$payload"
           printf 'draft_sha=%s\nexecution_sha=%s\n' "$draft_sha" "$execution_sha" >> "${GITHUB_OUTPUT}"
           exit 0
       - name: Run the AI review (run 3 of 3)
@@ -3053,7 +3051,7 @@ jobs:
         env:
           ANTHROPIC_VERTEX_PROJECT_ID: jhorn-pai
           CLOUD_ML_REGION: global
-          AI_REVIEW_FINDINGS_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-draft-3.json
+          AI_REVIEW_FINDINGS_PATH: ${{ steps.ai-review-prepare.outputs.path }}
           AI_REVIEW_ROUND_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-round.txt
           AI_REVIEW_INTENT_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-intent.txt
           AI_REVIEW_CARRY_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-carried.txt
@@ -3311,7 +3309,7 @@ jobs:
 
             Write the result to exactly this absolute path, character for character:
 
-              ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-draft-3.json
+              ${{ steps.ai-review-prepare.outputs.path }}
 
             That path is outside this checkout on purpose, and the directory it names
             already exists. Do not shorten it, do not drop a path segment, and do not
@@ -3411,7 +3409,6 @@ jobs:
           payload="${AI_REVIEW_FINDINGS_PATH}"
           dir="$(dirname "$payload")"
           kept="${dir}.kept"
-          draft="$dir/ai-review-draft-3.json"
           kept_draft="$kept/ai-review-draft-3.json"
           kept_exec="$kept/ai-review-execution-3.json"
           src="${AI_REVIEW_EXECUTION_FILE:-}"
@@ -3419,7 +3416,7 @@ jobs:
           execution_sha=""
           if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then
             rm -f "$kept_draft" "$kept_exec"
-            if [ -f "$draft" ] && cp "$draft" "$kept_draft"; then
+            if [ -f "$payload" ] && cp "$payload" "$kept_draft"; then
               draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"
               echo "kept run 3's draft as $kept_draft"
             else
@@ -3440,7 +3437,7 @@ jobs:
             echo "::warning title=AI review drafts::could not make $kept, so run 3's draft and execution file are not kept and run 3 reads as having written neither"
           fi
           if [ -n "$src" ]; then rm -f "$src"; fi
-          rm -f "$dir"/ai-review-draft-*.json "$payload"
+          rm -f "$payload"
           printf 'draft_sha=%s\nexecution_sha=%s\n' "$draft_sha" "$execution_sha" >> "${GITHUB_OUTPUT}"
           exit 0
       - name: Merge the review runs' drafts into this round's payload

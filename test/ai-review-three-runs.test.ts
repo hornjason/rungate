@@ -9,7 +9,8 @@
  * file holds the WIRING in the generated job, and every case in it is a
  * failure written down before the first push:
  *
- * - a run writing the round's payload directly instead of its own draft;
+ * - one run differing from another — a second prompt, model, credential or
+ *   path — so a round is not one reviewer three times;
  * - a later run reading an earlier run's execution file as its own, because
  *   the action writes that file to one fixed path;
  * - the merge running inside the checkout, where the branch's own package
@@ -120,28 +121,14 @@ describe("CRC-B11: three reviewer invocations, then one merge, in the generated 
     expect(new Set(AI_REVIEW_ACTION_STEP_IDS).size).toBe(AI_REVIEW_RUNS);
   });
 
-  test("each run writes its own draft, and no run is told the round's payload path", () => {
-    const prompts: string[] = [];
-    AI_REVIEW_ACTION_STEP_IDS.forEach((id, i) => {
-      const s = step(id);
-      const draft = `${dirExpr}/${aiReviewDraftBasename(i + 1)}`;
-      expect(s["continue-on-error"], `${id}: a failed run must not end the round`).toBe(true);
-      expect(s.env?.AI_REVIEW_FINDINGS_PATH, id).toBe(draft);
-      const prompt = String(s.with?.prompt ?? "");
-      expect(prompt, `${id}: the prompt names its draft`).toContain(draft);
-      expect(prompt, `${id}: the prompt names the round's payload path`).not.toContain(canonicalExpr);
-      prompts.push(prompt.split(draft).join("<DRAFT>"));
-    });
-    const drafts = new Set(AI_REVIEW_ACTION_STEP_IDS.map((_, i) => aiReviewDraftBasename(i + 1)));
-    expect(drafts.size, "two runs share a draft").toBe(AI_REVIEW_RUNS);
-    expect(new Set(prompts).size, "the runs are reviewed with different prompts").toBe(1);
-  });
-
-  test("the runs are the same reviewer: one action, one model and tool set, one credential", () => {
-    const shape = (s: Record<string, any>) =>
-      JSON.stringify({ uses: s.uses, with: { ...s.with, prompt: undefined }, env: { ...s.env, AI_REVIEW_FINDINGS_PATH: undefined } });
-    const shapes = new Set(AI_REVIEW_ACTION_STEP_IDS.map(id => shape(step(id))));
-    expect(shapes.size).toBe(1);
+  test("every run is the same step apart from its id and name: one action, prompt, model, credential and path", () => {
+    const shape = (st: Record<string, any>) => JSON.stringify({ ...st, id: undefined, name: undefined });
+    expect(new Set(AI_REVIEW_ACTION_STEP_IDS.map(id => shape(step(id)))).size).toBe(1);
+    const first = step(AI_REVIEW_ACTION_STEP_IDS[0]);
+    expect(first["continue-on-error"], "a failed run must not end the round").toBe(true);
+    expect(first.env?.AI_REVIEW_FINDINGS_PATH).toBe(canonicalExpr);
+    expect(String(first.with?.prompt ?? ""), "the prompt names the round's payload path").toContain(canonicalExpr);
+    expect(new Set(STEPS.map(st => st?.name)).size, "two steps share a name").toBe(STEPS.length);
   });
 
   test("after each run, a step keeps that run's draft and execution file, reading the run's own output", () => {
@@ -208,28 +195,29 @@ describe("#2648: keeping a run's draft and execution file out of the next run's 
       encoding: "utf-8",
     });
 
-  test("the run's draft and execution file are moved out, and their digests are the step's outputs", () => {
+  test("what the run left at the round's payload path is kept as its draft, with its transcript, and their digests are the outputs", () => {
     const f = findingsDir();
-    writeFileSync(join(f.dir, aiReviewDraftBasename(1)), '{"findings":[]}');
+    writeFileSync(f.payload, '{"findings":[]}');
     const src = join(f.root, "claude-execution-output.json");
     writeFileSync(src, '{"run":1}');
     const r = runKeep(1, f, src);
     expect(r.status).toBe(0);
     expect(readFileSync(join(f.kept, aiReviewDraftBasename(1)), "utf-8")).toBe('{"findings":[]}');
     expect(readFileSync(join(f.kept, aiReviewExecutionCopyBasename(1)), "utf-8")).toBe('{"run":1}');
-    expect(existsSync(join(f.dir, aiReviewDraftBasename(1))), "left where the next run can write it").toBe(false);
+    expect(existsSync(f.payload), "left at the round's payload path, where the next run would be read as having written it").toBe(false);
     expect(existsSync(src), "left at the fixed path for the next run to be read as").toBe(false);
     expect(outputs(f.out)).toEqual({ draft_sha: sha('{"findings":[]}'), execution_sha: sha('{"run":1}') });
   });
 
-  test("what a run wrote for another run, or for the round, does not survive into the next run", () => {
+  test("run 2 that writes nothing is not read as having written run 1's draft", () => {
     const f = findingsDir();
-    writeFileSync(join(f.dir, aiReviewDraftBasename(2)), '{"findings":[],"verdict":"PASS"}');
-    writeFileSync(join(f.dir, aiReviewDraftBasename(3)), '{"findings":[],"verdict":"PASS"}');
     writeFileSync(f.payload, '{"findings":[],"verdict":"PASS"}');
     runKeep(1, f, "");
-    for (const k of [2, 3]) expect(existsSync(join(f.dir, aiReviewDraftBasename(k))), `a planted draft ${k}`).toBe(false);
-    expect(existsSync(f.payload), "a planted round payload").toBe(false);
+    writeFileSync(f.out, "");
+    const r = runKeep(2, f, "");
+    expect(r.stdout).toContain("run 2 wrote no draft");
+    expect(existsSync(join(f.kept, aiReviewDraftBasename(2)))).toBe(false);
+    expect(outputs(f.out).draft_sha).toBe("");
   });
 
   test("a run that wrote nothing keeps nothing, says so, and outputs empty digests — even over an old kept file", () => {

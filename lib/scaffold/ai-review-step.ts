@@ -3470,12 +3470,11 @@ export function buildThreadsScript(version: string): string {
  * - The action writes its execution file to ONE fixed path, so the next run
  *   overwrites it. It is copied out, and the fixed path is CLEARED, because a
  *   run that crashes before writing can still report that path as its output.
- * - Every run can write the findings directory, so the run's draft is copied
- *   out of it — a later run, by mistake or by design, cannot overwrite the
- *   kept copy — and the directory is then cleared, below.
- * - A run can write files for runs that have not happened yet, or the round's
- *   payload itself. Every draft and the payload are deleted from the
- *   directory, so the next run starts with nothing planted.
+ * - Every run writes the round's payload path, because the runs are one
+ *   reviewer. What run k wrote there is its draft: it is copied out, where a
+ *   later run, by mistake or by design, cannot overwrite it, and the path is
+ *   cleared, so run k+1 starts with nothing there and cannot be read as
+ *   having written what run k did.
  *
  * The digest of each kept file is this step's output. A step's outputs are
  * fixed when it ends, so the merge can tell a kept file from one changed
@@ -3491,7 +3490,6 @@ export function buildKeepExecutionScript(k: number): string {
     `payload="\${${AI_REVIEW_FINDINGS_PATH_VAR}}"`,
     `dir="$(dirname "$payload")"`,
     `kept="\${dir}${AI_REVIEW_KEPT_DIR_SUFFIX}"`,
-    `draft="$dir/${aiReviewDraftBasename(k)}"`,
     `kept_draft="$kept/${aiReviewDraftBasename(k)}"`,
     `kept_exec="$kept/${aiReviewExecutionCopyBasename(k)}"`,
     `src="\${${AI_REVIEW_EXECUTION_FILE_VAR}:-}"`,
@@ -3499,7 +3497,7 @@ export function buildKeepExecutionScript(k: number): string {
     `execution_sha=""`,
     `if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then`,
     `  rm -f "$kept_draft" "$kept_exec"`,
-    `  if [ -f "$draft" ] && cp "$draft" "$kept_draft"; then`,
+    `  if [ -f "$payload" ] && cp "$payload" "$kept_draft"; then`,
     `    draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"`,
     `    echo "kept run ${k}'s draft as $kept_draft"`,
     `  else`,
@@ -3520,7 +3518,7 @@ export function buildKeepExecutionScript(k: number): string {
     `  echo "::warning title=AI review drafts::could not make $kept, so run ${k}'s draft and execution file are not kept and run ${k} reads as having written neither"`,
     `fi`,
     `if [ -n "$src" ]; then rm -f "$src"; fi`,
-    `rm -f "$dir"/ai-review-draft-*.json "$payload"`,
+    `rm -f "$payload"`,
     `printf 'draft_sha=%s\\nexecution_sha=%s\\n' "$draft_sha" "$execution_sha" >> "\${GITHUB_OUTPUT}"`,
     `exit 0`,
   ].join("\n");
@@ -11773,20 +11771,16 @@ export function buildReviewRunStep(
     ...buildCarryScript().trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
   ];
 
-  // CRC-B11 (#2648): the same reviewer three times, each writing its own
-  // draft. The ONLY difference between the runs is the findings path, in the
-  // env and in the prompt, so no run is told the round's payload path and
-  // only the merge writes it.
-  const reviewRun = (k: number) => {
-    const draft = `\${{ steps.${AI_REVIEW_PREPARE_STEP_ID}.outputs.${AI_REVIEW_FINDINGS_DIR_OUTPUT} }}/${aiReviewDraftBasename(k)}`;
-    const paths = { ...AI_REVIEW_PROMPT_PATH_EXPRESSIONS, [AI_REVIEW_FINDINGS_PATH_VAR]: draft };
-    return review
+  // CRC-B11 (#2648): the same reviewer three times. The runs are IDENTICAL
+  // apart from their id and name — one action, one prompt, one model, one
+  // credential, and one findings path: the round's own. The keep step after
+  // each run moves what it wrote out of that path before the next run, and
+  // only the merge writes it for the round. Identical steps mean nothing about
+  // the reviewer can differ between the runs of one round.
+  const reviewRun = (k: number) =>
+    review
       .map(l => (l === `- name: ${AI_REVIEW_ACTION_STEP_NAME}` && k > 1 ? `- name: ${AI_REVIEW_ACTION_STEP_NAME} (run ${k} of ${AI_REVIEW_RUNS})` : l))
-      .map(l => (l === `  id: ${AI_REVIEW_ACTION_STEP_ID}` ? `  id: ${AI_REVIEW_ACTION_STEP_IDS[k - 1]}` : l))
-      .map(l => (l === `    ${AI_REVIEW_FINDINGS_PATH_VAR}: ${AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_FINDINGS_PATH_VAR]}` ? `    ${AI_REVIEW_FINDINGS_PATH_VAR}: ${draft}` : l))
-      .slice(0, review.length - promptLines.length)
-      .concat(buildReviewPrompt(paths).trimEnd().split("\n").map(l => (l ? `      ${l}` : "")));
-  };
+      .map(l => (l === `  id: ${AI_REVIEW_ACTION_STEP_ID}` ? `  id: ${AI_REVIEW_ACTION_STEP_IDS[k - 1]}` : l));
 
   const keepExecution = (k: number) => [
     `- name: Keep run ${k}'s draft and execution file out of the next run's reach`,
@@ -11812,7 +11806,6 @@ export function buildReviewRunStep(
     ...buildMergeDraftsScript(version).trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
   ];
 
-  const promptLines = buildReviewPrompt().trimEnd().split("\n");
   const review = [
     `- name: ${AI_REVIEW_ACTION_STEP_NAME}`,
     `  id: ${AI_REVIEW_ACTION_STEP_ID}`,
