@@ -233,6 +233,39 @@ export function mergeDrafts(inputs: readonly DraftInput[]): MergedDrafts {
   return { payload, drafts, kept: kept.length, duplicates };
 }
 
+/** One review run as the job saw it: its action step's outcome, and its copied execution file ("" when it wrote none). */
+export interface RoundRun {
+  outcome: string;
+  execution: string;
+}
+
+/**
+ * The run a round reports (#2661). The steps after the review read ONE
+ * action outcome and ONE execution file, so with several runs this decides,
+ * once, which run supplies them:
+ *
+ * - a written payload is reported by the first run whose draft parsed, as
+ *   `success` — it is a run that reviewed and wrote, whatever its step said;
+ * - a withheld payload is reported by the first run whose draft did NOT
+ *   parse, with that run's own outcome and execution file. So a partial round
+ *   is reported by the run that made it partial, and a round where every run
+ *   failed is reported by run 1, exactly as the one run is today.
+ *
+ * Runs are matched to drafts by position; a list of a different length is
+ * refused rather than read as far as it goes.
+ */
+export function roundRepresentative(m: MergedDrafts, runs: readonly RoundRun[]): RoundRun & { run: number } {
+  if (runs.length !== m.drafts.length) {
+    throw new Error(`${m.drafts.length} drafts and ${runs.length} runs — each draft needs the run that wrote it`);
+  }
+  const written = m.payload !== null;
+  const at = m.drafts.findIndex(d => (d.status === "parsed") === written);
+  // Total: a written payload has a parsed draft, and a withheld one has a
+  // draft that did not parse (every draft parsed always writes the union).
+  const run = runs[at];
+  return { run: at, outcome: written ? "success" : run.outcome, execution: run.execution };
+}
+
 /** The log lines the merge step prints: the counts first, then each draft that did not parse. */
 export function mergeReport(m: MergedDrafts): string[] {
   const parsedCount = m.drafts.filter(d => d.status === "parsed").length;
