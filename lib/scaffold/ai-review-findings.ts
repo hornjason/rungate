@@ -1398,11 +1398,16 @@ export interface AiReviewFindingsReading {
  *
  * Three states, not two: an unrecognised severity is unclassified, and
  * unclassified is not "does not block".
+ *
+ * The table is read for its OWN keys (#2657). A plain property read hands back
+ * what every object inherits — `constructor` is the Object function,
+ * `__proto__` is Object.prototype — which is neither undefined nor a boolean,
+ * so the adjudicator read a severity nobody declared as blocking instead of
+ * naming it `SEVERITY_UNRECOGNISED`.
  */
 export function severityBlocks(severity: unknown): boolean | null {
-  if (typeof severity !== "string") return null;
-  const blocks = AI_REVIEW_SEVERITIES[severity];
-  return blocks === undefined ? null : blocks;
+  if (typeof severity !== "string" || !Object.hasOwn(AI_REVIEW_SEVERITIES, severity)) return null;
+  return AI_REVIEW_SEVERITIES[severity];
 }
 
 /**
