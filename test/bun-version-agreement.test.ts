@@ -180,10 +180,7 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     const steps = setupBunStepsUnder(WORKFLOW_DIR);
     expect(steps.length, "fewer setup-bun steps than this repo has workflows that install bun")
       .toBeGreaterThanOrEqual(19);
-    // The trial reviewer (`claude-review.yml`) is disabled and #2627 deletes
-    // it, so it is not counted here (#2626). Once it is gone this filter
-    // matches nothing, and #2627 removes it.
-    const files = new Set(steps.map(s => s.file).filter(f => f !== "claude-review.yml"));
+    const files = new Set(steps.map(s => s.file));
     expect([...files].sort()).toEqual([
       "action-pins.yml",
       "adr-accepted.yml",
