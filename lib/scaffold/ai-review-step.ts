@@ -1282,8 +1282,20 @@ export function aiReviewExecutionCopyBasename(k: number): string {
   return `ai-review-execution-${k}.json`;
 }
 
-/** The variable the keep step copies run k's execution file to. */
-export const AI_REVIEW_EXECUTION_COPY_PATH_VAR = "AI_REVIEW_EXECUTION_COPY_PATH";
+/**
+ * Where each run's draft and execution file are kept once the run is over: a
+ * sibling of the findings directory, never inside it. Every run is given the
+ * findings directory with `--add-dir`, so anything left there is something
+ * the next run can see, overwrite or plant; the sibling is out of a run's
+ * working directories, and the digest each keep step outputs catches a write
+ * that reaches it anyway.
+ */
+export const AI_REVIEW_KEPT_DIR_SUFFIX = ".kept";
+
+/** The merge step's env names for the digests run `k`'s keep step output. */
+export function aiReviewRunDigestVar(k: number, what: "DRAFT" | "EXECUTION"): string {
+  return `AI_REVIEW_RUN_${k}_${what}_SHA`;
+}
 
 export const AI_REVIEW_MERGE_STEP_ID = "ai-review-merge";
 
@@ -3450,34 +3462,66 @@ export function buildThreadsScript(version: string): string {
 }
 
 /**
- * Keep one run's execution file under that run's own name (#2648).
+ * After run `k`: keep its draft and execution file where the next run cannot
+ * reach them, and record what they were (#2648).
  *
- * The action writes its execution file to ONE fixed path, so without this the
- * next run overwrites it and every later reader sees run 3's transcript under
- * run 1's name. The copy is taken, and then the fixed path is CLEARED: a run
- * that crashes before writing can still report that path as its output, and a
- * file left there from the previous run would be kept as this run's.
+ * Three things this is for, each a failure the shared directory allows:
  *
- * It never fails the job. A copy it cannot make is a warning and leaves no
- * partial copy, so the run reads as having written none — which is what the
- * merge and the report already know how to say.
+ * - The action writes its execution file to ONE fixed path, so the next run
+ *   overwrites it. It is copied out, and the fixed path is CLEARED, because a
+ *   run that crashes before writing can still report that path as its output.
+ * - Every run can write the findings directory, so the run's draft is copied
+ *   out of it — a later run, by mistake or by design, cannot overwrite the
+ *   kept copy — and the directory is then cleared, below.
+ * - A run can write files for runs that have not happened yet, or the round's
+ *   payload itself. Every draft and the payload are deleted from the
+ *   directory, so the next run starts with nothing planted.
+ *
+ * The digest of each kept file is this step's output. A step's outputs are
+ * fixed when it ends, so the merge can tell a kept file from one changed
+ * after its run, wherever that change came from.
+ *
+ * It never fails the job. What it cannot keep is a warning, and the run then
+ * reads as having written nothing — a route the merge and the report already
+ * name.
  */
-export function buildKeepExecutionScript(): string {
+export function buildKeepExecutionScript(k: number): string {
   return [
     `set -uo pipefail`,
+    `payload="\${${AI_REVIEW_FINDINGS_PATH_VAR}}"`,
+    `dir="$(dirname "$payload")"`,
+    `kept="\${dir}${AI_REVIEW_KEPT_DIR_SUFFIX}"`,
+    `draft="$dir/${aiReviewDraftBasename(k)}"`,
+    `kept_draft="$kept/${aiReviewDraftBasename(k)}"`,
+    `kept_exec="$kept/${aiReviewExecutionCopyBasename(k)}"`,
     `src="\${${AI_REVIEW_EXECUTION_FILE_VAR}:-}"`,
-    `dest="\${${AI_REVIEW_EXECUTION_COPY_PATH_VAR}}"`,
-    `if [ -n "${"$"}src" ] && [ -f "${"$"}src" ]; then`,
-    `  if cp "${"$"}src" "${"$"}dest"; then`,
-    `    echo "kept this run's execution file as ${"$"}dest"`,
+    `draft_sha=""`,
+    `execution_sha=""`,
+    `if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then`,
+    `  rm -f "$kept_draft" "$kept_exec"`,
+    `  if [ -f "$draft" ] && cp "$draft" "$kept_draft"; then`,
+    `    draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"`,
+    `    echo "kept run ${k}'s draft as $kept_draft"`,
     `  else`,
-    `    rm -f "${"$"}dest"`,
-    `    echo "::warning title=AI review execution file::could not keep this run's execution file at ${"$"}dest, so this run reads as having written none"`,
+    `    echo "run ${k} wrote no draft"`,
     `  fi`,
-    `  rm -f "${"$"}src"`,
+    `  if [ -n "$src" ] && [ -f "$src" ]; then`,
+    `    if cp "$src" "$kept_exec"; then`,
+    `      execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)"`,
+    `      echo "kept run ${k}'s execution file as $kept_exec"`,
+    `    else`,
+    `      rm -f "$kept_exec"`,
+    `      echo "::warning title=AI review execution file::could not keep run ${k}'s execution file, so run ${k} reads as having written none"`,
+    `    fi`,
+    `  else`,
+    `    echo "run ${k} wrote no execution file"`,
+    `  fi`,
     `else`,
-    `  echo "this run wrote no execution file"`,
+    `  echo "::warning title=AI review drafts::could not make $kept, so run ${k}'s draft and execution file are not kept and run ${k} reads as having written neither"`,
     `fi`,
+    `if [ -n "$src" ]; then rm -f "$src"; fi`,
+    `rm -f "$dir"/ai-review-draft-*.json "$payload"`,
+    `printf 'draft_sha=%s\\nexecution_sha=%s\\n' "$draft_sha" "$execution_sha" >> "\${GITHUB_OUTPUT}"`,
     `exit 0`,
   ].join("\n");
 }
@@ -3493,6 +3537,12 @@ export function buildKeepExecutionScript(): string {
  * adjudicator does: `bunx` in the checkout would resolve the command through
  * the branch's own package files.
  *
+ * It reads only what the keep steps kept, and only if each file's digest is
+ * the one its keep step output: a kept draft or transcript changed after its
+ * run is passed as not written, and named. So tampering can withhold a round
+ * or leave a block, never produce a pass. The round's payload path is cleared
+ * first — only the merge writes it.
+ *
  * A run with no outcome is passed as `failure`. The only route this script
  * decides itself is a merge that refused or could not run: then no payload
  * stands, the round reports run 1 as failed, and the annotation says the
@@ -3504,22 +3554,42 @@ export function buildMergeDraftsScript(version: string): string {
   return [
     `set -uo pipefail`,
     `payload="\${${AI_REVIEW_FINDINGS_PATH_VAR}}"`,
-    `dir="$(dirname "${"$"}payload")"`,
-    `args=(--out "${"$"}payload" --github-output "\${GITHUB_OUTPUT}")`,
+    `dir="$(dirname "$payload")"`,
+    `kept="\${dir}${AI_REVIEW_KEPT_DIR_SUFFIX}"`,
+    `# Only the merge writes the round's payload; anything already there is not it.`,
+    `rm -f "$payload"`,
+    `# A kept file is read only if it is exactly what its run's keep step recorded.`,
+    `# Sets REPLY to the path, or to "" — naming any file that changed after its run.`,
+    `check() {`,
+    `  REPLY=""`,
+    `  if [ -f "$1" ]; then`,
+    `    if [ -n "$2" ] && [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]; then`,
+    `      REPLY="$1"`,
+    `    else`,
+    `      echo "::error title=AI review drafts::$3 changed after its run finished, so it is read as not written"`,
+    `    fi`,
+    `  fi`,
+    `}`,
+    `args=(--out "$payload" --github-output "\${GITHUB_OUTPUT}")`,
     `drafts=()`,
     ...runs.flatMap(k => [
-      `kept="${"$"}dir/${aiReviewExecutionCopyBasename(k)}"; [ -f "${"$"}kept" ] || kept=""`,
-      `args+=(--outcome "\${${aiReviewRunOutcomeVar(k)}:-failure}" --execution "${"$"}kept")`,
-      `drafts+=("${"$"}dir/${aiReviewDraftBasename(k)}")`,
+      `check "$kept/${aiReviewExecutionCopyBasename(k)}" "\${${aiReviewRunDigestVar(k, "EXECUTION")}:-}" "run ${k}'s execution file"`,
+      `args+=(--outcome "\${${aiReviewRunOutcomeVar(k)}:-failure}" --execution "$REPLY")`,
+      `check "$kept/${aiReviewDraftBasename(k)}" "\${${aiReviewRunDigestVar(k, "DRAFT")}:-}" "run ${k}'s draft"`,
+      // An absent draft is passed by its own name, which the merge reports as
+      // not written. Only a draft that changed after its run is renamed, so it
+      // cannot be read at all.
+      `d="$kept/${aiReviewDraftBasename(k)}"; if [ -z "$REPLY" ] && [ -f "$d" ]; then d="$d.withheld"; fi`,
+      `drafts+=("$d")`,
     ]),
     `merge_code=0`,
-    `merge_out="$(cd "${"$"}dir" && ${merger} "\${args[@]}" "\${drafts[@]}" 2>&1)" || merge_code=$?`,
-    `printf '%s\\n' "${"$"}merge_out"`,
-    `if [ "${"$"}merge_code" -ne 0 ]; then`,
-    `  rm -f "${"$"}payload"`,
-    `  first="${"$"}dir/${aiReviewExecutionCopyBasename(1)}"; [ -f "${"$"}first" ] || first=""`,
-    `  echo "::error title=AI review drafts::UNMEASURED - the review runs' drafts could not be merged (exit ${"$"}merge_code), so this round has no findings payload and reports run 1 as failed. This is not a review that found nothing."`,
-    `  printf 'outcome=failure\\nexecution_file=%s\\n' "${"$"}first" >> "\${GITHUB_OUTPUT}"`,
+    `merge_out="$(cd "$dir" && ${merger} "\${args[@]}" "\${drafts[@]}" 2>&1)" || merge_code=$?`,
+    `printf '%s\\n' "$merge_out"`,
+    `if [ "$merge_code" -ne 0 ]; then`,
+    `  rm -f "$payload"`,
+    `  check "$kept/${aiReviewExecutionCopyBasename(1)}" "\${${aiReviewRunDigestVar(1, "EXECUTION")}:-}" "run 1's execution file"`,
+    `  echo "::error title=AI review drafts::UNMEASURED - the review runs' drafts could not be merged (exit $merge_code), so this round has no findings payload and reports run 1 as failed. This is not a review that found nothing."`,
+    `  printf 'outcome=failure\\nexecution_file=%s\\n' "$REPLY" >> "\${GITHUB_OUTPUT}"`,
     `fi`,
     `exit 0`,
   ].join("\n");
@@ -11718,13 +11788,13 @@ export function buildReviewRunStep(
   };
 
   const keepExecution = (k: number) => [
-    `- name: Keep run ${k}'s execution file before the next run overwrites it`,
+    `- name: Keep run ${k}'s draft and execution file out of the next run's reach`,
     `  id: ${AI_REVIEW_KEEP_EXECUTION_STEP_IDS[k - 1]}`,
     `  env:`,
     `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_ACTION_STEP_IDS[k - 1]}.outputs.execution_file }}`,
-    `    ${AI_REVIEW_EXECUTION_COPY_PATH_VAR}: \${{ steps.${AI_REVIEW_PREPARE_STEP_ID}.outputs.${AI_REVIEW_FINDINGS_DIR_OUTPUT} }}/${aiReviewExecutionCopyBasename(k)}`,
+    `    ${AI_REVIEW_FINDINGS_PATH_VAR}: ${AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_FINDINGS_PATH_VAR]}`,
     `  run: |`,
-    ...buildKeepExecutionScript().trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
+    ...buildKeepExecutionScript(k).trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
   ];
 
   const merge = [
@@ -11732,7 +11802,11 @@ export function buildReviewRunStep(
     `  id: ${AI_REVIEW_MERGE_STEP_ID}`,
     `  env:`,
     `    ${AI_REVIEW_FINDINGS_PATH_VAR}: ${AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_FINDINGS_PATH_VAR]}`,
-    ...AI_REVIEW_ACTION_STEP_IDS.map((id, i) => `    ${aiReviewRunOutcomeVar(i + 1)}: \${{ steps.${id}.outcome }}`),
+    ...AI_REVIEW_ACTION_STEP_IDS.flatMap((id, i) => [
+      `    ${aiReviewRunOutcomeVar(i + 1)}: \${{ steps.${id}.outcome }}`,
+      `    ${aiReviewRunDigestVar(i + 1, "DRAFT")}: \${{ steps.${AI_REVIEW_KEEP_EXECUTION_STEP_IDS[i]}.outputs.draft_sha }}`,
+      `    ${aiReviewRunDigestVar(i + 1, "EXECUTION")}: \${{ steps.${AI_REVIEW_KEEP_EXECUTION_STEP_IDS[i]}.outputs.execution_sha }}`,
+    ]),
     `  run: |`,
     ...buildMergeDraftsScript(version).trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
   ];

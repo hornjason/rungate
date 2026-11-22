@@ -16,12 +16,20 @@
  *   files would resolve the command;
  * - a merge that could not run leaving the job with no outcome at all;
  * - a downstream step still reading run 1's outcome, so a round reported by
- *   another run is described as run 1.
+ *   another run is described as run 1;
+ * - every run can write the shared findings directory, so one run could plant
+ *   another run's draft or transcript, overwrite an earlier run's draft, or
+ *   leave the round's payload behind for a round that should have none. Each
+ *   run's draft and transcript are moved out of that directory with their
+ *   digest recorded as a step output the next run cannot change, and the
+ *   merge reads a file whose digest moved as not written — so tampering can
+ *   withhold a round or leave a block, never produce a pass.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { declaredBunVersion, setupBunEnv, setupBunWith } from "../lib/bun-version";
@@ -31,6 +39,7 @@ import {
   AI_REVIEW_ACTION_STEP_IDS,
   AI_REVIEW_DRIFT_STEP_ID,
   AI_REVIEW_BASELINE_STEP_ID,
+  AI_REVIEW_KEPT_DIR_SUFFIX,
   AI_REVIEW_JOB,
   AI_REVIEW_KEEP_EXECUTION_STEP_IDS,
   AI_REVIEW_MERGE_STEP_ID,
@@ -134,11 +143,12 @@ describe("CRC-B11: three reviewer invocations, then one merge, in the generated 
     expect(shapes.size).toBe(1);
   });
 
-  test("each run's execution file is kept under its own name before the next run overwrites it", () => {
+  test("after each run, a step keeps that run's draft and execution file, reading the run's own output", () => {
     AI_REVIEW_KEEP_EXECUTION_STEP_IDS.forEach((id, i) => {
       const s = step(id);
       expect(s.env?.AI_REVIEW_EXECUTION_FILE).toBe(`\${{ steps.${AI_REVIEW_ACTION_STEP_IDS[i]}.outputs.execution_file }}`);
-      expect(s.env?.AI_REVIEW_EXECUTION_COPY_PATH).toBe(`${dirExpr}/${aiReviewExecutionCopyBasename(i + 1)}`);
+      expect(s.env?.AI_REVIEW_FINDINGS_PATH).toBe(canonicalExpr);
+      expect(String(s.run), `${id} keeps a different run`).toContain(aiReviewDraftBasename(i + 1));
     });
   });
 
@@ -147,6 +157,9 @@ describe("CRC-B11: three reviewer invocations, then one merge, in the generated 
     expect(s.env?.AI_REVIEW_FINDINGS_PATH).toBe(canonicalExpr);
     AI_REVIEW_ACTION_STEP_IDS.forEach((id, i) => {
       expect(s.env?.[`AI_REVIEW_RUN_${i + 1}_OUTCOME`]).toBe(`\${{ steps.${id}.outcome }}`);
+      const keep = AI_REVIEW_KEEP_EXECUTION_STEP_IDS[i];
+      expect(s.env?.[`AI_REVIEW_RUN_${i + 1}_DRAFT_SHA`]).toBe(`\${{ steps.${keep}.outputs.draft_sha }}`);
+      expect(s.env?.[`AI_REVIEW_RUN_${i + 1}_EXECUTION_SHA`]).toBe(`\${{ steps.${keep}.outputs.execution_sha }}`);
     });
   });
 
@@ -173,117 +186,188 @@ describe("CRC-B11: three reviewer invocations, then one merge, in the generated 
   });
 });
 
-describe("#2648: keeping a run's execution file", () => {
-  const runKeep = (env: Record<string, string>) =>
-    spawnSync("bash", ["-c", buildKeepExecutionScript()], { env: { PATH: process.env.PATH ?? "", ...env }, encoding: "utf-8" });
+const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
-  test("a written file is copied under the run's name and the fixed path is cleared", () => {
-    const d = scratch("rg-keep-");
-    const src = join(d, "claude-execution-output.json");
+/** A findings directory as the prepare step leaves it, and the GITHUB_OUTPUT file a step appends to. */
+const findingsDir = () => {
+  const root = scratch("rg-three-runs-");
+  const dir = join(root, "ai-review-1");
+  mkdirSync(dir);
+  const out = join(root, "github-output");
+  writeFileSync(out, "");
+  return { dir, kept: `${dir}${AI_REVIEW_KEPT_DIR_SUFFIX}`, payload: join(dir, "ai-review-findings.json"), out, root };
+};
+const outputs = (file: string) =>
+  Object.fromEntries(readFileSync(file, "utf-8").trimEnd().split("\n").filter(Boolean).map(l => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]));
+
+describe("#2648: keeping a run's draft and execution file out of the next run's reach", () => {
+  const runKeep = (k: number, f: ReturnType<typeof findingsDir>, src: string) =>
+    spawnSync("bash", ["-c", buildKeepExecutionScript(k)], {
+      env: { PATH: process.env.PATH ?? "", AI_REVIEW_FINDINGS_PATH: f.payload, AI_REVIEW_EXECUTION_FILE: src, GITHUB_OUTPUT: f.out },
+      encoding: "utf-8",
+    });
+
+  test("the run's draft and execution file are moved out, and their digests are the step's outputs", () => {
+    const f = findingsDir();
+    writeFileSync(join(f.dir, aiReviewDraftBasename(1)), '{"findings":[]}');
+    const src = join(f.root, "claude-execution-output.json");
     writeFileSync(src, '{"run":1}');
-    const r = runKeep({ AI_REVIEW_EXECUTION_FILE: src, AI_REVIEW_EXECUTION_COPY_PATH: join(d, "execution-1.json") });
+    const r = runKeep(1, f, src);
     expect(r.status).toBe(0);
-    expect(readFileSync(join(d, "execution-1.json"), "utf-8")).toBe('{"run":1}');
+    expect(readFileSync(join(f.kept, aiReviewDraftBasename(1)), "utf-8")).toBe('{"findings":[]}');
+    expect(readFileSync(join(f.kept, aiReviewExecutionCopyBasename(1)), "utf-8")).toBe('{"run":1}');
+    expect(existsSync(join(f.dir, aiReviewDraftBasename(1))), "left where the next run can write it").toBe(false);
     expect(existsSync(src), "left at the fixed path for the next run to be read as").toBe(false);
+    expect(outputs(f.out)).toEqual({ draft_sha: sha('{"findings":[]}'), execution_sha: sha('{"run":1}') });
   });
 
-  test("a run that wrote none leaves no copy, and says so", () => {
+  test("what a run wrote for another run, or for the round, does not survive into the next run", () => {
+    const f = findingsDir();
+    writeFileSync(join(f.dir, aiReviewDraftBasename(2)), '{"findings":[],"verdict":"PASS"}');
+    writeFileSync(join(f.dir, aiReviewDraftBasename(3)), '{"findings":[],"verdict":"PASS"}');
+    writeFileSync(f.payload, '{"findings":[],"verdict":"PASS"}');
+    runKeep(1, f, "");
+    for (const k of [2, 3]) expect(existsSync(join(f.dir, aiReviewDraftBasename(k))), `a planted draft ${k}`).toBe(false);
+    expect(existsSync(f.payload), "a planted round payload").toBe(false);
+  });
+
+  test("a run that wrote nothing keeps nothing, says so, and outputs empty digests — even over an old kept file", () => {
+    const f = findingsDir();
+    mkdirSync(f.kept);
+    writeFileSync(join(f.kept, aiReviewDraftBasename(2)), "planted");
+    writeFileSync(join(f.kept, aiReviewExecutionCopyBasename(2)), "planted");
     for (const src of ["", "/nonexistent/claude-execution-output.json"]) {
-      const d = scratch("rg-keep-");
-      const r = runKeep({ AI_REVIEW_EXECUTION_FILE: src, AI_REVIEW_EXECUTION_COPY_PATH: join(d, "execution-2.json") });
+      writeFileSync(f.out, "");
+      const r = runKeep(2, f, src);
       expect(r.status).toBe(0);
-      expect(existsSync(join(d, "execution-2.json"))).toBe(false);
+      expect(r.stdout).toContain("wrote no draft");
       expect(r.stdout).toContain("wrote no execution file");
+      expect(existsSync(join(f.kept, aiReviewDraftBasename(2)))).toBe(false);
+      expect(existsSync(join(f.kept, aiReviewExecutionCopyBasename(2)))).toBe(false);
+      expect(outputs(f.out)).toEqual({ draft_sha: "", execution_sha: "" });
     }
   });
 
-  test("run 2 that writes nothing is not read as run 1, whose file sat at the same fixed path", () => {
-    const d = scratch("rg-keep-");
-    const fixed = join(d, "claude-execution-output.json");
+  test("run 2 that writes nothing is not read as run 1, whose transcript sat at the same fixed path", () => {
+    const f = findingsDir();
+    const fixed = join(f.root, "claude-execution-output.json");
     writeFileSync(fixed, '{"run":1}');
-    runKeep({ AI_REVIEW_EXECUTION_FILE: fixed, AI_REVIEW_EXECUTION_COPY_PATH: join(d, "execution-1.json") });
-    // Run 2 crashed before writing, but reports the same fixed path.
-    const r = runKeep({ AI_REVIEW_EXECUTION_FILE: fixed, AI_REVIEW_EXECUTION_COPY_PATH: join(d, "execution-2.json") });
-    expect(r.status).toBe(0);
-    expect(existsSync(join(d, "execution-2.json"))).toBe(false);
+    runKeep(1, f, fixed);
+    writeFileSync(f.out, "");
+    runKeep(2, f, fixed);
+    expect(existsSync(join(f.kept, aiReviewExecutionCopyBasename(2)))).toBe(false);
+    expect(outputs(f.out).execution_sha).toBe("");
   });
 
   test("a copy it cannot make is a warning, leaves no partial copy, and still clears the fixed path", () => {
-    const d = scratch("rg-keep-");
-    const src = join(d, "claude-execution-output.json");
+    const f = findingsDir();
+    writeFileSync(join(f.root, "ai-review-1.kept"), "a file where the kept directory should be");
+    const src = join(f.root, "claude-execution-output.json");
     writeFileSync(src, '{"run":3}');
-    const dest = join(d, "missing-dir", "execution-3.json");
-    const r = runKeep({ AI_REVIEW_EXECUTION_FILE: src, AI_REVIEW_EXECUTION_COPY_PATH: dest });
+    const r = runKeep(3, f, src);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("::warning");
-    expect(existsSync(dest)).toBe(false);
     expect(existsSync(src)).toBe(false);
+    expect(outputs(f.out)).toEqual({ draft_sha: "", execution_sha: "" });
   });
 });
 
 describe("#2648: the merge step", () => {
-  /** A findings dir as the prepare step leaves it, plus the copies the keep steps made. */
-  const fixture = (copies: number[]) => {
-    const dir = scratch("rg-merge-step-");
-    for (const k of copies) writeFileSync(join(dir, aiReviewExecutionCopyBasename(k)), "{}");
-    const out = join(dir, "github-output");
-    writeFileSync(out, "");
-    return { dir, payload: join(dir, "ai-review-findings.json"), out };
+  /** Kept drafts and transcripts as the keep steps left them, and the digests they output. */
+  const kept = (runs: Record<number, { draft?: string; execution?: string }>) => {
+    const f = findingsDir();
+    mkdirSync(f.kept);
+    const env: Record<string, string> = {};
+    for (const [k, r] of Object.entries(runs)) {
+      if (r.draft !== undefined) {
+        writeFileSync(join(f.kept, aiReviewDraftBasename(Number(k))), r.draft);
+        env[`AI_REVIEW_RUN_${k}_DRAFT_SHA`] = sha(r.draft);
+      }
+      if (r.execution !== undefined) {
+        writeFileSync(join(f.kept, aiReviewExecutionCopyBasename(Number(k))), r.execution);
+        env[`AI_REVIEW_RUN_${k}_EXECUTION_SHA`] = sha(r.execution);
+      }
+    }
+    return { ...f, env };
   };
-  const runMerge = (path: string, f: ReturnType<typeof fixture>, outcomes: Record<string, string>) =>
+  const runMerge = (path: string, f: ReturnType<typeof kept>, extra: Record<string, string> = {}) =>
     spawnSync("bash", ["-c", buildMergeDraftsScript(VERSION)], {
-      env: { PATH: path, AI_REVIEW_FINDINGS_PATH: f.payload, GITHUB_OUTPUT: f.out, ...outcomes },
+      env: { PATH: path, AI_REVIEW_FINDINGS_PATH: f.payload, GITHUB_OUTPUT: f.out, ...f.env, ...extra },
       encoding: "utf-8",
       cwd: REPO_ROOT,
     });
-  // A bunx that records where it ran and what it was asked, then exits with $STUB_EXIT.
-  const recorder = (log: string, exit = 0) =>
-    stubBunx(`pwd > "${log}.pwd"; printf '%s\\n' "$@" > "${log}"; exit ${exit}`);
+  // A bunx that records where it ran and what it was asked, then exits.
+  const recorder = (log: string, exit = 0) => stubBunx(`pwd > "${log}.pwd"; printf '%s\\n' "$@" > "${log}"; exit ${exit}`);
+  const argvOf = (log: string) => readFileSync(log, "utf-8").trimEnd().split("\n");
+  const flag = (argv: string[], name: string) => argv.flatMap((a, i) => (a === name ? [argv[i + 1]] : []));
+  const OUTCOMES = { AI_REVIEW_RUN_1_OUTCOME: "success", AI_REVIEW_RUN_2_OUTCOME: "failure", AI_REVIEW_RUN_3_OUTCOME: "success" };
 
-  test("it runs the pinned command from the findings dir with every run's outcome, kept file and draft, in order", () => {
-    const f = fixture([1, 3]);
-    const log = join(f.dir, "argv");
-    const r = runMerge(recorder(log), f, { AI_REVIEW_RUN_1_OUTCOME: "success", AI_REVIEW_RUN_2_OUTCOME: "failure", AI_REVIEW_RUN_3_OUTCOME: "success" });
+  test("it runs the pinned command outside the checkout, with every run's outcome, kept transcript and kept draft, in order", () => {
+    const f = kept({ 1: { draft: "d1", execution: "e1" }, 3: { draft: "d3", execution: "e3" } });
+    const log = join(f.root, "argv");
+    const r = runMerge(recorder(log), f, OUTCOMES);
     expect(r.status).toBe(0);
-    const argv = readFileSync(log, "utf-8").trimEnd().split("\n");
-    const at = (flag: string) => argv.flatMap((a, i) => (a === flag ? [argv[i + 1]] : []));
+    const argv = argvOf(log);
     expect(argv.slice(0, 2)).toEqual([`rungate@${VERSION}`, "ai-review-merge-drafts"]);
-    expect(at("--out")).toEqual([f.payload]);
-    expect(at("--github-output")).toEqual([f.out]);
-    expect(at("--outcome")).toEqual(["success", "failure", "success"]);
-    expect(at("--execution")).toEqual([join(f.dir, aiReviewExecutionCopyBasename(1)), "", join(f.dir, aiReviewExecutionCopyBasename(3))]);
-    expect(argv.slice(-3)).toEqual([1, 2, 3].map(k => join(f.dir, aiReviewDraftBasename(k))));
+    expect(flag(argv, "--out")).toEqual([f.payload]);
+    expect(flag(argv, "--github-output")).toEqual([f.out]);
+    expect(flag(argv, "--outcome")).toEqual(["success", "failure", "success"]);
+    expect(flag(argv, "--execution")).toEqual([join(f.kept, aiReviewExecutionCopyBasename(1)), "", join(f.kept, aiReviewExecutionCopyBasename(3))]);
+    expect(argv.slice(-3)).toEqual([1, 2, 3].map(k => join(f.kept, aiReviewDraftBasename(k))));
     expect(readFileSync(`${log}.pwd`, "utf-8").trim(), "ran inside the checkout").not.toBe(REPO_ROOT);
   });
 
+  test("a round payload left before the merge is gone before the merge runs, so a withheld round has none", () => {
+    const f = kept({ 1: { draft: "d1" } });
+    writeFileSync(f.payload, '{"findings":[],"verdict":"PASS"}');
+    const log = join(f.root, "argv");
+    const r = runMerge(stubBunx(`test -e "${f.payload}" && echo PRESENT > "${log}" || echo ABSENT > "${log}"; exit 0`), f, OUTCOMES);
+    expect(r.status).toBe(0);
+    expect(readFileSync(log, "utf-8").trim()).toBe("ABSENT");
+  });
+
+  test("a kept draft or transcript whose digest moved after its run is passed as not written, and named", () => {
+    const f = kept({ 1: { draft: "d1", execution: "e1" }, 2: { draft: "d2", execution: "e2" } });
+    writeFileSync(join(f.kept, aiReviewDraftBasename(1)), '{"findings":[],"verdict":"PASS"}');
+    writeFileSync(join(f.kept, aiReviewExecutionCopyBasename(2)), "forged");
+    // Run 3 output no digest, but a draft appeared for it afterwards.
+    writeFileSync(join(f.kept, aiReviewDraftBasename(3)), '{"findings":[],"verdict":"PASS"}');
+    const log = join(f.root, "argv");
+    const r = runMerge(recorder(log), f, OUTCOMES);
+    const argv = argvOf(log);
+    const drafts = argv.slice(-3);
+    expect(existsSync(drafts[0]), "run 1's changed draft is read").toBe(false);
+    expect(drafts[1]).toBe(join(f.kept, aiReviewDraftBasename(2)));
+    expect(existsSync(drafts[2]), "a draft run 3 never wrote is read").toBe(false);
+    expect(flag(argv, "--execution")).toEqual([join(f.kept, aiReviewExecutionCopyBasename(1)), "", ""]);
+    expect(r.stdout.match(/::error title=AI review drafts::run \d+'s (draft|execution file) changed/g)?.length).toBe(3);
+  });
+
   test("a run with no outcome is passed as a failure, never as a success", () => {
-    const f = fixture([]);
-    const log = join(f.dir, "argv");
+    const f = kept({});
+    const log = join(f.root, "argv");
     runMerge(recorder(log), f, { AI_REVIEW_RUN_1_OUTCOME: "success" });
-    const argv = readFileSync(log, "utf-8").trimEnd().split("\n");
-    expect(argv.flatMap((a, i) => (a === "--outcome" ? [argv[i + 1]] : []))).toEqual(["success", "failure", "failure"]);
+    expect(flag(argvOf(log), "--outcome")).toEqual(["success", "failure", "failure"]);
   });
 
   test("a merge that succeeded adds nothing of its own to the step's outputs", () => {
-    const f = fixture([1]);
-    const r = runMerge(recorder(join(f.dir, "argv")), f, { AI_REVIEW_RUN_1_OUTCOME: "success" });
+    const f = kept({ 1: { draft: "d1" } });
+    const r = runMerge(recorder(join(f.root, "argv")), f, OUTCOMES);
     expect(r.status).toBe(0);
     expect(readFileSync(f.out, "utf-8")).toBe("");
   });
 
   for (const [name, path] of [
-    ["refused", (f: ReturnType<typeof fixture>) => recorder(join(f.dir, "argv"), 2)],
+    ["refused", (f: ReturnType<typeof kept>) => recorder(join(f.root, "argv"), 2)],
     ["could not run at all", () => stubBunxAbsent()],
   ] as const) {
     test(`a merge that ${name} leaves no payload, reports run 1 as failed, and names the round UNMEASURED`, () => {
-      const f = fixture([1]);
-      writeFileSync(f.payload, '{"findings":[]}');
-      const r = runMerge(path(f), f, { AI_REVIEW_RUN_1_OUTCOME: "success" });
+      const f = kept({ 1: { draft: "d1", execution: "e1" } });
+      const r = runMerge(path(f), f, OUTCOMES);
       expect(r.status).toBe(0);
-      expect(existsSync(f.payload), "a payload the merge did not finish is left for the adjudicator").toBe(false);
-      expect(readFileSync(f.out, "utf-8")).toBe(`outcome=failure\nexecution_file=${join(f.dir, aiReviewExecutionCopyBasename(1))}\n`);
+      expect(existsSync(f.payload)).toBe(false);
+      expect(readFileSync(f.out, "utf-8")).toBe(`outcome=failure\nexecution_file=${join(f.kept, aiReviewExecutionCopyBasename(1))}\n`);
       expect(r.stdout).toMatch(/::error title=AI review drafts::UNMEASURED/);
     });
   }
 });
-

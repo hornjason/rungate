@@ -1,4 +1,4 @@
-# generated-sha: ee91813fa8a5b0c1
+# generated-sha: 1b3c53fcac5911f5
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -2607,26 +2607,47 @@ jobs:
             Do not post review comments and do not push commits. Write nothing into this
             checkout at all: the payload path above is outside it, and a later step fails
             the job if `git diff` reports anything, so an edit here costs the review.
-      - name: Keep run 1's execution file before the next run overwrites it
+      - name: Keep run 1's draft and execution file out of the next run's reach
         id: ai-review-keep-execution-1
         env:
           AI_REVIEW_EXECUTION_FILE: ${{ steps.ai-review-action.outputs.execution_file }}
-          AI_REVIEW_EXECUTION_COPY_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-execution-1.json
+          AI_REVIEW_FINDINGS_PATH: ${{ steps.ai-review-prepare.outputs.path }}
         run: |
           set -uo pipefail
+          payload="${AI_REVIEW_FINDINGS_PATH}"
+          dir="$(dirname "$payload")"
+          kept="${dir}.kept"
+          draft="$dir/ai-review-draft-1.json"
+          kept_draft="$kept/ai-review-draft-1.json"
+          kept_exec="$kept/ai-review-execution-1.json"
           src="${AI_REVIEW_EXECUTION_FILE:-}"
-          dest="${AI_REVIEW_EXECUTION_COPY_PATH}"
-          if [ -n "$src" ] && [ -f "$src" ]; then
-            if cp "$src" "$dest"; then
-              echo "kept this run's execution file as $dest"
+          draft_sha=""
+          execution_sha=""
+          if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then
+            rm -f "$kept_draft" "$kept_exec"
+            if [ -f "$draft" ] && cp "$draft" "$kept_draft"; then
+              draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"
+              echo "kept run 1's draft as $kept_draft"
             else
-              rm -f "$dest"
-              echo "::warning title=AI review execution file::could not keep this run's execution file at $dest, so this run reads as having written none"
+              echo "run 1 wrote no draft"
             fi
-            rm -f "$src"
+            if [ -n "$src" ] && [ -f "$src" ]; then
+              if cp "$src" "$kept_exec"; then
+                execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)"
+                echo "kept run 1's execution file as $kept_exec"
+              else
+                rm -f "$kept_exec"
+                echo "::warning title=AI review execution file::could not keep run 1's execution file, so run 1 reads as having written none"
+              fi
+            else
+              echo "run 1 wrote no execution file"
+            fi
           else
-            echo "this run wrote no execution file"
+            echo "::warning title=AI review drafts::could not make $kept, so run 1's draft and execution file are not kept and run 1 reads as having written neither"
           fi
+          if [ -n "$src" ]; then rm -f "$src"; fi
+          rm -f "$dir"/ai-review-draft-*.json "$payload"
+          printf 'draft_sha=%s\nexecution_sha=%s\n' "$draft_sha" "$execution_sha" >> "${GITHUB_OUTPUT}"
           exit 0
       - name: Run the AI review (run 2 of 3)
         id: ai-review-action-2
@@ -2983,26 +3004,47 @@ jobs:
             Do not post review comments and do not push commits. Write nothing into this
             checkout at all: the payload path above is outside it, and a later step fails
             the job if `git diff` reports anything, so an edit here costs the review.
-      - name: Keep run 2's execution file before the next run overwrites it
+      - name: Keep run 2's draft and execution file out of the next run's reach
         id: ai-review-keep-execution-2
         env:
           AI_REVIEW_EXECUTION_FILE: ${{ steps.ai-review-action-2.outputs.execution_file }}
-          AI_REVIEW_EXECUTION_COPY_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-execution-2.json
+          AI_REVIEW_FINDINGS_PATH: ${{ steps.ai-review-prepare.outputs.path }}
         run: |
           set -uo pipefail
+          payload="${AI_REVIEW_FINDINGS_PATH}"
+          dir="$(dirname "$payload")"
+          kept="${dir}.kept"
+          draft="$dir/ai-review-draft-2.json"
+          kept_draft="$kept/ai-review-draft-2.json"
+          kept_exec="$kept/ai-review-execution-2.json"
           src="${AI_REVIEW_EXECUTION_FILE:-}"
-          dest="${AI_REVIEW_EXECUTION_COPY_PATH}"
-          if [ -n "$src" ] && [ -f "$src" ]; then
-            if cp "$src" "$dest"; then
-              echo "kept this run's execution file as $dest"
+          draft_sha=""
+          execution_sha=""
+          if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then
+            rm -f "$kept_draft" "$kept_exec"
+            if [ -f "$draft" ] && cp "$draft" "$kept_draft"; then
+              draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"
+              echo "kept run 2's draft as $kept_draft"
             else
-              rm -f "$dest"
-              echo "::warning title=AI review execution file::could not keep this run's execution file at $dest, so this run reads as having written none"
+              echo "run 2 wrote no draft"
             fi
-            rm -f "$src"
+            if [ -n "$src" ] && [ -f "$src" ]; then
+              if cp "$src" "$kept_exec"; then
+                execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)"
+                echo "kept run 2's execution file as $kept_exec"
+              else
+                rm -f "$kept_exec"
+                echo "::warning title=AI review execution file::could not keep run 2's execution file, so run 2 reads as having written none"
+              fi
+            else
+              echo "run 2 wrote no execution file"
+            fi
           else
-            echo "this run wrote no execution file"
+            echo "::warning title=AI review drafts::could not make $kept, so run 2's draft and execution file are not kept and run 2 reads as having written neither"
           fi
+          if [ -n "$src" ]; then rm -f "$src"; fi
+          rm -f "$dir"/ai-review-draft-*.json "$payload"
+          printf 'draft_sha=%s\nexecution_sha=%s\n' "$draft_sha" "$execution_sha" >> "${GITHUB_OUTPUT}"
           exit 0
       - name: Run the AI review (run 3 of 3)
         id: ai-review-action-3
@@ -3359,57 +3401,105 @@ jobs:
             Do not post review comments and do not push commits. Write nothing into this
             checkout at all: the payload path above is outside it, and a later step fails
             the job if `git diff` reports anything, so an edit here costs the review.
-      - name: Keep run 3's execution file before the next run overwrites it
+      - name: Keep run 3's draft and execution file out of the next run's reach
         id: ai-review-keep-execution-3
         env:
           AI_REVIEW_EXECUTION_FILE: ${{ steps.ai-review-action-3.outputs.execution_file }}
-          AI_REVIEW_EXECUTION_COPY_PATH: ${{ steps.ai-review-prepare.outputs.dir }}/ai-review-execution-3.json
+          AI_REVIEW_FINDINGS_PATH: ${{ steps.ai-review-prepare.outputs.path }}
         run: |
           set -uo pipefail
+          payload="${AI_REVIEW_FINDINGS_PATH}"
+          dir="$(dirname "$payload")"
+          kept="${dir}.kept"
+          draft="$dir/ai-review-draft-3.json"
+          kept_draft="$kept/ai-review-draft-3.json"
+          kept_exec="$kept/ai-review-execution-3.json"
           src="${AI_REVIEW_EXECUTION_FILE:-}"
-          dest="${AI_REVIEW_EXECUTION_COPY_PATH}"
-          if [ -n "$src" ] && [ -f "$src" ]; then
-            if cp "$src" "$dest"; then
-              echo "kept this run's execution file as $dest"
+          draft_sha=""
+          execution_sha=""
+          if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then
+            rm -f "$kept_draft" "$kept_exec"
+            if [ -f "$draft" ] && cp "$draft" "$kept_draft"; then
+              draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)"
+              echo "kept run 3's draft as $kept_draft"
             else
-              rm -f "$dest"
-              echo "::warning title=AI review execution file::could not keep this run's execution file at $dest, so this run reads as having written none"
+              echo "run 3 wrote no draft"
             fi
-            rm -f "$src"
+            if [ -n "$src" ] && [ -f "$src" ]; then
+              if cp "$src" "$kept_exec"; then
+                execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)"
+                echo "kept run 3's execution file as $kept_exec"
+              else
+                rm -f "$kept_exec"
+                echo "::warning title=AI review execution file::could not keep run 3's execution file, so run 3 reads as having written none"
+              fi
+            else
+              echo "run 3 wrote no execution file"
+            fi
           else
-            echo "this run wrote no execution file"
+            echo "::warning title=AI review drafts::could not make $kept, so run 3's draft and execution file are not kept and run 3 reads as having written neither"
           fi
+          if [ -n "$src" ]; then rm -f "$src"; fi
+          rm -f "$dir"/ai-review-draft-*.json "$payload"
+          printf 'draft_sha=%s\nexecution_sha=%s\n' "$draft_sha" "$execution_sha" >> "${GITHUB_OUTPUT}"
           exit 0
       - name: Merge the review runs' drafts into this round's payload
         id: ai-review-merge
         env:
           AI_REVIEW_FINDINGS_PATH: ${{ steps.ai-review-prepare.outputs.path }}
           AI_REVIEW_RUN_1_OUTCOME: ${{ steps.ai-review-action.outcome }}
+          AI_REVIEW_RUN_1_DRAFT_SHA: ${{ steps.ai-review-keep-execution-1.outputs.draft_sha }}
+          AI_REVIEW_RUN_1_EXECUTION_SHA: ${{ steps.ai-review-keep-execution-1.outputs.execution_sha }}
           AI_REVIEW_RUN_2_OUTCOME: ${{ steps.ai-review-action-2.outcome }}
+          AI_REVIEW_RUN_2_DRAFT_SHA: ${{ steps.ai-review-keep-execution-2.outputs.draft_sha }}
+          AI_REVIEW_RUN_2_EXECUTION_SHA: ${{ steps.ai-review-keep-execution-2.outputs.execution_sha }}
           AI_REVIEW_RUN_3_OUTCOME: ${{ steps.ai-review-action-3.outcome }}
+          AI_REVIEW_RUN_3_DRAFT_SHA: ${{ steps.ai-review-keep-execution-3.outputs.draft_sha }}
+          AI_REVIEW_RUN_3_EXECUTION_SHA: ${{ steps.ai-review-keep-execution-3.outputs.execution_sha }}
         run: |
           set -uo pipefail
           payload="${AI_REVIEW_FINDINGS_PATH}"
           dir="$(dirname "$payload")"
+          kept="${dir}.kept"
+          # Only the merge writes the round's payload; anything already there is not it.
+          rm -f "$payload"
+          # A kept file is read only if it is exactly what its run's keep step recorded.
+          # Sets REPLY to the path, or to "" — naming any file that changed after its run.
+          check() {
+            REPLY=""
+            if [ -f "$1" ]; then
+              if [ -n "$2" ] && [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]; then
+                REPLY="$1"
+              else
+                echo "::error title=AI review drafts::$3 changed after its run finished, so it is read as not written"
+              fi
+            fi
+          }
           args=(--out "$payload" --github-output "${GITHUB_OUTPUT}")
           drafts=()
-          kept="$dir/ai-review-execution-1.json"; [ -f "$kept" ] || kept=""
-          args+=(--outcome "${AI_REVIEW_RUN_1_OUTCOME:-failure}" --execution "$kept")
-          drafts+=("$dir/ai-review-draft-1.json")
-          kept="$dir/ai-review-execution-2.json"; [ -f "$kept" ] || kept=""
-          args+=(--outcome "${AI_REVIEW_RUN_2_OUTCOME:-failure}" --execution "$kept")
-          drafts+=("$dir/ai-review-draft-2.json")
-          kept="$dir/ai-review-execution-3.json"; [ -f "$kept" ] || kept=""
-          args+=(--outcome "${AI_REVIEW_RUN_3_OUTCOME:-failure}" --execution "$kept")
-          drafts+=("$dir/ai-review-draft-3.json")
+          check "$kept/ai-review-execution-1.json" "${AI_REVIEW_RUN_1_EXECUTION_SHA:-}" "run 1's execution file"
+          args+=(--outcome "${AI_REVIEW_RUN_1_OUTCOME:-failure}" --execution "$REPLY")
+          check "$kept/ai-review-draft-1.json" "${AI_REVIEW_RUN_1_DRAFT_SHA:-}" "run 1's draft"
+          d="$kept/ai-review-draft-1.json"; if [ -z "$REPLY" ] && [ -f "$d" ]; then d="$d.withheld"; fi
+          drafts+=("$d")
+          check "$kept/ai-review-execution-2.json" "${AI_REVIEW_RUN_2_EXECUTION_SHA:-}" "run 2's execution file"
+          args+=(--outcome "${AI_REVIEW_RUN_2_OUTCOME:-failure}" --execution "$REPLY")
+          check "$kept/ai-review-draft-2.json" "${AI_REVIEW_RUN_2_DRAFT_SHA:-}" "run 2's draft"
+          d="$kept/ai-review-draft-2.json"; if [ -z "$REPLY" ] && [ -f "$d" ]; then d="$d.withheld"; fi
+          drafts+=("$d")
+          check "$kept/ai-review-execution-3.json" "${AI_REVIEW_RUN_3_EXECUTION_SHA:-}" "run 3's execution file"
+          args+=(--outcome "${AI_REVIEW_RUN_3_OUTCOME:-failure}" --execution "$REPLY")
+          check "$kept/ai-review-draft-3.json" "${AI_REVIEW_RUN_3_DRAFT_SHA:-}" "run 3's draft"
+          d="$kept/ai-review-draft-3.json"; if [ -z "$REPLY" ] && [ -f "$d" ]; then d="$d.withheld"; fi
+          drafts+=("$d")
           merge_code=0
           merge_out="$(cd "$dir" && bunx rungate@0.8.43 ai-review-merge-drafts "${args[@]}" "${drafts[@]}" 2>&1)" || merge_code=$?
           printf '%s\n' "$merge_out"
           if [ "$merge_code" -ne 0 ]; then
             rm -f "$payload"
-            first="$dir/ai-review-execution-1.json"; [ -f "$first" ] || first=""
+            check "$kept/ai-review-execution-1.json" "${AI_REVIEW_RUN_1_EXECUTION_SHA:-}" "run 1's execution file"
             echo "::error title=AI review drafts::UNMEASURED - the review runs' drafts could not be merged (exit $merge_code), so this round has no findings payload and reports run 1 as failed. This is not a review that found nothing."
-            printf 'outcome=failure\nexecution_file=%s\n' "$first" >> "${GITHUB_OUTPUT}"
+            printf 'outcome=failure\nexecution_file=%s\n' "$REPLY" >> "${GITHUB_OUTPUT}"
           fi
           exit 0
       - name: Refuse a reviewer that modified the tree
