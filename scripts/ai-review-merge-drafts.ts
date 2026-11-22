@@ -14,7 +14,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { mergeDrafts, mergeReport } from "../lib/ai-review-drafts";
+import { type DraftInput, mergeDrafts, mergeReport } from "../lib/ai-review-drafts";
 
 /** The one non-zero exit: a call this script cannot read. */
 export const MERGE_DRAFTS_USAGE_EXIT = 2;
@@ -36,6 +36,16 @@ function readCall(argv: readonly string[]): { out: string; drafts: string[] } | 
   }
 }
 
+/** A draft path read: absent, its text, or why a path that exists could not be read. */
+function readDraft(path: string): DraftInput {
+  if (!existsSync(path)) return { path, text: null };
+  try {
+    return { path, text: readFileSync(path, "utf-8") };
+  } catch (e) {
+    return { path, text: null, readError: (e as Error).message };
+  }
+}
+
 export function main(argv: readonly string[]): number {
   const call = readCall(argv);
   if ("refused" in call) {
@@ -43,7 +53,7 @@ export function main(argv: readonly string[]): number {
     return MERGE_DRAFTS_USAGE_EXIT;
   }
   const { out, drafts } = call;
-  const merged = mergeDrafts(drafts.map(path => ({ path, text: existsSync(path) ? readFileSync(path, "utf-8") : null })));
+  const merged = mergeDrafts(drafts.map(readDraft));
   for (const line of mergeReport(merged)) console.log(`ai-review-merge-drafts: ${line}`);
   if (merged.payload !== null) writeFileSync(out, `${JSON.stringify(merged.payload, null, 2)}\n`);
   return 0;

@@ -23,10 +23,14 @@
  * on the same finding share a key. Keeping whichever came first would drop a
  * blocking finding whenever an advisory run was listed before it — a merged
  * round passing a pull request one of its runs blocked. So the kept entry is
- * replaced, in place, by a stricter duplicate: strictness is the order of
- * `AI_REVIEW_SEVERITIES`, and a severity that table does not declare ranks
- * above all of them, because the adjudicator refuses it by name and the
- * direction this is allowed to be wrong in is toward blocking.
+ * replaced, in place, by a stricter duplicate. Strictness is three tiers,
+ * read through `severityBlocks` so this adds no second answer to "does this
+ * block": a blocking severity, then one the table does not declare, then an
+ * advisory one; within a tier, the order of `AI_REVIEW_SEVERITIES`. An
+ * undeclared severity sits between because that is what it does to a round:
+ * the adjudicator reads it `SEVERITY_UNRECOGNISED`, UNMEASURED — weaker than
+ * a block, so it must never displace one (PR #2656 round 1), and stronger
+ * than a pass, so an advisory duplicate must never hide it.
  *
  * ## What a draft that did not parse means
  *
@@ -39,6 +43,7 @@
 
 import {
   advisoryKey,
+  severityBlocks,
   AI_REVIEW_BLOCK_VERDICT,
   AI_REVIEW_FINDINGS_KEY,
   AI_REVIEW_PASS_VERDICT,
@@ -67,22 +72,31 @@ export interface MergedDrafts {
   duplicates: number;
 }
 
-/** One draft as the merge receives it: its path, and its text or `null` when the file is absent. */
+/**
+ * One draft as the merge receives it: its path, and its text or `null` when
+ * the file is absent. `readError` is set when the path exists and could not
+ * be read — a directory, or no read permission — which is UNREADABLE, not
+ * ABSENT: something is there, and the run that wrote it did not write a draft.
+ */
 export interface DraftInput {
   path: string;
   text: string | null;
+  readError?: string;
 }
 
-/**
- * Lower is stricter: the index in `AI_REVIEW_SEVERITIES`, whose order is
- * strictest first, and -1 for a severity it does not declare.
- */
+/** Lower is stricter: blocking, then undeclared, then advisory; table order within a tier. */
 function strictness(finding: Record<string, unknown>): number {
   const sev = finding.severity;
-  return typeof sev === "string" ? Object.keys(AI_REVIEW_SEVERITIES).indexOf(sev) : -1;
+  const blocks = severityBlocks(sev);
+  const tier = blocks === true ? 0 : blocks === null ? 1 : 2;
+  const declared = Object.keys(AI_REVIEW_SEVERITIES);
+  return tier * declared.length + Math.max(0, typeof sev === "string" ? declared.indexOf(sev) : 0);
 }
 
 function parseDraft(d: DraftInput): { reading: DraftReading; obj: Record<string, unknown> | null } {
+  if (d.readError !== undefined) {
+    return { reading: { path: d.path, status: "unreadable", findings: 0, why: `could not be read (${d.readError})` }, obj: null };
+  }
   if (d.text === null) return { reading: { path: d.path, status: "absent", findings: 0 }, obj: null };
   let obj: unknown;
   try {

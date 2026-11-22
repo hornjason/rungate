@@ -17,7 +17,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mergeDrafts, mergeReport } from "../lib/ai-review-drafts";
@@ -56,12 +56,21 @@ describe("#2648: the drafts merge into their union", () => {
     expect(m.duplicates).toBe(2);
   });
 
-  test("a severity the table does not declare outranks every declared one, so the adjudicator refuses it by name", () => {
-    const m = mergeDrafts([
-      { path: "d1", text: draft([finding("lib/a.ts", "One", "critical")]) },
-      { path: "d2", text: draft([finding("lib/a.ts", "One", "urgent")]) },
-    ]);
-    expect((m.payload!.findings as { severity: string }[]).map(f => f.severity)).toEqual(["urgent"]);
+  // PR #2656 round 1: an undeclared severity reads the round UNMEASURED,
+  // which is weaker than a block and stronger than a pass. So it ranks below
+  // every blocking severity and above every advisory one.
+  test("a blocking severity outranks one the table does not declare, so the round still blocks", () => {
+    for (const order of [["critical", "Critical"], ["Critical", "critical"]]) {
+      const m = mergeDrafts(order.map((sev, i) => ({ path: `d${i}`, text: draft([finding("lib/a.ts", "One", sev)]) })));
+      expect((m.payload!.findings as { severity: string }[]).map(f => f.severity)).toEqual(["critical"]);
+    }
+  });
+
+  test("a severity the table does not declare outranks an advisory one, so the adjudicator refuses it by name", () => {
+    for (const order of [["low", "urgent"], ["urgent", "low"]]) {
+      const m = mergeDrafts(order.map((sev, i) => ({ path: `d${i}`, text: draft([finding("lib/a.ts", "One", sev)]) })));
+      expect((m.payload!.findings as { severity: string }[]).map(f => f.severity)).toEqual(["urgent"]);
+    }
   });
 
   test("the stricter duplicate takes the first one's place, so the order is unchanged", () => {
@@ -142,6 +151,22 @@ describe("#2648: rungate ai-review-merge-drafts", () => {
       expect(r.stdout).toContain("drafts: 2 of 3 parsed; 2 finding(s) kept, 1 duplicate(s) removed");
       expect(r.stdout).toContain("ABSENT");
       expect((JSON.parse(readFileSync(out, "utf-8")).findings as unknown[]).length).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a draft path that exists but cannot be read is named UNREADABLE, and the union is taken over the rest", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-merge-drafts-"));
+    try {
+      writeFileSync(join(dir, "d1.json"), draft([finding("lib/a.ts", "One")]));
+      mkdirSync(join(dir, "d2.json"));
+      const out = join(dir, "payload.json");
+      const r = run(["--out", out, join(dir, "d1.json"), join(dir, "d2.json")]);
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain("drafts: 1 of 2 parsed");
+      expect(r.stdout).toMatch(/d2\.json: UNREADABLE — could not be read/);
+      expect((JSON.parse(readFileSync(out, "utf-8")).findings as unknown[]).length).toBe(1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
