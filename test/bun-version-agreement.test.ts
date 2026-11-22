@@ -169,6 +169,7 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // no criterion when it is opened, and re-reads every open issue daily —
     // eighteen. `status-issue` joined with #2097, which rewrites the pinned
     // "where we are" issue from live readings on every change — nineteen.
+    // `claude-review` leaves with the trial reviewer (#2626, #2627).
     //
     // The floor and the list are two different claims, deliberately:
     // the floor says the scan read SOMETHING, so no case below is satisfied
@@ -179,7 +180,10 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     const steps = setupBunStepsUnder(WORKFLOW_DIR);
     expect(steps.length, "fewer setup-bun steps than this repo has workflows that install bun")
       .toBeGreaterThanOrEqual(19);
-    const files = new Set(steps.map(s => s.file));
+    // The trial reviewer (`claude-review.yml`) is disabled and #2627 deletes
+    // it, so it is not counted here (#2626). Once it is gone this filter
+    // matches nothing, and #2627 removes it.
+    const files = new Set(steps.map(s => s.file).filter(f => f !== "claude-review.yml"));
     expect([...files].sort()).toEqual([
       "action-pins.yml",
       "adr-accepted.yml",
@@ -192,7 +196,6 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
       "board-sweep.yml",
       "board-walkthrough.yml",
       "ci.yml",
-      "claude-review.yml",
       "closing-references.yml",
       "consumer-intake.yml",
       "criterion-label.yml",

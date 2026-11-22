@@ -182,13 +182,19 @@ describe("AC-3: the generated workflow carries the declared budget", () => {
 });
 
 /**
- * AC-5: the OTHER reviewer runs on the same budget (#1966).
+ * AC-5: the COMMITTED reviewer workflow runs on the declared budget (#1966,
+ * #2626).
  *
  * AC-2 and AC-3 make the budget one declaration reaching one generated
- * workflow. They are silent about `claude-review.yml`, which is hand-written
- * and caller-owned — its own header says so — and which therefore never
- * received #812's raise. It sat on 25 for as long as this file has existed,
- * and in exactly the same way: all turns spent, nothing written.
+ * workflow, generated into a scratch directory. They are silent about any
+ * workflow file this repository actually runs. This case reads the committed
+ * `.github/workflows/ai-review.yml`.
+ *
+ * It was written against the trial reviewer, `claude-review.yml`, which was
+ * hand-written and caller-owned and therefore never received #812's raise. It
+ * sat on 25 for as long as this file had existed, and in exactly the same way:
+ * all turns spent, nothing written. #2626 moved the read to the reviewer that
+ * can block a merge so the trial could be deleted.
  *
  * Run 42868398515 on PR #1965, 2026-11-10:
  *
@@ -207,14 +213,14 @@ describe("AC-3: the generated workflow carries the declared budget", () => {
  * thing that just cost two rounds: #812 raised one site and nothing carried
  * it to the other, and nothing could see the two had drifted.
  *
- * Breaking it: set `--max-turns 25` back in the workflow and this goes red
- * naming both numbers, while AC-2 and AC-3 stay green — they read the
- * generated file and cannot see this one.
+ * Breaking it: set `--max-turns 25` in the committed workflow and this goes
+ * red naming both numbers, while AC-2 and AC-3 stay green — they read a
+ * freshly generated file and cannot see this one.
  */
-describe("AC-5: the hand-written reviewer runs on the same declared budget (#1966)", () => {
-  test("claude-review.yml's --max-turns is AI_REVIEW_MAX_TURNS, not a literal of its own", () => {
+describe("AC-5: the committed reviewer workflow runs on the declared budget (#1966)", () => {
+  test("the committed ai-review.yml's --max-turns is AI_REVIEW_MAX_TURNS, not a literal of its own", () => {
     const text = readFileSync(
-      join(import.meta.dir, "..", ".github", "workflows", "claude-review.yml"),
+      join(import.meta.dir, "..", ".github", "workflows", AI_REVIEW_WORKFLOW_FILE),
       "utf-8",
     );
     const budgets = text
@@ -225,15 +231,15 @@ describe("AC-5: the hand-written reviewer runs on the same declared budget (#196
 
     expect(
       budgets.length,
-      "no --max-turns outside a comment in claude-review.yml — this case would pass " +
+      `no --max-turns outside a comment in the committed ${AI_REVIEW_WORKFLOW_FILE} — this case would pass ` +
         "vacuously, and a reviewer with no turn budget is a job with no bound",
     ).toBe(1);
 
     expect(
       budgets[0],
-      `the trial reviewer runs on ${budgets[0]} turns and ai-review on ` +
+      `the committed ${AI_REVIEW_WORKFLOW_FILE} runs on ${budgets[0]} turns and AI_REVIEW_MAX_TURNS says ` +
         `${AI_REVIEW_MAX_TURNS}. One number, in AI_REVIEW_MAX_TURNS — #812 raised it once ` +
-        "and the hand-written workflow did not follow, which cost #1965 two UNMEASURED rounds.",
+        "and a hand-written workflow did not follow, which cost #1965 two UNMEASURED rounds.",
     ).toBe(AI_REVIEW_MAX_TURNS);
 
     // The control. Without it the equality above is satisfied by two sites

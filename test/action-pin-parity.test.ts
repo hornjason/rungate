@@ -89,8 +89,12 @@ import {
 
 const REPO_ROOT = join(import.meta.dir, "..");
 
-/** The one workflow in this tree that pins the action today. */
-const ACTION_PIN_WORKFLOW = join(".github", "workflows", "claude-review.yml");
+/**
+ * The one workflow in this tree that pins the action today: the AI review,
+ * the reviewer that can block a merge. It was the trial reviewer's workflow
+ * until #2626 moved this read off it so the trial could be deleted.
+ */
+const ACTION_PIN_WORKFLOW = join(".github", "workflows", "ai-review.yml");
 
 const scratch: string[] = [];
 afterAll(() => {

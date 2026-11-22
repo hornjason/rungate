@@ -7,7 +7,7 @@
  * | File | Pin | Comment | What it actually was |
  * |---|---|---|---|
  * | `.github/workflows/ai-review.yml` (#631, unmerged) | `5eb090f3` | `# v1` | v1 |
- * | `.github/workflows/claude-review.yml` | `f27be6b6` | `# v1` | v1 as of 2026-10-16 |
+ * | the trial reviewer's workflow (deleted, #2627) | `f27be6b6` | `# v1` | v1 as of 2026-10-16 |
  *
  * The comment is the only thing a reader checks. It agreed with itself in both
  * files while naming neither commit, which is `.claude/rules/
