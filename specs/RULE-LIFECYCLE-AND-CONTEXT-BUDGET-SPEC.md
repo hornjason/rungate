@@ -382,8 +382,9 @@ holds the decisions and the decomposition.
 - [x] SC-2799: CI renders the full scaffold into fixture consumers, and every lint below reads that rendered tree
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       proved-by: test/rendered-surface.test.ts "SC-2799: CI renders the full scaffold into fixture consumers, and lints read that rendered tree"
-- [ ] SC-2800: Every file, heading or table a rendered brief or rule tells its agent to read exists in the rendered tree
+- [x] SC-2800: Every file, heading or table a rendered brief or rule tells its agent to read exists in the rendered tree
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      proved-by: test/rendered-surface.test.ts "SC-2800: every file, heading or table a rendered brief or rule tells its agent to read exists in the rendered tree"
 - [ ] SC-2801: No rendered file carries an unexpanded `${…}`, the brief templates' test-only marker string, or a numbered list that skips, and the SC-354 test edits a copy, never the shipped template
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2802: No always-loaded rendered rule states a count of files that adding one file would change
