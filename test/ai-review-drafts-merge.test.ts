@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findingIdentity, mergeDrafts, mergeReport, severityStrictness } from "../lib/ai-review-drafts";
 import { advisoryKey, severityBlocks, summaryReading } from "../lib/scaffold/ai-review-findings";
-import { MERGE_DRAFTS_USAGE_EXIT } from "../scripts/ai-review-merge-drafts";
+import { MERGE_DRAFTS_REFUSED_EXIT } from "../scripts/ai-review-merge-drafts";
 
 const finding = (file: string, summary: string, severity = "high", line = 1) => ({
   severity,
@@ -421,11 +421,33 @@ describe("#2648: rungate ai-review-merge-drafts", () => {
     }
   });
 
+  // PR #2656 round 8: a payload that should have been written and was not
+  // would read as no payload, and a block that stands would read UNMEASURED.
+  // So an unwritable --out refuses, by name, through the one constant.
+  test("a payload it cannot write refuses through the same constant, naming the path", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-merge-drafts-"));
+    try {
+      writeFileSync(join(dir, "d1.json"), draft([finding("lib/a.ts", "One", "critical")]));
+      const out = join(dir, "missing-dir", "payload.json");
+      const r = run(["--out", out, join(dir, "d1.json")]);
+      expect(r.status).toBe(MERGE_DRAFTS_REFUSED_EXIT);
+      expect(r.stderr).toContain(`could not write the payload to ${out}`);
+      expect(r.stderr, "an uncaught throw, not a refusal").not.toMatch(/^\s+at /m);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the usage names every planned path, written or not, as the plan", () => {
+    expect(run([]).stderr).toContain("every planned draft path, written or not");
+  });
+
   test("a call it cannot read refuses through its one exit constant", () => {
-    expect(run([]).status).toBe(MERGE_DRAFTS_USAGE_EXIT);
-    expect(run(["--out", "x.json"]).status).toBe(MERGE_DRAFTS_USAGE_EXIT);
+    expect(run([]).status).toBe(MERGE_DRAFTS_REFUSED_EXIT);
+    expect(run(["--out", "x.json"]).status).toBe(MERGE_DRAFTS_REFUSED_EXIT);
     const source = readFileSync(SCRIPT, "utf-8");
-    expect(source.split("MERGE_DRAFTS_USAGE_EXIT = ").length - 1, "the constant is declared more than once").toBe(1);
+    expect(source.split("MERGE_DRAFTS_REFUSED_EXIT = ").length - 1, "the constant is declared more than once").toBe(1);
+    expect(source, "a write that can throw out of main").not.toMatch(/^\s*if \(merged\.payload !== null\) writeFileSync/m);
     expect(source, "a refusal inlines its own literal").not.toMatch(/return [1-9];|process\.exit\([1-9]\)/);
   });
 });
