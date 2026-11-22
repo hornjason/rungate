@@ -80,10 +80,15 @@ added. CRC-M18 is retired with the trial that proved it.
    reviewer's byte budget is still reviewed, with coverage stated as "n of m
    files read". The byte budget belonged to the trial, which pasted the diff
    into its prompt. The AI review reads files itself and has no such
-   ceiling. The helpers kept for it — `scripts/review-diff-subject.ts`,
-   `scripts/read-review-execution.ts`, `lib/review-execution-reading.ts` and
-   their tests — are deleted with it. If a measured miss on a large diff
-   turns up, it is a new criterion with its own evidence.
+   ceiling. The diff-budget script kept for it, `scripts/review-diff-subject.ts`,
+   is deleted with it. If a measured miss on a large diff turns up, it is a
+   new criterion with its own evidence.
+
+   **The reading module stays.** `lib/review-execution-reading.ts` and
+   `scripts/read-review-execution.ts` were kept for CRC-M18, but CRC-M13 (open)
+   needs them too: it is met when the required reviewer reports the tool-call
+   census that module computes. Only the coverage statement, "n of m files
+   read", goes with CRC-M18.
 
 ## Not decided here
 
@@ -109,7 +114,7 @@ Ids are allocated when they are written.
 - Each AI review round is three separate reviewer invocations, and the round's findings are their union with duplicates removed; no finding is dropped for being raised by one run.
 - The generated AI review passes the job's own token to the review action, so a consumer runs it without installing the Claude GitHub App.
 - `docs/guides/AI-REVIEW.md` states every credential the generated job resolves, who pays for each, the per-pull-request cost on the default model, and that a tree with no credential spends nothing.
-- CRC-M18 is retired, and the diff-budget helpers it named are deleted.
+- CRC-M18 is retired, and the diff-budget script it named is deleted. The reading module CRC-M13 needs is kept.
 
 ## Decomposition
 
@@ -131,10 +136,10 @@ not exist.
 4. **The consumer AI review guide.** `docs/guides/AI-REVIEW.md`,
    `docs/guides/HOW-WORK-FLOWS.md`, `test/agents-md-refs.test.ts`.
    Blocked by rows 1 to 3, so it states what shipped.
-5. **CRC-M18 and its helpers retired.** `scripts/review-diff-subject.ts`,
-   `scripts/read-review-execution.ts`, `lib/review-execution-reading.ts`,
-   `test/review-diff-subject.test.ts`, `test/review-execution-reading.test.ts`,
-   `.claude/spec-write-opaque-ratchet.json` (two entries name the diff script),
-   and the comments in `lib/scaffold/ai-review-step.ts` and
-   `test/ai-review-route-reading.test.ts` that cite the reading module. Eight
-   files. The spec edit is Jason's. Blocked by #2627.
+5. **CRC-M18 and its diff-budget script retired.** `scripts/review-diff-subject.ts`,
+   `test/review-diff-subject.test.ts`, `.claude/spec-write-opaque-ratchet.json`
+   (two entries name the diff script), and the coverage-statement half of
+   `lib/review-execution-reading.ts` with its cases in
+   `test/review-execution-reading.test.ts` (AC-15 to AC-19). The census half,
+   which CRC-M13 needs, stays. Five files. The spec edit is Jason's. Blocked
+   by #2627.
