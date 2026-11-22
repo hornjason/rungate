@@ -467,7 +467,12 @@ const UNCLAIMED_RATCHET = 150;
 // at most 35% above the measured peak, a reading of the config and the scaffold's
 // report that no registered pattern expresses; the `SC-2797` describe in
 // test/consumer-instruction-surface.test.ts names it (2026-11-21).
-const CLAIMED_UNBINDABLE = 198;
+// 199: SC-2798 (#2599) ticked by `sync-sc-status --only SC-2798` — the generated
+// conformity test refuses an over-budget consumer surface and an unreadable one as
+// UNMEASURED, a reading of a spawned conformity check that no registered pattern
+// expresses; the `SC-2798` describe in test/scaffold-conformity-surface.test.ts
+// names it (2026-11-21).
+const CLAIMED_UNBINDABLE = 199;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
