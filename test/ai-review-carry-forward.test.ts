@@ -1368,18 +1368,21 @@ describe("AC-5 (Increment 1c): the ledger snapshot is gone, writer and wiring to
     // These are the CONSTANT IDENTIFIERS as they are spelled in the
     // adjudicator's source, not the env names they resolve to; the
     // extractor reads source text, so that is what it can be wrong about.
-    // The third since #2257: the checkout the suppression gate reads cited
-    // lines from, because the generated step runs this from the payload's
-    // directory and the working directory is not the checkout.
-    // The fourth since #1357: the changed files' line counts, which the
+    // The third since #1357: the changed files' line counts, which the
     // changed-files step writes before the reviewer runs.
-    expect(read, "the adjudicator no longer reads exactly these four AI_REVIEW_* variables")
+    expect(read, "the adjudicator no longer reads exactly these three AI_REVIEW_* variables itself")
       .toEqual([
         "AI_REVIEW_BALLOT_DIR_ENV",
-        "AI_REVIEW_CHECKOUT_ROOT_VAR",
         "AI_REVIEW_THREADS_PATH_VAR",
         "AI_REVIEW_LINE_COUNTS_PATH_VAR",
       ]);
+    // The fourth since #2257: the checkout the suppression gate reads cited
+    // lines from, because the generated step runs this outside the checkout.
+    // Since #2669 it is read through `suppressionCheckoutRoot()`, the one
+    // function the threads poster reads it through too, so it is asserted by
+    // that call rather than by a `process.env[...]` in this file.
+    expect(script.includes("suppressionCheckoutRoot()"), "the adjudicator no longer reads the checkout it is told")
+      .toBe(true);
     expect(script, "the adjudicator imports the snapshot variable it never reads")
       .not.toContain(AI_REVIEW_LEDGER_SNAPSHOT_PATH_VAR);
   });

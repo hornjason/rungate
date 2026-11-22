@@ -92,11 +92,10 @@
  * `specs/CODE-REVIEW-CONVERGENCE-SPEC.md`.
  */
 import { aiReviewJuryGate } from "../lib/ai-review-jury";
-import { productionSuppression } from "../lib/ai-review-suppression";
+import { productionSuppression, suppressionCheckoutRoot } from "../lib/ai-review-suppression";
 import { main, readAiReviewLineCounts } from "../lib/scaffold/ai-review-findings";
 import {
   AI_REVIEW_BALLOT_DIR_ENV,
-  AI_REVIEW_CHECKOUT_ROOT_VAR,
   AI_REVIEW_LINE_COUNTS_PATH_VAR,
   AI_REVIEW_THREADS_PATH_VAR,
 } from "../lib/scaffold/ai-review-step";
@@ -110,11 +109,11 @@ const jury =
 // Assembled in `lib/`, not here. This command and `ai-review-threads.ts` must
 // form the SAME gate from the same file, and two hand-written literals is how
 // `anchorOccurrences` reached one of them and not the other (#1861 round 4).
-// #2257: the checkout by name. The generated step runs this from the payload's
-// directory on purpose, so the working directory is not the checkout; it is
-// the fallback only for a step generated before the variable was set.
-const checkoutRoot = process.env[AI_REVIEW_CHECKOUT_ROOT_VAR];
-const root = checkoutRoot !== undefined && checkoutRoot !== "" ? checkoutRoot : process.cwd();
+// #2257: the checkout by name. The generated step runs this outside the
+// checkout on purpose, so the working directory is not the checkout; it is
+// the fallback only for a step generated before the variable was set. Resolved
+// in `lib/`, as the poster resolves it (#2669).
+const root = suppressionCheckoutRoot();
 // #1883: `linesOf` reads the same checkout, so a finding's population is counted by its search.
 // CRC-N7 (#1818): `populationOwed` reads the same thread list.
 const { gate: suppress, linesOf: citedLines, populationOwed } = productionSuppression(process.env[AI_REVIEW_THREADS_PATH_VAR], root);
