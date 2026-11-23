@@ -174,6 +174,7 @@ describe("#2719 review round 3", () => {
     expect(await decide('gh "issue" edit 2655 --body x')).toContain("#2655");
     expect(await decide('"gh" issue edit 2655 --body new')).toContain("#2655");
     expect(await decide("gh iss\\ue edit 2655 --body new")).toContain("#2655");
+    expect(await decide("g\\h issue ed\\it 2655 --body new")).toContain("#2655");
   });
 
   test("an attached value that starts with a dash, or with =, is the flag's value", async () => {
