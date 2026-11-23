@@ -3334,8 +3334,12 @@ export function reviewDepthConfig(ci: unknown): ReviewDepthDecision {
   };
 }
 
-/** Standard, for a caller composing the args with no config to read. */
-export const AI_REVIEW_STANDARD_DEPTH: ReviewDepthDecision = reviewDepthConfig({ reviewDepth: "standard" });
+/**
+ * The reading of a config that sets no depth: Standard, with the note that
+ * says so. The default for a caller composing the step with no config to read,
+ * so a direct call and a scaffold of such a config emit the same text.
+ */
+export const AI_REVIEW_UNSET_DEPTH: ReviewDepthDecision = reviewDepthConfig(undefined);
 
 /**
  * The `claude_args` line, with the model the consumer's config resolved.
@@ -3351,7 +3355,7 @@ export const AI_REVIEW_STANDARD_DEPTH: ReviewDepthDecision = reviewDepthConfig({
  * would let the action's own default float, which is `AI_REVIEW_MODEL`'s
  * whole subject.
  */
-export function aiReviewClaudeArgs(vertex: VertexCiDecision, depth: ReviewDepthDecision = AI_REVIEW_STANDARD_DEPTH): string {
+export function aiReviewClaudeArgs(vertex: VertexCiDecision, depth: ReviewDepthDecision = AI_REVIEW_UNSET_DEPTH): string {
   const model = vertex.config?.model ?? AI_REVIEW_MODEL;
   return (
     `--model ${model} --max-turns ${depth.maxTurns} ` +
@@ -11917,7 +11921,7 @@ export function buildReviewRunStep(
   refs: AiReviewActionRefs,
   version: string,
   indent = "      ",
-  depth: ReviewDepthDecision = AI_REVIEW_STANDARD_DEPTH,
+  depth: ReviewDepthDecision = AI_REVIEW_UNSET_DEPTH,
 ): string {
   const modeIs = (mode: string) =>
     `steps.${AI_REVIEW_AUTH_STEP_ID}.outputs.mode == '${mode}'`;
