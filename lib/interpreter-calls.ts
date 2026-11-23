@@ -73,19 +73,27 @@ function isNode(v: unknown): v is AstNode {
   return typeof v === 'object' && v !== null && typeof (v as AstNode).type === 'string';
 }
 
-/** Every node with its parent, in source order. */
+/**
+ * Every node with its parent, in source order. An explicit stack, not
+ * recursion: acorn builds a left-deep tree for a long `+` chain without
+ * recursing per term, and a recursive walk of 50,000 terms overflowed the
+ * call stack, so the guard refused a read-only command (#2702 review).
+ */
 function walk(root: AstNode): Array<{ node: AstNode; parent: AstNode | null }> {
   const out: Array<{ node: AstNode; parent: AstNode | null }> = [];
-  const visit = (node: AstNode, parent: AstNode | null): void => {
-    out.push({ node, parent });
-    for (const [key, value] of Object.entries(node)) {
+  const stack: Array<{ node: AstNode; parent: AstNode | null }> = [{ node: root, parent: null }];
+  while (stack.length > 0) {
+    const entry = stack.pop()!;
+    out.push(entry);
+    const children: AstNode[] = [];
+    for (const [key, value] of Object.entries(entry.node)) {
       if (key === 'type' || key === 'start' || key === 'end') continue;
       if (Array.isArray(value)) {
-        for (const v of value) if (isNode(v)) visit(v, node);
-      } else if (isNode(value)) visit(value, node);
+        for (const v of value) if (isNode(v)) children.push(v);
+      } else if (isNode(value)) children.push(value);
     }
-  };
-  visit(root, null);
+    for (let i = children.length - 1; i >= 0; i--) stack.push({ node: children[i], parent: entry.node });
+  }
   return out;
 }
 

@@ -75,6 +75,16 @@ describe("#2702: readJsCalls", () => {
     }
   });
 
+  test("a 50,000-term + chain is read, not a stack overflow (#2702 review)", () => {
+    // A recursive walk threw RangeError here, and the guard's hook refused
+    // this read-only command as one it could not evaluate.
+    const body = `const d = '/x/state.json'; console.log(d); const z = ${Array(50_000).fill("1").join(" + ")};`;
+    const reading = readJsCalls(body);
+    expect(reading).not.toBeNull();
+    const i = at(body, "state.json");
+    expect(reading!.boundIdentifier(i, i + "state.json".length)).toBe("d");
+  });
+
   test("references find a name's uses, not its declaration or a property spelled the same", () => {
     const body = "const dst = '/b/x'; o.dst = 1; copy(src, dst); ({ dst: 2 })";
     const refs = readJsCalls(body)!.references("dst");
