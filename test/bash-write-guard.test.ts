@@ -5184,6 +5184,7 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["another shutil function imported as copy", PY(`import os, shutil\nfrom shutil import move as copy\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', os.environ['RG'])`)],
     ["a def open", PY(`import os, io\ndef open(p, m): return io.open(os.environ['RG'], m)\nopen('${T}', 'w').write('{}')`)],
     ["a method on an object of the body's own", PY(`import os, shutil\nclass F:\n    def copy(self, a, b): shutil.copy(a, os.environ['RG'])\nF().copy('/tmp/rg2705/x', '${T}')`)],
+    ["a method on a named object of the body's own", PY(`import os, shutil\nclass F:\n    def copy(self, a, b): shutil.copy(a, os.environ['RG'])\nf = F()\nf.copy('/tmp/rg2705/x', '${T}')`)],
     ["a JavaScript function writeFileSync", JS(`function writeFileSync(p, d) { require('fs').writeFileSync(process.env.RG, d) }; writeFileSync('${T}', '{}')`)],
     ["a JavaScript const writeFileSync", JS(`const writeFileSync = (p, d) => require('fs').writeFileSync(process.env.RG, d); writeFileSync('${T}', '{}')`)],
     ["writeFileSync destructured from another module", JS(`const { writeFileSync } = require('./fake'); writeFileSync('${T}', '{}')`)],
@@ -5192,8 +5193,10 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
   });
   test.each([
     ["shutil.copy", PY(`import shutil\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
-    ["copy imported from shutil", PY(`from shutil import copy\ncopy('/tmp/rg2705/x', '${T}')`)],
-    ["copy imported from shutil among others", PY(`from shutil import (move, copy)\ncopy('/tmp/rg2705/x', '${T}')`)],
+    // Each control below also makes a recognised write (scratch to scratch), so
+    // it reaches the exemption question rather than passing as no write.
+    ["copy imported from shutil", PY(`import shutil\nfrom shutil import copy\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
+    ["copy imported from shutil among others", PY(`import shutil\nfrom shutil import (move, copy)\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
     ["the builtin open", PY(`open('${T}', 'w').write('{}')`)],
     ["io.open", PY(`import io\nio.open('${T}', 'w').write('{}')`)],
     ["fs.writeFileSync", JS(`const fs = require('fs'); fs.writeFileSync('${T}', '{}')`)],
@@ -5202,7 +5205,7 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["writeFileSync imported from node:fs", JS(`import { writeFileSync } from 'node:fs'; writeFileSync('${T}', '{}')`)],
     // Only code names the function: a string, or another object's attribute
     // of the same name, is neither a call nor a binding.
-    ["a string naming copy beside the import", PY(`from shutil import copy\ncopy('/tmp/rg2705/x', '${T}'); print('copy done')`)],
+    ["a string naming copy beside the import", PY(`import shutil\nfrom shutil import copy\ncopy('/tmp/rg2705/x', '${T}'); print('copy done'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
     ["an attribute named copy beside the import", PY(`import shutil\nfrom shutil import copy\nalias = shutil.copy\ncopy('/tmp/rg2705/x', '${T}')`)],
   ])("CONTROL: %s onto a scratch path stays exempt", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
