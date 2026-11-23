@@ -1732,99 +1732,18 @@ function coverageRecord(successCriteria, acs, deferrals) {
 }
 // ──── AC-COVERAGE-END ────
 
-// ──── PHASE2-DECOMPOSITION-START ────
-/**
- * Inline copy of lib/phase2-decomposition.ts (#79). ship.js cannot import
- * (#69), so this block and the library are held together by a shared matrix
- * in test/phase2-decomposition.test.ts — see test/decomposition-waves.test.ts
- * for the same arrangement.
- *
- * The defect: the decompose step returns a structured `{number, phase,
- * acIds}` list and separately writes each sub-issue's prose body, and nothing
- * compared the two. On #70 they disagreed completely and the disagreement
- * deleted the defect that caused the bug report.
- */
-function acsForGroup(acs, group) {
-  const ids = new Set(Array.isArray(group && group.acIds) ? group.acIds : [])
-  if (ids.size === 0) return []
-  return (Array.isArray(acs) ? acs : []).filter(ac => {
-    if (ids.has(ac.id)) return true
-    if (!ac.specElement) return false
-    return ac.specElement.split(',').some(s => ids.has(s.trim()))
-  })
-}
-
-function shellSingleQuote(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`
-}
-
-function acListBlock(acs) {
-  return acs.map(ac => `- [ ] ${ac.id}: ${ac.statement}`).join('\n')
-}
-
-function phase2AcsCommand(harnessRoot, workDir, acs) {
-  const payload = JSON.stringify(acs.map(a => ({ id: a.id, statement: a.statement, specElement: a.specElement })))
-  return `bun --cwd ${shellSingleQuote(harnessRoot)} -e 'require("fs").writeFileSync(process.argv[1], process.argv[2])' ` +
-    `${workDir}/phase2-acs.json ${shellSingleQuote(payload)}`
-}
-
-function decompositionRefusal(allAcs, phase1AcIds, subIssues) {
-  const acs = Array.isArray(allAcs) ? allAcs : []
-  const phase1 = Array.isArray(phase1AcIds) ? phase1AcIds : []
-  const groups = Array.isArray(subIssues) ? subIssues : []
-  const out = []
-
-  if (acs.length === 0) return ['decomposition was asked for with no ACs to decompose']
-
-  const known = new Set()
-  for (const ac of acs) {
-    if (ac && ac.id) known.add(ac.id)
-    if (ac && ac.specElement) for (const s of ac.specElement.split(',')) known.add(s.trim())
-  }
-
-  if (phase1.length === 0) out.push('no AC was kept for Phase 1 — the whole issue was deferred')
-  for (const id of phase1) {
-    if (!known.has(id)) out.push(`Phase 1 keeps ${id}, which discovery never produced`)
-  }
-
-  const claimedBy = new Map()
-  for (let i = 0; i < groups.length; i++) {
-    const g = groups[i]
-    const label = g && g.number ? `#${g.number}` : ((g && g.phase) || `group ${i + 1}`)
-    const ids = Array.isArray(g && g.acIds) ? g.acIds : []
-    if (ids.length === 0) out.push(`${label} was created carrying no ACs`)
-    for (const id of ids) {
-      if (!known.has(id)) out.push(`${label} claims ${id}, which discovery never produced`)
-      claimedBy.set(id, [...(claimedBy.get(id) || []), label])
-    }
-  }
-
-  const phase1Set = new Set(phase1)
-  for (const [id, labels] of claimedBy) {
-    if (phase1Set.has(id)) {
-      out.push(`${id} is in Phase 1 AND deferred to ${labels.join(' and ')} — a deferral that duplicates shipped work`)
-    }
-    if (labels.length > 1) {
-      out.push(`${id} is claimed by ${labels.join(' and ')} — two phases cannot both own one AC`)
-    }
-  }
-
-  for (const ac of acs) {
-    const ids = [ac.id, ...(ac.specElement ? ac.specElement.split(',').map(s => s.trim()) : [])].filter(Boolean)
-    const placed = ids.some(id => phase1Set.has(id) || claimedBy.has(id))
-    if (!placed) out.push(`${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`)
-  }
-
-  return out
-}
-// ──── PHASE2-DECOMPOSITION-END ────
+// acsForGroup, shellSingleQuote, acListBlock, phase2AcsCommand and
+// decompositionRefusal (#79) are lib/phase2-decomposition.ts's own code,
+// carried into workflows/ship.run.js by the launch bundle (#2693, SC-2775
+// wave 6a). ship.js holds no copy.
 
 // ──── AC-PAYLOAD-TRANSPORT-START ────
 /**
  * Inline copy of lib/evidence-command-transport.ts (#614). ship.js cannot
  * import (#69), so this block and the library are held together by a shared
- * matrix in test/evidence-command-roundtrip.test.ts — the same arrangement as
- * the deny-list block above and as test/phase2-decomposition.test.ts.
+ * matrix in test/evidence-command-roundtrip.test.ts. The deny-list and phase-2
+ * blocks that once shared this arrangement are now bundled from lib (#2404,
+ * #2693); this one is next (SC-2775).
  *
  * The defect: the AC payload was interpolated into the setup agent's
  * DOUBLE-QUOTED `bun -e "…"` shell string. A shell expands `$1` to the empty
@@ -1836,9 +1755,9 @@ function decompositionRefusal(allAcs, phase1AcIds, subIssues) {
  * The payload now travels as a SINGLE-QUOTED argument after the program, and
  * the program reads it out of `process.argv` — a file in ${WORK_DIR} would be
  * archived by `beginRun`'s sweep (#288) before the read, which is how the
- * first draft of this failed. `shellSingleQuote` lives in the phase-2 block
- * above; both blocks are loaded together by the matrix so the extracted copy
- * is the one that runs here.
+ * first draft of this failed. `shellSingleQuote` is lib/phase2-decomposition.ts's,
+ * carried by the launch bundle (#2693); the matrix loads that bundle with
+ * this block, so the extracted copy is the one that runs here.
  */
 const AC_PAYLOAD_ARGV_INDEX = 1
 

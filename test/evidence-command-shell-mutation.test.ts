@@ -44,6 +44,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { readJunitCheckNames } from "../lib/junit-checks";
+import { phase2DecompositionBundle } from "./helpers/ship-block";
 
 const REPO = join(import.meta.dir, "..");
 const SHIP = join(REPO, "workflows", "ship.js");
@@ -116,6 +117,9 @@ const SHIP = process.env.SHIP_UNDER_TEST;
 const REPO = process.env.REPO_UNDER_TEST;
 if (!SHIP) throw new Error("SHIP_UNDER_TEST is unset — this suite has nothing to observe");
 if (!REPO) throw new Error("REPO_UNDER_TEST is unset — there is no orchestrator to call");
+// The transport block's shellSingleQuote, as the launch file carries it (#2693).
+const PHASE2_BUNDLE = process.env.PHASE2_BUNDLE_UNDER_TEST;
+if (!PHASE2_BUNDLE) throw new Error("PHASE2_BUNDLE_UNDER_TEST is unset — the transport block has no quoting to run");
 const SRC = readFileSync(SHIP, "utf-8");
 
 function block(start, end) {
@@ -126,7 +130,7 @@ function block(start, end) {
 }
 
 const body =
-  block("// ──── PHASE2-DECOMPOSITION-START ────", "// ──── PHASE2-DECOMPOSITION-END ────") +
+  PHASE2_BUNDLE +
   "\n" +
   block("// ──── AC-PAYLOAD-TRANSPORT-START ────", "// ──── AC-PAYLOAD-TRANSPORT-END ────");
 
@@ -210,7 +214,12 @@ function spawnSuite(suiteFile: string, shipUnderTest: string, reportFile: string
       cwd: REPO,
       encoding: "utf-8",
       timeout: 600000,
-      env: { ...process.env, SHIP_UNDER_TEST: shipUnderTest, REPO_UNDER_TEST: REPO },
+      env: {
+        ...process.env,
+        SHIP_UNDER_TEST: shipUnderTest,
+        REPO_UNDER_TEST: REPO,
+        PHASE2_BUNDLE_UNDER_TEST: phase2DecompositionBundle(),
+      },
     },
   );
   const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
@@ -262,14 +271,12 @@ describe("#614 SC-2056: the round-trip cases go red when the defect is put back"
 
       const block = (src: string) =>
         src.slice(src.indexOf(TRANSPORT_START) + TRANSPORT_START.length, src.indexOf(TRANSPORT_END));
-      const phase2 = (src: string) =>
-        src.slice(
-          src.indexOf("// ──── PHASE2-DECOMPOSITION-START ────") + "// ──── PHASE2-DECOMPOSITION-START ────".length,
-          src.indexOf("// ──── PHASE2-DECOMPOSITION-END ────"),
-        );
+      // The quoting is lib/phase2-decomposition.ts's, as the launch file
+      // carries it (#2693); only the transport block differs between the two.
+      const phase2 = phase2DecompositionBundle();
       const load = (src: string) =>
         new Function(
-          `${phase2(src)}\n${block(src)}\nreturn { acPayloadShellArgument, acPayloadReadExpression }`,
+          `${phase2}\n${block(src)}\nreturn { acPayloadShellArgument, acPayloadReadExpression }`,
         )() as { acPayloadShellArgument: (a: unknown) => string; acPayloadReadExpression: (a?: unknown) => string };
 
       const acs = [{

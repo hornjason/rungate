@@ -112,8 +112,9 @@ export const PATH_FLAGS = ["-C", "--cwd", "--prefix", "--project"] as const;
  * cannot run: `quote` is a PARAMETER of `suiteCaptureCommand`
  * (`test/recorder-command-executed.test.ts`), `q` is a local arrow in the
  * rook-review-scope block (`test/security-verdict-blocks.test.ts`), and
- * `shellSingleQuote` is declared inside the phase-2 decomposition block
- * (`test/evidence-command-roundtrip.test.ts`). See the gap declared above:
+ * `shellSingleQuote` is lib/phase2-decomposition.ts's, which the launch
+ * bundle carries for the evidence-command transport block
+ * (`test/evidence-command-roundtrip.test.ts`, #2693). See the gap declared above:
  * this is a name list, not a proof that the name quotes.
  */
 export const QUOTER_NAMES = ["shellQuote", "shellSingleQuote", "quote", "q"] as const;
