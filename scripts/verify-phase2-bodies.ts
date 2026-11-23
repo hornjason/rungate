@@ -92,9 +92,9 @@ export async function verifyPhase2(plan: Phase2Plan, readBody: BodyReader, cap: 
   let checked = 0;
   for (const group of subIssues) {
     if (typeof group?.number !== "number") {
-      // A group with no number is a sub-issue that was never created. Silence
-      // here would be the #79 defect with the body omitted entirely.
-      violations.push(`${group?.phase || "a group"} has no issue number — it was never created`);
+      // A group with no number is a sub-issue that was never created, and
+      // there is no body to read back. decompositionRefusal names it, for
+      // ship.js's judgment as well as this one (#2716 review round 5).
       continue;
     }
     let body: string | null;

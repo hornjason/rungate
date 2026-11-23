@@ -875,31 +875,36 @@ function decompositionRefusal(allAcs, phase1AcIds, subIssues, keptAcs) {
             out.push(`Phase 1 keeps ${id}, which discovery never produced`);
     }
     const claimedBy = new Map();
+    const labels = [];
     for (const [i, g] of groups.entries()) {
         const label = g?.number ? `#${g.number}` : (g?.phase || `group ${i + 1}`);
+        labels.push(label);
         const ids = Array.isArray(g?.acIds) ? g.acIds : [];
+        if (typeof g?.number !== "number")
+            out.push(`${label} has no issue number — it was never created, so the ACs it claims are filed nowhere`);
         if (ids.length === 0)
             out.push(`${label} was created carrying no ACs`);
         for (const id of ids) {
             if (!known.has(id))
                 out.push(`${label} claims ${id}, which discovery never produced`);
-            claimedBy.set(id, [...(claimedBy.get(id) ?? []), label]);
+            claimedBy.set(id, [...(claimedBy.get(id) ?? []), i]);
         }
     }
+    const named = (owners) => [...new Set(owners)].map(i => labels[i]).join(" and ");
     const acIds = (ac) => [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s) => s.trim()) : [])].filter(Boolean);
     const phase1Set = new Set(phase1);
     const keptIds = new Set(keptAcs.map(ac => ac?.id));
     const isKept = (ac) => keptIds.has(ac.id);
-    for (const [id, labels] of claimedBy) {
+    for (const [id, owners] of claimedBy) {
         const inPhase1 = acs.some(ac => isKept(ac) && acIds(ac).includes(id));
         if (inPhase1) {
-            out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
+            out.push(`${id} is in Phase 1 AND deferred to ${named(owners)} — a deferral that duplicates shipped work`);
         }
     }
     for (const ac of acs) {
         const owners = [...new Set(acIds(ac).flatMap(id => claimedBy.get(id) ?? []))];
         if (owners.length > 1) {
-            out.push(`${ac.id} is claimed by ${owners.join(" and ")} — two phases cannot both own one AC`);
+            out.push(`${ac.id} is claimed by ${named(owners)} — two phases cannot both own one AC`);
         }
     }
     for (const ac of acs) {
@@ -2491,10 +2496,16 @@ ${acListBlock(discovery.acs)}
      --acs ${WORK_DIR}/phase2-acs.json --grouping ${WORK_DIR}/phase2-grouping.json --cap ${MAX_ACS_PER_ISSUE}
 
    It reads each sub-issue back FROM GITHUB and compares its
-   "## Success Criteria" section against the statements from step 0. If it
-   exits non-zero, FIX THE ISSUE BODY with
-   \`bun scripts/github-op.ts issue-update --repo ${ISSUE_REPO} --issue N --body-file …\`
-   and run it again. Do not report success while it is failing, and do not
+   "## Success Criteria" section against the statements from step 0, and it
+   judges the split. If it exits non-zero, fix what it names, then run it
+   again:
+   - a body that does not carry its ACs: FIX THE ISSUE BODY with
+     \`bun scripts/github-op.ts issue-update --repo ${ISSUE_REPO} --issue N --body-file …\`
+   - a Phase 1 over ${MAX_ACS_PER_ISSUE} ACs, an AC kept AND deferred, an AC placed
+     nowhere, or a group with no issue number: FIX THE GROUPING. Move ACs
+     between phase1AcIds and the sub-issues, create or update the sub-issues
+     to match, and rewrite ${WORK_DIR}/phase2-grouping.json.
+   Do not report success while it is failing, and do not
    edit ${WORK_DIR}/phase2-acs.json to make it pass — that file is the
    reference, and changing it is changing an acceptance criterion nobody
    reviewed.

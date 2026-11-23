@@ -103,17 +103,27 @@ export function decompositionRefusal(
     if (!known.has(id)) out.push(`Phase 1 keeps ${id}, which discovery never produced`);
   }
 
-  /** Which groups claim each id — the shape both duplicate cases need. */
-  const claimedBy = new Map<string, string[]>();
+  /**
+   * Which groups claim each id, by position — the shape both duplicate cases
+   * need. By position, not label: two groups can share one (#2716 review
+   * round 5), and a set of labels counted them as one owner.
+   */
+  const claimedBy = new Map<string, number[]>();
+  const labels: string[] = [];
   for (const [i, g] of groups.entries()) {
     const label = g?.number ? `#${g.number}` : (g?.phase || `group ${i + 1}`);
+    labels.push(label);
     const ids = Array.isArray(g?.acIds) ? g.acIds : [];
+    // A group with no number was never created, so the ACs only it claims are
+    // filed nowhere (#2716 review round 5).
+    if (typeof g?.number !== "number") out.push(`${label} has no issue number — it was never created, so the ACs it claims are filed nowhere`);
     if (ids.length === 0) out.push(`${label} was created carrying no ACs`);
     for (const id of ids) {
       if (!known.has(id)) out.push(`${label} claims ${id}, which discovery never produced`);
-      claimedBy.set(id, [...(claimedBy.get(id) ?? []), label]);
+      claimedBy.set(id, [...(claimedBy.get(id) ?? []), i]);
     }
   }
+  const named = (owners: readonly number[]): string => [...new Set(owners)].map(i => labels[i]).join(" and ");
 
   // AC-3. The #70 failure mode exactly: a deferred AC that restates one
   // already being shipped. Flagged, never written.
@@ -125,10 +135,10 @@ export function decompositionRefusal(
   // reading one let a dropped AC count as kept (#2716 review).
   const keptIds = new Set(keptAcs.map(ac => ac?.id));
   const isKept = (ac: DecomposedAc): boolean => keptIds.has(ac.id);
-  for (const [id, labels] of claimedBy) {
+  for (const [id, owners] of claimedBy) {
     const inPhase1 = acs.some(ac => isKept(ac) && acIds(ac).includes(id));
     if (inPhase1) {
-      out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
+      out.push(`${id} is in Phase 1 AND deferred to ${named(owners)} — a deferral that duplicates shipped work`);
     }
   }
   // Two groups owning one AC, by any id it answers to: one group naming
@@ -136,7 +146,7 @@ export function decompositionRefusal(
   for (const ac of acs) {
     const owners = [...new Set(acIds(ac).flatMap(id => claimedBy.get(id) ?? []))];
     if (owners.length > 1) {
-      out.push(`${ac.id} is claimed by ${owners.join(" and ")} — two phases cannot both own one AC`);
+      out.push(`${ac.id} is claimed by ${named(owners)} — two phases cannot both own one AC`);
     }
   }
 

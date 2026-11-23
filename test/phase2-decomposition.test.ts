@@ -161,6 +161,21 @@ describe("SC-1484: the structured decomposition is refused when it loses or dupl
     expect(refuse(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["SC-484", "SC-485"] }])).toEqual([]);
   });
 
+  // #2716 review round 5: a group with no number was never created, so the
+  // ACs only it claims are filed nowhere, and the split read as sound.
+  test("a group with no issue number is refused: the ACs it claims are filed nowhere", () => {
+    const out = refuse(ALL, ["AC-1", "AC-5"], [{ phase: "Phase 2", acIds: ["AC-7", "AC-8"] }]);
+    expect(out.join(" | ")).toContain("Phase 2 has no issue number — it was never created");
+  });
+
+  test("two groups with one label claiming one AC are two owners, not one", () => {
+    const out = refuse(ALL, ["AC-1", "AC-5"], [
+      { number: 75, acIds: ["AC-7"] },
+      { number: 75, acIds: ["AC-7", "AC-8"] },
+    ]);
+    expect(out.join(" | ")).toContain("AC-7 is claimed by #75 and #75");
+  });
+
   test("every problem is reported, not the first", () => {
     const out = refuse(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-5"] }]);
     expect(out.length, "a second round would discover what the first did not report").toBeGreaterThan(1);
@@ -412,6 +427,8 @@ describe("SC-1487: the launch file's bundled copy and the library agree", () => 
     expect(src).toContain("bun --cwd ${shellQuote(HARNESS_ROOT)} scripts/verify-phase2-bodies.ts --repo ${ISSUE_REPO}");
     expect(src, "the verifier is not told the run's cap (#2716 review round 4)")
       .toContain("--grouping ${WORK_DIR}/phase2-grouping.json --cap ${MAX_ACS_PER_ISSUE}");
+    // #2716 review round 5: a split refusal is cleared by the grouping, not the body.
+    expect(src, "step 6 tells the agent to fix only the body").toContain("FIX THE GROUPING");
     expect(src, "the structural refusal is not wired into the run").toContain("DECOMPOSITION_REFUSED");
   });
 
@@ -605,6 +622,14 @@ describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap
     const r = run(block, EIGHT, null);
     expect(r.proceeded).toBe(false);
     expect(r.discoveryRefusal?.why).toContain("returned no answer");
+  });
+
+  // #2716 review round 5, through the block as ship.js holds it.
+  test("a sub-issue with no number is refused: the ACs it claims were filed nowhere", () => {
+    const answer = { phase1AcIds: ids(1, 6), subIssues: [{ phase: "Phase 2", acIds: ["AC-7", "AC-8"] }] } as unknown as Answer;
+    const r = run(block, EIGHT, answer);
+    expect(r.proceeded).toBe(false);
+    expect(r.logs.join("\n")).toContain("has no issue number");
   });
 
   test("an AC the cap drops that a sub-issue carries is deferred to it, not refused as a duplicate", () => {

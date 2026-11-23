@@ -2833,10 +2833,16 @@ ${acListBlock(discovery.acs)}
      --acs ${WORK_DIR}/phase2-acs.json --grouping ${WORK_DIR}/phase2-grouping.json --cap ${MAX_ACS_PER_ISSUE}
 
    It reads each sub-issue back FROM GITHUB and compares its
-   "## Success Criteria" section against the statements from step 0. If it
-   exits non-zero, FIX THE ISSUE BODY with
-   \`bun scripts/github-op.ts issue-update --repo ${ISSUE_REPO} --issue N --body-file …\`
-   and run it again. Do not report success while it is failing, and do not
+   "## Success Criteria" section against the statements from step 0, and it
+   judges the split. If it exits non-zero, fix what it names, then run it
+   again:
+   - a body that does not carry its ACs: FIX THE ISSUE BODY with
+     \`bun scripts/github-op.ts issue-update --repo ${ISSUE_REPO} --issue N --body-file …\`
+   - a Phase 1 over ${MAX_ACS_PER_ISSUE} ACs, an AC kept AND deferred, an AC placed
+     nowhere, or a group with no issue number: FIX THE GROUPING. Move ACs
+     between phase1AcIds and the sub-issues, create or update the sub-issues
+     to match, and rewrite ${WORK_DIR}/phase2-grouping.json.
+   Do not report success while it is failing, and do not
    edit ${WORK_DIR}/phase2-acs.json to make it pass — that file is the
    reference, and changing it is changing an acceptance criterion nobody
    reviewed.
