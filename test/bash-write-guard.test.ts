@@ -5200,6 +5200,10 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["require('fs').writeFileSync", JS(`require('fs').writeFileSync('${T}', '{}')`)],
     ["writeFileSync destructured from fs", JS(`const { writeFileSync } = require('fs'); writeFileSync('${T}', '{}')`)],
     ["writeFileSync imported from node:fs", JS(`import { writeFileSync } from 'node:fs'; writeFileSync('${T}', '{}')`)],
+    // Only code names the function: a string, or another object's attribute
+    // of the same name, is neither a call nor a binding.
+    ["a string naming copy beside the import", PY(`from shutil import copy\ncopy('/tmp/rg2705/x', '${T}'); print('copy done')`)],
+    ["an attribute named copy beside the import", PY(`import shutil\nfrom shutil import copy\nalias = shutil.copy\ncopy('/tmp/rg2705/x', '${T}')`)],
   ])("CONTROL: %s onto a scratch path stays exempt", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
