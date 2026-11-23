@@ -2416,66 +2416,119 @@ function writesNear(body: string, protectedName: string): boolean {
     // `shutil.copy(SRC, DST)` the verb comes before SRC, so a SRC longer than
     // the window put DST's name out of its reach, and a copy onto the artifact
     // spelled in full was allowed; a realpath'd macOS $TMPDIR is long enough.
-    // A call is read with quotes and brackets tracked, so one formatted over
-    // several lines, or holding a `;` in a path string, is still one call
-    // (security review of the first draft). A name that is no call's argument
-    // (text in a string assigned to a variable, a docblock being edited) gets
-    // the window alone, as before.
+    // A name that is no call's argument (text in a string assigned to a
+    // variable, a docblock being edited) gets the window alone, as before.
     if (enclosingCalls(body, at).some(call => WRITE_INTENT.test(call))) return true;
   }
   return false;
 }
 
-/**
- * The text of every call whose argument list holds offset `at`, innermost
- * first: callee through matching `)`. Brackets are tracked outside quotes,
- * and a call that never closes runs to the end of the body, which reads more
- * as the call: the direction that refuses rather than allows.
- */
-function enclosingCalls(body: string, at: number): string[] {
-  const open: { at: number; ch: string }[] = [];
+/** Per offset: 0 code, 1 inside a quote, 2 inside a `#` comment; and whether every quote closed. */
+function codeMask(body: string): { mask: Uint8Array; balanced: boolean } {
+  const mask = new Uint8Array(body.length);
   let quote: string | null = null;
-  for (let i = 0; i < at; i++) {
+  for (let i = 0; i < body.length; i++) {
     const ch = body[i];
     if (quote !== null) {
-      if (ch === '\\') i++;
+      mask[i] = 1;
+      if (ch === '\\' && i + 1 < body.length) mask[++i] = 1;
       else if (ch === quote) quote = null;
       continue;
     }
-    if (ch === "'" || ch === '"' || ch === '`') quote = ch;
-    else if (ch === '(' || ch === '[' || ch === '{') open.push({ at: i, ch });
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      mask[i] = 1;
+    } else if (ch === '#') {
+      // A comment runs to the end of the line. An apostrophe in one ("don't")
+      // would otherwise open a quote that swallows the brackets after it.
+      while (i < body.length && body[i] !== '\n') mask[i++] = 2;
+    }
+  }
+  return { mask, balanced: quote === null };
+}
+
+/**
+ * The text of every call whose argument list holds offset `at`, innermost
+ * first: callee, argument list, and any method chain after it (`.f(…).g(…)`).
+ * Read over code only, with quotes and `#` comments masked, so a call over
+ * several lines, a `;` in a path string, or an apostrophe in a comment does
+ * not split or hide it. A callee may be computed (`fs['copyFileSync'](…)`,
+ * `(shutil.copy)(…)`). A body whose quotes never close cannot be read, and
+ * is returned whole: the direction that refuses rather than allows (security
+ * review of #1407's first two drafts).
+ */
+function enclosingCalls(body: string, at: number): string[] {
+  const { mask, balanced } = codeMask(body);
+  if (!balanced) return [body];
+  const open: { at: number; ch: string }[] = [];
+  for (let i = 0; i < at; i++) {
+    if (mask[i] !== 0) continue;
+    const ch = body[i];
+    if (ch === '(' || ch === '[' || ch === '{') open.push({ at: i, ch });
     else if ((ch === ')' || ch === ']' || ch === '}') && open.length > 0) open.pop();
   }
   const calls: string[] = [];
   for (let k = open.length - 1; k >= 0; k--) {
     if (open[k].ch !== '(') continue;
     const paren = open[k].at;
-    const callee = /[\w.$]+\s*$/.exec(body.slice(Math.max(0, paren - 80), paren))?.[0] ?? '';
-    if (callee.trim() === '') continue;
-    calls.push(body.slice(paren - callee.length, closingParen(body, paren)));
+    const start = calleeStart(body, mask, paren);
+    if (start === paren) continue;
+    calls.push(body.slice(start, chainEnd(body, mask, closingParen(body, mask, paren))));
   }
   return calls;
 }
 
-/** The offset just past the `)` matching the `(` at `paren`, or the body's end. */
-function closingParen(body: string, paren: number): number {
+/** Where the callee before the `(` at `paren` starts: identifiers, dots, and bracketed groups. */
+function calleeStart(body: string, mask: Uint8Array, paren: number): number {
+  let j = paren - 1;
+  while (j >= 0 && (body[j] === ' ' || body[j] === '\t')) j--;
+  let start = j + 1;
+  while (j >= 0) {
+    const ch = body[j];
+    if (mask[j] === 0 && (ch === ']' || ch === ')')) {
+      const opener = ch === ']' ? '[' : '(';
+      let depth = 0;
+      while (j >= 0) {
+        if (mask[j] === 0 && body[j] === ch) depth++;
+        else if (mask[j] === 0 && body[j] === opener && --depth === 0) break;
+        j--;
+      }
+      if (j < 0) return start;
+      start = j;
+      j--;
+    } else if (/[\w.$]/.test(ch)) {
+      start = j;
+      j--;
+    } else break;
+  }
+  return start;
+}
+
+/** The offset just past the `)` matching the `(` at `paren`, over code only, or the body's end. */
+function closingParen(body: string, mask: Uint8Array, paren: number): number {
   let depth = 0;
-  let quote: string | null = null;
   for (let i = paren; i < body.length; i++) {
+    if (mask[i] !== 0) continue;
     const ch = body[i];
-    if (quote !== null) {
-      if (ch === '\\') i++;
-      else if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === "'" || ch === '"' || ch === '`') quote = ch;
-    else if (ch === '(' || ch === '[' || ch === '{') depth++;
-    else if (ch === ')' || ch === ']' || ch === '}') {
-      depth--;
-      if (depth === 0) return i + 1;
-    }
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if ((ch === ')' || ch === ']' || ch === '}') && --depth === 0) return i + 1;
   }
   return body.length;
+}
+
+/** Past any method chain starting at `from`: `.name`, optionally called, repeated. */
+function chainEnd(body: string, mask: Uint8Array, from: number): number {
+  let i = from;
+  for (;;) {
+    let j = i;
+    while (j < body.length && (body[j] === ' ' || body[j] === '\t')) j++;
+    if (body[j] !== '.') return i;
+    j++;
+    while (j < body.length && /[\w$]/.test(body[j])) j++;
+    if (body[j] === '(') j = closingParen(body, mask, j);
+    if (j === i) return i;
+    i = j;
+  }
 }
 
 /**

@@ -4570,6 +4570,33 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
+  // Second security review: the call reading must not fail open where its
+  // parse cannot be trusted, nor miss a write reached by a computed callee or
+  // a method chain after the call.
+  test("WITNESS: an apostrophe in a comment does not hide the call", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\n# don't touch the original\nshutil.copy(\n    '${LONG}/${STATE}',\n    '${LIVE}/${STATE}',\n)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a computed callee is still the call", () => {
+    for (const cmd of [
+      `node -e "require('fs')['copyFileSync']('${LONG}/${STATE}', '${LIVE}/${STATE}')"`,
+      `python3 -c "import shutil; (shutil.copy)('${LONG}/${STATE}', '${LIVE}/${STATE}')"`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a write method chained after the call holding the name", () => {
+    const chain = ".resolve()".repeat(10);
+    const cmd = `python3 -c "import pathlib; pathlib.Path('${LIVE}/${STATE}')${chain}.write_text('x')"`;
+    expect(chain.length).toBeGreaterThan(80);
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a body whose quotes never balance is read whole", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\nnote = \"it's\nshutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
   test("CONTROL: a read with the same long path is allowed", () => {
     const cmd = `python3 -c "import json; d = json.load(open('${LONG}/${STATE}')); print(d)"`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
