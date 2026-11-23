@@ -62,6 +62,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { securityHelpersRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -97,7 +98,7 @@ const claimSource = block("COLLECT-CLAIM");
 // the COLLECT-CLAIM block's refusal templates and nothing else. Evaluation
 // needs both blocks: #400 moved the path-safety rules into SECURITY-HELPERS
 // so staging and the audit share one decider, and the audit calls into it.
-const securitySource = block("SECURITY-HELPERS");
+const securitySource = securityHelpersRegion(shipSource);
 
 function loadAudit(source: string = claimSource): Audit {
   return new Function(

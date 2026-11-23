@@ -47,6 +47,7 @@ import { dirname, join } from "path";
 
 import { structuralCut } from "../lib/source-slice";
 import { collectWorktreeFiles, groupFilesByWorktree } from "../lib/worktree-collect";
+import { securityHelpersRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP_PATH = join(REPO_ROOT, "workflows", "ship.js");
@@ -94,7 +95,7 @@ function loadClaimAudit(): {
   return new Function(
     "PROJECT_ROOT",
     "log",
-    `${block("SECURITY-HELPERS")}\n${block("COLLECT-CLAIM")}\nreturn { auditWorktreeClaims, claimKey, pathRefusal }`,
+    `${securityHelpersRegion(shipSource)}\n${block("COLLECT-CLAIM")}\nreturn { auditWorktreeClaims, claimKey, pathRefusal }`,
   )("/repo", () => {});
 }
 
@@ -134,7 +135,7 @@ function loadCollectAgentWork(
   // loader used to inject a copy of — the copy is gone, so the quoting these
   // tests assert on is the quoting ship.js performs.
   const body = [
-    block("SECURITY-HELPERS"),
+    securityHelpersRegion(shipSource),
     block("COLLECT-DESTINATION"),
     block("COLLECT-CLAIM"),
     block("PRESERVE-REFUSED"),
@@ -619,7 +620,7 @@ describe("#228 / AC-5: the single-worktree exemption is mutated and watched", ()
     return new Function(
       "PROJECT_ROOT",
       "log",
-      `${block("SECURITY-HELPERS")}\n${mutated}\nreturn auditWorktreeClaims`,
+      `${securityHelpersRegion(shipSource)}\n${mutated}\nreturn auditWorktreeClaims`,
     )("/repo", () => {}) as (r: unknown) => ClaimAudit;
   }
 
@@ -1060,7 +1061,7 @@ describe("#585 / AC-5: a relocated COLLECT-CLAIM block is a TDZ fault, executed"
    * and the same one-line call appear in both bodies, in two orders.
    */
   function evaluateWithCallAt(position: "before" | "after"): ClaimAudit {
-    const helpers = block("SECURITY-HELPERS");
+    const helpers = securityHelpersRegion(shipSource);
     const claim = block("COLLECT-CLAIM");
     const body =
       position === "before"

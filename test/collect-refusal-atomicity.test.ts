@@ -116,6 +116,7 @@ import { execFileSync, spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, relative } from "path";
+import { securityHelpersRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -163,7 +164,7 @@ function loadCollect(project: string, workDir: string) {
   const calls: AgentCall[] = [];
   const logs: string[] = [];
   const body = [
-    block("SECURITY-HELPERS"),
+    securityHelpersRegion(shipSource),
     block("COLLECT-DESTINATION"),
     block("COLLECT-CLAIM"),
     block("PRESERVE-REFUSED"),

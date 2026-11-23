@@ -14,13 +14,12 @@ import {
   validateEvidenceCommand,
   pathRefusal,
 } from "../lib/workflow-security";
+import { securityHelpersRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP_PATH = join(REPO_ROOT, "workflows", "ship.js");
 const shipSource = readFileSync(SHIP_PATH, "utf-8");
 
-const HELPERS_START = "// ──── SECURITY-HELPERS-START ────";
-const HELPERS_END = "// ──── SECURITY-HELPERS-END ────";
 
 /**
  * ship.js runs inside the Workflow sandbox and is not importable as a module.
@@ -29,14 +28,7 @@ const HELPERS_END = "// ──── SECURITY-HELPERS-END ────";
  * not just grep coverage.
  */
 function securityBlock(): string {
-  const start = shipSource.indexOf(HELPERS_START);
-  const end = shipSource.indexOf(HELPERS_END);
-  if (start === -1 || end === -1) {
-    throw new Error(
-      "ship.js is missing the SECURITY-HELPERS-START/END markers",
-    );
-  }
-  return shipSource.slice(start + HELPERS_START.length, end);
+  return securityHelpersRegion(shipSource);
 }
 
 function loadShipSecurityHelpers(projectRoot: string) {

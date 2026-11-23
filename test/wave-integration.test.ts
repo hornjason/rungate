@@ -59,7 +59,7 @@ import { describe, test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { worktreeIdentityRegion } from "./helpers/ship-block";
+import { securityHelpersRegion, worktreeIdentityRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const RUN_REPO = "owner/project";
@@ -98,7 +98,7 @@ const CLAIM_PAIRING_BLOCK = sliceBlock("CLAIM-PAIRING");
 // and here the dependency IS the point: a stub would let the report-time
 // reading and the collection-time reading disagree about what a path is,
 // which is the disagreement #400 closed and #830 is the timing half of.
-const PATH_TABLE_BLOCK = sliceBlock("SECURITY-HELPERS");
+const PATH_TABLE_BLOCK = securityHelpersRegion(shipSource);
 const COLLECT_CLAIM_BLOCK = sliceBlock("COLLECT-CLAIM");
 const REPORT_PATH_BLOCKS = `${PATH_TABLE_BLOCK}\n${COLLECT_CLAIM_BLOCK}`;
 
