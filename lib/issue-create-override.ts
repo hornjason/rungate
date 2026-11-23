@@ -128,7 +128,28 @@ const OPERATORS = ["&&", "||", ";;", ";", "|", "&", "(", ")", "`", "\n"];
  * flags nobody wrote.
  */
 export function tokenize(cmd: string): string[] {
+  return scanTokens(cmd).tokens;
+}
+
+/** A command substitution inside a double-quoted string, and the token it sits in. */
+interface QuotedSubstitution {
+  /** The index, in `tokens`, of the word the substitution is part of. */
+  token: number;
+  /** The command it runs. */
+  text: string;
+}
+
+/**
+ * `tokenize`'s scan, which also records every `$(…)` and backtick
+ * substitution inside a double-quoted string (#2722). The shell keeps such a
+ * string as one word and still runs what it substitutes. They are recorded
+ * here, by the one scanner that follows the shell's comment rule, and not by
+ * a second walk over the quoting: a second walk read an apostrophe in a `#`
+ * comment as a quote and lost every later substitution (#2723 review).
+ */
+function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[] } {
   const out: string[] = [];
+  const subs: QuotedSubstitution[] = [];
   let cur = "";
   let quote: '"' | "'" | null = null;
   let started = false;
@@ -161,6 +182,21 @@ export function tokenize(cmd: string): string[] {
       i--;
       continue;
     }
+    if (quote === '"' && c === "$" && cmd[i + 1] === "(") {
+      const end = substitutionEnd(cmd, i + 2);
+      subs.push({ token: out.length, text: cmd.slice(i + 2, end) });
+      cur += cmd.slice(i, end + 1);
+      i = end;
+      continue;
+    }
+    if (quote === '"' && c === "`") {
+      let j = i + 1;
+      while (j < cmd.length && cmd[j] !== "`") j += cmd[j] === "\\" ? 2 : 1;
+      subs.push({ token: out.length, text: cmd.slice(i + 1, Math.min(j, cmd.length)) });
+      cur += cmd.slice(i, j + 1);
+      i = j;
+      continue;
+    }
     if (quote) {
       if (c === quote) quote = null;
       else cur += c;
@@ -186,7 +222,7 @@ export function tokenize(cmd: string): string[] {
     started = true;
   }
   flush();
-  return out;
+  return { tokens: out, subs };
 }
 
 const SEPARATORS = new Set(OPERATORS);
@@ -215,7 +251,8 @@ const SEPARATORS = new Set(OPERATORS);
  */
 export function clauses(cmd: string, depth = 0): string[][] {
   const flat: string[][] = [[]];
-  for (const t of tokenize(heredocView(cmd))) {
+  const { tokens, subs } = scanTokens(heredocView(cmd));
+  for (const t of tokens) {
     if (SEPARATORS.has(t)) flat.push([]);
     else flat[flat.length - 1].push(t);
   }
@@ -228,55 +265,16 @@ export function clauses(cmd: string, depth = 0): string[][] {
     for (const inner of commandArguments(c)) out.push(...clauses(inner, depth + 1));
   }
   if (depth < 4) {
-    for (const inner of quotedSubstitutions(heredocView(cmd))) out.push(...clauses(inner, depth + 1));
+    for (const sub of subs) out.push(...clauses(sub.text, depth + 1));
   }
   return out;
 }
 
 /**
- * The commands inside every `$(…)` and backtick substitution in a
- * double-quoted string (#2722). The shell keeps a double-quoted string as one
- * word and still runs what it substitutes, so `--body "$(gh issue edit …)"`
- * runs the edit, while `tokenize` keeps the whole string as one word. A
- * substitution outside quotes is already split by `tokenize`, and single
- * quotes make the text literal, so neither is returned here. Inside `$(…)`
- * the quoting starts afresh, which `substitutionEnd` follows; a nested quoted
- * substitution is found when `clauses` reads the inner command.
+ * The offset of the `)` closing a `$(` whose text starts at `from`, or the end
+ * of `cmd`. Inside it the quoting starts afresh, and a `#` starting a word is a
+ * comment to the end of the line, as `tokenize` reads one (#2723 review).
  */
-function quotedSubstitutions(cmd: string): string[] {
-  const out: string[] = [];
-  let quote: '"' | "'" | null = null;
-  for (let i = 0; i < cmd.length; i++) {
-    const c = cmd[i];
-    if (c === "\\" && quote !== "'") {
-      i++;
-      continue;
-    }
-    if (quote === "'") {
-      if (c === "'") quote = null;
-      continue;
-    }
-    if (quote === '"') {
-      if (c === '"') {
-        quote = null;
-      } else if (c === "$" && cmd[i + 1] === "(") {
-        const end = substitutionEnd(cmd, i + 2);
-        out.push(cmd.slice(i + 2, end));
-        i = end;
-      } else if (c === "`") {
-        let j = i + 1;
-        while (j < cmd.length && cmd[j] !== "`") j += cmd[j] === "\\" ? 2 : 1;
-        out.push(cmd.slice(i + 1, Math.min(j, cmd.length)));
-        i = j;
-      }
-      continue;
-    }
-    if (c === "'" || c === '"') quote = c;
-  }
-  return out;
-}
-
-/** The offset of the `)` closing a `$(` whose text starts at `from`, or the end of `cmd`. */
 function substitutionEnd(cmd: string, from: number): number {
   let depth = 0;
   let quote: '"' | "'" | null = null;
@@ -288,6 +286,10 @@ function substitutionEnd(cmd: string, from: number): number {
     }
     if (quote !== null) {
       if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "#" && (j === from || /[\s;&|(]/.test(cmd[j - 1]))) {
+      while (j < cmd.length && cmd[j] !== "\n") j++;
       continue;
     }
     if (c === "'" || c === '"') quote = c;
@@ -445,7 +447,8 @@ function scanForFiling(
     if (entered.length > 0) dir = entered.pop()!;
   };
 
-  for (const t of tokenize(heredocView(cmd))) {
+  const { tokens, subs } = scanTokens(heredocView(cmd));
+  for (const [k, t] of tokens.entries()) {
     if (t === "`") {
       if (inBacktick) close();
       else {
@@ -472,6 +475,19 @@ function scanForFiling(
       continue;
     }
     clause.push(t);
+    // A quoted substitution runs in the directory its word is read in, before
+    // the clause's own command, and its `cd` does not outlive it (#2723
+    // review): the same reading `clauses()` takes of it.
+    if (found === null && depth < 4) {
+      for (const sub of subs) {
+        if (sub.token !== k) continue;
+        const nested = scanForFiling(sub.text, dir, depth + 1);
+        if (nested.found !== null) {
+          found = nested.found;
+          break;
+        }
+      }
+    }
   }
   settle();
   return { found, dir };

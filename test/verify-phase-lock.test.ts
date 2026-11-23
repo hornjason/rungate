@@ -30,6 +30,7 @@ import {
   OVERRIDE_LABELS,
   clauses,
   createsIssue,
+  filingDirectory,
   labelValues,
   tokenize,
   verifyPhaseRefusal,
@@ -345,6 +346,37 @@ describe("#2722: a command substitution inside double quotes is a command", () =
   test("the lock refuses a filing inside a quoted substitution, as it refuses one outside", () => {
     expect(verifyPhaseRefusal('echo "$(gh issue create --label bug)"')).not.toBeNull();
     expect(verifyPhaseRefusal("echo $(gh issue create --label bug)")).not.toBeNull();
+  });
+});
+
+describe("#2723 review round 1: one scanner, and the directory reader reads what it reads", () => {
+  test("an apostrophe in a # comment does not hide a later quoted substitution", () => {
+    const cmd = `echo ok # it's done\necho "$(gh issue create --title t)"`;
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    expect(verifyPhaseRefusal(cmd)).not.toBeNull();
+  });
+
+  test("CONTROL: a quoted substitution inside a # comment is not a command", () => {
+    expect(clauses(`echo hi # "$(gh issue create)"`).some(createsIssue)).toBe(false);
+  });
+
+  test("an apostrophe in a comment inside the substitution does not end it early", () => {
+    const cmd = `echo "$(echo hi # it's\ngh issue create)"`;
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+  });
+
+  test("an apostrophe in a comment inside the substitution does not swallow what follows it", () => {
+    const cmd = `echo "$(echo hi # it's\n)"; gh issue create --title t`;
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+  });
+
+  test("filingDirectory reads a filing inside a quoted substitution where it runs", () => {
+    expect(filingDirectory(`(cd /wt/a && gh issue comment 1 --body "$(gh issue create --title t)")`, "/home/u/main")).toBe("/wt/a");
+    expect(filingDirectory(`echo "$(cd /wt/a && gh issue create --title t)"`, "/main")).toBe("/wt/a");
+  });
+
+  test("CONTROL: a cd inside a quoted substitution does not move what follows", () => {
+    expect(filingDirectory(`echo "$(cd /wt/a)"; gh issue create --title t`, "/main")).toBe("/main");
   });
 });
 
