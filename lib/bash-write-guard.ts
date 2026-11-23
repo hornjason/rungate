@@ -2412,13 +2412,26 @@ function writesNear(body: string, protectedName: string): boolean {
     const from = Math.max(0, at - WINDOW);
     const slice = body.slice(from, at + protectedName.length + WINDOW);
     if (WRITE_INTENT.test(slice)) return true;
-    // #1407: and every call the name is an argument of. In
-    // `shutil.copy(SRC, DST)` the verb comes before SRC, so a SRC longer than
-    // the window put DST's name out of its reach, and a copy onto the artifact
-    // spelled in full was allowed; a realpath'd macOS $TMPDIR is long enough.
-    // A name that is no call's argument (text in a string assigned to a
-    // variable, a docblock being edited) gets the window alone, as before.
-    if (enclosingCalls(body, at).some(call => WRITE_INTENT.test(call))) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether any call holding `protectedName` as an argument, at any depth, is
+ * a write (#1407). `writesNear`'s window misses a verb separated from the
+ * name by a long argument: in `shutil.copy(SRC, DST)` the verb comes before
+ * SRC, so a SRC longer than the window put DST's name out of its reach, and a
+ * copy onto the artifact spelled in full was allowed; a realpath'd macOS
+ * $TMPDIR is long enough. A name that is no call's argument (text in a string
+ * assigned to a variable, a docblock being edited) is left to the window.
+ *
+ * `program` must be the program text with its quotes: the reading masks
+ * strings and comments, and `dequote`'s view, which strips every quote,
+ * would read a `#` inside a string as a comment.
+ */
+function callWrites(program: string, protectedName: string): boolean {
+  for (const m of program.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))) {
+    if (enclosingCalls(program, m.index ?? 0).some(call => WRITE_INTENT.test(call))) return true;
   }
   return false;
 }
@@ -3452,7 +3465,7 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
     // all — so the `.replace` spelling #1276 closed for `-e` was still open
     // here, in a heredoc, for as long as the stopgap existed.
     const pf = absoluteNamesOutsideScratch(program, bodyTargetsAreScratch(program, exempt) ? exempt : NO_EXEMPTION).find(p =>
-      writesNear(program, p),
+      writesNear(program, p) || callWrites(program, p),
     );
     if (pf) {
       return {
@@ -3566,9 +3579,11 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
             ? bodyJudge
             : NO_EXEMPTION;
       const candidates = namesOutsideScratch(bare, ALL_PROTECTED, bodyExempt);
+      // #1407: `callWrites` reads the body, which keeps its quotes; `bare`
+      // has had every quote stripped by `dequote`.
       const pf = isMutatingFind
         ? (candidates[0] ?? null)
-        : (candidates.find(p => writesNear(bare, p)) ?? null);
+        : (candidates.find(p => writesNear(bare, p) || (body !== '' && callWrites(body, p))) ?? null);
       if (pf) {
         return {
           blocked: true,
