@@ -2438,9 +2438,11 @@ function codeMask(body: string): { mask: Uint8Array; balanced: boolean } {
     if (ch === "'" || ch === '"' || ch === '`') {
       quote = ch;
       mask[i] = 1;
-    } else if (ch === '#') {
+    } else if (ch === '#' && (i === 0 || /\s/.test(body[i - 1]))) {
       // A comment runs to the end of the line. An apostrophe in one ("don't")
-      // would otherwise open a quote that swallows the brackets after it.
+      // would otherwise open a quote that swallows the brackets after it. Only
+      // a `#` that starts a word: `this.#x` in JavaScript and `$#` in shell
+      // are code (security review).
       while (i < body.length && body[i] !== '\n') mask[i++] = 2;
     }
   }
@@ -2453,13 +2455,14 @@ function codeMask(body: string): { mask: Uint8Array; balanced: boolean } {
  * Read over code only, with quotes and `#` comments masked, so a call over
  * several lines, a `;` in a path string, or an apostrophe in a comment does
  * not split or hide it. A callee may be computed (`fs['copyFileSync'](…)`,
- * `(shutil.copy)(…)`). A body whose quotes never close cannot be read, and
- * is returned whole: the direction that refuses rather than allows (security
- * review of #1407's first two drafts).
+ * `(shutil.copy)(…)`). A body whose quotes never close cannot be read, so
+ * none is returned and the window alone decides, as it did before #1407.
+ * Reading such a body whole was tried and measured: it refused eight real
+ * commands, all edits of docs and config, and none a write of an artifact.
  */
 function enclosingCalls(body: string, at: number): string[] {
   const { mask, balanced } = codeMask(body);
-  if (!balanced) return [body];
+  if (!balanced) return [];
   const open: { at: number; ch: string }[] = [];
   for (let i = 0; i < at; i++) {
     if (mask[i] !== 0) continue;
@@ -2481,7 +2484,7 @@ function enclosingCalls(body: string, at: number): string[] {
 /** Where the callee before the `(` at `paren` starts: identifiers, dots, and bracketed groups. */
 function calleeStart(body: string, mask: Uint8Array, paren: number): number {
   let j = paren - 1;
-  while (j >= 0 && (body[j] === ' ' || body[j] === '\t')) j--;
+  while (j >= 0 && /\s/.test(body[j])) j--;
   let start = j + 1;
   while (j >= 0) {
     const ch = body[j];
@@ -2521,7 +2524,7 @@ function chainEnd(body: string, mask: Uint8Array, from: number): number {
   let i = from;
   for (;;) {
     let j = i;
-    while (j < body.length && (body[j] === ' ' || body[j] === '\t')) j++;
+    while (j < body.length && (/\s/.test(body[j]) || body[j] === '\\' || mask[j] === 2)) j++;
     if (body[j] !== '.') return i;
     j++;
     while (j < body.length && /[\w$]/.test(body[j])) j++;

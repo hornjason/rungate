@@ -4592,9 +4592,20 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
-  test("WITNESS: a body whose quotes never balance is read whole", () => {
-    const cmd = `python3 - <<'PY'\nimport shutil\nnote = \"it's\nshutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')\nPY`;
+  test("WITNESS: a chain continued on the next line", () => {
+    const cmd = `python3 - <<'PY'\nimport pathlib\n(pathlib.Path('${LIVE}/${STATE}')\n    ${".resolve()".repeat(10)}\n    .write_text('x'))\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // What this does NOT claim, pinned so the limit is a test and not prose. A
+  // body whose quotes never close cannot be parsed, so the window alone
+  // decides, as before #1407. Reading it whole refused eight real commands in
+  // the transcript sweep, every one an edit of docs or config. An unclosed
+  // quote is built, not accidental: the evasion WRITE_INTENT's docblock
+  // concedes. If this turns red, the guard got wider; measure the corpus again.
+  test("CONCESSION: a body whose quotes never close gets the window alone", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\nnote = \"it's\nshutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
   test("CONTROL: a read with the same long path is allowed", () => {
