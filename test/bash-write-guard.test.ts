@@ -4851,6 +4851,11 @@ describe("#2701: the write spellings the verb list missed", () => {
     ["fs.rename", `node -e "require('fs').rename('/tmp/a.json', '${LIVE}/${STATE}', () => {})"`],
     ["fs.promises.writeFile", `node -e "require('fs').promises.writeFile('${LIVE}/${STATE}', '{}')"`],
     ["fs.openSync with a write flag", `node -e "require('fs').openSync('${LIVE}/${STATE}', 'w')"`],
+    // #2704 review: the deletions in the same Sync-only class.
+    ["fs.unlink", `node -e "require('fs').unlink('${LIVE}/${STATE}', () => {})"`],
+    ["fs.rm", `node -e "require('fs').rm('${LIVE}/${STATE}', () => {})"`],
+    ["fs.truncate", `node -e "require('fs').truncate('${LIVE}/${STATE}', 0, () => {})"`],
+    ["Path.unlink", `python3 -c "import pathlib; pathlib.Path('${LIVE}/${STATE}').unlink()"`],
   ];
   test.each(witnesses)("WITNESS: %s onto a protected artifact is refused", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
@@ -4862,6 +4867,9 @@ describe("#2701: the write spellings the verb list missed", () => {
     ["shutil.copy2", `mkdir -p /tmp/rg2701a /tmp/rg2701b && python3 -I -c "import shutil; shutil.copy2('/tmp/rg2701a/${STATE}', '/tmp/rg2701b/${STATE}')"`],
     ["fs.writeFile", `mkdir -p /tmp/rg2701b && node -e "require('fs').writeFile('/tmp/rg2701b/${STATE}', '{}', () => {})"`],
     ["fs.openSync with a write flag", `mkdir -p /tmp/rg2701b && node -e "require('fs').openSync('/tmp/rg2701b/${STATE}', 'w')"`],
+    ["fs.unlink", `mkdir -p /tmp/rg2701b && node -e "require('fs').unlink('/tmp/rg2701b/${STATE}', () => {})"`],
+    ["fs.rm", `mkdir -p /tmp/rg2701b && node -e "require('fs').rm('/tmp/rg2701b/${STATE}', () => {})"`],
+    ["fs.truncate", `mkdir -p /tmp/rg2701b && node -e "require('fs').truncate('/tmp/rg2701b/${STATE}', 0, () => {})"`],
   ];
   test.each(controls)("CONTROL: %s between scratch trees stays a fixture", (_l, cmd) => {
     const d = decideBashWrite(cmd);

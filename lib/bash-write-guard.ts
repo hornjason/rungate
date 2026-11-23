@@ -2874,8 +2874,9 @@ const WRITE_INTENT = new RegExp(
   // `copyFile`, which also covers `fs.promises.*`), `write_bytes` beside
   // `write_text`, `shutil`'s other copies (`copy\b` cannot reach `copy2`: a
   // digit is a word character), any `.rename(` (`fs.rename`, `Path.rename`),
-  // and `openSync` beside `open`.
-  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|writeFile|appendFile|copyFile|write_text|write_bytes|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy2?|copyfile|copytree|move|rmtree))\b|\.rename\s*\(|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen(?:Sync)?\s*\([^)]*` +
+  // `openSync` beside `open`, and the deletions in the same class: any
+  // `.unlink(`, `.rm(` or `.truncate(` (`fs.unlink`, `Path.unlink`, #2704 review).
+  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|writeFile|appendFile|copyFile|write_text|write_bytes|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy2?|copyfile|copytree|move|rmtree))\b|\.(?:rename|unlink|rm|truncate)\s*\(|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen(?:Sync)?\s*\([^)]*` +
     WRITE_MODE_SOURCE +
     // #2699 review: the mode after nested calls in the path, two levels deep.
     // `opensForWrite` reads any depth, but only in a body that parses; this is
@@ -3326,11 +3327,10 @@ const WHITESPACE = new Set([' ', '\t', '\n', '\r']);
  * the first place — so a verb missing here is a verb that never brought a
  * command to this question.
  *
- * `remove`, `replace`, `unlink` and `write` are qualified rather than
- * matched bare: `str.replace` and `stdout.write` are not writes to a file,
+ * `remove`, `replace` and `write` are qualified rather than matched bare: `str.replace` and `stdout.write` are not writes to a file,
  * and a bare match would read a transform as a write position, which is the
- * denylist's failure wearing a whitelist's clothes. `rename` is bare since
- * #2701: no string or array type has one, and `require('fs').rename(` is
+ * denylist's failure wearing a whitelist's clothes. `rename`, `unlink`, `rm`
+ * and `truncate` are bare since #2701: no string or array type has one, and `require('fs').rename(` is
  * read here as `.rename`, which the qualified `os.rename` never matched. Its
  * destination is argument 1 in the function forms; in `Path(src).rename(dst)`
  * it is argument 0, so a scratch `Path.rename` reads its literal as an
@@ -3349,6 +3349,9 @@ const WRITE_CALLEES = new Set([
   'appendFile',
   'copyFile',
   'rename',
+  'unlink',
+  'rm',
+  'truncate',
   'write_text',
   'write_bytes',
   'open',
