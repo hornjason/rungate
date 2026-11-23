@@ -4891,6 +4891,50 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
+  // #2720. For a body that does not parse as JavaScript, the mask binds a
+  // protected literal to the target of the assignment whose right-hand side
+  // holds it, whatever expression it sits in: one rule, not one link per
+  // form. Each WITNESS is allowed on main, where the mask followed only a
+  // chain of `+`, `or` and `and`.
+  const PY = (body: string, tail: string) =>
+    `python3 - <<'PY'\nimport os, shutil, json\n${body}\n${PYPAD2714}\n${tail}\nPY`;
+  const COPY = "shutil.copy('/tmp/src.json', d)";
+  const READ = "print(json.load(open(d)))";
+  test.each([
+    ["parentheses", PY(`d = (ROOT + '${LIVE}/.rungate/x/witnesses/' + f)`, COPY)],
+    ["a conditional expression", PY(`d = other if ok else '${LIVE}/${STATE}'`, COPY)],
+    ["a call argument", PY(`d = os.path.join(base, '${LIVE}/${STATE}')`, COPY)],
+    ["a call argument over several lines", PY(`d = os.path.join(\n    base,\n    '${LIVE}/${STATE}',\n)`, COPY)],
+    ["a bare file name in os.path.join, under -c", `python3 -c "import os, json; d = os.path.join(os.environ['RUNGATE_WORK_DIR'], '${STATE}'); ${PYPAD2714}; json.dump({}, open(d, 'w'))"`],
+    ["an f-string with a value after a directory name", PY(`d = f'${LIVE}/.rungate/x/witnesses/{f}'`, COPY)],
+    ["an augmented assignment", PY(`d = base\nd += '${LIVE}/${STATE}'`, COPY)],
+    ["Python's walrus", PY(`if (d := '${LIVE}/${STATE}'):\n    pass`, COPY)],
+    // Main read `ok:` as an annotation and bound `ok`.
+    ["an assignment after a one-line if", PY(`if ok: d = '${LIVE}/${STATE}'`, COPY)],
+  ])("WITNESS (#2720): %s binds the assignment's target", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+  test.each([
+    ["parentheses", PY(`d = (ROOT + '${LIVE}/.rungate/x/witnesses/' + f)`, READ)],
+    ["a call argument", PY(`d = os.path.join(base, '${LIVE}/${STATE}')`, READ)],
+    ["an augmented assignment", PY(`d = base\nd += '${LIVE}/${STATE}'`, READ)],
+    ["Python's walrus", PY(`if (d := '${LIVE}/${STATE}'):\n    pass`, READ)],
+    // A comparison is not an assignment.
+    ["a comparison", PY(`ok = d == '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', d)")],
+    // A call that reads or transforms its argument does not hand the path on,
+    // and a subscript's key is not its value.
+    ["a call that is not a path builder", PY(`d = os.path.getsize('${LIVE}/${STATE}')`, COPY)],
+    ["a subscript key", PY(`d = cfg['${LIVE}/${STATE}']`, COPY)],
+  ])("CONTROL (#2720): %s is allowed", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+  // Bound on main as well, and kept: a parameter default holds the literal
+  // inside the function, so `=` after a name in brackets still binds it.
+  test("KEPT (#2720): a parameter default still binds its name", () => {
+    const cmd = PY(`def f(d='${LIVE}/${STATE}'):\n    ${PYPAD2714}\n    ${COPY}`, "f()");
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
   test("CONCESSION: a body whose quotes never close gets the window alone", () => {
     const cmd = `python3 - <<'PY'\nimport shutil\nnote = \"it's\nshutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);

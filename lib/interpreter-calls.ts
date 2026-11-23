@@ -106,7 +106,8 @@ function isStringLiteral(n: AstNode): boolean {
 }
 
 /** A call that builds a path from its arguments: `join`, `resolve` or `normalize`, bare or as a member (#2714). */
-const PATH_BUILDERS = new Set(['join', 'resolve', 'normalize']);
+/** The calls whose arguments a path flows through; the bash write guard's mask extends it for Python (#2720). */
+export const PATH_BUILDERS: ReadonlySet<string> = new Set(['join', 'resolve', 'normalize']);
 function buildsPath(call: AstNode): boolean {
   const callee = call.callee as AstNode;
   if (callee.type === 'Identifier') return PATH_BUILDERS.has(callee.name as string);
