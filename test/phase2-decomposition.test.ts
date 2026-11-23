@@ -348,7 +348,7 @@ function inlineBlock(): Record<string, Function> {
 describe("SC-1487: the launch file's bundled copy and the library agree", () => {
   const inline = inlineBlock();
 
-  const MATRIX: Array<[string, readonly DecomposedAc[], string[], any[]]> = [
+  const MATRIX: Array<[string, readonly DecomposedAc[], string[], any[], DecomposedAc[]?]> = [
     ["a sound split", ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-7", "AC-8"] }]],
     ["duplicated into Phase 2", ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-5", "AC-7", "AC-8"] }]],
     ["one dropped", ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-7"] }]],
@@ -359,11 +359,13 @@ describe("SC-1487: the launch file's bundled copy and the library agree", () => 
     ["by specElement", ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["SC-484", "SC-485"] }]],
     ["no ACs at all", [], ["AC-1"], [{ number: 75, acIds: ["AC-7"] }]],
     ["no groups at all", ALL, ["AC-1", "AC-5", "AC-7", "AC-8"], []],
+    // #2710: the run's cap dropped AC-7 from the agent's Phase 1.
+    ["the cap dropped one", ALL, ["AC-1", "AC-5", "AC-7"], [{ number: 75, acIds: ["AC-8"] }], ALL.filter(a => a.id === "AC-1" || a.id === "AC-5")],
   ];
 
-  for (const [name, acs, phase1, groups] of MATRIX) {
+  for (const [name, acs, phase1, groups, kept] of MATRIX) {
     test(`decompositionRefusal agrees: ${name}`, () => {
-      expect(inline.decompositionRefusal!(acs, phase1, groups)).toEqual(decompositionRefusal(acs, phase1, groups));
+      expect(inline.decompositionRefusal!(acs, phase1, groups, kept)).toEqual(decompositionRefusal(acs, phase1, groups, kept));
     });
   }
 
