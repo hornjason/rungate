@@ -4804,6 +4804,16 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
+  // The limit of a lexical mask, pinned. A `// don't` blinds the plain
+  // readings, and a `/*` inside a regex character class, read from a `/` the
+  // mask takes for a division, pairs with a later `*/` and blinds the
+  // JavaScript ones. Built to defeat every reading at once: the evasion
+  // WRITE_INTENT's docblock concedes. The window, main's rule, still answers.
+  test("CONCESSION: a construction built to blind every reading gets the window alone", () => {
+    const cmd = `node - <<'JS'\n// don't\nif (x) /[/*]/.test(s); require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}') /* end */\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
   test("CONCESSION: a body whose quotes never close gets the window alone", () => {
     const cmd = `python3 - <<'PY'\nimport shutil\nnote = \"it's\nshutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
