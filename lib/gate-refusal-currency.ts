@@ -40,6 +40,13 @@
  * and only one of them is a measurement
  * (.claude/rules/config-access.md, Silent Default Substitution).
  *
+ * And a pass is a verdict the gate computed, never an absence (#2692).
+ * `failedChecks` is re-typed by the gate's agent, so a failing check it left
+ * out of both `failures` and `failedChecks` read as passed. The gate now
+ * writes `checksPassed` itself: the checks it ran with no FAIL or WARN
+ * verdict. Only a name on that list is resolved, and a report without it
+ * retires nothing.
+ *
  * ## How ship.js runs this
  *
  * `workflows/ship.js` runs in a sandbox with no module loading (#69), so it
@@ -55,6 +62,8 @@ export interface GateReport {
   /** "PASS" or "FAIL". Anything but "PASS" is a gate that did not pass. */
   result?: unknown;
   checksRun?: unknown;
+  /** The checks the gate ran with no FAIL or WARN verdict, computed by the gate (#2692). */
+  checksPassed?: unknown;
   failedChecks?: unknown;
   /** The gate's free-text failure lines, each meant to begin with its check's name. */
   failures?: unknown;
@@ -96,6 +105,7 @@ export interface RefusalEntry {
  */
 export function resolvedCheckNames(report: GateReport | null | undefined): string[] | null {
   if (!report || !Array.isArray(report.checksRun) || !Array.isArray(report.failedChecks)) return null;
+  if (!Array.isArray(report.checksPassed)) return null;
   if (Array.isArray(report.failures)) {
     for (const line of report.failures) {
       if (typeof line === "string" && line !== "" && failureCheckName(line, report.failedChecks) === undefined) return null;
@@ -115,8 +125,11 @@ export function resolvedCheckNames(report: GateReport | null | undefined): strin
       }
     }
   }
+  const passed = new Set(
+    report.checksPassed.filter((c: unknown): c is string => typeof c === "string" && c !== ""),
+  );
   return report.checksRun.filter(
-    (c: unknown): c is string => typeof c === "string" && c !== "" && !failed.has(c),
+    (c: unknown): c is string => typeof c === "string" && c !== "" && !failed.has(c) && passed.has(c),
   );
 }
 

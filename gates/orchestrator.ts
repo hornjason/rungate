@@ -208,12 +208,20 @@ export function writeGateResult(
   // list says the gate ran nothing, which is a claim, and a wrong one.
   const measuredChecks = unionNames(checksRun ?? null, results.map(r => r.check));
 
+  // #2692. What passed, computed here from the verdicts rather than left for
+  // the gate's agent to infer from `failures`: a check it dropped from its
+  // failed list read as passed. A FAIL or WARN verdict is not a pass, and with
+  // no `checksRun` reading there is no list, as there is no `checksRun`.
+  const notPassed = new Set(results.filter(r => r.result !== "PASS").map(r => r.check));
+  const passedChecks = measuredChecks === null ? null : measuredChecks.filter(c => !notPassed.has(c));
+
   state.gates = state.gates || {};
   state.gates[gate] = {
     result: resultVal,
     attempt,
     failures,
     ...(measuredChecks === null ? {} : { checksRun: measuredChecks }),
+    ...(passedChecks === null ? {} : { checksPassed: passedChecks }),
     ts,
     commitSha: sha,
   };

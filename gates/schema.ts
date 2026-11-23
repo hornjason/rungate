@@ -288,6 +288,12 @@ export const GateResultSchema = z.object({
    * field must not be read as a gate that retired every earlier refusal.
    */
   checksRun: z.array(z.string()).optional(),
+  /**
+   * The `checksRun` names with no FAIL or WARN verdict, computed by
+   * `writeGateResult` (#2692). The only list that retires an earlier
+   * refusal; absent, nothing is retired.
+   */
+  checksPassed: z.array(z.string()).optional(),
   ts: z.string().optional(),
   commitSha: z.string().optional(),
 }).optional();
