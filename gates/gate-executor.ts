@@ -1,5 +1,5 @@
 import { execSync, execFileSync } from "child_process";
-import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, readdirSync, statSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, readdirSync, statSync, rmSync } from "fs";
 import { join } from "path";
 import { splitGateRuns } from "../lib/gate-run-split";
 import { gateSaltPath, workDir as slugWorkDir } from "../lib/paths";
@@ -2223,10 +2223,25 @@ export function junitReportPath(workDir: string, gate: string): string {
   return join(workDir, `gate-${gate}-junit.xml`);
 }
 
+/**
+ * The gate's report path, with any previous run's report removed (#2697).
+ *
+ * The path is fixed per gate, and a suite killed at `GATE_SUITE_TIMEOUT_MS`
+ * writes no report, so the last run's report was read as this run's: its
+ * testcases became this run's `checksRun`, and passed, and could retire a
+ * refusal this gate never re-measured. With the old report gone, a run that
+ * writes none reads as UNMEASURED and retires nothing.
+ */
+export function prepareGateReport(workDir: string, gate: string): string {
+  const junitPath = junitReportPath(workDir, gate);
+  rmSync(junitPath, { force: true });
+  return junitPath;
+}
+
 function runGateTests(gate: string, workDir: string, state: Record<string, any>, harnessRoot: string): { testOutput: string; testExitCode: number; junitPath: string } {
   let testOutput: string;
   let testExitCode = 0;
-  const junitPath = junitReportPath(workDir, gate);
+  const junitPath = prepareGateReport(workDir, gate);
   try {
     testOutput = execSync(
       `bun test gates/ --test-name-pattern "${gate === 'scope' ? 'schema|scope' : gate === 'verify' ? 'schema|scope|verify|B1|B2' : gate === 'ship' ? 'schema|scope|verify|ship|B1|B2' : gate === 'prove' ? 'prove' : '.*'}" --reporter=junit --reporter-outfile=${JSON.stringify(junitPath)} 2>&1`,
