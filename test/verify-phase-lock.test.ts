@@ -472,6 +472,22 @@ describe("#2723 review round 3", () => {
     expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
   });
 
+  test("a case branch that prints a quote does not hide what follows", () => {
+    // Read case-blind, the substitution ends at the pattern's `)`, the `"`
+    // printed in the branch closes the outer quote, and the `'` opens one
+    // that runs to the end. Bash closes at the last `)`, and the command is
+    // read that way too.
+    for (const cmd of [
+      `echo "$(case x in x) echo '"';; esac)"; gh issue create --title t`,
+      `echo "$(case x in x) echo '"';; esac)" && gh issue create --title t`,
+    ]) {
+      expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    }
+    // The filing gate's reader takes the same second reading, in the
+    // directory the command is in.
+    expect(filingDirectory(`cd /wt/a && echo "$(case x in x) echo '"';; esac)"; gh issue create --title t`, "/main")).toBe("/wt/a");
+  });
+
   test("CONTROL: an argument case adds no reading, so a filing quoted later is text", () => {
     // Counted, each would add a case-aware reading that ends inside the last
     // string and reads the filing quoted there as a command.

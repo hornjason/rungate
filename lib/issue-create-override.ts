@@ -147,9 +147,12 @@ interface QuotedSubstitution {
  * a second walk over the quoting: a second walk read an apostrophe in a `#`
  * comment as a quote and lost every later substitution (#2723 review).
  */
-function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[] } {
+function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[]; alts: string[] } {
   const out: string[] = [];
   const subs: QuotedSubstitution[] = [];
+  // The command again, with a quoted substitution's word going on from its
+  // case-aware close (#2723 review): read beside this one, never instead.
+  const alts: string[] = [];
   let cur = "";
   let quote: '"' | "'" | null = null;
   let started = false;
@@ -183,17 +186,22 @@ function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[]
       continue;
     }
     if (quote === '"' && c === "$" && cmd[i + 1] === "(") {
-      // Two readings of where it ends (#2723 review). The word goes on from
-      // the first `)` at depth 0, read as if no `case` were open, so no
-      // miscounted case can carry later text into the substitution and out of
-      // the outer reading. A case-aware reading that ends later is recorded
-      // too, so a filing in a case branch after a pattern's `)` is read. A
-      // filing either reading finds is refused; a miscount costs at most a
-      // refusal.
+      // Two readings of where it ends (#2723 review). Here the word goes on
+      // from the first `)` at depth 0, read as if no `case` were open, so a
+      // miscounted case cannot carry later text into the substitution and out
+      // of the command. A case-aware close that ends later is the one bash
+      // takes for a real case, so its substitution is recorded, and the whole
+      // command is read again with the word going on from it: a branch that
+      // prints a quote (`echo '"'`) inverts the case-blind reading's quotes
+      // and hides what follows. A filing any reading finds is refused; a
+      // miscount costs at most a refusal.
       const end = substitutionEnd(cmd, i + 2, false);
       subs.push({ token: out.length, text: cmd.slice(i + 2, end) });
       const cased = substitutionEnd(cmd, i + 2, true);
-      if (cased > end) subs.push({ token: out.length, text: cmd.slice(i + 2, cased) });
+      if (cased > end) {
+        subs.push({ token: out.length, text: cmd.slice(i + 2, cased) });
+        alts.push(cmd.slice(0, i) + cmd.slice(cased + 1));
+      }
       cur += cmd.slice(i, end + 1);
       i = end;
       continue;
@@ -231,7 +239,7 @@ function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[]
     started = true;
   }
   flush();
-  return { tokens: out, subs };
+  return { tokens: out, subs, alts };
 }
 
 const SEPARATORS = new Set(OPERATORS);
@@ -260,7 +268,7 @@ const SEPARATORS = new Set(OPERATORS);
  */
 export function clauses(cmd: string, depth = 0): string[][] {
   const flat: string[][] = [[]];
-  const { tokens, subs } = scanTokens(heredocView(cmd));
+  const { tokens, subs, alts } = scanTokens(heredocView(cmd));
   for (const t of tokens) {
     if (SEPARATORS.has(t)) flat.push([]);
     else flat[flat.length - 1].push(t);
@@ -275,6 +283,7 @@ export function clauses(cmd: string, depth = 0): string[][] {
   }
   if (depth < 4) {
     for (const sub of subs) out.push(...clauses(sub.text, depth + 1));
+    for (const alt of alts) out.push(...clauses(alt, depth + 1));
   }
   return out;
 }
@@ -508,7 +517,7 @@ function scanForFiling(
     if (entered.length > 0) dir = entered.pop()!;
   };
 
-  const { tokens, subs } = scanTokens(heredocView(cmd));
+  const { tokens, subs, alts } = scanTokens(heredocView(cmd));
   for (const [k, t] of tokens.entries()) {
     if (t === "`") {
       if (inBacktick) close();
@@ -551,6 +560,17 @@ function scanForFiling(
     }
   }
   settle();
+  // The command read again from a case-aware close, in the directory it
+  // started in, as `clauses()` reads it (#2723 review).
+  if (found === null && depth < 4) {
+    for (const alt of alts) {
+      const nested = scanForFiling(alt, from, depth + 1);
+      if (nested.found !== null) {
+        found = nested.found;
+        break;
+      }
+    }
+  }
   return { found, dir };
 }
 
