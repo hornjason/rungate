@@ -3,6 +3,7 @@ import { join } from "path";
 
 import { loadRungateConfig } from "../../lib/config-loader";
 import { shipPrelude } from "../../scripts/build-workflow-launch";
+import { securityHelpersRegion } from "./ship-block";
 
 /**
  * #274 — the consumer fixture, and the `workflows/ship.js` sites it drives.
@@ -207,12 +208,12 @@ const PREFLIGHT_BLOCK = one(
  * SECURITY-HELPERS block rather than stubbed — the pre-flight filters out any
  * host it refuses, so a stub that always returned a command would make the
  * fixture's host reach the agent through a door the real run keeps shut.
+ *
+ * Through the one helper (#2684): `safeSSHCommand` calls the library's
+ * `buildSafeSSHCommand`, which the launch bundle carries and the helper puts
+ * in front of the region.
  */
-const SECURITY_HELPERS = region(
-  /^\/\/ ──── SECURITY-HELPERS-START ────$/m,
-  /^\/\/ ──── SECURITY-HELPERS-END ────$/m,
-  "the security helpers block",
-);
+const SECURITY_HELPERS = securityHelpersRegion(shipSource);
 
 /**
  * `suiteOutputPath`, `suiteCaptureCommand` and `recorderCommand`, extracted for

@@ -621,7 +621,7 @@ function libModuleOf(from: string, spec: string): string | null {
   return posix.normalize(posix.join(posix.dirname(from), spec)).replace(/\.(js|ts)$/, "") + ".ts";
 }
 
-/** What `workflows/ship.run.js` carries from lib/ (#2400 wave 2a, #2404 wave 2b, #2408 wave 2c, #2410 wave 3a, #2417 wave 3b). Later waves add the rest of PURE_CORE_MODULES. */
+/** What `workflows/ship.run.js` carries from lib/ (#2400 wave 2a, #2404 wave 2b, #2408 wave 2c, #2410 wave 3a, #2417 wave 3b, #2436 wave 3c-B, #2684 wave 4-B). */
 export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
   "lib/suite-measurement.ts": ["suiteCurrency"],
   "lib/scope-denylist.ts": [
@@ -639,6 +639,13 @@ export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
   "lib/dev-liveness.ts": ["containerProbeTarget", "CONTAINER_HOST"],
   "lib/worktree-repo.ts": [
     "repoSlug", "redactRemote", "looksLikeFilesystemPath", "worktreeIdentity", "worktreeIdentityViolations",
+  ],
+  // #2684, wave 4-B: ship.js's SECURITY-HELPERS region copied these nine.
+  // shellQuote is not here: ship.js keeps it in the SHELL-QUOTE block that
+  // every workflow building a shell command carries, byte-identical.
+  "lib/workflow-security.ts": [
+    "pathRefusal", "validateFilePaths", "buildSafeGitAdd", "isSafeBranchName", "repoSlugRefusal",
+    "rootPathRefusal", "resolveEvidencePath", "validateEvidenceCommand", "buildSafeSSHCommand",
   ],
 };
 

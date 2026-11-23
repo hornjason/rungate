@@ -23,13 +23,26 @@ const SHIP_PATH = join(ROOT, "workflows", "ship.js");
 /** The module the region's bundled half comes from. */
 export const WORKTREE_REPO_MODULE = "lib/worktree-repo.ts";
 
+/** The module the SECURITY-HELPERS region's bundled half comes from (#2684). */
+export const WORKFLOW_SECURITY_MODULE = "lib/workflow-security.ts";
+
+/** One module as ship.run.js bundles it; refused, naming the region, if the bundle no longer carries it. */
+function moduleBundle(module: string, region: string): string {
+  const names = LAUNCH_BUNDLE[module];
+  if (names === undefined) {
+    throw new Error(`LAUNCH_BUNDLE no longer carries ${module}, so the ${region} region cannot run`);
+  }
+  return bundleLibCores({ [module]: names }, path => readFileSync(join(ROOT, path), "utf-8")).text;
+}
+
 /** lib/worktree-repo.ts as ship.run.js bundles it; refused if the bundle no longer carries it. */
 export function worktreeRepoBundle(): string {
-  const names = LAUNCH_BUNDLE[WORKTREE_REPO_MODULE];
-  if (names === undefined) {
-    throw new Error(`LAUNCH_BUNDLE no longer carries ${WORKTREE_REPO_MODULE}, so the WORKTREE-IDENTITY region cannot run`);
-  }
-  return bundleLibCores({ [WORKTREE_REPO_MODULE]: names }, path => readFileSync(join(ROOT, path), "utf-8")).text;
+  return moduleBundle(WORKTREE_REPO_MODULE, "WORKTREE-IDENTITY");
+}
+
+/** lib/workflow-security.ts as ship.run.js bundles it; refused if the bundle no longer carries it. */
+export function workflowSecurityBundle(): string {
+  return moduleBundle(WORKFLOW_SECURITY_MODULE, "SECURITY-HELPERS");
 }
 
 /**
@@ -46,12 +59,17 @@ export function worktreeIdentityRegion(
 
 /**
  * ship.js's SECURITY-HELPERS region, START marker through the line before END
- * (#2290 wave 4-A1, plan on #2290). Refused, naming the markers, if either is
- * missing or doubled. Wave 4-B moves its copies of lib/workflow-security.ts
- * into the launch bundle; then only this function changes for its readers.
+ * (#2290 wave 4-A1, plan on #2290), with lib/workflow-security.ts's bundle in
+ * front. Since wave 4-B (#2684) the region keeps only ship.js's own builders;
+ * the library's rules are that module's code, carried into ship.run.js by the
+ * launch bundle, so every reader runs what the launch file runs. Refused,
+ * naming the markers, if either is missing or doubled.
  */
-export function securityHelpersRegion(source: string = readFileSync(SHIP_PATH, "utf-8")): string {
-  return markedRegion(source, "SECURITY-HELPERS");
+export function securityHelpersRegion(
+  source: string = readFileSync(SHIP_PATH, "utf-8"),
+  bundle: string = workflowSecurityBundle(),
+): string {
+  return `${bundle}\n${markedRegion(source, "SECURITY-HELPERS")}`;
 }
 
 /**

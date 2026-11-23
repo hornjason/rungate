@@ -641,6 +641,154 @@ function worktreeIdentityViolations(reports, expectedRepo, opts = {}) {
     }
     return out;
 }
+const SHELL_METACHARACTERS = /[;&|$`\n\r"'\\(){}[\]<>!~*?#]/;
+const PATH_TRAVERSAL = /\.\.($|[/\\])/;
+const NULL_BYTE = /\x00/;
+const CONTRIBUTABLE_PATH_RULES = [
+    ["an absolute path", true, (p) => p.startsWith("/")],
+    ["a `..` segment", true, (p) => p.split("/").includes("..")],
+    ["a segment ending in `..`", false, (p) => PATH_TRAVERSAL.test(p)],
+    ["a shell metacharacter", false, (p) => SHELL_METACHARACTERS.test(p)],
+    ["a null byte", false, (p) => NULL_BYTE.test(p)],
+    ["over 500 characters", false, (p) => p.length > 500],
+];
+function pathRefusal(p) {
+    for (const [rule, boundary, fails] of CONTRIBUTABLE_PATH_RULES) {
+        if (fails(p))
+            return { rule, boundary };
+    }
+    return null;
+}
+function buildSafeGitAdd(filesChanged) {
+    const validated = validateFilePaths(filesChanged);
+    if (validated.rejected.length > 0) {
+        throw new Error(`Rejected unsafe file paths: ${validated.rejected.join(", ")}`);
+    }
+    if (validated.valid.length === 0)
+        throw new Error("No valid files to stage");
+    return `git add ${validated.valid.map((f) => `'${f.replace(/'/g, "'\\''")}'`).join(" ")}`;
+}
+function validateFilePaths(paths) {
+    const valid = [];
+    const rejected = [];
+    for (const p of paths) {
+        if (pathRefusal(p)) {
+            rejected.push(p);
+        }
+        else {
+            valid.push(p);
+        }
+    }
+    return { valid, rejected };
+}
+const SAFE_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+function isSafeBranchName(name) {
+    if (typeof name !== "string" || name.length === 0 || name.length > 255)
+        return false;
+    if (!SAFE_BRANCH.test(name))
+        return false;
+    if (name.includes("..") || name.includes("//") || name.endsWith("/") || name.endsWith(".lock"))
+        return false;
+    return true;
+}
+const REPO_SLUG_SEGMENT = /^[A-Za-z0-9._-]+$/;
+function illegalSlugSegment(p) {
+    if (!REPO_SLUG_SEGMENT.test(p))
+        return true;
+    return p === "." || p === ".." || p.startsWith("-") || p.startsWith(".") || p.endsWith(".");
+}
+function repoSlugRefusal(argName, value) {
+    if (typeof value !== "string" || value.length === 0) {
+        return `${argName} must be a non-empty string of the form "owner/name"; got ${describeArg(value)}`;
+    }
+    if (value.length > 255)
+        return `${argName} is ${value.length} characters, which is not a repository slug`;
+    const parts = value.split("/");
+    if (parts.length !== 2 || parts.some(illegalSlugSegment)) {
+        return (`${argName} must be "owner/name" using only letters, digits, dot, dash and underscore; ` +
+            `got ${describeArg(value)} — it is interpolated unquoted into shell commands`);
+    }
+    return null;
+}
+function rootPathRefusal(argName, value) {
+    if (typeof value !== "string" || value.length === 0) {
+        return `${argName} must be a non-empty absolute path; got ${describeArg(value)}`;
+    }
+    if (value.length > 500)
+        return `${argName} is ${value.length} characters, which is not a directory path`;
+    if (!value.startsWith("/"))
+        return `${argName} must be an absolute path; got ${describeArg(value)}`;
+    if (NULL_BYTE.test(value))
+        return `${argName} contains a null byte`;
+    if (value.split("/").includes(".."))
+        return `${argName} contains a \`..\` segment: ${describeArg(value)}`;
+    if (/\s/.test(value)) {
+        return (`${argName} contains whitespace: ${describeArg(value)} — it is interpolated unquoted into ` +
+            `shell commands, so the run would cd somewhere other than where you meant`);
+    }
+    if (SHELL_METACHARACTERS.test(value)) {
+        return `${argName} contains a shell metacharacter: ${describeArg(value)} — it is interpolated unquoted into shell commands`;
+    }
+    return null;
+}
+function describeArg(value) {
+    if (typeof value !== "string")
+        return value === undefined ? "nothing" : JSON.stringify(value) ?? String(value);
+    return JSON.stringify(value.length > 80 ? value.slice(0, 80) + "…" : value);
+}
+function resolveEvidencePath(basePath, evidencePath) {
+    if (NULL_BYTE.test(evidencePath)) {
+        throw new Error(`Evidence path contains null byte: ${evidencePath}`);
+    }
+    if (PATH_TRAVERSAL.test(evidencePath)) {
+        throw new Error(`Evidence path contains traversal: ${evidencePath}`);
+    }
+    if (evidencePath.startsWith("/")) {
+        throw new Error(`Evidence path is absolute: ${evidencePath}`);
+    }
+    const resolved = `${basePath}/${evidencePath}`;
+    if (!resolved.startsWith(basePath)) {
+        throw new Error(`Evidence path escapes base: ${resolved}`);
+    }
+    return resolved;
+}
+function validateEvidenceCommand(command) {
+    if (NULL_BYTE.test(command)) {
+        return { safe: false, reason: "Command contains null byte" };
+    }
+    const dangerous = [
+        /rm\s+-rf/,
+        />\s*\/dev/,
+        /mkfs/,
+        /dd\s+if=/,
+        /chmod\s+777/,
+        /curl.*\|\s*(bash|sh)/,
+    ];
+    for (const pattern of dangerous) {
+        if (pattern.test(command)) {
+            return { safe: false, reason: `Dangerous pattern: ${pattern.source}` };
+        }
+    }
+    return { safe: true };
+}
+function buildSafeSSHCommand(host, command) {
+    if (SHELL_METACHARACTERS.test(host)) {
+        throw new Error(`SSH host contains shell metacharacters: ${host}`);
+    }
+    if (host.startsWith("-")) {
+        throw new Error(`SSH host starts with dash (option injection): ${host}`);
+    }
+    return [
+        "ssh",
+        "-o",
+        "ConnectTimeout=5",
+        "-o",
+        "StrictHostKeyChecking=no",
+        "--",
+        host,
+        command,
+    ];
+}
 // ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----
 
 
@@ -816,152 +964,12 @@ const SKIP_GRADE = parsedArgs.skipGrade || false
 const MAX_REGRESSIONS = 2
 const MAX_SECURITY_REREVIEWS = 2
 
-const SHELL_METACHARACTERS = /[;&|$`\n\r"'\\(){}[\]<>!~*?#]/
-const PATH_TRAVERSAL = /\.\.($|[/\\])/
-const NULL_BYTE = /\x00/
-
-const CONTRIBUTABLE_PATH_RULES = [
-  ['an absolute path', true, p => p.startsWith('/')],
-  ['a `..` segment', true, p => p.split('/').includes('..')],
-  ['a segment ending in `..`', false, p => PATH_TRAVERSAL.test(p)],
-  ['a shell metacharacter', false, p => SHELL_METACHARACTERS.test(p)],
-  ['a null byte', false, p => NULL_BYTE.test(p)],
-  ['over 500 characters', false, p => p.length > 500],
-]
-
-function pathRefusal(p) {
-  for (const [rule, boundary, fails] of CONTRIBUTABLE_PATH_RULES) {
-    if (fails(p)) return { rule, boundary }
-  }
-  return null
-}
-
-function validateFilePaths(paths) {
-  const valid = []
-  const rejected = []
-  for (const p of paths) {
-    if (pathRefusal(p)) {
-      rejected.push(p)
-    } else {
-      valid.push(p)
-    }
-  }
-  return { valid, rejected }
-}
-
-function buildSafeGitAdd(filesChanged) {
-  const validated = validateFilePaths(filesChanged)
-  if (validated.rejected.length > 0) {
-    throw new Error(`Rejected unsafe file paths: ${validated.rejected.join(', ')}`)
-  }
-  if (validated.valid.length === 0) throw new Error('No valid files to stage')
-  return `git add ${validated.valid.map(f => `'${f.replace(/'/g, "'\\''")}'`).join(' ')}`
-}
-
-const SAFE_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/
-
-function isSafeBranchName(name) {
-  if (typeof name !== 'string' || name.length === 0 || name.length > 255) return false
-  if (!SAFE_BRANCH.test(name)) return false
-  if (name.includes('..') || name.includes('//') || name.endsWith('/') || name.endsWith('.lock')) return false
-  return true
-}
 
 function bareBranchName(ref) {
   return String(ref ?? '')
     .trim()
     .replace(/^refs\/(?:heads|remotes)\//, '')
     .replace(/^origin\//, '')
-}
-
-const REPO_SLUG_SEGMENT = /^[A-Za-z0-9._-]+$/
-
-function illegalSlugSegment(p) {
-  if (!REPO_SLUG_SEGMENT.test(p)) return true
-  return p === '.' || p === '..' || p.startsWith('-') || p.startsWith('.') || p.endsWith('.')
-}
-
-function describeArg(value) {
-  if (typeof value !== 'string') return value === undefined ? 'nothing' : (JSON.stringify(value) ?? String(value))
-  return JSON.stringify(value.length > 80 ? value.slice(0, 80) + '…' : value)
-}
-
-function repoSlugRefusal(argName, value) {
-  if (typeof value !== 'string' || value.length === 0) {
-    return `${argName} must be a non-empty string of the form "owner/name"; got ${describeArg(value)}`
-  }
-  if (value.length > 255) return `${argName} is ${value.length} characters, which is not a repository slug`
-  const parts = value.split('/')
-  if (parts.length !== 2 || parts.some(illegalSlugSegment)) {
-    return `${argName} must be "owner/name" using only letters, digits, dot, dash and underscore; ` +
-      `got ${describeArg(value)} — it is interpolated unquoted into shell commands`
-  }
-  return null
-}
-
-function rootPathRefusal(argName, value) {
-  if (typeof value !== 'string' || value.length === 0) {
-    return `${argName} must be a non-empty absolute path; got ${describeArg(value)}`
-  }
-  if (value.length > 500) return `${argName} is ${value.length} characters, which is not a directory path`
-  if (!value.startsWith('/')) return `${argName} must be an absolute path; got ${describeArg(value)}`
-  if (NULL_BYTE.test(value)) return `${argName} contains a null byte`
-  if (value.split('/').includes('..')) return `${argName} contains a \`..\` segment: ${describeArg(value)}`
-  if (/\s/.test(value)) {
-    return `${argName} contains whitespace: ${describeArg(value)} — it is interpolated unquoted into ` +
-      `shell commands, so the run would cd somewhere other than where you meant`
-  }
-  if (SHELL_METACHARACTERS.test(value)) {
-    return `${argName} contains a shell metacharacter: ${describeArg(value)} — it is interpolated unquoted into shell commands`
-  }
-  return null
-}
-
-function resolveEvidencePath(basePath, evidencePath) {
-  if (NULL_BYTE.test(evidencePath)) {
-    throw new Error(`Evidence path contains null byte: ${evidencePath}`)
-  }
-  if (PATH_TRAVERSAL.test(evidencePath)) {
-    throw new Error(`Evidence path contains traversal: ${evidencePath}`)
-  }
-  if (evidencePath.startsWith('/')) {
-    throw new Error(`Evidence path is absolute: ${evidencePath}`)
-  }
-  const resolved = `${basePath}/${evidencePath}`
-  if (!resolved.startsWith(basePath)) {
-    throw new Error(`Evidence path escapes base: ${resolved}`)
-  }
-  return resolved
-}
-
-function validateEvidenceCommand(command) {
-  if (NULL_BYTE.test(command)) {
-    return { safe: false, reason: 'Command contains null byte' }
-  }
-  const dangerous = [
-    /rm\s+-rf/,
-    />\s*\/dev/,
-    /mkfs/,
-    /dd\s+if=/,
-    /chmod\s+777/,
-    /curl.*\|\s*(bash|sh)/,
-  ]
-  for (const pattern of dangerous) {
-    if (pattern.test(command)) {
-      return { safe: false, reason: `Dangerous pattern: ${pattern.source}` }
-    }
-  }
-  return { safe: true }
-}
-
-function buildSafeSSHCommand(host, command) {
-  if (SHELL_METACHARACTERS.test(host)) {
-    throw new Error(`SSH host contains shell metacharacters: ${host}`)
-  }
-  if (host.startsWith('-')) {
-    throw new Error(`SSH host starts with dash (option injection): ${host}`)
-  }
-  return ['ssh', '-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=no', '--', host, command]
 }
 
 function shellQuote(word) {
