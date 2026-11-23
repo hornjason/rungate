@@ -37,6 +37,7 @@ import {
   AI_REVIEW_CHECKOUT_ROOT_VAR,
   AI_REVIEW_FORK_VAR,
   AI_REVIEW_THREADS_STEP_ID,
+  aiReviewUnknownCommandLine,
   buildThreadsScript,
 } from "../lib/scaffold/ai-review-step";
 
@@ -809,13 +810,49 @@ describe("#2203: the generated threads step", () => {
     }
   }
 
-  const SKEW_LINE = 'rungate: unknown command "ai-review-threads"';
-  const SKEW_WARNING = "does not carry the ai-review-threads command yet";
+  // Built by the generator's own function, which the case below holds to the
+  // line bin/rungate.ts prints (#2675 round 4).
+  const SKEW_LINE = aiReviewUnknownCommandLine("ai-review-threads");
 
-  test("version skew: the exact unknown-command line reads as UNMEASURED and exits 0", () => {
+  test("the line the step matches is the line bin/rungate.ts prints for an unknown command", () => {
+    // Without this, rewording either side leaves every case here green while
+    // the annotation naming the cause stops being printed.
+    const name = "no-such-command-2666";
+    const r = Bun.spawnSync(["bun", "bin/rungate.ts", name], {
+      cwd: new URL("..", import.meta.url).pathname,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    // Whole lines, anywhere in the output: the same reading the step's
+    // `grep -qxF` takes. The CLI prints a version banner first.
+    const lines = new TextDecoder().decode(r.stderr).split("\n");
+    expect(r.exitCode, "an unknown command did not refuse").not.toBe(0);
+    expect(lines, `bin/rungate.ts no longer prints the line the step matches:\n${lines.join("\n")}`).toContain(
+      aiReviewUnknownCommandLine(name),
+    );
+  });
+  // The warning this step printed until #2666, kept so the cases below can
+  // assert it is gone rather than merely reworded.
+  const SKEW_WARNING = "does not carry the ai-review-threads command yet";
+  const MISSING_COMMAND = "::error title=AI review threads::";
+
+  // #2666. This line used to read as version skew: a workflow ahead of the
+  // published package, UNMEASURED, exit 0. That cannot be true any more: only
+  // a version that has the command generates this step, and it pins itself.
+  // So the pinned package lacks the command, either because the pin was edited
+  // by hand or because that version's registry lost it. A warning on a green
+  // job, with no threads posted, hid both.
+  test("an unknown-command line is a command the pinned package lacks: the step fails, naming it", () => {
     const r = runThreads(`rungate-version: 0.8.20 (resolved at runtime, not the pin)\n${SKEW_LINE}\n\nUsage: …\n`, 1);
-    expect(r.stdout).toContain(SKEW_WARNING);
-    expect(r.code).toBe(0);
+    expect(r.stdout, "the old reading survives: a missing command read as a release still to come").not.toContain(SKEW_WARNING);
+    const annotation = r.stdout.split("\n").find(l => l.startsWith(MISSING_COMMAND));
+    expect(annotation, `no error annotation was printed:\n${r.stdout}`).toBeDefined();
+    expect(annotation!, "the annotation does not name the missing command").toContain("ai-review-threads");
+    expect(annotation!, "the annotation does not name the version that lacks it").toContain("rungate@0.8.21");
+    // #2675 round 2: a script missing from files[] prints the incomplete-install
+    // message, never this line, so blaming files[] here names the wrong cause.
+    expect(annotation!, "the annotation blames files[], which prints a different line").not.toContain("files[]");
+    expect(r.code, "the step went green over a package that cannot post threads").not.toBe(0);
   });
 
   // The forgery the substring grep allowed: the phrase inside a line the
@@ -824,12 +861,16 @@ describe("#2203: the generated threads step", () => {
   test("the phrase mid-line in the command's own output is a refusal, not skew", () => {
     const r = runThreads(`ai-review-threads: a finding quoting ${SKEW_LINE} in its text\n`, 1);
     expect(r.stdout).not.toContain(SKEW_WARNING);
+    expect(r.stdout, "a finding's text named a missing command it is not").not.toContain(MISSING_COMMAND);
     expect(r.code).toBe(1);
   });
 
   test("the bare phrase without the 'rungate: ' prefix is a refusal, not skew", () => {
     const r = runThreads('unknown command "ai-review-threads"\n', 1);
     expect(r.stdout).not.toContain(SKEW_WARNING);
+    // #2675 round 4: and not the missing-command annotation either, so a match
+    // that dropped the `rungate: ` prefix goes red here.
+    expect(r.stdout, "the bare phrase was read as a missing command").not.toContain(MISSING_COMMAND);
     expect(r.code).toBe(1);
   });
 
