@@ -4703,11 +4703,12 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
-  test("WITNESS: a division is not a regex literal", () => {
-    // Against the wrong fix: reading every slash as a regex masks from it to
-    // the next slash, inside the path, and the body no longer balances.
-    const cmd = `python3 -c "import shutil; n = 4; shutil.copy('${LONG}' if n / 2 else '', '${LIVE}/${STATE}')"`;
-    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  test("CONTROL: a division is not a regex literal, so it invents no write around the name", () => {
+    // Read as a regex, `/ 2)); x = n /` would be masked, its two `)` with it,
+    // and the name would sit inside the `.write(` call. Padded so the window
+    // misses: only a misread could refuse this.
+    const cmd = `python3 -c "n = 4; open('/tmp/rg1407-o.txt', 'w').write(str(n / 2)); x = n / 3; pad = '${"z".repeat(90)}'; print('${LIVE}/${STATE}')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
   // Security review of the round-2 commit: one misread must not blind every
