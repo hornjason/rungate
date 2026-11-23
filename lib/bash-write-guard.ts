@@ -2424,7 +2424,7 @@ function writesNear(body: string, protectedName: string): boolean {
  * tracked, at any depth; the mode is a whole argument, positional or `mode=`.
  */
 function opensForWrite(call: string): boolean {
-  const head = /^(?:[A-Za-z_$][\w$]*\s*\.\s*)*open\s*\(/.exec(call);
+  const head = /^(?:[A-Za-z_$][\w$]*\s*\.\s*)*open(?:Sync)?\s*\(/.exec(call);
   if (!head) return false;
   return READINGS.some(reading => {
     const { mask } = codeMask(call, reading);
@@ -2870,12 +2870,20 @@ const WRITE_MODE = new RegExp(WRITE_MODE_SOURCE);
  * reach for the obvious fix gets a red suite naming what it costs.
  */
 const WRITE_INTENT = new RegExp(
-  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\([^)]*` +
+  // #2701: the callback forms beside the `Sync` ones (`writeFile`, `appendFile`,
+  // `copyFile`, which also covers `fs.promises.*`), `cpSync` and any `.cp(`,
+  // `write_bytes` beside `write_text`, `shutil`'s other copies (`copy\b`
+  // cannot reach `copy2`: a digit is a word character), any `.rename(`,
+  // `.unlink(`, `.rm(` or `.truncate(` (`fs.unlink`, `Path.unlink`), `os.open`
+  // with a write flag (read through two levels of nested calls in the path,
+  // as the open pattern below is), and `openSync` beside `open`. None of these joins
+  // `WRITE_CALLEES`; its docblock says why.
+  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|writeFile|appendFile|copyFile|cpSync|write_text|write_bytes|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy2?|copyfile|copytree|move|rmtree))\b|\.(?:rename|unlink|rm|truncate|cp)\s*\(|\bos\.open\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\bO_(?:WRONLY|RDWR|CREAT|TRUNC|APPEND)\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen(?:Sync)?\s*\([^)]*` +
     WRITE_MODE_SOURCE +
     // #2699 review: the mode after nested calls in the path, two levels deep.
     // `opensForWrite` reads any depth, but only in a body that parses; this is
     // what the window still reads in one whose quotes never close.
-    String.raw`|\bopen\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*` +
+    String.raw`|\bopen(?:Sync)?\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*` +
     WRITE_MODE_SOURCE,
 );
 
@@ -3325,6 +3333,18 @@ const WHITESPACE = new Set([' ', '\t', '\n', '\r']);
  * than matched bare: `str.replace` and `stdout.write` are not writes to a
  * file, and a bare match would read a transform as a write position, which
  * is the denylist's failure wearing a whitelist's clothes.
+ *
+ * The verbs #2701 added to `WRITE_INTENT` are deliberately NOT here, so this
+ * list is no longer exactly `WRITE_INTENT`'s names. A name here is trusted
+ * by its last segment alone, and a body can define its own function under
+ * it: with `rm` listed, `def rm(p): os.remove(os.environ['RG'])` and then
+ * `rm('/tmp/fix/workflow-state.json')` read the scratch literal as the
+ * write's target and exempted the body, a shape main refused (#2704 review).
+ * Matching the binding forms was tried and walked around twice (a compound
+ * statement, a parameter, a loop variable, a tuple). Left out, an unlisted
+ * callee ends the exemption, which is the direction above: a fixture writing
+ * through one of #2701's verbs is refused. The names already here carry that
+ * hole (`def copy`), pinned as a CONCESSION row and owned by #2705.
  */
 const WRITE_CALLEES = new Set([
   'writeFileSync',

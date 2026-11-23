@@ -4830,3 +4830,121 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 });
+
+/**
+ * #2701: write spellings `WRITE_INTENT` did not list. `shutil\.copy\b` does
+ * not match `copy2`, a digit being a word character, and the Node verbs were
+ * listed only in their `Sync` forms. Each is a write onto a protected
+ * artifact, short enough that the window reaches it: the verb list is the
+ * question here, not distance (#1407 was distance).
+ */
+describe("#2701: the write spellings the verb list missed", () => {
+  const witnesses: Array<[string, string]> = [
+    ["shutil.copy2", `python3 -c "import shutil; shutil.copy2('/tmp/a.json', '${LIVE}/${STATE}')"`],
+    ["shutil.copyfile", `python3 -c "import shutil; shutil.copyfile('/tmp/a.json', '${LIVE}/${STATE}')"`],
+    ["shutil.copytree", `python3 -c "import shutil; shutil.copytree('/tmp/w', '${LIVE}/witnesses/')"`],
+    ["Path.write_bytes", `python3 -c "import pathlib; pathlib.Path('${LIVE}/${STATE}').write_bytes(b'{}')"`],
+    ["Path.rename", `python3 -c "import pathlib; pathlib.Path('/tmp/a.json').rename('${LIVE}/${STATE}')"`],
+    ["fs.writeFile", `node -e "require('fs').writeFile('${LIVE}/${STATE}', '{}', () => {})"`],
+    ["fs.appendFile", `node -e "require('fs').appendFile('${LIVE}/${STATE}', '{}', () => {})"`],
+    ["fs.copyFile", `node -e "require('fs').copyFile('/tmp/a.json', '${LIVE}/${STATE}', () => {})"`],
+    ["fs.rename", `node -e "require('fs').rename('/tmp/a.json', '${LIVE}/${STATE}', () => {})"`],
+    ["fs.promises.writeFile", `node -e "require('fs').promises.writeFile('${LIVE}/${STATE}', '{}')"`],
+    ["fs.openSync with a write flag", `node -e "require('fs').openSync('${LIVE}/${STATE}', 'w')"`],
+    // #2704 review round 1: the deletions in the same Sync-only class.
+    ["fs.unlink", `node -e "require('fs').unlink('${LIVE}/${STATE}', () => {})"`],
+    ["fs.rm", `node -e "require('fs').rm('${LIVE}/${STATE}', () => {})"`],
+    ["fs.truncate", `node -e "require('fs').truncate('${LIVE}/${STATE}', 0, () => {})"`],
+    ["Path.unlink", `python3 -c "import pathlib; pathlib.Path('${LIVE}/${STATE}').unlink()"`],
+    // #2704 review round 2.
+    ["fs.cpSync", `node -e "require('fs').cpSync('/tmp/a.json', '${LIVE}/${STATE}')"`],
+    ["fs.cp", `node -e "require('fs').cp('/tmp/a.json', '${LIVE}/${STATE}', () => {})"`],
+    ["os.open with a write flag", `python3 -c "import os; os.open('${LIVE}/${STATE}', os.O_WRONLY | os.O_TRUNC)"`],
+    ["os.open with a nested call in its path", `python3 -c "import os; os.open(os.path.join(os.environ['R'], '${STATE}'), os.O_WRONLY)"`],
+  ];
+  test.each(witnesses)("WITNESS: %s onto a protected artifact is refused", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // #1411's shape for two of the new copies: a scratch SOURCE and a
+  // destination the guard cannot read. The scratch source must not exempt it.
+  test.each([
+    ["shutil.copy2", `mkdir -p /tmp/rg2701a && python3 -I -c "import shutil, os; shutil.copy2('/tmp/rg2701a/${STATE}', os.environ['RG'])"`],
+    ["fs.copyFile", `mkdir -p /tmp/rg2701a && node -e "require('fs').copyFile('/tmp/rg2701a/${STATE}', process.env.RG, () => {})"`],
+  ])("WITNESS: %s from a scratch source to an unread destination is refused", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // What leaving the new verbs out of WRITE_CALLEES costs, pinned: the
+  // exemption cannot place a literal in a call it does not list, so a
+  // fixture writing a protected name between scratch trees through one of
+  // them is refused. The transcript corpus holds none (see the PR). If this
+  // turns green, a verb joined WRITE_CALLEES: read its docblock first.
+  test.each([
+    ["shutil.copy2", `mkdir -p /tmp/rg2701a /tmp/rg2701b && python3 -I -c "import shutil; shutil.copy2('/tmp/rg2701a/${STATE}', '/tmp/rg2701b/${STATE}')"`],
+    ["fs.writeFile", `mkdir -p /tmp/rg2701b && node -e "require('fs').writeFile('/tmp/rg2701b/${STATE}', '{}', () => {})"`],
+    ["fs.rm", `mkdir -p /tmp/rg2701b && node -e "require('fs').rm('/tmp/rg2701b/${STATE}', () => {})"`],
+  ])("COST: a scratch fixture writing through %s is refused", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // A receiver write (`Path(p).write_text(…)`) puts the path where the
+  // exemption cannot place it, so a scratch one was refused before #2701 and
+  // still is. `write_bytes` is the same shape and must answer the same way.
+  test("PARITY: write_bytes answers as write_text does, on a scratch tree and a live one", () => {
+    for (const path of [`/tmp/rg2701b/${STATE}`, `${LIVE}/${STATE}`]) {
+      const text = decideBashWrite(`mkdir -p /tmp/rg2701b && python3 -I -c "import pathlib; pathlib.Path('${path}').write_text('{}')"`).blocked;
+      const bytes = decideBashWrite(`mkdir -p /tmp/rg2701b && python3 -I -c "import pathlib; pathlib.Path('${path}').write_bytes(b'{}')"`).blocked;
+      expect(bytes, path).toBe(text);
+    }
+  });
+
+  test("CONTROL: fs.openSync and os.open for reading are not writes", () => {
+    for (const cmd of [
+      `node -e "const fd = require('fs').openSync('${LIVE}/${STATE}', 'r'); console.log(fd)"`,
+      `python3 -c "import os; print(os.open('${LIVE}/${STATE}', os.O_RDONLY))"`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+});
+
+/**
+ * #2704 review: a name in WRITE_CALLEES is trusted by its last segment, so a
+ * body that binds its own function under it and calls it on a scratch
+ * literal exempts itself. Main refused these with `rm`, which it did not
+ * list; adding `rm` there allowed them, and matching the binding forms was
+ * walked around twice. The new verbs stay out of WRITE_CALLEES, and every
+ * form below is refused as it is on main.
+ */
+describe("#2704: the new verbs do not open the scratch exemption", () => {
+  const forms: Array<[string, string]> = [
+    ["a Python def rm", `import os\ndef rm(p): os.remove(os.environ['RG'])\nrm('/tmp/rg2704c/${STATE}')`],
+    ["a compound statement binding rm", `import os\nif True: rm = lambda p: os.remove(os.environ['RG'])\nrm('/tmp/rg2704c/${STATE}')`],
+    ["a parameter named rm", `import os\ndef go(rm): rm('/tmp/rg2704c/${STATE}')\ngo(lambda p: os.remove(os.environ['RG']))`],
+    ["a loop variable named rm", `import os\nfor rm in [lambda p: os.remove(os.environ['RG'])]: rm('/tmp/rg2704c/${STATE}')`],
+    ["a tuple binding rm", `import os\nrm, _ = (lambda p: os.remove(os.environ['RG'])), 0\nrm('/tmp/rg2704c/${STATE}')`],
+    ["an import bound as rm", `import os\nfrom os import remove as rm\nrm('/tmp/rg2704c/${STATE}'); os.remove(os.environ['RG'])`],
+  ];
+  test.each(forms)("WITNESS: %s is refused, as on main", (_l, body) => {
+    const cmd = `mkdir -p /tmp/rg2704c && python3 -I -c "${body}"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a JavaScript function or const rm is refused, as on main", () => {
+    for (const body of [
+      `function rm(p) { require('fs').rmSync(process.env.RG) }; rm('/tmp/rg2704c/${STATE}')`,
+      `const rm = p => require('fs').rmSync(process.env.RG); rm('/tmp/rg2704c/${STATE}')`,
+    ]) {
+      const cmd = `mkdir -p /tmp/rg2704c && node -e "${body}"`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    }
+  });
+
+  // The names main already lists carry the same hole, on main as here: a body
+  // defining its own `copy` and passing the protected literal at the
+  // destination index exempts itself. Owned by #2705, which decides how a
+  // callee's identity is shown rather than assumed from its name.
+  test("CONCESSION: a body defining its own copy exempts itself, on main as here", () => {
+    const cmd = `mkdir -p /tmp/rg2704c && python3 -I -c "import os, shutil\ndef copy(a, b): shutil.copy(b, os.environ['RG'])\ncopy('/tmp/rg2704c/x', '/tmp/rg2704c/${STATE}')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+});
