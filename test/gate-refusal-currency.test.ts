@@ -110,12 +110,45 @@ describe("#2690: a report whose failedChecks does not claim every failure retire
       expect(ledger).toEqual([{ check: TSC }]);
     });
 
-    test(`${name}: a line two reported names both prefix is unclaimed`, () => {
-      expect(impl.failureCheckName("a-b: broke", ["a", "a-b"])).toBeUndefined();
-      expect(impl.failureCheckName("a-b: broke", ["a-b"])).toBe("a-b");
+    // Review round 1 (#2691). A bare prefix let "tsc" claim a "tsc-strict"
+    // line, so a still-failing tsc-strict was resolved and its refusal tagged
+    // "tsc". A name claims a line only at a boundary: the line ends, or the
+    // next character cannot continue a name.
+    test(`${name}: a name claims a line only at a boundary, so tsc does not claim tsc-strict`, () => {
+      const TSC_ONLY = "verify checks > tsc";
+      const STRICT = "verify checks > tsc-strict";
+      expect(impl.failureCheckName(`${STRICT}: 2 errors`, [TSC_ONLY])).toBeUndefined();
+      expect(impl.failureCheckName(`${TSC_ONLY}: 2 errors`, [TSC_ONLY])).toBe(TSC_ONLY);
+      expect(impl.failureCheckName(TSC_ONLY, [TSC_ONLY]), "a line that is the name itself").toBe(TSC_ONLY);
+      const report = { checksRun: [TSC_ONLY, STRICT], failures: [`${STRICT}: 2 errors`], failedChecks: [TSC_ONLY] };
+      const ledger = [{ check: STRICT }];
+      expect(impl.resolvedCheckNames(report)).toBeNull();
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([]);
+      expect(ledger, "tsc-strict still fails and its refusal was retired").toEqual([{ check: STRICT }]);
+    });
+
+    // A truncated name can still claim a line at a boundary: check names may
+    // contain ": ". If that line also belongs to a check that ran and is not in
+    // failedChecks, the report contradicts itself, and it retires nothing.
+    test(`${name}: a failure line that belongs to a ran-but-unlisted check retires nothing`, () => {
+      const SHORT = "verify checks > tests-pass";
+      const FULL = "verify checks > tests-pass: test suite passes";
+      const report = { checksRun: [SHORT, FULL], failures: [`${FULL}: 3 failed`], failedChecks: [SHORT] };
+      const ledger = [{ check: FULL }];
+      expect(impl.resolvedCheckNames(report)).toBeNull();
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([]);
+      expect(ledger).toEqual([{ check: FULL }]);
+    });
+
+    // Names may contain ": ", so two names can both claim one line at a
+    // boundary. Such a line is unclaimed.
+    test(`${name}: a line two reported names both claim is unclaimed`, () => {
+      expect(impl.failureCheckName("a: b: broke", ["a", "a: b"])).toBeUndefined();
+      expect(impl.failureCheckName("a: b: broke", ["a: b"])).toBe("a: b");
+      expect(impl.failureCheckName("a-b: broke", ["a", "a-b"]), "a has no boundary in a-b, so a-b is the one claimant").toBe("a-b");
       expect(impl.failureCheckName("c: broke", ["a-b"])).toBeUndefined();
       expect(impl.failureCheckName("", ["a"])).toBeUndefined();
-      expect(impl.resolvedCheckNames({ checksRun: ["x"], failures: ["a-b: broke"], failedChecks: ["a", "a-b"] })).toBeNull();
+      expect(impl.resolvedCheckNames({ checksRun: ["x"], failures: ["a: b: broke"], failedChecks: ["a", "a: b"] })).toBeNull();
     });
   }
 });

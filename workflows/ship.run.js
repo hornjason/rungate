@@ -799,14 +799,27 @@ function resolvedCheckNames(report) {
         }
     }
     const failed = new Set(report.failedChecks.filter((c) => typeof c === "string" && c !== ""));
+    if (Array.isArray(report.failures)) {
+        for (const line of report.failures) {
+            if (typeof line !== "string" || line === "")
+                continue;
+            for (const ran of report.checksRun) {
+                if (typeof ran === "string" && ran !== "" && !failed.has(ran) && checkNameClaimsLine(ran, line))
+                    return null;
+            }
+        }
+    }
     return report.checksRun.filter((c) => typeof c === "string" && c !== "" && !failed.has(c));
 }
 function failureCheckName(line, failedChecks) {
     if (typeof line !== "string" || line === "")
         return undefined;
     const reported = (Array.isArray(failedChecks) ? failedChecks : []).filter((c) => typeof c === "string" && c !== "");
-    const hits = reported.filter(c => line.startsWith(c));
+    const hits = reported.filter(c => checkNameClaimsLine(c, line));
     return hits.length === 1 ? hits[0] : undefined;
+}
+function checkNameClaimsLine(name, line) {
+    return line === name || line.startsWith(`${name}: `);
 }
 function retireSupersededRefusals(entries, report) {
     const resolved = resolvedCheckNames(report);

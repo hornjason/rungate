@@ -82,6 +82,11 @@ export interface RefusalEntry {
  * entry claims (#2690). The agent copies those names from the lines, and a
  * partial copy left a still-failing check out of the list, so it counted as
  * resolved. Claimed means `failureCheckName` finds its one name.
+ *
+ * And `null` when a failure line belongs to a check that ran and is missing
+ * from `failedChecks` (#2691 review round 1). Check names can contain ": ", so
+ * a truncated copy can still claim a line at a boundary; the line naming a
+ * ran-but-unlisted check in full is the report contradicting itself.
  */
 export function resolvedCheckNames(report: GateReport | null | undefined): string[] | null {
   if (!report || !Array.isArray(report.checksRun) || !Array.isArray(report.failedChecks)) return null;
@@ -95,6 +100,14 @@ export function resolvedCheckNames(report: GateReport | null | undefined): strin
       (c: unknown): c is string => typeof c === "string" && c !== "",
     ),
   );
+  if (Array.isArray(report.failures)) {
+    for (const line of report.failures) {
+      if (typeof line !== "string" || line === "") continue;
+      for (const ran of report.checksRun) {
+        if (typeof ran === "string" && ran !== "" && !failed.has(ran) && checkNameClaimsLine(ran, line)) return null;
+      }
+    }
+  }
   return report.checksRun.filter(
     (c: unknown): c is string => typeof c === "string" && c !== "" && !failed.has(c),
   );
@@ -102,20 +115,30 @@ export function resolvedCheckNames(report: GateReport | null | undefined): strin
 
 /**
  * The one reported check name that claims a free-text failure line (#532), or
- * undefined. A line is claimed only when EXACTLY ONE name prefixes it: two
- * names that both prefix one line would make its refusal retirable by either,
- * and a refusal retired by the wrong check's pass is the defect #532 fixed,
- * pointed the other way. ship.js tags its refusals with this, and
- * `resolvedCheckNames` refuses a report with an unclaimed line, so the two
- * cannot disagree about which check a line belongs to (#2690).
+ * undefined. A line is claimed only when EXACTLY ONE name claims it, at a
+ * boundary (`checkNameClaimsLine`): two names that both claim one line would
+ * make its refusal retirable by either, and a refusal retired by the wrong
+ * check's pass is the defect #532 fixed, pointed the other way. ship.js tags
+ * its refusals with this, and `resolvedCheckNames` refuses a report with an
+ * unclaimed line (#2690).
  */
 export function failureCheckName(line: unknown, failedChecks: unknown): string | undefined {
   if (typeof line !== "string" || line === "") return undefined;
   const reported = (Array.isArray(failedChecks) ? failedChecks : []).filter(
     (c: unknown): c is string => typeof c === "string" && c !== "",
   );
-  const hits = reported.filter(c => line.startsWith(c));
+  const hits = reported.filter(c => checkNameClaimsLine(c, line));
   return hits.length === 1 ? hits[0] : undefined;
+}
+
+/**
+ * Whether a failure line is about `name`: the line IS the name, or the name is
+ * followed by ": " (#2691 review round 1). A bare prefix let "tsc" claim a
+ * "tsc-strict: 2 errors" line. A line in any other shape is claimed by no
+ * name, which retires nothing: the safe direction.
+ */
+function checkNameClaimsLine(name: string, line: string): boolean {
+  return line === name || line.startsWith(`${name}: `);
 }
 
 /**
