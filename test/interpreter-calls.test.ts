@@ -89,6 +89,8 @@ describe("#2702: readJsCalls", () => {
       // test of a branch is never its value; a member of the literal is not it.
       "const n = count('/b/state.json')",
       "const v = '/b/state.json' ? a : b",
+      // #2718 review round 3: a truthy literal on the left of && is never the value.
+      "const dst = '/b/state.json' && '/tmp/out.json'",
       "const n = '/b/state.json'.length",
       "const t = `${R}/b/state.json.bak`",
     ]) {

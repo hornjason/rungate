@@ -2514,19 +2514,6 @@ function callWrites(program: string, protectedName: string): boolean {
 }
 
 /**
- * The identifier a literal holding the name at `at` is assigned to
- * (`x = '…'`), or null. The literal is found by its own quotes, and it must
- * END at the name, or for a directory name at a file name after it, and hold
- * no newline but a line continuation: the variable then holds the path, not text that mentions it. An
- * assignment spelled inside another string (a docblock being edited) is
- * therefore not a binding. Literals separated only by spaces or a string
- * prefix are one (`'a/' 'b'`, `'a/' r'b'`), which is also how a
- * triple-quoted literal reads here: `''`, `'…'`, `''`. A `+` chain of names
- * and literals may stand between the `=` and the literal (#2714):
- * `d = ROOT + '/witnesses/' + f` binds `d`, as the parser binds it in a body
- * that parses as JavaScript.
- */
-/**
  * The name the literal starting at `start` is assigned to, read BACKWARD from
  * it: a string prefix, any chain of names, attribute paths and literals joined
  * by `+`, `or` or `and`, then `=`, an optional type annotation, and the name,
@@ -2584,6 +2571,21 @@ function bindingBefore(program: string, start: number, view: CodeView): string |
   if (!/^[A-Za-z_]\w*$/.test(name)) return null;
   return nameAt === 0 || /[\s;(,]/.test(program[nameAt - 1]) ? name : null;
 }
+
+/**
+ * The identifier a literal holding the name at `at` is assigned to
+ * (`x = '…'`), or null. The literal is found by its own quotes, and it must
+ * END at the name, or for a directory name at a file name after it, and hold
+ * no newline but a line continuation: the variable then holds the path, not text that mentions it. An
+ * assignment spelled inside another string (a docblock being edited) is
+ * therefore not a binding. Literals separated only by spaces or a string
+ * prefix are one (`'a/' 'b'`, `'a/' r'b'`), which is also how a
+ * triple-quoted literal reads here: `''`, `'…'`, `''`. A chain of names and
+ * literals joined by `+`, `or` or `and` may stand between the `=` and the
+ * literal (#2714), read by `bindingBefore`:
+ * `d = ROOT + '/witnesses/' + f` binds `d`, as the parser binds it in a body
+ * that parses as JavaScript.
+ */
 function boundIdentifier(program: string, at: number, protectedName: string, view: CodeView): string | null {
   const k = view.literals.findIndex(([open, close]) => open < at && at < close);
   if (k < 0) return null;
