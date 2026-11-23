@@ -1,4 +1,4 @@
-# generated-sha: cc7f1812d9dc22f8
+# generated-sha: c00f53e1900925d6
 # Managed by rungate — do not edit. The board is board.id in .claude/rungate/config.json.
 #
 # Every new issue and pull request goes on the board, and a pull request
@@ -54,7 +54,7 @@ jobs:
           # The board is board.id in the default branch's config. Only the no-board
           # refusal (exit 2 AND its own wording) is an annotation; a usage error is red.
           code=0
-          project=$(bunx rungate@0.8.45 board-id 2>"${RUNNER_TEMP}/board-id.stderr") || code=$?
+          project=$(bunx rungate@0.8.46 board-id 2>"${RUNNER_TEMP}/board-id.stderr") || code=$?
           cat "${RUNNER_TEMP}/board-id.stderr" >&2
           if [ "${code}" -eq 2 ] && grep -q '^UNMEASURED: no board' "${RUNNER_TEMP}/board-id.stderr"; then
             echo "::warning title=Board intake::UNMEASURED — no board.id in the rungate config, so nothing was added. Set board.id and this runs."
@@ -98,4 +98,4 @@ jobs:
           COLUMN: In review
         run: |
           set -euo pipefail
-          bunx rungate@0.8.45 board-intake-move --project "${PROJECT_ID}" --item "${ITEM_ID}" --column "${COLUMN}"
+          bunx rungate@0.8.46 board-intake-move --project "${PROJECT_ID}" --item "${ITEM_ID}" --column "${COLUMN}"
