@@ -515,7 +515,12 @@ const UNCLAIMED_RATCHET = 150;
 // generated workflow and its keep and merge scripts that no registered pattern
 // expresses; the `CRC-B11` describe in test/ai-review-three-runs.test.ts names
 // it (2026-11-22).
-const CLAIMED_UNBINDABLE = 208;
+// 209: CRC-B13 (#2650) ticked by `sync-sc-status --only CRC-B13` — the consumer
+// AI review guide states every credential the generated job resolves, who pays,
+// and what a pull request costs, a reading of a doc against the job's constants
+// that no registered pattern expresses; the `CRC-B13` describe in
+// test/agents-md-refs.test.ts names it (2026-11-23).
+const CLAIMED_UNBINDABLE = 209;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
