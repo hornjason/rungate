@@ -2408,11 +2408,26 @@ export function argumentsOf(segment: string): string[] {
 function writesNear(body: string, protectedName: string): boolean {
   const WINDOW = 80;
   for (const m of body.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))) {
-    const from = Math.max(0, (m.index ?? 0) - WINDOW);
-    const slice = body.slice(from, (m.index ?? 0) + protectedName.length + WINDOW);
+    const at = m.index ?? 0;
+    const from = Math.max(0, at - WINDOW);
+    const slice = body.slice(from, at + protectedName.length + WINDOW);
     if (WRITE_INTENT.test(slice)) return true;
+    // #1407: and the whole statement holding the name. In
+    // `shutil.copy(SRC, DST)` the verb comes before SRC, so a SRC longer than
+    // the window put DST's name out of its reach, and a copy onto the artifact
+    // spelled in full was allowed; a realpath'd macOS $TMPDIR is long enough.
+    // A statement ends at `;` or a newline, so a write in the NEXT statement
+    // is still not read as writing this name.
+    if (WRITE_INTENT.test(statementAround(body, at, at + protectedName.length))) return true;
   }
   return false;
+}
+
+/** The text between the statement separators (`;`, newline) either side of [start, end). */
+function statementAround(body: string, start: number, end: number): string {
+  const before = Math.max(body.lastIndexOf(';', start - 1), body.lastIndexOf('\n', start - 1));
+  const ends = [body.indexOf(';', end), body.indexOf('\n', end)].filter(i => i !== -1);
+  return body.slice(before + 1, ends.length > 0 ? Math.min(...ends) : body.length);
 }
 
 /**

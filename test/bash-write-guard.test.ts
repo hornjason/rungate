@@ -4530,3 +4530,40 @@ describe("#1367 BYPASS 6: a write that runs LATER than a step after it", () => {
     });
   });
 });
+
+// #1407. Arm 3 and the stdin-program arm refused only when a write verb sat
+// within 80 characters of the protected name. In `shutil.copy(SRC, DST)` the
+// verb comes before SRC, so a source path over about 80 characters put DST's
+// name out of range, and a copy onto the artifact, spelled in full, was
+// allowed. A realpath'd macOS $TMPDIR is long enough on its own. Write intent
+// is now also read over the whole statement holding the name.
+describe("#1407: write intent is read per statement, not only by character distance", () => {
+  const LONG = `/private/var/folders/m7/${"x".repeat(32)}/T/rg1407-${"y".repeat(24)}`;
+
+  test("WITNESS: a copy onto the artifact with a long source path is refused", () => {
+    const cmd = `python3 -c "import shutil; shutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')"`;
+    expect(LONG.length, "the source path must be long enough to have escaped the window").toBeGreaterThan(80);
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: the same copy as a stdin program", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\nshutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: node, with the write call holding a long first argument", () => {
+    const cmd = `node -e "require('fs').copyFileSync('${LONG}/${STATE}', '${LIVE}/${STATE}')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("CONTROL: a read with the same long path is allowed", () => {
+    const cmd = `python3 -c "import json; d = json.load(open('${LONG}/${STATE}')); print(d)"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  test("CONTROL: a write in another statement, out of the window, is not read as writing the name", () => {
+    const pad = "z".repeat(90);
+    const cmd = `python3 -c "import json; d = json.load(open('${LIVE}/${STATE}')); note = '${pad}'; open('/tmp/rg1407-out.txt', 'w').write(str(d))"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+});
