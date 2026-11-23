@@ -1965,23 +1965,16 @@ function recordGateRefusal(phaseName, gateName, result) {
   if (lines.length === 0) {
     return [recordRefusal('GATE_FAIL', phaseName, `${tag} ${result.result || 'did not report a result'} with no failures listed`)]
   }
-  // #532 — the check name comes from `failedChecks`, matched by prefix
-  // against the free-text line. A line is tagged only when EXACTLY ONE name
-  // matches it: two names that both prefix one line would make the entry
-  // retirable by either, and a refusal retired by the wrong check's pass is
-  // the bug this is fixing, pointed the other way.
-  const reported = Array.isArray(result.failedChecks)
-    ? result.failedChecks.filter(c => typeof c === 'string' && c)
-    : []
-  const nameFor = line => {
-    const hits = reported.filter(c => line.startsWith(c))
-    return hits.length === 1 ? hits[0] : undefined
-  }
+  // #532 — the check name comes from `failedChecks`: the one name the
+  // free-text line is, or begins with followed by ": ", through
+  // lib/gate-refusal-currency.ts's `failureCheckName` (bundled). The same
+  // claim rule decides whether a later gate's report may retire this refusal
+  // (#2690).
   return lines.map(line => recordRefusal(
     UNPOPULATED_SLOT_LINE.test(line) ? 'UNPOPULATED_SLOT' : 'GATE_FAIL',
     phaseName,
     `${tag}: ${line}`,
-    nameFor(line),
+    failureCheckName(line, result.failedChecks),
   ))
 }
 

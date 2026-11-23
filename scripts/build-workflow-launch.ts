@@ -648,7 +648,7 @@ export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
     "rootPathRefusal", "resolveEvidencePath", "validateEvidenceCommand", "buildSafeSSHCommand",
   ],
   // #2688, SC-2775 wave 5: ship.js's REFUSAL-CURRENCY copy.
-  "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals"],
+  "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals", "failureCheckName"],
 };
 
 /** The bundle the launch file is built with, read from this checkout's lib/. */

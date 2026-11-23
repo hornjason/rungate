@@ -52,8 +52,12 @@
 
 /** What a gate run reported back: the names it measured and the ones it failed. */
 export interface GateReport {
+  /** "PASS" or "FAIL". Anything but "PASS" is a gate that did not pass. */
+  result?: unknown;
   checksRun?: unknown;
   failedChecks?: unknown;
+  /** The gate's free-text failure lines, each meant to begin with its check's name. */
+  failures?: unknown;
 }
 
 /** One recorded refusal. `check` is absent for refusals no gate produced. */
@@ -75,17 +79,77 @@ export interface RefusalEntry {
  * naming what it ran but not what it failed says nothing about which checks
  * passed. Reading the missing list as "nothing failed" retired a refusal for a
  * check the same gate had just failed again.
+ *
+ * And `null` when the report lists a failure line no single `failedChecks`
+ * entry claims (#2690). The agent copies those names from the lines, and a
+ * partial copy left a still-failing check out of the list, so it counted as
+ * resolved. Claimed means `failureCheckName` finds its one name.
+ *
+ * And `null` when a failure line belongs to a check that ran and is missing
+ * from `failedChecks` (#2691 review round 1). Check names can contain ": ", so
+ * a truncated copy can still claim a line at a boundary; the line naming a
+ * ran-but-unlisted check in full is the report contradicting itself.
+ *
+ * And `null` when the gate did not report PASS and names no failed check
+ * (#2691 review round 3). An empty list from a gate that did not pass says
+ * nothing about which of its checks passed, failure lines or not.
  */
 export function resolvedCheckNames(report: GateReport | null | undefined): string[] | null {
   if (!report || !Array.isArray(report.checksRun) || !Array.isArray(report.failedChecks)) return null;
+  if (Array.isArray(report.failures)) {
+    for (const line of report.failures) {
+      if (typeof line === "string" && line !== "" && failureCheckName(line, report.failedChecks) === undefined) return null;
+    }
+  }
   const failed = new Set(
     report.failedChecks.filter(
       (c: unknown): c is string => typeof c === "string" && c !== "",
     ),
   );
+  if (report.result !== "PASS" && failed.size === 0) return null;
+  if (Array.isArray(report.failures)) {
+    for (const line of report.failures) {
+      if (typeof line !== "string" || line === "") continue;
+      for (const ran of report.checksRun) {
+        if (typeof ran === "string" && ran !== "" && !failed.has(ran) && checkNameClaimsLine(ran, line)) return null;
+      }
+    }
+  }
   return report.checksRun.filter(
     (c: unknown): c is string => typeof c === "string" && c !== "" && !failed.has(c),
   );
+}
+
+/**
+ * The one reported check name that claims a free-text failure line (#532), or
+ * undefined. A line is claimed only when EXACTLY ONE name claims it, at a
+ * boundary (`checkNameClaimsLine`): two names that both claim one line would
+ * make its refusal retirable by either, and a refusal retired by the wrong
+ * check's pass is the defect #532 fixed, pointed the other way. A name listed
+ * twice is one name: `failedChecks` carries the `check` of every failure
+ * entry, so a check failing on two lines appears twice (#2691 review round 2).
+ * ship.js tags its refusals with this, and `resolvedCheckNames` refuses a
+ * report with an unclaimed line (#2690).
+ */
+export function failureCheckName(line: unknown, failedChecks: unknown): string | undefined {
+  if (typeof line !== "string" || line === "") return undefined;
+  const reported = new Set(
+    (Array.isArray(failedChecks) ? failedChecks : []).filter(
+      (c: unknown): c is string => typeof c === "string" && c !== "",
+    ),
+  );
+  const hits = [...reported].filter(c => checkNameClaimsLine(c, line));
+  return hits.length === 1 ? hits[0] : undefined;
+}
+
+/**
+ * Whether a failure line is about `name`: the line IS the name, or the name is
+ * followed by ": " (#2691 review round 1). A bare prefix let "tsc" claim a
+ * "tsc-strict: 2 errors" line. A line in any other shape is claimed by no
+ * name, which retires nothing: the safe direction.
+ */
+function checkNameClaimsLine(name: string, line: string): boolean {
+  return line === name || line.startsWith(`${name}: `);
 }
 
 /**

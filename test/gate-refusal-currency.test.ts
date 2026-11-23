@@ -30,6 +30,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import {
+  failureCheckName as libFailureCheckName,
   resolvedCheckNames as libResolved,
   retireSupersededRefusals as libRetire,
 } from "../lib/gate-refusal-currency";
@@ -59,17 +60,140 @@ const BLOCK: string = (() => {
 })();
 
 const shipCopy = new Function(
-  `${BLOCK}\nreturn { resolvedCheckNames, retireSupersededRefusals }`,
+  `${BLOCK}\nreturn { resolvedCheckNames, retireSupersededRefusals, failureCheckName }`,
 )() as {
   resolvedCheckNames: (r: unknown) => string[] | null;
   retireSupersededRefusals: (e: any[], r: unknown) => any[];
+  failureCheckName: (line: unknown, failedChecks: unknown) => string | undefined;
 };
 
 /** One row run through both copies, so neither can be right alone. */
 const IMPLS = [
-  ["lib", { resolvedCheckNames: libResolved as any, retireSupersededRefusals: libRetire as any }],
+  [
+    "lib",
+    {
+      resolvedCheckNames: libResolved as any,
+      retireSupersededRefusals: libRetire as any,
+      failureCheckName: libFailureCheckName as any,
+    },
+  ],
   ["the launch bundle", shipCopy],
 ] as const;
+
+// #2690. A gate's agent copies the failing check names into `failedChecks`
+// from its `failures` lines. A partial copy left a still-failing check out of
+// the list, so it counted as resolved and its earlier refusal was retired.
+// A line is claimed only when exactly one reported name prefixes it (#532),
+// and a report with an unclaimed line retires nothing.
+describe("#2690: a report whose failedChecks does not claim every failure retires nothing", () => {
+  const TESTS = "verify checks > tests-pass: test suite passes";
+  const TSC = "verify checks > tsc-pass: typecheck passes";
+  const LINT = "verify checks > lint-pass: lint passes";
+  for (const [name, impl] of IMPLS) {
+    test(`${name}: two failing lines, one named — nothing is resolved, nothing retired`, () => {
+      const report = {
+        checksRun: [TESTS, TSC],
+        failures: [`${TESTS}: 3 failed`, `${TSC}: 2 errors`],
+        failedChecks: [TSC],
+      };
+      const ledger = [{ check: TESTS }];
+      expect(impl.resolvedCheckNames(report)).toBeNull();
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([]);
+      expect(ledger, "the refusal for a check that still fails was retired").toEqual([{ check: TESTS }]);
+    });
+
+    test(`${name}: CONTROL: every failing line claimed — the check that passed is resolved`, () => {
+      const report = { checksRun: [TESTS, TSC, LINT], failures: [`${TSC}: 2 errors`], failedChecks: [TSC] };
+      const ledger = [{ check: TESTS }, { check: TSC }];
+      expect(impl.resolvedCheckNames(report)).toEqual([TESTS, LINT]);
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([{ check: TESTS }]);
+      expect(ledger).toEqual([{ check: TSC }]);
+    });
+
+    // Review round 1 (#2691). A bare prefix let "tsc" claim a "tsc-strict"
+    // line, so a still-failing tsc-strict was resolved and its refusal tagged
+    // "tsc". A name claims a line only at a boundary: the line ends, or the
+    // next character cannot continue a name.
+    test(`${name}: a name claims a line only at a boundary, so tsc does not claim tsc-strict`, () => {
+      const TSC_ONLY = "verify checks > tsc";
+      const STRICT = "verify checks > tsc-strict";
+      expect(impl.failureCheckName(`${STRICT}: 2 errors`, [TSC_ONLY])).toBeUndefined();
+      expect(impl.failureCheckName(`${TSC_ONLY}: 2 errors`, [TSC_ONLY])).toBe(TSC_ONLY);
+      expect(impl.failureCheckName(TSC_ONLY, [TSC_ONLY]), "a line that is the name itself").toBe(TSC_ONLY);
+      const report = { checksRun: [TSC_ONLY, STRICT], failures: [`${STRICT}: 2 errors`], failedChecks: [TSC_ONLY] };
+      const ledger = [{ check: STRICT }];
+      expect(impl.resolvedCheckNames(report)).toBeNull();
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([]);
+      expect(ledger, "tsc-strict still fails and its refusal was retired").toEqual([{ check: STRICT }]);
+    });
+
+    // A truncated name can still claim a line at a boundary: check names may
+    // contain ": ". If that line also belongs to a check that ran and is not in
+    // failedChecks, the report contradicts itself, and it retires nothing.
+    test(`${name}: a failure line that belongs to a ran-but-unlisted check retires nothing`, () => {
+      const SHORT = "verify checks > tests-pass";
+      const FULL = "verify checks > tests-pass: test suite passes";
+      const report = { checksRun: [SHORT, FULL], failures: [`${FULL}: 3 failed`], failedChecks: [SHORT] };
+      const ledger = [{ check: FULL }];
+      expect(impl.resolvedCheckNames(report)).toBeNull();
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([]);
+      expect(ledger).toEqual([{ check: FULL }]);
+    });
+
+    // Review round 2 (#2691). failedChecks is the `check` of every failure
+    // entry, so a check failing on two lines is listed twice. A repeat is one
+    // name, not two claimants: counting it twice left both lines unclaimed, so
+    // nothing retired and both refusals lost their tag.
+    test(`${name}: a name repeated in failedChecks still claims its own lines`, () => {
+      const TESTS = "verify checks > tests-pass";
+      const TSC = "verify checks > tsc";
+      expect(impl.failureCheckName(`${TESTS}: 2 failing`, [TESTS, TESTS])).toBe(TESTS);
+      const report = {
+        checksRun: [TESTS, TSC],
+        failures: [`${TESTS}: 2 failing`, `${TESTS}: 1 failing`],
+        failedChecks: [TESTS, TESTS],
+      };
+      const ledger = [{ check: TSC }, { check: TESTS }];
+      expect(impl.resolvedCheckNames(report)).toEqual([TSC]);
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([{ check: TSC }]);
+      expect(ledger, "tests-pass still fails, so its refusal stays").toEqual([{ check: TESTS }]);
+    });
+
+    // Review round 3 (#2691). A gate that did not pass and names no failed
+    // check says nothing about which of its checks passed. Reading the empty
+    // list as "none failed" retired every refusal for the checks it ran, while
+    // the same gate was refusing the run.
+    test(`${name}: a report that did not pass and names no failed check retires nothing`, () => {
+      const TESTS = "verify checks > tests-pass";
+      for (const report of [
+        { result: "FAIL", checksRun: [TESTS], failures: [], failedChecks: [] },
+        { result: "FAIL", checksRun: [TESTS], failedChecks: [] },
+        { checksRun: [TESTS], failedChecks: [] },
+      ]) {
+        const ledger = [{ check: TESTS }];
+        expect(impl.resolvedCheckNames(report), JSON.stringify(report)).toBeNull();
+        expect(impl.retireSupersededRefusals(ledger, report), JSON.stringify(report)).toEqual([]);
+        expect(ledger, "a refusal was retired by a gate that did not pass").toEqual([{ check: TESTS }]);
+      }
+      const passed = { result: "PASS", checksRun: [TESTS], failedChecks: [] };
+      const ledger = [{ check: TESTS }];
+      expect(impl.retireSupersededRefusals(ledger, passed), "CONTROL: a gate that passed retires it").toEqual([{ check: TESTS }]);
+      const failedOther = { result: "FAIL", checksRun: [TESTS, "verify checks > tsc"], failures: ["verify checks > tsc: 1 error"], failedChecks: ["verify checks > tsc"] };
+      expect(impl.resolvedCheckNames(failedOther), "CONTROL: a FAIL that names its failure resolves the rest").toEqual([TESTS]);
+    });
+
+    // Names may contain ": ", so two names can both claim one line at a
+    // boundary. Such a line is unclaimed.
+    test(`${name}: a line two reported names both claim is unclaimed`, () => {
+      expect(impl.failureCheckName("a: b: broke", ["a", "a: b"])).toBeUndefined();
+      expect(impl.failureCheckName("a: b: broke", ["a: b"])).toBe("a: b");
+      expect(impl.failureCheckName("a-b: broke", ["a", "a-b"]), "a has no boundary in a-b, so a-b is the one claimant").toBe("a-b");
+      expect(impl.failureCheckName("c: broke", ["a-b"])).toBeUndefined();
+      expect(impl.failureCheckName("", ["a"])).toBeUndefined();
+      expect(impl.resolvedCheckNames({ checksRun: ["x"], failures: ["a: b: broke"], failedChecks: ["a", "a: b"] })).toBeNull();
+    });
+  }
+});
 
 // ── what a later gate retires ───────────────────────────────────────────────
 
@@ -122,8 +246,9 @@ describe("#532: a refusal a later gate re-ran and did not reproduce", () => {
       expect(impl.resolvedCheckNames({ failedChecks: [] }), "null, not []").toBeNull();
       expect(impl.resolvedCheckNames(undefined)).toBeNull();
       expect(impl.resolvedCheckNames({ checksRun: "not an array" })).toBeNull();
-      // …and a gate that genuinely ran nothing is an EMPTY list, not null.
-      expect(impl.resolvedCheckNames({ checksRun: [], failedChecks: [] })).toEqual([]);
+      // …and a gate that passed and genuinely ran nothing is an EMPTY list,
+      // not null.
+      expect(impl.resolvedCheckNames({ result: "PASS", checksRun: [], failedChecks: [] })).toEqual([]);
     });
 
     test(`SC-1866 (${name}): a refusal with no check name is never retired`, () => {
@@ -136,6 +261,7 @@ describe("#532: a refusal a later gate re-ran and did not reproduce", () => {
         { kind: "GATE_FAIL", phase: "Verify", check: "verify checks > tsc-pass: no new TypeScript errors above baseline" },
       ];
       const dropped = impl.retireSupersededRefusals(ledger, {
+        result: "PASS",
         checksRun: ["verify checks > tsc-pass: no new TypeScript errors above baseline"],
         failedChecks: [],
       });
@@ -156,6 +282,7 @@ describe("#532: a refusal a later gate re-ran and did not reproduce", () => {
       ];
       const same = ledger;
       const dropped = impl.retireSupersededRefusals(ledger, {
+        result: "PASS",
         checksRun: ["a", "c"],
         failedChecks: [],
       });
@@ -202,7 +329,7 @@ describe("#2688: a report that does not say what failed retires nothing", () => 
 
     test(`${name}: CONTROL: the same report with an empty failedChecks retires it`, () => {
       const ledger = [{ check: TESTS_PASS }];
-      expect(impl.retireSupersededRefusals(ledger, { checksRun: [TESTS_PASS], failedChecks: [] })).toEqual([{ check: TESTS_PASS }]);
+      expect(impl.retireSupersededRefusals(ledger, { result: "PASS", checksRun: [TESTS_PASS], failedChecks: [] })).toEqual([{ check: TESTS_PASS }]);
       expect(ledger).toEqual([]);
     });
   }
@@ -223,11 +350,13 @@ describe("#532: the inlined copy and the library agree", () => {
     // turn this row red and did not, because no row made the two lists
     // overlap. Twelve rows, none of them exercising the subtraction.
     { label: "a name in both lists", report: { checksRun: ["a", "b"], failedChecks: ["a"] }, ledger: () => [{ check: "a" }, { check: "b" }] },
-    { label: "non-string names are ignored", report: { checksRun: ["a", 3, null, ""], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "" }] },
-    { label: "a non-string check on the entry", report: { checksRun: ["a"], failedChecks: [] }, ledger: () => [{ check: 7 }, { check: "a" }] },
-    { label: "duplicate names", report: { checksRun: ["a", "a"], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "a" }] },
-    { label: "nothing matches", report: { checksRun: ["z"], failedChecks: [] }, ledger: () => [{ check: "a" }] },
-    { label: "an empty ledger", report: { checksRun: ["a"], failedChecks: [] }, ledger: () => [] },
+    { label: "non-string names are ignored", report: { result: "PASS", checksRun: ["a", 3, null, ""], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "" }] },
+    { label: "a non-string check on the entry", report: { result: "PASS", checksRun: ["a"], failedChecks: [] }, ledger: () => [{ check: 7 }, { check: "a" }] },
+    { label: "duplicate names", report: { result: "PASS", checksRun: ["a", "a"], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "a" }] },
+    { label: "nothing matches", report: { result: "PASS", checksRun: ["z"], failedChecks: [] }, ledger: () => [{ check: "a" }] },
+    { label: "an empty ledger", report: { result: "PASS", checksRun: ["a"], failedChecks: [] }, ledger: () => [] },
+    // #2691 review round 3: a gate that did not pass and names no failed check.
+    { label: "FAIL naming no failed check", report: { result: "FAIL", checksRun: ["a"], failedChecks: [] }, ledger: () => [{ check: "a" }] },
   ];
 
   test("SC-1869: both copies give the same answer on every row", () => {
