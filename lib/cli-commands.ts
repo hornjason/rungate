@@ -90,6 +90,19 @@ export interface CliCommand {
   projectRootFlag?: true;
 }
 
+/**
+ * The status `bin/rungate.ts` exits with for a name this registry does not
+ * have (#2676). Every refusal a command makes exits 1, and an install missing
+ * a command's script or a dependency exits `INCOMPLETE_INSTALL_EXIT`, so a
+ * generated workflow could tell "this package has no such command" from
+ * either only by matching the sentence. 64 is `EX_USAGE` in `sysexits.h`:
+ * the command was used incorrectly. Not 2, which commands exit for their OWN
+ * bad arguments: an older version that has a command but not a flag must not
+ * read the same as one with no such command. Declared beside the registry it
+ * describes.
+ */
+export const UNKNOWN_COMMAND_EXIT = 64;
+
 export const CLI_COMMANDS: Record<string, CliCommand> = {
   scaffold: {
     script: "scripts/scaffold-project.ts",
