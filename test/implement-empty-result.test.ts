@@ -26,7 +26,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { shipWorktreeIdentity } from "./helpers/ship-block";
+import { securityHelpersRegion, shipWorktreeIdentity } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -209,7 +209,7 @@ describe("#181 SC-855 (AC-3): the decomposed path ACTS on the refusal, it does n
       if (a === -1 || b === -1) throw new Error(`ship.js is missing the ${name} markers`);
       return shipSource.slice(a, b);
     };
-    const pathTableBlocks = `${marked("SECURITY-HELPERS")}\n${marked("COLLECT-CLAIM")}`;
+    const pathTableBlocks = `${securityHelpersRegion(shipSource)}\n${marked("COLLECT-CLAIM")}`;
     const logs: string[] = [];
     const factory = new Function(
       "log", "briefedAgent", "parallel", "WORK_DIR", "ISSUE", "PROJECT_ROOT",
