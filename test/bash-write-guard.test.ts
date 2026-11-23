@@ -4891,6 +4891,142 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
+  // #2720. The mask binds a protected literal to the target of the assignment
+  // whose right-hand side holds it, whatever expression it sits in: one rule,
+  // not one link per form. It reads every body; one that parses as JavaScript
+  // is also read by the parser, which adds a reading and replaces none (#2702).
+  // Each WITNESS is allowed on main, where the mask followed only a chain of
+  // `+`, `or` and `and`.
+  const PY = (body: string, tail: string) =>
+    `python3 - <<'PY'\nimport os, shutil, json\n${body}\n${PYPAD2714}\n${tail}\nPY`;
+  const COPY = "shutil.copy('/tmp/src.json', d)";
+  const READ = "print(json.load(open(d)))";
+  test.each([
+    ["parentheses", PY(`d = (ROOT + '${LIVE}/.rungate/x/witnesses/' + f)`, COPY)],
+    ["a conditional expression", PY(`d = other if ok else '${LIVE}/${STATE}'`, COPY)],
+    ["a call argument", PY(`d = os.path.join(base, '${LIVE}/${STATE}')`, COPY)],
+    ["a call argument over several lines", PY(`d = os.path.join(\n    base,\n    '${LIVE}/${STATE}',\n)`, COPY)],
+    ["a bare file name in os.path.join, under -c", `python3 -c "import os, json; d = os.path.join(os.environ['RUNGATE_WORK_DIR'], '${STATE}'); ${PYPAD2714}; json.dump({}, open(d, 'w'))"`],
+    ["an f-string with a value after a directory name", PY(`d = f'${LIVE}/.rungate/x/witnesses/{f}'`, COPY)],
+    ["an augmented assignment", PY(`d = base\nd += '${LIVE}/${STATE}'`, COPY)],
+    ["Python's walrus", PY(`if (d := '${LIVE}/${STATE}'):\n    pass`, COPY)],
+    // Main read `ok:` as an annotation and bound `ok`.
+    ["an assignment after a one-line if", PY(`if ok: d = '${LIVE}/${STATE}'`, COPY)],
+  ])("WITNESS (#2720): %s binds the assignment's target", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+  test.each([
+    ["parentheses", PY(`d = (ROOT + '${LIVE}/.rungate/x/witnesses/' + f)`, READ)],
+    ["a call argument", PY(`d = os.path.join(base, '${LIVE}/${STATE}')`, READ)],
+    ["an augmented assignment", PY(`d = base\nd += '${LIVE}/${STATE}'`, READ)],
+    ["Python's walrus", PY(`if (d := '${LIVE}/${STATE}'):\n    pass`, READ)],
+    // A comparison is not an assignment.
+    ["a comparison", PY(`ok = d == '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', d)")],
+    // A call that reads or transforms its argument does not hand the path on,
+    // and a subscript's key is not its value.
+    ["a call that is not a path builder", PY(`d = os.path.getsize('${LIVE}/${STATE}')`, COPY)],
+    ["a subscript key", PY(`d = cfg['${LIVE}/${STATE}']`, COPY)],
+  ])("CONTROL (#2720): %s is allowed", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+  // Bound on main as well, and kept: a parameter default holds the literal
+  // inside the function, so `=` after a name in brackets still binds it.
+  // #2721 review round 1.
+  test.each([
+    // Main binds `d` here; the first version of #2720 bound the annotation `str`.
+    ["an annotated parameter default", PY(`def f(d: str = '${LIVE}/${STATE}'):\n    ${PYPAD2714}\n    ${COPY}`, "f()")],
+    ["a list display after or", PY(`d = os.environ.get('NOPE') or ['${LIVE}/${STATE}']`, "open(d[0], 'w').write('{}')")],
+    ["a list display after else", PY(`d = [] if ok else ['${LIVE}/${STATE}']`, "open(d[0], 'w').write('{}')")],
+    ["an attribute target", PY(`class W:\n    def __init__(self):\n        self.p = '${LIVE}/${STATE}'\n    def save(self):\n        ${PYPAD2714}\n        shutil.copy('/tmp/src.json', self.p)`, "W().save()")],
+  ])("WITNESS (#2721): %s binds", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+  test.each([
+    ["an attribute target", PY(`class W:\n    def __init__(self):\n        self.p = '${LIVE}/${STATE}'\n    def load(self):\n        ${PYPAD2714}\n        print(json.load(open(self.p)))`, "W().load()")],
+    // A longer attribute that starts with the bound one is another name.
+    ["a longer attribute, written", PY(`self.p = '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', self.path)")],
+    // The dot is a dot: `self_p` is another name.
+    ["a name that differs at the dot, written", PY(`self.p = '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', self_p)")],
+  ])("CONTROL (#2721): %s is allowed", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  // #2721 review round 2: the target is read at its own bracket level, so an
+  // annotation of any shape, an annotated attribute and every target of a
+  // chain bind.
+  test.each([
+    ["every target of a chained assignment", PY(`x = d = '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', x)")],
+    ["an annotation with a subscript", PY(`d: Optional[str] = '${LIVE}/${STATE}'`, COPY)],
+    ["an annotation with a union", PY(`d: str | None = '${LIVE}/${STATE}'`, COPY)],
+    ["an annotation with a subscript of two", PY(`d: dict[str, str] = '${LIVE}/${STATE}'`, COPY)],
+    ["an annotated attribute", PY(`class W:\n    def __init__(self):\n        self.p: str = '${LIVE}/${STATE}'\n    def save(self):\n        ${PYPAD2714}\n        shutil.copy('/tmp/src.json', self.p)`, "W().save()")],
+    ["an annotated parameter with a subscript", PY(`def f(d: Optional[str] = '${LIVE}/${STATE}'):\n    ${PYPAD2714}\n    ${COPY}`, "f()")],
+  ])("WITNESS (#2721 round 2): %s binds", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // #2721 review round 3: every name of a tuple target, an annotation after a
+  // compound statement's colon, the path builders the list missed, a line
+  // continuation ending in CRLF, and JavaScript's logical assignments bind.
+  // A body that does not parse as JavaScript ends in a stray `)`.
+  const JS3 = (body: string, target = "d") =>
+    `node - <<'JS'\n${body} ${PAD2714} require('fs').writeFileSync(${target}, '{}') )\nJS`;
+  test.each([
+    ["the first name of a tuple target", PY(`d, e = '${LIVE}/${STATE}', 1`, COPY)],
+    ["a parenthesized tuple target", PY(`(d, e) = '${LIVE}/${STATE}', 1`, COPY)],
+    ["a list target", PY(`[d, e] = ['${LIVE}/${STATE}', 1]`, COPY)],
+    ["a starred tuple target", PY(`d, *rest = '${LIVE}/${STATE}', 1, 2`, COPY)],
+    ["a nested tuple target", PY(`(a, (d, e)) = 1, ('${LIVE}/${STATE}', 2)`, COPY)],
+    // Kept from round 2: a comprehension's iterable holds its items.
+    ["a list comprehension over a list", PY(`d = [p for p in ['${LIVE}/${STATE}']][0]`, COPY)],
+    ["a list comprehension over a tuple", PY(`d = [p for p in ('${LIVE}/${STATE}',)][0]`, COPY)],
+    // JavaScript's comma operator assigns the literal to the LAST name, and the
+    // mask does not know the language, so every name binds.
+    ["the last name, which JavaScript's comma operator assigns", JS3(`let d, e; d, e = '${LIVE}/${STATE}', 1;`, "e")],
+    ["an annotation after a one-line if", PY(`if ok: d: str = '${LIVE}/${STATE}'`, COPY)],
+    ["an annotation after else", PY(`if ok: pass\nelse: d: Optional[str] = '${LIVE}/${STATE}'`, COPY)],
+    ["os.path.relpath", PY(`d = os.path.relpath('${LIVE}/${STATE}')`, COPY)],
+    ["os.path.normcase", PY(`d = os.path.normcase('${LIVE}/${STATE}')`, COPY)],
+    ["os.path.commonpath", PY(`d = os.path.commonpath(['${LIVE}/${STATE}'])`, COPY)],
+    ["os.fsdecode", PY(`d = os.fsdecode('${LIVE}/${STATE}')`, COPY)],
+    ["PurePosixPath", PY(`d = pathlib.PurePosixPath('${LIVE}/${STATE}')`, COPY)],
+    ["PureWindowsPath", PY(`d = pathlib.PureWindowsPath('${LIVE}/${STATE}')`, COPY)],
+    ["WindowsPath", PY(`d = pathlib.WindowsPath('${LIVE}/${STATE}')`, COPY)],
+    ["path.relative", JS3(`const path = require('path'); const d = path.relative(base, '${LIVE}/${STATE}');`)],
+    ["a value continued over a CRLF line end", PY(`d = \\\r\n    '${LIVE}/${STATE}'`, COPY)],
+    ["a chain continued over a CRLF line end", PY(`x = \\\r\n    d = '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', x)")],
+    ["an annotation continued over a CRLF line end", PY(`d: str \\\r\n    = '${LIVE}/${STATE}'`, COPY)],
+    ["a target continued onto the operator's line", PY(`d \\\n    = '${LIVE}/${STATE}'`, COPY)],
+    ["a literal continued over a CRLF line end", PY(`d = '\\\r\n${LIVE}/${STATE}'`, COPY)],
+    ["an annotation after a one-line if's colon, continued over CRLF", PY(`if ok: \\\r\n    d: str = '${LIVE}/${STATE}'`, COPY)],
+    ["a tuple target continued over CRLF", PY(`d, \\\r\n    e = '${LIVE}/${STATE}', 1`, COPY)],
+    ["??=", JS3(`let d; d ??= '${LIVE}/${STATE}';`)],
+    ["||=", JS3(`let d; d ||= '${LIVE}/${STATE}';`)],
+    ["&&=", JS3(`let d = 1; d &&= '${LIVE}/${STATE}';`)],
+    ["the plain target of a chain ending in ??=", JS3(`let x, d; x = d ??= '${LIVE}/${STATE}';`, "x")],
+    ["the ||= target of a chain", JS3(`let x, d; d ||= x = '${LIVE}/${STATE}';`)],
+  ])("WITNESS (#2721 round 3): %s binds", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+  test.each([
+    // A word that is a keyword in one language and a name in the other is read
+    // as a keyword only when its keyword reading hands the bracket's value on.
+    ["a subscript on a variable named match", PY(`match = {}\nd = match['${LIVE}/${STATE}']`, COPY)],
+    ["a subscript on a variable named case", PY(`case = {}\nd = case['${LIVE}/${STATE}']`, COPY)],
+    ["a call to a function named match", PY(`d = match('${LIVE}/${STATE}')`, COPY)],
+    ["a subscript on a Python variable named delete", PY(`delete = {}\nd = delete['${LIVE}/${STATE}']`, COPY)],
+    ["a call to a Python function named typeof", PY(`d = typeof('${LIVE}/${STATE}')`, COPY)],
+    // `not` makes a bool, not the path.
+    ["not before a list", PY(`d = not ['${LIVE}/${STATE}']`, COPY)],
+  ])("CONTROL (#2721 round 3): %s is allowed", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  test("KEPT (#2720): a parameter default still binds its name", () => {
+    const cmd = PY(`def f(d='${LIVE}/${STATE}'):\n    ${PYPAD2714}\n    ${COPY}`, "f()");
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
   test("CONCESSION: a body whose quotes never close gets the window alone", () => {
     const cmd = `python3 - <<'PY'\nimport shutil\nnote = \"it's\nshutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
