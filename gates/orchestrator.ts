@@ -144,6 +144,7 @@ export function writeGateResult(
   results: GateResult[],
   projectRoot?: string,
   checksRun?: string[] | null,
+  failedTestcases?: string[] | null,
 ): { resultVal: "PASS" | "FAIL"; attempt: number } {
   const state = readState(sf);
   let resultVal: "PASS" | "FAIL" = fails === 0 ? "PASS" : "FAIL";
@@ -213,7 +214,15 @@ export function writeGateResult(
   // the gate's agent to infer from `failures`: a check it dropped from its
   // failed list read as passed. A FAIL or WARN verdict is not a pass, and with
   // no `checksRun` reading there is no list, as there is no `checksRun`.
-  const notPassed = new Set(results.filter(r => r.result !== "PASS").map(r => r.check));
+  //
+  // #2695 review: `checksRun`'s names come from the JUnit report, and the
+  // console parser cuts a failing title at " [", so its verdict can carry a
+  // shorter name than the testcase. The report's own failed testcases are
+  // subtracted too, so a failing test is never passed under its full name.
+  const notPassed = new Set([
+    ...results.filter(r => r.result !== "PASS").map(r => r.check),
+    ...(failedTestcases ?? []),
+  ]);
   const passedChecks = measuredChecks === null ? null : measuredChecks.filter(c => !notPassed.has(c));
 
   state.gates = state.gates || {};

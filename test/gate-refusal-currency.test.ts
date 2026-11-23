@@ -653,6 +653,30 @@ describe("#532: the gate runner records what it measured, not only what it faile
     expect(resolved).toEqual(gate.checksPassed);
   }, 180000);
 
+  // #2695 review round 2. checksRun names come from the JUnit report, and the
+  // console parser cuts a failing title at " [", so its FAIL verdict carries a
+  // shorter name than the testcase. A testcase the JUnit report marks failed
+  // is never passed, whatever name the console gave it.
+  test("#2695: a testcase the JUnit report marks failed is not passed under its full name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "checks-passed-junit-"));
+    try {
+      const sf = join(dir, "workflow-state.json");
+      writeFileSync(sf, JSON.stringify({ acs: [], gates: {}, changelog: [] }));
+      const FULL = "verify checks > parses [x] input";
+      const CUT = "verify checks > parses";
+      writeGateResult(
+        sf, "verify", 1, 1, 0,
+        [{ check: CUT, result: "FAIL", detail: "1 failing" }],
+        dir, [FULL, "verify checks > other", CUT], [FULL],
+      );
+      const verify = JSON.parse(readFileSync(sf, "utf-8")).gates.verify;
+      expect(verify.checksPassed, "a failing testcase was listed as passed under its JUnit name").toEqual(["verify checks > other"]);
+      expect(verify.checksPassedDigest).toBe(libDigest(["verify checks > other"]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // #2692. The list is computed from the gate's own verdicts: a check with a
   // FAIL or WARN verdict is not passed, so a WARN never retires a refusal.
   test("#2692: writeGateResult lists as passed the checks that ran with no FAIL or WARN verdict", () => {
@@ -732,6 +756,11 @@ describe("#532: the retirement runs where it has to", () => {
     expect(SHIP).toContain("Do NOT build it from\n     checksRun and failedChecks");
     // #2695 review: and the digest that lets a copy error be caught.
     expect(SHIP).toContain("checksPassedDigest: { type: 'string' }");
+    // #2695 review round 2: the gate hands the JUnit report's failed testcases
+    // to the writer, so a name the console cut short is still not passed.
+    const executor = readFileSync(join(REPO_ROOT, "gates", "gate-executor.ts"), "utf-8");
+    expect(executor).toContain("readJunitOutcomes(junitPath)");
+    expect(executor).toMatch(/writeGateResult\([^)]*checksRun, junitOutcomes\.failed\)/);
     expect(SHIP).toContain("checksPassedDigest: its \\`checksPassedDigest\\` string exactly as it\n     appears");
   });
 });
