@@ -2502,7 +2502,8 @@ function callWrites(program: string, protectedName: string): boolean {
       // `WRITE_INTENT`'s docblock concedes.
       const bound = boundIdentifier(program, at, protectedName, view);
       if (bound !== null) {
-        for (const use of program.matchAll(new RegExp(`\\b${bound}\\b`, 'g'))) {
+        // `\b…\b` around the escaped name: `self.p` is not `self.path`.
+        for (const use of program.matchAll(new RegExp(`\\b${bound.replace(/\./g, '\\.')}\\b`, 'g'))) {
           const u = use.index ?? 0;
           if (u === at) continue;
           if (enclosingCalls(program, u, view).some(callIsWrite)) return true;
@@ -2565,7 +2566,15 @@ function carriesOut(program: string, view: CodeView, open: number): boolean {
   while (k >= 0 && (program[k] === ' ' || program[k] === '\t')) k--;
   const prev = k >= 0 ? program[k] : '';
   const quoted = k >= 0 && view.mask[k] === 1;
-  if (program[open] === '[') return !(quoted || /[\w$)\]]/.test(prev));
+  if (program[open] === '[') {
+    if (quoted || prev === ')' || prev === ']') return false;
+    if (!/[\w$]/.test(prev)) return true;
+    // After a word: a subscript (`cfg[…]`), unless the word is a keyword
+    // (`x or […]`, `[] if ok else […]`, #2721 review).
+    let w = k;
+    while (w > 0 && /[\w$]/.test(program[w - 1])) w--;
+    return GROUPING_KEYWORDS.has(program.slice(w, k + 1));
+  }
   if (quoted || prev === ')' || prev === ']') return false;
   if (!/[\w$]/.test(prev)) return true;
   let s = k;
@@ -2603,12 +2612,17 @@ function targetBefore(program: string, op: number): string | null {
     back(/\s/);
     const annotated = back(/\w/);
     const lineStart = Math.max(program.lastIndexOf('\n', i - 1), program.lastIndexOf(';', i - 1)) + 1;
-    if (program.slice(lineStart, i).trim() === '' && !BLOCK_KEYWORDS.has(annotated)) {
+    // An annotation starts its statement (`d: str = …`) or is a parameter's
+    // (`def f(d: str = …)`, after `(` or `,`, #2721 review).
+    const before = program.slice(lineStart, i);
+    const opensStatement = before.trim() === '' || /[(,]\s*$/.test(before);
+    if (annotated !== '' && opensStatement && !BLOCK_KEYWORDS.has(annotated)) {
       name = annotated;
       nameAt = i;
     }
   }
-  if (!/^[A-Za-z_]\w*$/.test(name)) return null;
+  // A name or an attribute path (`self.p = …`, #2721 review).
+  if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(name)) return null;
   return nameAt === 0 || /[\s;(,{]/.test(program[nameAt - 1]) ? name : null;
 }
 

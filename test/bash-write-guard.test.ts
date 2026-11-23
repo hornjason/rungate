@@ -4930,6 +4930,24 @@ describe("#1407: write intent is read per call, not only by character distance",
   });
   // Bound on main as well, and kept: a parameter default holds the literal
   // inside the function, so `=` after a name in brackets still binds it.
+  // #2721 review round 1.
+  test.each([
+    // Main binds `d` here; the first version of #2720 bound the annotation `str`.
+    ["an annotated parameter default", PY(`def f(d: str = '${LIVE}/${STATE}'):\n    ${PYPAD2714}\n    ${COPY}`, "f()")],
+    ["a list display after or", PY(`d = os.environ.get('NOPE') or ['${LIVE}/${STATE}']`, "open(d[0], 'w').write('{}')")],
+    ["a list display after else", PY(`d = [] if ok else ['${LIVE}/${STATE}']`, "open(d[0], 'w').write('{}')")],
+    ["an attribute target", PY(`class W:\n    def __init__(self):\n        self.p = '${LIVE}/${STATE}'\n    def save(self):\n        ${PYPAD2714}\n        shutil.copy('/tmp/src.json', self.p)`, "W().save()")],
+  ])("WITNESS (#2721): %s binds", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+  test.each([
+    ["an attribute target", PY(`class W:\n    def __init__(self):\n        self.p = '${LIVE}/${STATE}'\n    def load(self):\n        ${PYPAD2714}\n        print(json.load(open(self.p)))`, "W().load()")],
+    // A longer attribute that starts with the bound one is another name.
+    ["a longer attribute, written", PY(`self.p = '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', self.path)")],
+  ])("CONTROL (#2721): %s is allowed", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
   test("KEPT (#2720): a parameter default still binds its name", () => {
     const cmd = PY(`def f(d='${LIVE}/${STATE}'):\n    ${PYPAD2714}\n    ${COPY}`, "f()");
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
