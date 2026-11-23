@@ -49,7 +49,7 @@ import { interpreterPrograms, stripHeredocs } from "./bash-write-guard";
  *
  * So the parser is held to ordinary shapes: operators with or without
  * surrounding whitespace, newlines, subshells, command substitution
- * including backticks, a path-qualified binary, quoted arguments, trailing
+ * including backticks, quoted or not (#2722), a path-qualified binary, quoted arguments, trailing
  * `#` comments, backslash line continuations, and `-c` / `-lc` / `eval`
  * wrappers. **Every one of those was a measured bypass of an earlier version
  * of this file**, and each has a row in `test/verify-phase-lock.test.ts`.
@@ -227,7 +227,77 @@ export function clauses(cmd: string, depth = 0): string[][] {
     if (depth >= 4) continue; // a wrapper chain this deep is not an accident
     for (const inner of commandArguments(c)) out.push(...clauses(inner, depth + 1));
   }
+  if (depth < 4) {
+    for (const inner of quotedSubstitutions(heredocView(cmd))) out.push(...clauses(inner, depth + 1));
+  }
   return out;
+}
+
+/**
+ * The commands inside every `$(…)` and backtick substitution in a
+ * double-quoted string (#2722). The shell keeps a double-quoted string as one
+ * word and still runs what it substitutes, so `--body "$(gh issue edit …)"`
+ * runs the edit, while `tokenize` keeps the whole string as one word. A
+ * substitution outside quotes is already split by `tokenize`, and single
+ * quotes make the text literal, so neither is returned here. Inside `$(…)`
+ * the quoting starts afresh, which `substitutionEnd` follows; a nested quoted
+ * substitution is found when `clauses` reads the inner command.
+ */
+function quotedSubstitutions(cmd: string): string[] {
+  const out: string[] = [];
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (c === "\\" && quote !== "'") {
+      i++;
+      continue;
+    }
+    if (quote === "'") {
+      if (c === "'") quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (c === '"') {
+        quote = null;
+      } else if (c === "$" && cmd[i + 1] === "(") {
+        const end = substitutionEnd(cmd, i + 2);
+        out.push(cmd.slice(i + 2, end));
+        i = end;
+      } else if (c === "`") {
+        let j = i + 1;
+        while (j < cmd.length && cmd[j] !== "`") j += cmd[j] === "\\" ? 2 : 1;
+        out.push(cmd.slice(i + 1, Math.min(j, cmd.length)));
+        i = j;
+      }
+      continue;
+    }
+    if (c === "'" || c === '"') quote = c;
+  }
+  return out;
+}
+
+/** The offset of the `)` closing a `$(` whose text starts at `from`, or the end of `cmd`. */
+function substitutionEnd(cmd: string, from: number): number {
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+  for (let j = from; j < cmd.length; j++) {
+    const c = cmd[j];
+    if (c === "\\" && quote !== "'") {
+      j++;
+      continue;
+    }
+    if (quote !== null) {
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') quote = c;
+    else if (c === "(") depth++;
+    else if (c === ")") {
+      if (depth === 0) return j;
+      depth--;
+    }
+  }
+  return cmd.length;
 }
 
 /**

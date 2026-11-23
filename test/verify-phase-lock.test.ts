@@ -311,6 +311,42 @@ describe("#365 SC-826: the parts the decision is built from", () => {
   });
 });
 
+describe("#2722: a command substitution inside double quotes is a command", () => {
+  // The shell keeps a double-quoted string as one word and still runs what it
+  // substitutes. Each WITNESS yielded no inner clause on main.
+  const has = (cmd: string, words: string[]) =>
+    clauses(cmd).some(c => words.every((w, i) => c[i] === w));
+
+  test.each([
+    ["$(…) in a --body", `gh issue comment 2714 --body "$(gh issue edit 2655 --body x)"`, ["gh", "issue", "edit", "2655"]],
+    ["backticks", 'echo "`gh issue create --label follow-up`"', ["gh", "issue", "create"]],
+    ["the second of two in one string", `echo "a $(echo b) $(gh issue create)"`, ["gh", "issue", "create"]],
+    ["after an apostrophe in the same string", `echo "it's $(gh issue create)"`, ["gh", "issue", "create"]],
+    ["with a quoted ) inside it", `echo "$(gh issue create --title ')')"`, ["gh", "issue", "create"]],
+  ])("WITNESS: %s", (_l, cmd, words) => {
+    expect(has(cmd as string, words as string[]), cmd as string).toBe(true);
+  });
+
+  test.each([
+    ["single quotes", "echo '$(gh issue create)'"],
+    ["an escaped $", 'echo "\\$(gh issue create)"'],
+    ["text inside the substitution's own single quotes", `echo "$(echo 'gh issue create')"`],
+  ])("CONTROL: %s stay text", (_l, cmd) => {
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
+  });
+
+  // Read on main as well, where the tokenizer's misreading of the nested
+  // quotes happened to expose the inner command; kept.
+  test("KEPT: a nested quoted substitution is read", () => {
+    expect(has(`echo "$(echo "$(gh issue create)")"`, ["gh", "issue", "create"])).toBe(true);
+  });
+
+  test("the lock refuses a filing inside a quoted substitution, as it refuses one outside", () => {
+    expect(verifyPhaseRefusal('echo "$(gh issue create --label bug)"')).not.toBeNull();
+    expect(verifyPhaseRefusal("echo $(gh issue create --label bug)")).not.toBeNull();
+  });
+});
+
 describe("#365 SC-827: the hook reaches the decision", () => {
   /**
    * Spawn the real hook with a real VERIFY workflow state.
