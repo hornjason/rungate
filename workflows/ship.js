@@ -2830,13 +2830,19 @@ ${acListBlock(discovery.acs)}
 6. Verify the issues you created actually carry their ACs. Run:
 
    bun --cwd ${shellQuote(HARNESS_ROOT)} scripts/verify-phase2-bodies.ts --repo ${ISSUE_REPO} \\
-     --acs ${WORK_DIR}/phase2-acs.json --grouping ${WORK_DIR}/phase2-grouping.json
+     --acs ${WORK_DIR}/phase2-acs.json --grouping ${WORK_DIR}/phase2-grouping.json --cap ${MAX_ACS_PER_ISSUE}
 
    It reads each sub-issue back FROM GITHUB and compares its
-   "## Success Criteria" section against the statements from step 0. If it
-   exits non-zero, FIX THE ISSUE BODY with
-   \`bun scripts/github-op.ts issue-update --repo ${ISSUE_REPO} --issue N --body-file …\`
-   and run it again. Do not report success while it is failing, and do not
+   "## Success Criteria" section against the statements from step 0, and it
+   judges the split. If it exits non-zero, fix what it names, then run it
+   again:
+   - a body that does not carry its ACs: FIX THE ISSUE BODY with
+     \`bun scripts/github-op.ts issue-update --repo ${ISSUE_REPO} --issue N --body-file …\`
+   - a Phase 1 over ${MAX_ACS_PER_ISSUE} ACs, an AC kept AND deferred, an AC placed
+     nowhere, or a group with no issue number: FIX THE GROUPING. Move ACs
+     between phase1AcIds and the sub-issues, create or update the sub-issues
+     to match, and rewrite ${WORK_DIR}/phase2-grouping.json.
+   Do not report success while it is failing, and do not
    edit ${WORK_DIR}/phase2-acs.json to make it pass — that file is the
    reference, and changing it is changing an acceptance criterion nobody
    reviewed.
@@ -2854,8 +2860,21 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
       required: ['phase1AcIds']
     }})
 
-    if (decomposeResult?.phase1AcIds?.length > 0) {
-      const keepIds = new Set(decomposeResult.phase1AcIds)
+    // #2716 review: every outcome of the decompose call is judged here: an
+    // answer, an answer keeping nothing in Phase 1, or no answer at all. The
+    // last two used to skip this block, so neither the cap nor the refusal
+    // ran and every AC shipped past the limit.
+    judgeDecomposition: {
+      if (!decomposeResult) {
+        log(`DECOMPOSITION_REFUSED: the decompose agent returned no answer for ${discovery.acs.length} ACs`)
+        discoveryRefusal = shipFailed(
+          'Discovery',
+          `the decompose agent returned no answer for ${discovery.acs.length} ACs over the ` +
+            `${MAX_ACS_PER_ISSUE}-AC limit, so the split cannot be judged and the run cannot go on (#2716)`,
+        )
+        return false
+      }
+      const keepIds = new Set(decomposeResult.phase1AcIds || [])
       const originalAcs = [...discovery.acs]
       // Match on ac.id (AC-N) OR ac.specElement (SC-N) — decompose agent may return either format
       const filtered = originalAcs.filter(ac => keepIds.has(ac.id) || keepIds.has(ac.specElement) || (ac.specElement && ac.specElement.split(',').some(s => keepIds.has(s.trim()))))
@@ -2878,8 +2897,9 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
         .map(ac => ({
           specElement: acCoversIds(ac).join(', ') || ac.specElement || ac.id,
           reason: `deferred by decomposition — ${discovery.acs.length} of ${originalAcs.length} ACs fit the ${MAX_ACS_PER_ISSUE}-AC limit for one run`,
-          subIssue: (decomposeResult.subIssues || [])
-            .find(s => (s.acIds || []).includes(ac.id) || (s.acIds || []).includes(ac.specElement))?.number,
+          // #2716 review: the matcher the sub-issue's body is built from, so a
+          // comma-separated specElement finds the group that carries one of it.
+          subIssue: (decomposeResult.subIssues || []).find(s => acsForGroup([ac], s).length > 0)?.number,
         }))
       // #79 — the structural half, before anything downstream reads the
       // split. An AC in Phase 1 AND in a sub-issue is a deferral that
@@ -2887,10 +2907,14 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
       // this run prints still adds up. Both are refusals rather than
       // repairs: a decomposition the harness quietly fixes is an acceptance
       // criterion nobody reviewed (#217).
+      // #2710: judged on what Phase 1 KEPT after the cap above, not on the
+      // agent's list. An AC the cap dropped and no sub-issue carries is
+      // otherwise shipped neither measured nor filed.
       const splitViolations = decompositionRefusal(
         originalAcs,
         decomposeResult.phase1AcIds,
         decomposeResult.subIssues,
+        discovery.acs,
       )
       if (splitViolations.length > 0) {
         for (const v of splitViolations) log(`DECOMPOSITION_REFUSED: ${v}`)

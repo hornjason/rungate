@@ -851,13 +851,15 @@ function retireSupersededRefusals(entries, report) {
     }
     return dropped;
 }
-function decompositionRefusal(allAcs, phase1AcIds, subIssues) {
+function decompositionRefusal(allAcs, phase1AcIds, subIssues, keptAcs) {
     const acs = Array.isArray(allAcs) ? allAcs : [];
     const phase1 = Array.isArray(phase1AcIds) ? phase1AcIds : [];
     const groups = Array.isArray(subIssues) ? subIssues : [];
     const out = [];
     if (acs.length === 0)
         return ["decomposition was asked for with no ACs to decompose"];
+    if (!Array.isArray(keptAcs))
+        return ["the caller did not say what Phase 1 kept, so the split cannot be judged"];
     const known = new Set();
     for (const ac of acs) {
         if (ac?.id)
@@ -873,31 +875,46 @@ function decompositionRefusal(allAcs, phase1AcIds, subIssues) {
             out.push(`Phase 1 keeps ${id}, which discovery never produced`);
     }
     const claimedBy = new Map();
+    const labels = [];
     for (const [i, g] of groups.entries()) {
         const label = g?.number ? `#${g.number}` : (g?.phase || `group ${i + 1}`);
+        labels.push(label);
         const ids = Array.isArray(g?.acIds) ? g.acIds : [];
+        if (typeof g?.number !== "number")
+            out.push(`${label} has no issue number — it was never created, so the ACs it claims are filed nowhere`);
         if (ids.length === 0)
             out.push(`${label} was created carrying no ACs`);
         for (const id of ids) {
             if (!known.has(id))
                 out.push(`${label} claims ${id}, which discovery never produced`);
-            claimedBy.set(id, [...(claimedBy.get(id) ?? []), label]);
+            claimedBy.set(id, [...(claimedBy.get(id) ?? []), i]);
         }
     }
+    const named = (owners) => [...new Set(owners)].map(i => labels[i]).join(" and ");
+    const acIds = (ac) => [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s) => s.trim()) : [])].filter(Boolean);
     const phase1Set = new Set(phase1);
-    for (const [id, labels] of claimedBy) {
-        if (phase1Set.has(id)) {
-            out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
-        }
-        if (labels.length > 1) {
-            out.push(`${id} is claimed by ${labels.join(" and ")} — two phases cannot both own one AC`);
+    const keptIds = new Set(keptAcs.map(ac => ac?.id));
+    const isKept = (ac) => keptIds.has(ac.id);
+    for (const [id, owners] of claimedBy) {
+        const inPhase1 = acs.some(ac => isKept(ac) && acIds(ac).includes(id));
+        if (inPhase1) {
+            out.push(`${id} is in Phase 1 AND deferred to ${named(owners)} — a deferral that duplicates shipped work`);
         }
     }
     for (const ac of acs) {
-        const ids = [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s) => s.trim()) : [])].filter(Boolean);
-        const placed = ids.some(id => phase1Set.has(id) || claimedBy.has(id));
-        if (!placed)
-            out.push(`${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`);
+        const owners = [...new Set(acIds(ac).flatMap(id => claimedBy.get(id) ?? []))];
+        if (owners.length > 1) {
+            out.push(`${ac.id} is claimed by ${named(owners)} — two phases cannot both own one AC`);
+        }
+    }
+    for (const ac of acs) {
+        const ids = acIds(ac);
+        const placed = isKept(ac) || ids.some(id => claimedBy.has(id));
+        if (placed)
+            continue;
+        out.push(ids.some(id => phase1Set.has(id))
+            ? `${ac.id} was in the agent's Phase 1, the run's cap dropped it, and no sub-issue carries it — it is gone, and nothing else would say so`
+            : `${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`);
     }
     return out;
 }
@@ -2476,13 +2493,19 @@ ${acListBlock(discovery.acs)}
 6. Verify the issues you created actually carry their ACs. Run:
 
    bun --cwd ${shellQuote(HARNESS_ROOT)} scripts/verify-phase2-bodies.ts --repo ${ISSUE_REPO} \\
-     --acs ${WORK_DIR}/phase2-acs.json --grouping ${WORK_DIR}/phase2-grouping.json
+     --acs ${WORK_DIR}/phase2-acs.json --grouping ${WORK_DIR}/phase2-grouping.json --cap ${MAX_ACS_PER_ISSUE}
 
    It reads each sub-issue back FROM GITHUB and compares its
-   "## Success Criteria" section against the statements from step 0. If it
-   exits non-zero, FIX THE ISSUE BODY with
-   \`bun scripts/github-op.ts issue-update --repo ${ISSUE_REPO} --issue N --body-file …\`
-   and run it again. Do not report success while it is failing, and do not
+   "## Success Criteria" section against the statements from step 0, and it
+   judges the split. If it exits non-zero, fix what it names, then run it
+   again:
+   - a body that does not carry its ACs: FIX THE ISSUE BODY with
+     \`bun scripts/github-op.ts issue-update --repo ${ISSUE_REPO} --issue N --body-file …\`
+   - a Phase 1 over ${MAX_ACS_PER_ISSUE} ACs, an AC kept AND deferred, an AC placed
+     nowhere, or a group with no issue number: FIX THE GROUPING. Move ACs
+     between phase1AcIds and the sub-issues, create or update the sub-issues
+     to match, and rewrite ${WORK_DIR}/phase2-grouping.json.
+   Do not report success while it is failing, and do not
    edit ${WORK_DIR}/phase2-acs.json to make it pass — that file is the
    reference, and changing it is changing an acceptance criterion nobody
    reviewed.
@@ -2500,8 +2523,17 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
       required: ['phase1AcIds']
     }})
 
-    if (decomposeResult?.phase1AcIds?.length > 0) {
-      const keepIds = new Set(decomposeResult.phase1AcIds)
+    judgeDecomposition: {
+      if (!decomposeResult) {
+        log(`DECOMPOSITION_REFUSED: the decompose agent returned no answer for ${discovery.acs.length} ACs`)
+        discoveryRefusal = shipFailed(
+          'Discovery',
+          `the decompose agent returned no answer for ${discovery.acs.length} ACs over the ` +
+            `${MAX_ACS_PER_ISSUE}-AC limit, so the split cannot be judged and the run cannot go on (#2716)`,
+        )
+        return false
+      }
+      const keepIds = new Set(decomposeResult.phase1AcIds || [])
       const originalAcs = [...discovery.acs]
       const filtered = originalAcs.filter(ac => keepIds.has(ac.id) || keepIds.has(ac.specElement) || (ac.specElement && ac.specElement.split(',').some(s => keepIds.has(s.trim()))))
       if (filtered.length === 0) {
@@ -2515,13 +2547,13 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
         .map(ac => ({
           specElement: acCoversIds(ac).join(', ') || ac.specElement || ac.id,
           reason: `deferred by decomposition — ${discovery.acs.length} of ${originalAcs.length} ACs fit the ${MAX_ACS_PER_ISSUE}-AC limit for one run`,
-          subIssue: (decomposeResult.subIssues || [])
-            .find(s => (s.acIds || []).includes(ac.id) || (s.acIds || []).includes(ac.specElement))?.number,
+          subIssue: (decomposeResult.subIssues || []).find(s => acsForGroup([ac], s).length > 0)?.number,
         }))
       const splitViolations = decompositionRefusal(
         originalAcs,
         decomposeResult.phase1AcIds,
         decomposeResult.subIssues,
+        discovery.acs,
       )
       if (splitViolations.length > 0) {
         for (const v of splitViolations) log(`DECOMPOSITION_REFUSED: ${v}`)

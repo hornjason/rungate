@@ -60,11 +60,24 @@ export interface SubIssuePlan {
  * Returns a LIST, not a boolean or a first error: a decomposition that drops
  * one AC and duplicates another has two problems, and reporting one of them
  * invites a second round that discovers the other.
+ *
+ * `keptAcs` is what Phase 1 holds after the caller's cap (#2710), and every
+ * caller passes it. ship.js keeps at most `MAX_ACS_PER_ISSUE` of the agent's
+ * Phase 1, so an agent that keeps seven loses one, and a partition read off
+ * the agent's seven ids is clean while that AC sits in no sub-issue. The
+ * split is judged on what the run keeps; the agent's ids are still read for
+ * ones discovery never produced, and for a Phase 1 that holds nothing.
+ *
+ * The argument was optional, and a caller that left it out got the agent's
+ * reading back with nothing to say so (#2716 review round 4). It is required
+ * now, and a JavaScript caller that leaves it out anyway is refused rather
+ * than judged.
  */
 export function decompositionRefusal(
   allAcs: readonly DecomposedAc[] | null | undefined,
   phase1AcIds: readonly string[] | null | undefined,
   subIssues: readonly SubIssuePlan[] | null | undefined,
+  keptAcs: readonly DecomposedAc[],
 ): string[] {
   const acs = Array.isArray(allAcs) ? allAcs : [];
   const phase1 = Array.isArray(phase1AcIds) ? phase1AcIds : [];
@@ -72,6 +85,9 @@ export function decompositionRefusal(
   const out: string[] = [];
 
   if (acs.length === 0) return ["decomposition was asked for with no ACs to decompose"];
+  // Checked at run time as well as by the type: ship.js is JavaScript, and
+  // the type is no help there (#2716 review round 4).
+  if (!Array.isArray(keptAcs)) return ["the caller did not say what Phase 1 kept, so the split cannot be judged"];
 
   const known = new Set<string>();
   for (const ac of acs) {
@@ -87,36 +103,64 @@ export function decompositionRefusal(
     if (!known.has(id)) out.push(`Phase 1 keeps ${id}, which discovery never produced`);
   }
 
-  /** Which groups claim each id — the shape both duplicate cases need. */
-  const claimedBy = new Map<string, string[]>();
+  /**
+   * Which groups claim each id, by position — the shape both duplicate cases
+   * need. By position, not label: two groups can share one (#2716 review
+   * round 5), and a set of labels counted them as one owner.
+   */
+  const claimedBy = new Map<string, number[]>();
+  const labels: string[] = [];
   for (const [i, g] of groups.entries()) {
     const label = g?.number ? `#${g.number}` : (g?.phase || `group ${i + 1}`);
+    labels.push(label);
     const ids = Array.isArray(g?.acIds) ? g.acIds : [];
+    // A group with no number was never created, so the ACs only it claims are
+    // filed nowhere (#2716 review round 5).
+    if (typeof g?.number !== "number") out.push(`${label} has no issue number — it was never created, so the ACs it claims are filed nowhere`);
     if (ids.length === 0) out.push(`${label} was created carrying no ACs`);
     for (const id of ids) {
       if (!known.has(id)) out.push(`${label} claims ${id}, which discovery never produced`);
-      claimedBy.set(id, [...(claimedBy.get(id) ?? []), label]);
+      claimedBy.set(id, [...(claimedBy.get(id) ?? []), i]);
     }
   }
+  const named = (owners: readonly number[]): string => [...new Set(owners)].map(i => labels[i]).join(" and ");
 
   // AC-3. The #70 failure mode exactly: a deferred AC that restates one
   // already being shipped. Flagged, never written.
+  const acIds = (ac: DecomposedAc): string[] =>
+    [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s: string) => s.trim()) : [])].filter(Boolean);
   const phase1Set = new Set(phase1);
-  for (const [id, labels] of claimedBy) {
-    if (phase1Set.has(id)) {
-      out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
+  // What Phase 1 holds (#2710): decided by each AC's own id, never by a spec
+  // section it shares with a kept AC. Several ACs can share a section, and
+  // reading one let a dropped AC count as kept (#2716 review).
+  const keptIds = new Set(keptAcs.map(ac => ac?.id));
+  const isKept = (ac: DecomposedAc): boolean => keptIds.has(ac.id);
+  for (const [id, owners] of claimedBy) {
+    const inPhase1 = acs.some(ac => isKept(ac) && acIds(ac).includes(id));
+    if (inPhase1) {
+      out.push(`${id} is in Phase 1 AND deferred to ${named(owners)} — a deferral that duplicates shipped work`);
     }
-    if (labels.length > 1) {
-      out.push(`${id} is claimed by ${labels.join(" and ")} — two phases cannot both own one AC`);
+  }
+  // Two groups owning one AC, by any id it answers to: one group naming
+  // AC-7 and another its section both carry it (#2716 review).
+  for (const ac of acs) {
+    const owners = [...new Set(acIds(ac).flatMap(id => claimedBy.get(id) ?? []))];
+    if (owners.length > 1) {
+      out.push(`${ac.id} is claimed by ${named(owners)} — two phases cannot both own one AC`);
     }
   }
 
   // The silent half. An AC in neither Phase 1 nor any sub-issue has been
   // dropped, and every count the run prints still adds up.
   for (const ac of acs) {
-    const ids: string[] = [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s: string) => s.trim()) : [])].filter(Boolean);
-    const placed = ids.some(id => phase1Set.has(id) || claimedBy.has(id));
-    if (!placed) out.push(`${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`);
+    const ids = acIds(ac);
+    const placed = isKept(ac) || ids.some(id => claimedBy.has(id));
+    if (placed) continue;
+    out.push(
+      ids.some(id => phase1Set.has(id))
+        ? `${ac.id} was in the agent's Phase 1, the run's cap dropped it, and no sub-issue carries it — it is gone, and nothing else would say so`
+        : `${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`,
+    );
   }
 
   return out;
