@@ -4860,6 +4860,7 @@ describe("#2701: the write spellings the verb list missed", () => {
     ["fs.cpSync", `node -e "require('fs').cpSync('/tmp/a.json', '${LIVE}/${STATE}')"`],
     ["fs.cp", `node -e "require('fs').cp('/tmp/a.json', '${LIVE}/${STATE}', () => {})"`],
     ["os.open with a write flag", `python3 -c "import os; os.open('${LIVE}/${STATE}', os.O_WRONLY | os.O_TRUNC)"`],
+    ["os.open with a nested call in its path", `python3 -c "import os; os.open(os.path.join(os.environ['R'], '${STATE}'), os.O_WRONLY)"`],
   ];
   test.each(witnesses)("WITNESS: %s onto a protected artifact is refused", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
