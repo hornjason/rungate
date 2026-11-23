@@ -2510,7 +2510,16 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
       required: ['phase1AcIds']
     }})
 
-    if (decomposeResult) {
+    judgeDecomposition: {
+      if (!decomposeResult) {
+        log(`DECOMPOSITION_REFUSED: the decompose agent returned no answer for ${discovery.acs.length} ACs`)
+        discoveryRefusal = shipFailed(
+          'Discovery',
+          `the decompose agent returned no answer for ${discovery.acs.length} ACs over the ` +
+            `${MAX_ACS_PER_ISSUE}-AC limit, so the split cannot be judged and the run cannot go on (#2716)`,
+        )
+        return false
+      }
       const keepIds = new Set(decomposeResult.phase1AcIds || [])
       const originalAcs = [...discovery.acs]
       const filtered = originalAcs.filter(ac => keepIds.has(ac.id) || keepIds.has(ac.specElement) || (ac.specElement && ac.specElement.split(',').some(s => keepIds.has(s.trim()))))

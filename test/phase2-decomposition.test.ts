@@ -455,12 +455,12 @@ describe("SC-1487: the launch file's bundled copy and the library agree", () => 
 describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap", () => {
   const src = readFileSync(SHIP, "utf-8");
   const coverage = structuralCut(src, "// ──── AC-COVERAGE-START ────", { endAnchor: "// ──── AC-COVERAGE-END ────" });
-  const block = structuralCut(src, "    if (decomposeResult) {", { balanced: "{" });
+  const block = structuralCut(src, "    judgeDecomposition: {", { balanced: "{" });
   const caps = [...src.matchAll(/const MAX_ACS_PER_ISSUE = (\d+)/g)];
   const KEPT_ARG = "        discovery.acs,\n";
 
   type Answer = { phase1AcIds: string[]; subIssues: { number: number; acIds: string[] }[] };
-  const run = (cut: string, acs: DecomposedAc[], answer: Answer) => {
+  const run = (cut: string, acs: DecomposedAc[], answer: Answer | null) => {
     const logs: string[] = [];
     const out = new Function("discovery", "decomposeResult", "decompositionRefusal", "acsForGroup", "log", `
       ${coverage}
@@ -568,6 +568,15 @@ describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap
     const r = run(block, EIGHT, { phase1AcIds: [], subIssues: [{ number: 90, acIds: ids(1, 8) }] });
     expect(r.proceeded).toBe(false);
     expect(r.logs.join("\n")).toContain("no AC was kept for Phase 1");
+  });
+
+  // #2716 review round 3: a decompose call that returns nothing skipped the
+  // block too, and every AC shipped past the cap. ship.js treats a null reply
+  // as reachable elsewhere (discovery's "returned nothing" refusal).
+  test("a decompose call that returns nothing is refused, not skipped", () => {
+    const r = run(block, EIGHT, null);
+    expect(r.proceeded).toBe(false);
+    expect(r.discoveryRefusal?.why).toContain("returned no answer");
   });
 
   test("an AC the cap drops that a sub-issue carries is deferred to it, not refused as a duplicate", () => {

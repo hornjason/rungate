@@ -2854,9 +2854,20 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
       required: ['phase1AcIds']
     }})
 
-    // #2716 review: every answer is judged. An answer keeping nothing in
-    // Phase 1 used to skip this block, so neither the cap nor the refusal ran.
-    if (decomposeResult) {
+    // #2716 review: every outcome of the decompose call is judged here: an
+    // answer, an answer keeping nothing in Phase 1, or no answer at all. The
+    // last two used to skip this block, so neither the cap nor the refusal
+    // ran and every AC shipped past the limit.
+    judgeDecomposition: {
+      if (!decomposeResult) {
+        log(`DECOMPOSITION_REFUSED: the decompose agent returned no answer for ${discovery.acs.length} ACs`)
+        discoveryRefusal = shipFailed(
+          'Discovery',
+          `the decompose agent returned no answer for ${discovery.acs.length} ACs over the ` +
+            `${MAX_ACS_PER_ISSUE}-AC limit, so the split cannot be judged and the run cannot go on (#2716)`,
+        )
+        return false
+      }
       const keepIds = new Set(decomposeResult.phase1AcIds || [])
       const originalAcs = [...discovery.acs]
       // Match on ac.id (AC-N) OR ac.specElement (SC-N) — decompose agent may return either format
