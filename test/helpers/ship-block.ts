@@ -55,8 +55,9 @@ export function securityHelpersRegion(source: string = readFileSync(SHIP_PATH, "
 }
 
 /**
- * One marked region, by literal markers. The two names are spelled out at
- * each call so the anchors stay literal where a reader greps for them.
+ * One marked region, by literal markers. Both marker pairs are spelled out
+ * in full below, not built from the name, so a grep for either anchor finds
+ * this function.
  */
 function markedRegion(source: string, name: "WORKTREE-IDENTITY" | "SECURITY-HELPERS"): string {
   const START = name === "WORKTREE-IDENTITY" ? "// ──── WORKTREE-IDENTITY-START ────" : "// ──── SECURITY-HELPERS-START ────";
