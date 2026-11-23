@@ -4964,6 +4964,57 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
+  // #2721 review round 3: every name of a tuple target, an annotation after a
+  // compound statement's colon, the path builders the list missed, a line
+  // continuation ending in CRLF, and JavaScript's logical assignments bind.
+  // A body that does not parse as JavaScript ends in a stray `)`.
+  const JS3 = (body: string, target = "d") =>
+    `node - <<'JS'\n${body} ${PAD2714} require('fs').writeFileSync(${target}, '{}') )\nJS`;
+  test.each([
+    ["the first name of a tuple target", PY(`d, e = '${LIVE}/${STATE}', 1`, COPY)],
+    ["a parenthesized tuple target", PY(`(d, e) = '${LIVE}/${STATE}', 1`, COPY)],
+    ["a list target", PY(`[d, e] = ['${LIVE}/${STATE}', 1]`, COPY)],
+    ["a starred tuple target", PY(`d, *rest = '${LIVE}/${STATE}', 1, 2`, COPY)],
+    ["a nested tuple target", PY(`(a, (d, e)) = 1, ('${LIVE}/${STATE}', 2)`, COPY)],
+    // JavaScript's comma operator assigns the literal to the LAST name, and the
+    // mask does not know the language, so every name binds.
+    ["the last name, which JavaScript's comma operator assigns", JS3(`let d, e; d, e = '${LIVE}/${STATE}', 1;`, "e")],
+    ["an annotation after a one-line if", PY(`if ok: d: str = '${LIVE}/${STATE}'`, COPY)],
+    ["an annotation after else", PY(`if ok: pass\nelse: d: Optional[str] = '${LIVE}/${STATE}'`, COPY)],
+    ["os.path.relpath", PY(`d = os.path.relpath('${LIVE}/${STATE}')`, COPY)],
+    ["os.path.normcase", PY(`d = os.path.normcase('${LIVE}/${STATE}')`, COPY)],
+    ["os.path.commonpath", PY(`d = os.path.commonpath(['${LIVE}/${STATE}'])`, COPY)],
+    ["os.fsdecode", PY(`d = os.fsdecode('${LIVE}/${STATE}')`, COPY)],
+    ["PurePosixPath", PY(`d = pathlib.PurePosixPath('${LIVE}/${STATE}')`, COPY)],
+    ["PureWindowsPath", PY(`d = pathlib.PureWindowsPath('${LIVE}/${STATE}')`, COPY)],
+    ["WindowsPath", PY(`d = pathlib.WindowsPath('${LIVE}/${STATE}')`, COPY)],
+    ["path.relative", JS3(`const path = require('path'); const d = path.relative(base, '${LIVE}/${STATE}');`)],
+    ["a value continued over a CRLF line end", PY(`d = \\\r\n    '${LIVE}/${STATE}'`, COPY)],
+    ["a chain continued over a CRLF line end", PY(`x = \\\r\n    d = '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', x)")],
+    ["an annotation continued over a CRLF line end", PY(`d: str \\\r\n    = '${LIVE}/${STATE}'`, COPY)],
+    ["a target continued onto the operator's line", PY(`d \\\n    = '${LIVE}/${STATE}'`, COPY)],
+    ["??=", JS3(`let d; d ??= '${LIVE}/${STATE}';`)],
+    ["||=", JS3(`let d; d ||= '${LIVE}/${STATE}';`)],
+    ["&&=", JS3(`let d = 1; d &&= '${LIVE}/${STATE}';`)],
+    ["the plain target of a chain ending in ??=", JS3(`let x, d; x = d ??= '${LIVE}/${STATE}';`, "x")],
+    ["the ||= target of a chain", JS3(`let x, d; d ||= x = '${LIVE}/${STATE}';`)],
+  ])("WITNESS (#2721 round 3): %s binds", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+  test.each([
+    // A word that is a keyword in one language and a name in the other is read
+    // as a keyword only when its keyword reading hands the bracket's value on.
+    ["a subscript on a variable named match", PY(`match = {}\nd = match['${LIVE}/${STATE}']`, COPY)],
+    ["a subscript on a variable named case", PY(`case = {}\nd = case['${LIVE}/${STATE}']`, COPY)],
+    ["a call to a function named match", PY(`d = match('${LIVE}/${STATE}')`, COPY)],
+    ["a subscript on a Python variable named delete", PY(`delete = {}\nd = delete['${LIVE}/${STATE}']`, COPY)],
+    ["a call to a Python function named typeof", PY(`d = typeof('${LIVE}/${STATE}')`, COPY)],
+    // `not` makes a bool, not the path.
+    ["not before a list", PY(`d = not ['${LIVE}/${STATE}']`, COPY)],
+  ])("CONTROL (#2721 round 3): %s is allowed", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
   test("KEPT (#2720): a parameter default still binds its name", () => {
     const cmd = PY(`def f(d='${LIVE}/${STATE}'):\n    ${PYPAD2714}\n    ${COPY}`, "f()");
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);

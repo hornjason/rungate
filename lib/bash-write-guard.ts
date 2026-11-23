@@ -2545,14 +2545,21 @@ function bracketDepths(program: string, view: CodeView): Int32Array {
 const MASK_PATH_BUILDERS: ReadonlySet<string> = new Set([
   ...PATH_BUILDERS,
   'normpath', 'abspath', 'realpath', 'expanduser', 'expandvars', 'joinpath', 'fspath',
-  'Path', 'PurePath', 'PosixPath', 'str',
+  'relpath', 'normcase', 'commonpath', 'commonprefix', 'fsencode', 'fsdecode',
+  'Path', 'PurePath', 'PosixPath', 'PurePosixPath', 'WindowsPath', 'PureWindowsPath', 'str', 'bytes',
+  // Node's, beside the parser's `join`, `resolve` and `normalize` (#2721 review).
+  'relative', 'toNamespacedPath', 'String',
 ]);
 
-/** Words before `(` that make it a grouping, not a call: `if (d := …)`, `return (a + b)`. */
-const GROUPING_KEYWORDS = new Set([
-  'if', 'elif', 'while', 'for', 'return', 'and', 'or', 'not', 'in', 'is', 'else', 'yield', 'await',
-  'assert', 'with', 'del', 'case', 'match', 'switch', 'catch', 'throw', 'typeof', 'void', 'delete',
-]);
+/**
+ * Keywords before `(` or `[` whose expression's value is the bracket's own:
+ * `x or ['…']`, `[] if ok else ('…')`, `await ('…')`. After any other word the
+ * bracket is a call or a subscript. Every other keyword makes a different
+ * value (`not`, `typeof`, `in`) or starts a statement that assigns nothing
+ * (`return`, `match`, `case`), and many are names in the other language or as
+ * Python's soft keywords: `d = match['…']` is a subscript (#2721 review).
+ */
+const VALUE_KEYWORDS = new Set(['and', 'or', 'else', 'await']);
 
 /**
  * Whether the value inside the bracket opened at `open` is part of the value
@@ -2569,18 +2576,27 @@ function carriesOut(program: string, view: CodeView, open: number): boolean {
     if (quoted || prev === ')' || prev === ']') return false;
     if (!/[\w$]/.test(prev)) return true;
     // After a word: a subscript (`cfg[…]`), unless the word is a keyword
-    // (`x or […]`, `[] if ok else […]`, #2721 review).
+    // that hands the value on (`x or […]`, `[] if ok else […]`, #2721 review).
     let w = k;
     while (w > 0 && /[\w$]/.test(program[w - 1])) w--;
-    return GROUPING_KEYWORDS.has(program.slice(w, k + 1));
+    return VALUE_KEYWORDS.has(program.slice(w, k + 1));
   }
   if (quoted || prev === ')' || prev === ']') return false;
   if (!/[\w$]/.test(prev)) return true;
   let s = k;
   while (s > 0 && /[\w$.]/.test(program[s - 1])) s--;
   const callee = program.slice(s, k + 1);
-  if (!callee.includes('.') && GROUPING_KEYWORDS.has(callee)) return true;
+  if (!callee.includes('.') && VALUE_KEYWORDS.has(callee)) return true;
   return MASK_PATH_BUILDERS.has(callee.split('.').pop() ?? '');
+}
+
+/**
+ * Whether the newline at `j` is escaped, by a backslash before it or before a
+ * CR before it: Python reads backslash-CRLF as a continuation too (#2721
+ * review).
+ */
+function continuedAt(program: string, j: number): boolean {
+  return program[j - 1] === '\\' || (program[j - 1] === '\r' && program[j - 2] === '\\');
 }
 
 /** Python's block keywords, which a `:` can follow without being an annotation. */
@@ -2604,7 +2620,7 @@ function targetBefore(program: string, op: number, view: CodeView, depths: Int32
     if (view.mask[j] !== 0 || depths[j] > level) continue;
     if (depths[j] < level) break; // the bracket this target sits in: `def f(`
     const ch = program[j];
-    if (ch === ';' || ch === '{' || ch === '}' || ch === ',' || ch === '=' || (ch === '\n' && program[j - 1] !== '\\')) break;
+    if (ch === ';' || ch === '{' || ch === '}' || ch === ',' || ch === '=' || (ch === '\n' && !continuedAt(program, j))) break;
     if (ch === ':') {
       colon = j;
       break;
@@ -2612,7 +2628,8 @@ function targetBefore(program: string, op: number, view: CodeView, depths: Int32
   }
   const wordBefore = (end: number): [string, number] => {
     let e = end;
-    while (e > 0 && /\s/.test(program[e - 1])) e--;
+    // Spaces, and a continuation between the target and the operator.
+    while (e > 0 && (/\s/.test(program[e - 1]) || (program[e - 1] === '\\' && /[\r\n]/.test(program[e] ?? '')))) e--;
     let st = e;
     while (st > 0 && /[\w.]/.test(program[st - 1])) st--;
     return [program.slice(st, e), st];
@@ -2622,7 +2639,9 @@ function targetBefore(program: string, op: number, view: CodeView, depths: Int32
     const [annotated, at] = wordBefore(colon);
     const lineStart = Math.max(program.lastIndexOf('\n', at - 1), program.lastIndexOf(';', at - 1)) + 1;
     const before = program.slice(lineStart, at);
-    const opensStatement = before.trim() === '' || /[(,]\s*$/.test(before);
+    // A statement starts the line, follows `;` (lineStart), or follows a
+    // compound statement's colon (`if ok: d: str = …`, #2721 review).
+    const opensStatement = before.trim() === '' || /[(,:]\s*$/.test(before);
     if (annotated !== '' && opensStatement && !BLOCK_KEYWORDS.has(annotated)) {
       name = annotated;
       nameAt = at;
@@ -2633,9 +2652,73 @@ function targetBefore(program: string, op: number, view: CodeView, depths: Int32
 }
 
 /**
+ * Python's and JavaScript's augmented assignment operators, longest first so
+ * `>>>=` is not read as `>=` (#2721 review: `??=`, `||=`, `&&=` bound
+ * nothing).
+ */
+const AUGMENTED_OPERATORS = [
+  '>>>=', '**=', '//=', '>>=', '<<=', '&&=', '||=', '??=',
+  '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '@=', ':=',
+];
+
+/**
+ * Every name of a tuple or list target before the top-level plain `=` at `op`
+ * (`d, e = …`, `(d, e) = …`, `[d, *rest] = …`), or null when the target is
+ * not one. All of them, not the one at the literal's position: in JavaScript
+ * `d, e = '…', 1` is the comma operator and assigns the literal to `e`, and
+ * the mask does not know the language (#2721 review). An element that is not
+ * a name (`1` in `let a = 1, d = …`, a subscript) binds nothing.
+ */
+function tupleTargets(program: string, op: number, view: CodeView, depths: Int32Array): string[] | null {
+  let start = op;
+  let comma = false;
+  for (let j = op - 1; j >= 0; j--) {
+    if (view.mask[j] === 0 && depths[j] === 0) {
+      const ch = program[j];
+      if (ch === ';' || ch === '{' || ch === '}' || ch === '=' || ch === ':' || (ch === '\n' && !continuedAt(program, j))) break;
+      if (ch === ',') comma = true;
+    }
+    start = j;
+  }
+  const region = program.slice(start, op).replace(/\\\r?\n/g, ' ').trim().replace(/^(?:const|let|var)\s+/, '');
+  if (!comma && !/^[([][\s\S]*[)\]]$/.test(region)) return null;
+  const names: string[] = [];
+  const collect = (from: number, to: number): void => {
+    let depth = 0;
+    let s = from;
+    for (let i = from; i <= to; i++) {
+      if (i < to && view.mask[i] !== 0) continue;
+      const c = i < to ? program[i] : ',';
+      if (c === '(' || c === '[') depth++;
+      else if (c === ')' || c === ']') depth--;
+      else if (c === ',' && depth === 0) {
+        const text = program.slice(s, i).replace(/\\\r?\n/g, ' ').trim().replace(/^(?:const|let|var)\s+/, '').replace(/^\*\s*/, '');
+        if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(text)) names.push(text);
+        else if (/^\([\s\S]*\)$|^\[[\s\S]*\]$/.test(text)) {
+          const first = s + program.slice(s, i).search(/[([]/);
+          const last = s + Math.max(program.slice(s, i).lastIndexOf(')'), program.slice(s, i).lastIndexOf(']'));
+          collect(first + 1, last);
+        }
+        s = i + 1;
+      }
+    }
+  };
+  collect(start, op);
+  return names;
+}
+
+/** The names a top-level plain `=` at `op` assigns: a tuple's every name, or the one target. */
+function targetsAt(program: string, op: number, view: CodeView, depths: Int32Array): string[] {
+  const tuple = tupleTargets(program, op, view, depths);
+  if (tuple !== null) return tuple;
+  const one = targetBefore(program, op, view, depths);
+  return one === null ? [] : [one];
+}
+
+/**
  * The names the literal starting at `start` is assigned to (#2720): the
- * target of the assignment whose right-hand side holds it, and every earlier
- * target of a chain, through any operator,
+ * target of the assignment whose right-hand side holds it (every name of a
+ * tuple target), and every earlier target of a chain, through any operator,
  * grouping parentheses, list displays and path-building calls
  * (`carriesOut`). One rule rather than one link per form, which is what four
  * review rounds of #2718 asked for. It is read backward from the literal at
@@ -2667,37 +2750,39 @@ function assignmentTargets(program: string, start: number, view: CodeView): stri
       continue;
     }
     if (depths[j] !== level) continue;
-    if (level === 0 && (ch === ';' || ch === '{' || ch === '}' || (ch === '\n' && program[j - 1] !== '\\'))) return [];
+    if (level === 0 && (ch === ';' || ch === '{' || ch === '}' || (ch === '\n' && !continuedAt(program, j)))) return [];
     if (ch === ',') {
       comma = true;
       continue;
     }
     if (ch !== '=' || program[j + 1] === '=' || program[j + 1] === '>') continue;
-    const before = program[j - 1] ?? '';
-    if (before === '=' || before === '!') continue;
-    let op = j;
-    if (before === '<' || before === '>') {
-      if (program[j - 2] !== before) continue; // `<=`, `>=`; `<<=`, `>>=` assign
-      op = j - 2;
-    } else if (before === '*' || before === '/') {
-      op = program[j - 2] === before ? j - 2 : j - 1;
-    } else if ('+-%&|^@:'.includes(before) && before !== '') {
-      op = j - 1;
-    }
-    const augmented = op !== j && before !== ':';
+    const operator = AUGMENTED_OPERATORS.find(o => program.startsWith(o, j - o.length + 1));
+    // `==`, `!=`, `<=`, `>=`, and the tail of `===` and `!==`.
+    if (operator === undefined && j > 0 && '=!<>'.includes(program[j - 1])) continue;
+    const op = operator === undefined ? j : j - operator.length + 1;
+    const augmented = operator !== undefined && operator !== ':=';
     if (level > 0 && (comma || augmented)) continue;
-    const first = targetBefore(program, op, view, depths);
-    const targets = first === null ? [] : [first];
-    if (level > 0 || op !== j) return targets;
-    // A chain (`x = y = '…'`): every earlier plain `=` in the statement
-    // assigns the same value (#2721 review).
+    const single = (at: number): string[] => {
+      const t = targetBefore(program, at, view, depths);
+      return t === null ? [] : [t];
+    };
+    if (level > 0) return single(op);
+    const targets = op !== j ? single(op) : targetsAt(program, op, view, depths);
+    // A chain (`x = y = '…'`, JavaScript's `x = y ??= '…'` and `y ||= x =
+    // '…'`): every earlier assignment in the statement holds the value too
+    // (#2721 review).
     for (let k = op - 1; k >= 0; k--) {
       if (view.mask[k] !== 0 || depths[k] !== 0) continue;
       const c = program[k];
-      if (c === ';' || c === '{' || c === '}' || (c === '\n' && program[k - 1] !== '\\')) break;
-      if (c !== '=' || program[k + 1] === '=' || program[k + 1] === '>' || (k > 0 && '=!<>+-*/%&|^@:'.includes(program[k - 1]))) continue;
-      const t = targetBefore(program, k, view, depths);
-      if (t !== null) targets.push(t);
+      if (c === ';' || c === '{' || c === '}' || (c === '\n' && !continuedAt(program, k))) break;
+      if (c !== '=' || program[k + 1] === '=' || program[k + 1] === '>') continue;
+      const earlier = AUGMENTED_OPERATORS.find(o => program.startsWith(o, k - o.length + 1));
+      if (earlier === undefined && k > 0 && '=!<>'.includes(program[k - 1])) continue;
+      if (earlier === undefined) targets.push(...targetsAt(program, k, view, depths));
+      else {
+        targets.push(...single(k - earlier.length + 1));
+        k -= earlier.length - 1;
+      }
     }
     return targets;
   }
@@ -2725,7 +2810,7 @@ function boundIdentifiers(program: string, at: number, protectedName: string, vi
   const tail = program.slice(at + protectedName.length, close);
   if (tail !== '' && !(protectedName.endsWith('/') && /^(?:[\w.\-/]|\{[^{}\n]*\})+$/.test(tail))) return [];
   // A backslash-newline inside a literal is a line continuation, not a newline.
-  if (program.slice(open, close).replace(/\\\n/g, '').includes('\n')) return [];
+  if (program.slice(open, close).replace(/\\\r?\n/g, '').includes('\n')) return [];
   let start = open;
   for (let j = k - 1; j >= 0 && /^[ \t]*(?:[rbfuRBFU]{1,2})?$/.test(program.slice(view.literals[j][1] + 1, start)); j--) {
     start = view.literals[j][0];
