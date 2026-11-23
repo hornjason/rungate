@@ -88,7 +88,7 @@ import { ciSetupStep } from "../ci-setup-step";
 import { DEFAULT_PROFILE, isRuleIncluded, type ScaffoldProfile } from "./profiles";
 import { referencedPaths } from "../agents-md-refs";
 import { scanDocsDirectory } from "../doc-routing";
-import { inferredTestCommand, testCommandDecision } from "../test-command";
+import { agentTestCommand, inferredTestCommand, testCommandDecision } from "../test-command";
 import { declaredBunVersion, setupBunEnv, setupBunWith } from "../bun-version";
 import { NON_SPEC_FILES, codeMapUnreferenced, unlistedSpecs } from "../spec-listing";
 import { censusReport, stampWorkflow, workflowBody, workflowCensus } from "./workflow-census";
@@ -573,6 +573,7 @@ export function generateAgentsMdContent(
     techStack,
     repoUrl,
     testCmd,
+    agentTestCmd: agentTestCommand(projectPath),
     keyFiles,
     specs: specEntries,
     testFiles: testEntries,

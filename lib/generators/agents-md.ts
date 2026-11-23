@@ -131,6 +131,7 @@ export function generateAgentsMd(scan: ProjectScan, today: string = localCalenda
     techStack,
     repoUrl,
     testCmd,
+    agentTestCmd,
     keyFiles,
     hasCodeMap,
     consumers,
@@ -138,6 +139,13 @@ export function generateAgentsMd(scan: ProjectScan, today: string = localCalenda
   } = scan;
 
   const techLine = techStack.length > 0 ? `\n**Tech:** ${techStack.join(", ")}` : "";
+
+  // #2707. With `dev.agentTestCmd` set, agents run the tests their change
+  // touches and CI's `test` job runs the full suite; unset, the line is the
+  // one every project has always had.
+  const testRule = agentTestCmd
+    ? `- Before you commit, run the tests your change touches (\`${agentTestCmd}\`) and show real output — no summaries. CI's \`test\` job runs the full suite (\`${testCmd}\`) on every pull request`
+    : `- Run full test suite (\`${testCmd}\`) and show real output — no summaries, no skipped files`;
 
   // #552. `scan.repoUrl` is `git remote get-url origin`, and a project with
   // no remote called `origin` gets `""` — which this line turned into
@@ -254,7 +262,7 @@ ${repoLine}
 - Verify before asserting — try it first, report what actually happened
 - Never fake results or hide failures — if it fails, report it honestly
 - Fix all test failures before reporting done — a green suite is the minimum bar
-- Run full test suite (\`${testCmd}\`) and show real output — no summaries, no skipped files
+${testRule}
 - Fix the source, not the output — fix generator, not generated files
 - Commit all changes before reporting done — uncommitted work is lost work
 - Read PROJECT-STATE.md first on session start — it's the session bridge

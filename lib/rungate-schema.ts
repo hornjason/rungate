@@ -7,6 +7,14 @@ export const DevSchema = z.object({
   preStart: z.string().optional(),
   testCmd: z.string().optional(),
   /**
+   * What an agent runs before it commits, when that is not the full suite
+   * (#2707). Set, the generated AGENTS.md tells agents to run the tests their
+   * change touches with this command and says CI's `test` job runs the full
+   * suite, `testCmd`. CI keeps running `testCmd` either way. Unset or blank,
+   * the Rules line says to run the full suite, as it always has.
+   */
+  agentTestCmd: z.string().optional(),
+  /**
    * The project's type check, or `null` when it has nothing to type-check.
    *
    * **Nullable as well as optional (#87)**, for `healthPath`'s reason below.

@@ -20,7 +20,7 @@ import { resolveConfig } from "./config-loader";
 import { isHarnessItself } from "./harness-identity";
 import { isSpecFile } from "./spec-listing";
 import { scanDocsDirectory } from "./doc-routing";
-import { testCommandDecision } from "./test-command";
+import { agentTestCommand, testCommandDecision } from "./test-command";
 import { projectStateDerivation, projectStateKeyFileRows } from "./project-state-derivation";
 import type {
   ProjectScan,
@@ -694,6 +694,7 @@ export function scanProject(root: string): ProjectScan {
     techStack: detectTechStack(root),
     repoUrl: detectRepoUrl(root),
     testCmd: detectTestCmd(root),
+    agentTestCmd: agentTestCommand(root),
     keyFiles: scanKeyFiles(root),
     specs: scanSpecs(root),
     testFiles: scanTestFiles(root),

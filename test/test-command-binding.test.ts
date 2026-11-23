@@ -19,7 +19,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-import { DEFAULT_TEST_COMMAND, testCommandDecision } from "../lib/test-command";
+import { DEFAULT_TEST_COMMAND, agentTestCommand, testCommandDecision } from "../lib/test-command";
 import { createCiWorkflows, generateAgentsMdContent } from "../lib/scaffold/steps";
 import { testCommandsNamedByCiWorkflow } from "../lib/test-command-positions";
 import { readFileSync } from "fs";
@@ -27,18 +27,19 @@ import { readFileSync } from "fs";
 const roots: string[] = [];
 afterAll(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); });
 
-function project(opts: { testCmd?: string; script?: string; pkg?: boolean } = {}): string {
+function project(opts: { testCmd?: string; agentTestCmd?: string; script?: string; pkg?: boolean } = {}): string {
   const root = mkdtempSync(join(tmpdir(), "test-cmd-488-"));
   roots.push(root);
   if (opts.pkg !== false) {
     const scripts = opts.script === undefined ? {} : { test: opts.script };
     writeFileSync(join(root, "package.json"), JSON.stringify({ name: "demo", scripts }));
   }
-  if (opts.testCmd !== undefined) {
+  if (opts.testCmd !== undefined || opts.agentTestCmd !== undefined) {
     mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+    const dev = { testCmd: opts.testCmd, agentTestCmd: opts.agentTestCmd };
     writeFileSync(
       join(root, ".claude", "rungate", "config.json"),
-      JSON.stringify({ project: "demo", dev: { testCmd: opts.testCmd } }),
+      JSON.stringify({ project: "demo", dev }),
     );
   }
   return root;
@@ -133,5 +134,47 @@ describe("#488: one binding decides the test command", () => {
       command: DEFAULT_TEST_COMMAND,
       source: "default",
     });
+  });
+});
+
+/**
+ * #2707: what an agent runs before it commits is the consumer's to choose.
+ * The Rules line said "Run full test suite" whatever the project decided,
+ * and one consumer whose agents run only the tests their change touches
+ * (four agents each running the full suite on one laptop had timed out) had
+ * a generated AGENTS.md contradicting its own CLAUDE.md, with no key to fix
+ * it. The CI job is the other half: it keeps running the full suite.
+ */
+describe("#2707: the Rules line follows dev.agentTestCmd, and CI keeps the full suite", () => {
+  const FULL_RULE = (cmd: string) =>
+    `- Run full test suite (\`${cmd}\`) and show real output — no summaries, no skipped files\n`;
+  const TARGETED_RULE = (agent: string, ci: string) =>
+    `- Before you commit, run the tests your change touches (\`${agent}\`) and show real output — no summaries. ` +
+    `CI's \`test\` job runs the full suite (\`${ci}\`) on every pull request\n`;
+
+  test("set: agents are told the targeted command, and CI still runs the full suite", () => {
+    const root = project({ testCmd: "bun test --bail", agentTestCmd: "bash scripts/check-unit-suite.sh" });
+    expect(agentTestCommand(root)).toBe("bash scripts/check-unit-suite.sh");
+    const md = generateAgentsMdContent(root, "code", []);
+    expect(md).toContain(TARGETED_RULE("bash scripts/check-unit-suite.sh", "bun test --bail"));
+    expect(md, "the full-suite rule is still there beside the targeted one").not.toContain("Run full test suite");
+    expect(ciTestStep(root), "CI runs the agents' command instead of the full suite").toBe("bun test --bail");
+    expect(md, "the Commands table stopped naming the full suite").toContain("| Test | `bun test --bail` |");
+  });
+
+  test("unset: the Rules line is today's, word for word", () => {
+    const root = project({ testCmd: "bun test --bail" });
+    expect(agentTestCommand(root)).toBeNull();
+    const md = generateAgentsMdContent(root, "code", []);
+    expect(md).toContain(FULL_RULE("bun test --bail"));
+    expect(md).not.toContain("Before you commit, run the tests your change touches");
+  });
+
+  test("an empty or blank value is unset, not a rule naming nothing", () => {
+    for (const blank of ["", "   "]) {
+      const root = project({ testCmd: "bun test", agentTestCmd: blank });
+      expect(agentTestCommand(root), JSON.stringify(blank)).toBeNull();
+      expect(generateAgentsMdContent(root, "code", [])).toContain(FULL_RULE("bun test"));
+    }
   });
 });

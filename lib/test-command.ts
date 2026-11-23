@@ -92,6 +92,22 @@ export function testCommandDecision(root: string): TestCommandDecision {
 }
 
 /**
+ * The command an agent runs before committing, when the project says it is
+ * not the full suite: `dev.agentTestCmd`, or null (#2707).
+ *
+ * Read through the same loader as `testCommandDecision`, and it throws on a
+ * malformed config for the same reason. Null means "agents run the full
+ * suite", which is what every project without the key has always been told.
+ * A blank value is null: a rule naming an empty command tells an agent
+ * nothing.
+ */
+export function agentTestCommand(root: string): string | null {
+  const config = tryLoadRungateConfig(root) as { dev?: { agentTestCmd?: unknown } } | null;
+  const declared = config?.dev?.agentTestCmd;
+  return typeof declared === "string" && declared.trim() !== "" ? declared.trim() : null;
+}
+
+/**
  * The same decision with the config rung removed — what this project's test
  * command would be if the config said nothing.
  *
