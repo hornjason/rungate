@@ -147,12 +147,9 @@ interface QuotedSubstitution {
  * a second walk over the quoting: a second walk read an apostrophe in a `#`
  * comment as a quote and lost every later substitution (#2723 review).
  */
-function scanTokens(cmd: string, followCased = false): { tokens: string[]; subs: QuotedSubstitution[]; cased: boolean } {
+function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[] } {
   const out: string[] = [];
   const subs: QuotedSubstitution[] = [];
-  // Whether any quoted substitution has a case-aware close later than its
-  // case-blind one, so a second reading would read differently.
-  let cased = false;
   let cur = "";
   let quote: '"' | "'" | null = null;
   let started = false;
@@ -186,29 +183,10 @@ function scanTokens(cmd: string, followCased = false): { tokens: string[]; subs:
       continue;
     }
     if (quote === '"' && c === "$" && cmd[i + 1] === "(") {
-      // Two readings of where it ends (#2723 review). The first reading's word
-      // goes on from the first `)` at depth 0, read as if no `case` were open,
-      // so a miscounted case cannot carry later text into the substitution and
-      // out of the command. A case-aware close that ends later is the one bash
-      // takes for a real case: the first reading records its substitution
-      // too, and the second (`followCased`) lets the word go on from it, since
-      // a branch that prints a quote (`echo '"'`) inverts the first reading's
-      // quotes and hides what follows. One second reading per command, every
-      // substitution following its case-aware close: one per substitution
-      // re-read and recursed again, and grew with the fourth power of their
-      // count. A filing either reading finds is refused; a miscount costs at
-      // most a refusal.
-      const end = substitutionEnd(cmd, i + 2, false);
-      const aware = substitutionEnd(cmd, i + 2, true);
-      if (aware > end) cased = true;
-      const close = followCased && aware > end ? aware : end;
-      // The second reading adds no substitutions: the first recorded both.
-      if (!followCased) {
-        subs.push({ token: out.length, text: cmd.slice(i + 2, end) });
-        if (aware > end) subs.push({ token: out.length, text: cmd.slice(i + 2, aware) });
-      }
-      cur += cmd.slice(i, close + 1);
-      i = close;
+      const end = substitutionEnd(cmd, i + 2);
+      subs.push({ token: out.length, text: cmd.slice(i + 2, end) });
+      cur += cmd.slice(i, end + 1);
+      i = end;
       continue;
     }
     if (quote === '"' && c === "`") {
@@ -244,7 +222,7 @@ function scanTokens(cmd: string, followCased = false): { tokens: string[]; subs:
     started = true;
   }
   flush();
-  return { tokens: out, subs, cased };
+  return { tokens: out, subs };
 }
 
 const SEPARATORS = new Set(OPERATORS);
@@ -271,9 +249,9 @@ const SEPARATORS = new Set(OPERATORS);
  * branch that will be wrong silently, so it is gone rather than kept for
  * reassurance.
  */
-export function clauses(cmd: string, depth = 0, followCased = false): string[][] {
+export function clauses(cmd: string, depth = 0): string[][] {
   const flat: string[][] = [[]];
-  const { tokens, subs, cased } = scanTokens(heredocView(cmd), followCased);
+  const { tokens, subs } = scanTokens(heredocView(cmd));
   for (const t of tokens) {
     if (SEPARATORS.has(t)) flat.push([]);
     else flat[flat.length - 1].push(t);
@@ -289,58 +267,22 @@ export function clauses(cmd: string, depth = 0, followCased = false): string[][]
   if (depth < 4) {
     for (const sub of subs) out.push(...clauses(sub.text, depth + 1));
   }
-  // The same command, every quoted substitution's word going on from its
-  // case-aware close: once, at this depth (#2723 review).
-  if (cased && !followCased) out.push(...clauses(cmd, depth, true));
   return out;
-}
-
-/**
- * Whether the word at `j` sits where the shell reads `case` and `esac` as
- * keywords: bash's `reserved_word_acceptable` tokens. That is the
- * substitution's start; after `;`, `&`, `|`, `(`, `)`, `{` or a newline; after
- * a `}` or `]]` that is its own word; or after `!`, `do`, `done`, `elif`,
- * `else`, `esac`, `fi`, `if`, `then`, `time`, `until`, `while` or `coproc`
- * (and `in`, for an empty `case x in esac`). So `case x in x) esac` and `fi
- * esac` close a case, and `echo case x` opens nothing (#2723 review). A `)`
- * that closed a word part (`$(date) case`, offsets in `wordCloses`) is no
- * token: the word goes on. Reading the word before is not the shell's
- * grammar (`echo fi case` counts a case), and a miscount here costs at most a
- * refusal, since the outer word never goes on from the case-aware close
- * (`scanTokens`).
- */
-function commandStart(cmd: string, from: number, j: number, keyword: "case" | "esac", wordCloses: ReadonlySet<number>): boolean {
-  let k = j - 1;
-  while (k >= from && (cmd[k] === " " || cmd[k] === "\t")) k--;
-  if (k < from) return true;
-  if (cmd[k] === ")") return !wordCloses.has(k);
-  if (/[;&|({\n]/.test(cmd[k])) return true;
-  const closer = cmd[k] === "}" ? k : cmd[k] === "]" && cmd[k - 1] === "]" ? k - 1 : -1;
-  if (closer >= 0) return closer === from || /[\s;&|]/.test(cmd[closer - 1]);
-  let w = k;
-  while (w > from && /[\w!]/.test(cmd[w - 1])) w--;
-  const before = cmd.slice(w, k + 1);
-  return /^(?:!|do|done|elif|else|esac|fi|if|then|time|until|while|coproc)$/.test(before) || (keyword === "esac" && before === "in");
 }
 
 /**
  * The offset of the `)` closing a `$(` whose text starts at `from`, or the end
  * of `cmd`. Inside it the quoting starts afresh, and a `#` starting a word is a
  * comment to the end of the line, as `tokenize` reads one (#2723 review).
- * With `caseAware`, a pattern's `)` inside an open `case` closes nothing.
+ *
+ * It does not read `case`: a pattern's `)` closes the substitution as any `)`
+ * does, so a filing in a later branch is text in the outer word, as on main.
+ * Rounds 2 to 5 of #2723 read case statements, and each round found the next
+ * miss in that reading, so it was taken out (rule 5). How this file reads a
+ * command at all is the follow-up issue's.
  */
-function substitutionEnd(cmd: string, from: number, caseAware: boolean): number {
+function substitutionEnd(cmd: string, from: number): number {
   let depth = 0;
-  // Open `case` statements: inside one, a pattern's `)` closes nothing (#2723 review).
-  let cases = 0;
-  // The first `)` skipped as a pattern's. A scan that never closes read a
-  // case that was not one, so it falls back to the case-blind close and adds
-  // no reading (#2723 review).
-  let skipped = -1;
-  // Per open `(`, whether it opened a word part (`$(`, `<(`, `>(`, an extglob
-  // `@(`), and the offsets of the `)` that closed one.
-  const parts: boolean[] = [];
-  const wordCloses = new Set<number>();
   let quote: '"' | "'" | null = null;
   for (let j = from; j < cmd.length; j++) {
     const c = cmd[j];
@@ -356,25 +298,14 @@ function substitutionEnd(cmd: string, from: number, caseAware: boolean): number 
       while (j < cmd.length && cmd[j] !== "\n") j++;
       continue;
     }
-    const wordStart = caseAware && (j === from || /[\s;&|(]/.test(cmd[j - 1]));
-    if (wordStart && /^case\s/.test(cmd.slice(j, j + 5)) && commandStart(cmd, from, j, "case", wordCloses)) cases++;
-    else if (wordStart && /^esac(?![\w-])/.test(cmd.slice(j, j + 5)) && cases > 0 && commandStart(cmd, from, j, "esac", wordCloses)) cases--;
     if (c === "'" || c === '"') quote = c;
-    else if (c === "(") {
-      depth++;
-      const p = cmd[j - 1] ?? "";
-      parts.push(/[$<>@?+*]/.test(p));
-    } else if (c === ")") {
-      if (depth === 0 && cases > 0) {
-        if (skipped < 0) skipped = j;
-        continue;
-      }
+    else if (c === "(") depth++;
+    else if (c === ")") {
       if (depth === 0) return j;
       depth--;
-      if (parts.pop() === true) wordCloses.add(j);
     }
   }
-  return skipped >= 0 ? skipped : cmd.length;
+  return cmd.length;
 }
 
 /**
@@ -489,7 +420,6 @@ function scanForFiling(
   cmd: string,
   from: string,
   depth: number,
-  followCased = false,
 ): { found: string | null; dir: string } {
   let dir = from;
   const entered: string[] = [];
@@ -525,7 +455,7 @@ function scanForFiling(
     if (entered.length > 0) dir = entered.pop()!;
   };
 
-  const { tokens, subs, cased } = scanTokens(heredocView(cmd), followCased);
+  const { tokens, subs } = scanTokens(heredocView(cmd));
   for (const [k, t] of tokens.entries()) {
     if (t === "`") {
       if (inBacktick) close();
@@ -568,12 +498,6 @@ function scanForFiling(
     }
   }
   settle();
-  // The same command's second reading, from the directory it started in, as
-  // `clauses()` takes it (#2723 review).
-  if (found === null && cased && !followCased) {
-    const again = scanForFiling(cmd, from, depth, true);
-    if (again.found !== null) found = again.found;
-  }
   return { found, dir };
 }
 

@@ -381,21 +381,6 @@ describe("#2723 review round 1: one scanner, and the directory reader reads what
 });
 
 describe("#2723 review round 2", () => {
-  test("a case pattern's ) inside a quoted substitution does not end it", () => {
-    for (const cmd of [
-      `echo "$(case x in x) gh issue create --title t;; esac)"`,
-      `echo "$(case x in (x) gh issue create --title t;; esac)"`,
-    ]) {
-      expect(verifyPhaseRefusal(cmd), cmd).not.toBeNull();
-    }
-  });
-
-  test("a word that only ends in case opens no case statement", () => {
-    // Read as one, its `)` would not close the substitution, and the filing
-    // after it would be swallowed into the quoted word.
-    expect(clauses(`echo "$(echo showcase x)"; gh issue create --title t`).some(createsIssue)).toBe(true);
-  });
-
   test("the comment rule, in both scans, on its edge inputs", () => {
     for (const cmd of [
       `echo a;# it's\necho "$(gh issue create)"`,
@@ -410,10 +395,19 @@ describe("#2723 review round 2", () => {
   });
 });
 
-describe("#2723 review round 3", () => {
-  test("case as an argument opens no case statement, so the substitution closes at its )", () => {
-    // Round 2 counted every word `case`; the `)` was then read as a pattern's,
-    // and the filing after the closing quote was swallowed into the word.
+/**
+ * #2723 review rounds 2 to 5 read `case` statements inside a quoted
+ * substitution, and each round found the next miss in that reading: a word
+ * `case` as an argument, `esac` positions, a branch printing a quote, a cost
+ * that grew with the fourth power of the count, `case` straight after a `)`,
+ * and a substitution only a second reading reached. Rule 5: the reading was
+ * taken out. A pattern's `)` closes the substitution as any `)` does, and how
+ * this file reads a command at all is the follow-up issue's.
+ */
+describe("#2723 rule 5: case statements in a quoted substitution are not read", () => {
+  test("a word case as an argument does not hide a filing after the substitution", () => {
+    // Round 2's case reading counted these, never closed the substitution, and
+    // swallowed the filing (round 3's high findings).
     for (const cmd of [
       `echo "$(printf case x)" ; gh issue create --title t`,
       `echo "$(echo case )" ; gh issue create --label bug`,
@@ -424,103 +418,16 @@ describe("#2723 review round 3", () => {
     }
   });
 
-  test("esac as an argument closes no case statement", () => {
-    // Read as one, the next pattern's `)` would end the substitution early,
-    // and the filing in that branch would sit in the outer word as text.
-    const cmd = `echo "$(case x in x) echo esac;; y) gh issue create --title t;; esac)"`;
-    expect(verifyPhaseRefusal(cmd), cmd).not.toBeNull();
-  });
-
-  test("case at a command's start still opens one: after ;, &&, a newline, then, and a pattern's )", () => {
+  test("CONCESSION: a filing a case statement hides is not read, as on main", () => {
+    // The shapes rounds 2 to 5 found, pinned so the redesign turns them red.
     for (const cmd of [
-      `echo "$(true; case x in x) gh issue create --title t;; esac)"`,
-      `echo "$(true && case x in x) gh issue create --title t;; esac)"`,
-      `echo "$(true\ncase x in x) gh issue create --title t;; esac)"`,
-      `echo "$(if true; then case x in x) gh issue create --title t;; esac; fi)"`,
-      `echo "$(case a in a) case b in b) gh issue create --title t;; esac;; esac)"`,
-      // The nested case counted: else the outer `c)` ends the substitution.
-      `echo "$(case a in a) case b in b) true;; esac;; c) gh issue create --title t;; esac)"`,
-    ]) {
-      expect(verifyPhaseRefusal(cmd), cmd).not.toBeNull();
-    }
-  });
-
-  test("esac closes a case wherever the shell reads it as a keyword", () => {
-    // A second case follows each, with a filing in its branch: an esac missed
-    // leaves the first case open, the case-aware scan never closes, and only
-    // the case-blind reading is left, which stops at the second pattern's `)`.
-    for (const first of [
-      `case x in esac`,
-      // An empty branch: the pattern's `)` then `esac`.
-      `case x in x) esac`,
-      `case x in (x) esac`,
-      // After a compound command's closer, with no `;;`.
-      `case x in x) if true; then true; fi esac`,
-      `case x in x) { true; } esac`,
-      `case a in a) case b in b) true;; esac esac`,
-    ]) {
-      const cmd = `echo "$(${first}; case y in y) gh issue create --title t;; esac)"`;
-      expect(verifyPhaseRefusal(cmd), cmd).not.toBeNull();
-    }
-  });
-
-  test("the outer word goes on from the first ), whatever the case reading says", () => {
-    // `echo fi case` counts a case (the word before is `fi`), so the
-    // case-aware scan skips the real `)`, reads the outer quotes inverted, and
-    // closes inside the last string. The outer reading does not follow it.
-    const cmd = `echo "$(echo fi case )" ; gh issue create --title t ; echo " ; esac )"`;
-    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
-  });
-
-  test("a case branch that prints a quote does not hide what follows", () => {
-    // Read case-blind, the substitution ends at the pattern's `)`, the `"`
-    // printed in the branch closes the outer quote, and the `'` opens one
-    // that runs to the end. Bash closes at the last `)`, and the command is
-    // read that way too.
-    for (const cmd of [
+      `echo "$(case x in x) gh issue create --title t;; esac)"`,
       `echo "$(case x in x) echo '"';; esac)"; gh issue create --title t`,
-      `echo "$(case x in x) echo '"';; esac)" && gh issue create --title t`,
-    ]) {
-      expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
-    }
-    // The filing gate's reader takes the same second reading, in the
-    // directory the command is in.
-    expect(filingDirectory(`cd /wt/a && echo "$(case x in x) echo '"';; esac)"; gh issue create --title t`, "/main")).toBe("/wt/a");
-  });
-
-  test("a command is read at most twice, however many case substitutions it holds", () => {
-    // One second reading per command, not one per substitution. Read once per
-    // substitution, each re-read recursed again: 16 of these gave 283,778
-    // clauses and 2.7 seconds. The count is asserted, not the time.
-    const k = 16;
-    const sub = `"$(case x in x) echo a;; esac)"`;
-    const cmd = `echo ${Array(k).fill(sub).join(" ")}; gh issue create --title t`;
-    const read = clauses(cmd);
-    expect(read.some(createsIssue)).toBe(true);
-    expect(read.length).toBeLessThan(10 * k);
-    expect(filingDirectory(`cd /wt/a && ${cmd}`, "/main")).toBe("/wt/a");
-  }, 30_000);
-
-  test("CONTROL: an argument case adds no reading, so a filing quoted later is text", () => {
-    // Counted, each would add a case-aware reading that ends inside the last
-    // string and reads the filing quoted there as a command.
-    for (const cmd of [
-      `echo "$(echo case )" ; echo " ; gh issue create --title t ; esac )"`,
-      // After a word part's `)` or `}`, the word goes on: `case` is an argument.
-      `echo "$(echo $(date) case )" ; echo " ; gh issue create --title t ; esac )"`,
-      `echo "$(echo <(date) case )" ; echo " ; gh issue create --title t ; esac )"`,
-      `echo "$(echo \${x} case )" ; echo " ; gh issue create --title t ; esac )"`,
+      `echo "$(case a in a)case b in b) true;; esac;; c) gh issue create --title t;; esac)"`,
+      `echo "$(case x in x) echo '"' ;; esac)" "$(gh issue create --label bug)"`,
     ]) {
       expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
     }
-  });
-
-  test("CONTROL: a case scan that never closes adds no reading", () => {
-    // A case no esac closes (a syntax error to the shell): the scan runs to
-    // the end and falls back to the case-blind close, so the filing quoted in
-    // the next command stays text.
-    const cmd = `echo "$(echo x; case )"; echo "; gh issue create --title t"`;
-    expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
   });
 });
 
