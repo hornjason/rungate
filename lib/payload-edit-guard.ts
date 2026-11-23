@@ -18,16 +18,24 @@
  *
  * ## Which writes
  *
- * The flags whose write `hand-edits` counts: body, title, milestone, labels,
- * blocked-by and blocking links, and project adds and removals. An assignee
- * is not a board write there, so claiming an issue stays allowed.
+ * Every flag but an assignee, the repository and help (#2719 review round
+ * 6). The flags `hand-edits` counts are body, title, milestone, labels,
+ * blocked-by and blocking links, and project adds and removals; gh 2.97 also
+ * sets parent and sub-issue links and the issue type (`--parent`,
+ * `--add-sub-issue`, `--type` and their removals), which no list here named.
+ * A flag this does not know to write nothing is read as a write, so a flag gh
+ * adds later is refused, not allowed. An assignee is not a board write, so
+ * claiming an issue stays allowed.
  *
  * The command is read by `clauses()` from `lib/issue-create-override.ts`,
  * the shell tokenizer the filing guard already uses (#2719 review round 2).
  * Quotes, backslash escapes, line continuations, comments, heredocs and
- * `bash -c` are its job, not a second reader's. A short flag may carry its
- * value attached (`-bTEXT`, `-mTITLE`, `-Rowner/name`), as gh's flag parser
- * allows, and a redirection is not an argument.
+ * `bash -c` are its job, not a second reader's. ANSI-C quoting is the form it
+ * does not read: `gh $'issue' edit` tokenizes as `$issue`. That is the shared
+ * tokenizer's to fix, for the filing guard too, and has its own issue. A
+ * short flag may carry its value attached (`-bTEXT`, `-mTITLE`,
+ * `-Rowner/name`), as gh's flag parser allows, and a redirection is not an
+ * argument.
  *
  * ## Which issues
  *
@@ -37,7 +45,9 @@
  * binds the board job's `--prefix`. A tree with no such spec has no payload,
  * and nothing is refused. A payload that is declared and cannot be read, a
  * missing spec or one with no `board.prefix`, refuses every board edit: a
- * broken declaration is not an absent one (#2719 review).
+ * broken declaration is not an absent one (#2719 review). So does a second
+ * spec declaring a payload: this reads one declaration, and two are a shape
+ * it does not know (#2719 review round 6).
  *
  * A milestone set into the family is refused whatever milestone the issue
  * has now, since moving an issue onto the payload board is itself a board
@@ -91,8 +101,16 @@ export const BOARD_WRITE_FLAGS: readonly string[] = [
  */
 const VALUE_FLAGS = new Set([
   ...BOARD_WRITE_FLAGS.filter(f => f !== "--remove-milestone"),
+  "--parent", "--add-sub-issue", "--remove-sub-issue", "--type",
   "--add-assignee", "--remove-assignee", "-R", "--repo",
 ]);
+
+/**
+ * The `gh issue edit` flags that write nothing `hand-edits` counts. Every
+ * other flag is a board write (#2719 review round 6): listing the writes let
+ * gh 2.97's `--parent`, `--add-sub-issue` and `--type` through.
+ */
+const NON_WRITE_FLAGS = new Set(["--add-assignee", "--remove-assignee", "-R", "--repo", "--help", "-h"]);
 const ISSUE_URL = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)\/?$/;
 
 /**
@@ -103,12 +121,14 @@ const ISSUE_URL = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)\/?$
 export function payloadPrefix(root: string): string | null {
   const dir = join(root, "specs");
   if (!existsSync(dir)) return null;
+  let found: { file: string; prefix: string } | null = null;
   for (const file of readdirSync(dir).filter(f => f.endsWith(".md")).sort()) {
     // The `governs:` value, wrapped lines included, is the declaration (#2719
     // review rounds 3 and 4): `Payload:` anywhere else in the frontmatter is
     // not one, and a `Payload:` there it cannot read is broken, not absent.
     const declaring = governsValue(frontmatter(readFileSync(join(dir, file), "utf-8")));
     if (declaring === undefined || !/\bPayload:/.test(declaring)) continue;
+    if (found !== null) throw new Error(`specs/${found.file} and specs/${file} both declare a payload ("Payload:"); this reads one`);
     const payload = /\bPayload:\s*(\S+\.md)\b/.exec(declaring)?.[1];
     if (payload === undefined) throw new Error(`specs/${file} declares a payload ("Payload:") and names no spec file this can read`);
     const path = join(dir, payload);
@@ -126,9 +146,9 @@ export function payloadPrefix(root: string): string | null {
     if (typeof prefix !== "string" || prefix === "") {
       throw new Error(`specs/${payload}, the payload specs/${file} names, has no board.prefix`);
     }
-    return prefix;
+    found = { file, prefix };
   }
-  return null;
+  return found?.prefix ?? null;
 }
 
 /**
@@ -206,7 +226,7 @@ function boardEdits(command: string): BoardEdit[] {
         value = VALUE_FLAGS.has(name) ? (w[++i] ?? null) : null;
       }
       if (name === "-R" || name === "--repo") edit.repo = value;
-      if (BOARD_WRITE_FLAGS.includes(name)) edit.flags.push(name);
+      if (!NON_WRITE_FLAGS.has(name)) edit.flags.push(name);
       if ((name === "--milestone" || name === "-m") && value !== null) edit.milestones.push(value);
     }
     if (edit.flags.length > 0) edits.push(edit);
@@ -291,7 +311,8 @@ export async function payloadEditRefusal(command: string, opts: PayloadEditOptio
       }
       if (family.test(title)) {
         return (
-          `#${issue} is in "${title}", a payload issue. ${edit.flags.join(", ")} is a board write, and any board ` +
+          `#${issue} is in "${title}", a payload issue. ${edit.flags.join(", ")} writes it (any flag but an assignee ` +
+          `or the repository is read as a board write), and any board ` +
           `write by a person or an agent ends SC-2625's hand-edit run (#1722). Comment instead: ` +
           `gh issue comment ${issue} --body-file <file>. ${why}`
         );

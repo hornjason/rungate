@@ -278,6 +278,40 @@ describe("#2719 review round 5", () => {
   });
 });
 
+describe("#2719 review round 6", () => {
+  // gh 2.97's link and type flags, and a flag gh adds later: none is listed,
+  // and each is refused, because only a known non-write is allowed.
+  test.each([
+    ["--parent 2600"], ["--remove-parent"], ["--add-sub-issue 2600"], ["--remove-sub-issue 2600"],
+    ["--type bug"], ["--remove-type"], ["--a-flag-gh-adds-later x"], ["--a-flag-gh-adds-later=x"],
+  ])("%s on a payload issue is refused", async flags => {
+    expect(await decide(`gh issue edit 2655 ${flags}`)).toContain("#2655");
+  });
+
+  test("a value-taking link flag's value is not read as an issue", async () => {
+    seen.length = 0;
+    await decide("gh issue edit 2655 --parent 2600 --type bug");
+    expect(seen).toEqual([["2655", null]]);
+  });
+
+  test("CONTROL: assignees, the repository and help stay allowed", async () => {
+    expect(await decide("gh issue edit 2655 --add-assignee @me")).toBeNull();
+    expect(await decide("gh issue edit 2655 --remove-assignee someone")).toBeNull();
+    expect(await decide("gh issue edit 2655 -R hornjason/rungate --add-assignee @me")).toBeNull();
+    expect(await decide("gh issue edit --help")).toBeNull();
+  });
+
+  test("a second spec declaring a payload is refused, not ignored", () => {
+    const root = mkdtempSync(join(tmpdir(), "peg-r6-"));
+    mkdirSync(join(root, "specs"));
+    writeFileSync(join(root, "specs", "A-ENGINE.md"), "---\ngoverns: THE ENGINE. Payload: PAY-A.md\n---\n");
+    writeFileSync(join(root, "specs", "B-ENGINE.md"), "---\ngoverns: THE OTHER. Payload: PAY-B.md\n---\n");
+    writeFileSync(join(root, "specs", "PAY-A.md"), "---\nboard:\n  prefix: Convergence\n---\n");
+    writeFileSync(join(root, "specs", "PAY-B.md"), "---\nboard:\n  prefix: Other\n---\n");
+    expect(() => payloadPrefix(root)).toThrow(/both declare a payload/);
+  });
+});
+
 describe("#2713: the hook runs the guard", () => {
   // A GitHub API that answers the milestone lookup, so the hook is driven end
   // to end through lib/github.ts with no network: issue 2655 is in the
