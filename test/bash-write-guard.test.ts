@@ -4600,6 +4600,31 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
+  // #2699 review round 1.
+  test("WITNESS: open-for-write whose mode follows a nested call in the path", () => {
+    for (const cmd of [
+      `python3 -c "import os; open(os.path.join(os.environ['RUN_STORE'], '${STATE}'), 'w').close()"`,
+      `python3 -c "import os; open(os.path.join(os.getcwd(), '${STATE}'), 'w').close()"`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a JavaScript private field is code, not a comment", () => {
+    for (const field of ["{ #x = 1 }", "{ static #x = 1 }"]) {
+      const cmd = `node - <<'JS'\nclass A ${field}; require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')\nJS`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    }
+  });
+
+  test("WITNESS: a name bound to a variable that a later write call takes", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\ndst = '${LIVE}/${STATE}'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("CONTROL: a name bound to a variable that only a read takes", () => {
+    const cmd = `python3 - <<'PY'\nimport json\np = '${LIVE}/${STATE}'\nnote = '${LONG}'\nd = json.load(open(p))\nprint(d)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
   test("WITNESS: a chain continued on the next line", () => {
     const cmd = `python3 - <<'PY'\nimport pathlib\n(pathlib.Path('${LIVE}/${STATE}')\n    ${".resolve()".repeat(10)}\n    .write_text('x'))\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);

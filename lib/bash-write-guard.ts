@@ -2431,9 +2431,31 @@ function writesNear(body: string, protectedName: string): boolean {
  */
 function callWrites(program: string, protectedName: string): boolean {
   for (const m of program.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))) {
-    if (enclosingCalls(program, m.index ?? 0).some(call => WRITE_INTENT.test(call))) return true;
+    const at = m.index ?? 0;
+    if (enclosingCalls(program, at).some(call => WRITE_INTENT.test(call))) return true;
+    // #2699 review: `dst = '<…>/workflow-state.json'` and then
+    // `shutil.copy(src, dst)` lines later. One level of binding is followed:
+    // the identifier the name's literal is assigned to counts as the name
+    // wherever a write call takes it. Deeper data flow is the evasion
+    // `WRITE_INTENT`'s docblock concedes.
+    const bound = boundIdentifier(program, at);
+    if (bound !== null) {
+      for (const use of program.matchAll(new RegExp(`\\b${bound}\\b`, 'g'))) {
+        const u = use.index ?? 0;
+        if (u === at) continue;
+        if (enclosingCalls(program, u).some(call => WRITE_INTENT.test(call))) return true;
+      }
+    }
   }
   return false;
+}
+
+/** The identifier a literal holding offset `at` is assigned to (`x = '…'`), or null. */
+function boundIdentifier(program: string, at: number): string | null {
+  const quoteAt = Math.max(program.lastIndexOf("'", at - 1), program.lastIndexOf('"', at - 1));
+  if (quoteAt < 0) return null;
+  const m = /(?:^|[\s;(,])([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[A-Za-z_][\w.]*\s*)?=\s*$/.exec(program.slice(Math.max(0, quoteAt - 80), quoteAt));
+  return m ? m[1] : null;
 }
 
 /** Per offset: 0 code, 1 inside a quote, 2 inside a `#` comment; and whether every quote closed. */
@@ -2451,11 +2473,12 @@ function codeMask(body: string): { mask: Uint8Array; balanced: boolean } {
     if (ch === "'" || ch === '"' || ch === '`') {
       quote = ch;
       mask[i] = 1;
-    } else if (ch === '#' && (i === 0 || /\s/.test(body[i - 1]))) {
+    } else if (ch === '#' && (i === 0 || /\s/.test(body[i - 1])) && (i + 1 >= body.length || /\s/.test(body[i + 1]))) {
       // A comment runs to the end of the line. An apostrophe in one ("don't")
       // would otherwise open a quote that swallows the brackets after it. Only
-      // a `#` that starts a word: `this.#x` in JavaScript and `$#` in shell
-      // are code (security review).
+      // a `#` that starts a word AND is followed by whitespace: a JavaScript
+      // private name (`this.#x`, `{ #x = 1 }`, `static #x`) and `$#` in
+      // shell are code (#2699 review).
       while (i < body.length && body[i] !== '\n') mask[i++] = 2;
     }
   }
@@ -2690,7 +2713,7 @@ function shellBody(segment: string): string {
  * reach for the obvious fix gets a red suite naming what it costs.
  */
 const WRITE_INTENT =
-  /\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\([^)]*['"][wax]\+?['"]/;
+  /\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*['"][wax]\+?['"]/;
 
 /**
  * #1176 measured the suggested widening of WRITE_INTENT to shell idioms —
