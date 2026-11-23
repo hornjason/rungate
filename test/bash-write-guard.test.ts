@@ -25,6 +25,7 @@ import { spawnSync } from "child_process";
 import {
   existsSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -4117,6 +4118,30 @@ describe("#1367 WITNESS: a link spelling the old list never named", () => {
     inScratch(base => {
       const cmd = `${mk(base)} && echo '{}' > ${base}/esc/${STATE}`;
       expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    });
+  });
+
+  // #1425. Its residual was the same-command case: `cp -a` preserves an
+  // existing link as a link, and a write through the copy in the SAME command
+  // reached the link's target with no link-creating flag anywhere. The rule
+  // above (the chain must be real) closes it, and the row in `spellings`
+  // shows the decision. This shows the case is a real bypass: run without the
+  // guard, the write lands in the target.
+  test("#1425: the cp -a row is a real bypass, executed rather than described", () => {
+    // A harmless filename stands in for the gate artifact, which the live
+    // hook refuses if this test names it.
+    inScratch(base => {
+      mkdirSync(join(base, "victim"));
+      symlinkSync(join(base, "victim"), join(base, "planted"));
+      // late-env-ok: the child is `cp` and `echo` under bash, which read no
+      // RUNGATE variable and no TMPDIR — both paths are absolute literals
+      // computed here and passed on the command line.
+      const r = spawnSync("/bin/bash", ["-c", `cp -a ${base}/planted ${base}/esc && echo x > ${base}/esc/SENTINEL`]);
+      expect(r.status, String(r.stderr)).toBe(0);
+      expect(lstatSync(join(base, "esc")).isSymbolicLink(), "cp -a dereferenced the link, so this platform cannot show the bypass").toBe(true);
+      expect(readFileSync(join(base, "victim", "SENTINEL"), "utf8")).toBe("x\n");
+      // The same command aimed at the gate artifact is refused.
+      expect(decideBashWrite(`cp -a ${base}/planted ${base}/esc2 && echo '{}' > ${base}/esc2/${STATE}`).blocked).toBe(true);
     });
   });
 
