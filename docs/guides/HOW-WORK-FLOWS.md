@@ -252,3 +252,4 @@ Two lanes, and they answer different questions:
 - `.claude/rules/parallel-sessions.md` — claiming, worktrees, merging
 - `docs/adr/ADR-009-engine-goal-and-build-order.md` — why the transform is deterministic
 - `docs/adr/ADR-003-spec-to-tracker-mapping.md` — which phase a criterion belongs to
+- `docs/guides/AI-REVIEW.md` — the AI review on every pull request: what it needs, who pays, what it costs
