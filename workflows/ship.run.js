@@ -814,8 +814,8 @@ function resolvedCheckNames(report) {
 function failureCheckName(line, failedChecks) {
     if (typeof line !== "string" || line === "")
         return undefined;
-    const reported = (Array.isArray(failedChecks) ? failedChecks : []).filter((c) => typeof c === "string" && c !== "");
-    const hits = reported.filter(c => checkNameClaimsLine(c, line));
+    const reported = new Set((Array.isArray(failedChecks) ? failedChecks : []).filter((c) => typeof c === "string" && c !== ""));
+    const hits = [...reported].filter(c => checkNameClaimsLine(c, line));
     return hits.length === 1 ? hits[0] : undefined;
 }
 function checkNameClaimsLine(name, line) {

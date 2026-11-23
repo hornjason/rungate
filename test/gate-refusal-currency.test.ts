@@ -140,6 +140,25 @@ describe("#2690: a report whose failedChecks does not claim every failure retire
       expect(ledger).toEqual([{ check: FULL }]);
     });
 
+    // Review round 2 (#2691). failedChecks is the `check` of every failure
+    // entry, so a check failing on two lines is listed twice. A repeat is one
+    // name, not two claimants: counting it twice left both lines unclaimed, so
+    // nothing retired and both refusals lost their tag.
+    test(`${name}: a name repeated in failedChecks still claims its own lines`, () => {
+      const TESTS = "verify checks > tests-pass";
+      const TSC = "verify checks > tsc";
+      expect(impl.failureCheckName(`${TESTS}: 2 failing`, [TESTS, TESTS])).toBe(TESTS);
+      const report = {
+        checksRun: [TESTS, TSC],
+        failures: [`${TESTS}: 2 failing`, `${TESTS}: 1 failing`],
+        failedChecks: [TESTS, TESTS],
+      };
+      const ledger = [{ check: TSC }, { check: TESTS }];
+      expect(impl.resolvedCheckNames(report)).toEqual([TSC]);
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([{ check: TSC }]);
+      expect(ledger, "tests-pass still fails, so its refusal stays").toEqual([{ check: TESTS }]);
+    });
+
     // Names may contain ": ", so two names can both claim one line at a
     // boundary. Such a line is unclaimed.
     test(`${name}: a line two reported names both claim is unclaimed`, () => {

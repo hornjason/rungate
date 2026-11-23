@@ -118,16 +118,20 @@ export function resolvedCheckNames(report: GateReport | null | undefined): strin
  * undefined. A line is claimed only when EXACTLY ONE name claims it, at a
  * boundary (`checkNameClaimsLine`): two names that both claim one line would
  * make its refusal retirable by either, and a refusal retired by the wrong
- * check's pass is the defect #532 fixed, pointed the other way. ship.js tags
- * its refusals with this, and `resolvedCheckNames` refuses a report with an
- * unclaimed line (#2690).
+ * check's pass is the defect #532 fixed, pointed the other way. A name listed
+ * twice is one name: `failedChecks` carries the `check` of every failure
+ * entry, so a check failing on two lines appears twice (#2691 review round 2).
+ * ship.js tags its refusals with this, and `resolvedCheckNames` refuses a
+ * report with an unclaimed line (#2690).
  */
 export function failureCheckName(line: unknown, failedChecks: unknown): string | undefined {
   if (typeof line !== "string" || line === "") return undefined;
-  const reported = (Array.isArray(failedChecks) ? failedChecks : []).filter(
-    (c: unknown): c is string => typeof c === "string" && c !== "",
+  const reported = new Set(
+    (Array.isArray(failedChecks) ? failedChecks : []).filter(
+      (c: unknown): c is string => typeof c === "string" && c !== "",
+    ),
   );
-  const hits = reported.filter(c => checkNameClaimsLine(c, line));
+  const hits = [...reported].filter(c => checkNameClaimsLine(c, line));
   return hits.length === 1 ? hits[0] : undefined;
 }
 

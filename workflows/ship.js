@@ -1965,10 +1965,11 @@ function recordGateRefusal(phaseName, gateName, result) {
   if (lines.length === 0) {
     return [recordRefusal('GATE_FAIL', phaseName, `${tag} ${result.result || 'did not report a result'} with no failures listed`)]
   }
-  // #532 — the check name comes from `failedChecks`, matched by prefix
-  // against the free-text line, through lib/gate-refusal-currency.ts's
-  // `failureCheckName` (bundled): the same rule decides whether a later gate's
-  // report may retire this refusal (#2690).
+  // #532 — the check name comes from `failedChecks`: the one name the
+  // free-text line is, or begins with followed by ": ", through
+  // lib/gate-refusal-currency.ts's `failureCheckName` (bundled). The same
+  // claim rule decides whether a later gate's report may retire this refusal
+  // (#2690).
   return lines.map(line => recordRefusal(
     UNPOPULATED_SLOT_LINE.test(line) ? 'UNPOPULATED_SLOT' : 'GATE_FAIL',
     phaseName,
