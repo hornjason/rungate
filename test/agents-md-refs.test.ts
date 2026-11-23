@@ -216,6 +216,7 @@ describe("#380 SC-848: refreshAgentsMd itself stops reporting commands as missin
 // the price to `AI_REVIEW_MODEL`, and the runs a round to `AI_REVIEW_RUNS`.
 // A change to any of them turns this red until the guide says it.
 const GUIDE = "docs/guides/AI-REVIEW.md";
+const audit = readFileSync(join(ROOT, "docs/research/ai-review-audit.md"), "utf-8");
 
 /** The table whose header row opens with `first`, as trimmed cells. */
 function markdownTable(md: string, first: string): { header: string[]; rows: string[][] } | null {
@@ -298,6 +299,10 @@ function aiReviewGuideViolations(
   const perRun = money(perRunRow?.[1]);
   const runs = Number(cell(/^Runs per round$/)?.[1] ?? NaN);
   const rounds = Number(cell(/^Rounds per pull request$/)?.[1] ?? NaN);
+  // #2715 review round 4: the rounds figure is the audit's measurement, so it
+  // is held to the audit's own table, not left free to drift within a rounding.
+  const measured = Number(/^\| Runs per pull request \| \*\*(\d+(?:\.\d+)?)\*\* mean/m.exec(audit)?.[1] ?? NaN);
+  if (rounds !== measured) v.push(`the cost table says ${rounds} rounds a pull request; the audit measured ${measured}`);
   const perRound = money(cell(/^Per round$/)?.[1]);
   const perPr = money(cell(/^Per pull request$/)?.[1]);
   if (!(perRun > 0)) v.push("the cost table states no price a run");
@@ -345,6 +350,11 @@ describe("CRC-B13: the consumer AI review guide says what the job resolves, who 
   test("CONTROL: a runs-a-round figure the job does not make is reported", () => {
     const v = broken("| Runs per round | 3 |", "| Runs per round | 4 |");
     expect(v).toContain(`the cost table says 4 runs a round; the job makes ${AI_REVIEW_RUNS}`);
+  });
+
+  test("CONTROL: a rounds figure the audit did not measure is reported, even inside a rounding", () => {
+    expect(broken("| Rounds per pull request | 2.7 |", "| Rounds per pull request | 2.8 |"))
+      .toContain("the cost table says 2.8 rounds a pull request; the audit measured 2.7");
   });
 
   test("CONTROL: a per-pull-request cost that does not follow from the table is reported", () => {

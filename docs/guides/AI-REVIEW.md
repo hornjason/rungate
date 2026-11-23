@@ -77,8 +77,8 @@ a full round.
   the bill you pay.
 - On a subscription there is no per-token bill. The runs count against the
   token owner's usage limits instead.
-- Rounds per pull request is this repository's figure, and it counts every
-  round the job ran on a pull request event, label events included. A team
+- Rounds per pull request is this repository's mean number of AI review
+  runs per pull request, 2026-11-14 to 2026-11-22 (audit section 2). A team
   that pushes or relabels more often runs more rounds.
 - A Vertex consumer can name another model in `ci.vertex.model`, as an exact
   model id, and pays that model's price. The same audit measured Sonnet 5 at
