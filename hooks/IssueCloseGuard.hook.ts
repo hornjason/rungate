@@ -33,6 +33,7 @@ import { join } from 'path';
 import { parseHookInput, findWorkflowState, parseCloseTarget, redactSecrets, HARNESS_ROOT } from './lib/utils';
 import { commentTemplateViolation, COMMENT_INVOCATION } from './lib/comment-template';
 import { createGitHubClient, getIssue } from '../lib/github';
+import { payloadEditRefusal } from '../lib/payload-edit-guard';
 
 function block(reason: string): never {
   console.log(JSON.stringify({ decision: 'block', reason }));
@@ -63,9 +64,8 @@ function validateHmac(wf: any, slug: string, issueNum: string) {
 async function main() {
   const input = await parseHookInput();
   if (!input || input.tool_name !== 'Bash') process.exit(0);
-
   const command = input.tool_input?.command || '';
-
+  const editRefusal = await payloadEditRefusal(command); if (editRefusal) block(editRefusal); // #2713
   if (COMMENT_INVOCATION.test(command)) {
     validateCommentTemplate(command);
     process.exit(0);
