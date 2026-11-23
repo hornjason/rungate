@@ -885,10 +885,12 @@ function decompositionRefusal(allAcs, phase1AcIds, subIssues, keptAcs) {
         }
     }
     const acIds = (ac) => [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s) => s.trim()) : [])].filter(Boolean);
-    const phase1Set = new Set(Array.isArray(keptAcs) ? keptAcs.flatMap(acIds) : phase1);
-    const agentPhase1 = new Set(phase1);
+    const phase1Set = new Set(phase1);
+    const keptIds = Array.isArray(keptAcs) ? new Set(keptAcs.map(ac => ac.id)) : null;
+    const isKept = (ac) => keptIds !== null ? keptIds.has(ac.id) : acIds(ac).some(id => phase1Set.has(id));
     for (const [id, labels] of claimedBy) {
-        if (phase1Set.has(id)) {
+        const inPhase1 = keptIds !== null ? acs.some(ac => isKept(ac) && acIds(ac).includes(id)) : phase1Set.has(id);
+        if (inPhase1) {
             out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
         }
         if (labels.length > 1) {
@@ -897,10 +899,10 @@ function decompositionRefusal(allAcs, phase1AcIds, subIssues, keptAcs) {
     }
     for (const ac of acs) {
         const ids = acIds(ac);
-        const placed = ids.some(id => phase1Set.has(id) || claimedBy.has(id));
+        const placed = isKept(ac) || ids.some(id => claimedBy.has(id));
         if (placed)
             continue;
-        out.push(ids.some(id => agentPhase1.has(id))
+        out.push(ids.some(id => phase1Set.has(id))
             ? `${ac.id} was in the agent's Phase 1, the run's cap dropped it, and no sub-issue carries it — it is gone, and nothing else would say so`
             : `${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`);
     }
@@ -2520,8 +2522,7 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
         .map(ac => ({
           specElement: acCoversIds(ac).join(', ') || ac.specElement || ac.id,
           reason: `deferred by decomposition — ${discovery.acs.length} of ${originalAcs.length} ACs fit the ${MAX_ACS_PER_ISSUE}-AC limit for one run`,
-          subIssue: (decomposeResult.subIssues || [])
-            .find(s => (s.acIds || []).includes(ac.id) || (s.acIds || []).includes(ac.specElement))?.number,
+          subIssue: (decomposeResult.subIssues || []).find(s => acsForGroup([ac], s).length > 0)?.number,
         }))
       const splitViolations = decompositionRefusal(
         originalAcs,

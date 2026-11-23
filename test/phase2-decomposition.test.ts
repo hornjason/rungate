@@ -452,7 +452,7 @@ describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap
   type Answer = { phase1AcIds: string[]; subIssues: { number: number; acIds: string[] }[] };
   const run = (cut: string, acs: DecomposedAc[], answer: Answer) => {
     const logs: string[] = [];
-    const out = new Function("discovery", "decomposeResult", "decompositionRefusal", "log", `
+    const out = new Function("discovery", "decomposeResult", "decompositionRefusal", "acsForGroup", "log", `
       ${coverage}
       const MAX_ACS_PER_ISSUE = ${caps[0]?.[1]}
       let acDeferrals = []
@@ -461,7 +461,7 @@ describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap
       const proceeded = (() => { ${cut}
         return true })()
       return { proceeded, discoveryRefusal, acDeferrals, kept: discovery.acs.map(a => a.id) }
-    `)({ acs: [...acs] }, answer, decompositionRefusal, (l: string) => logs.push(l));
+    `)({ acs: [...acs] }, answer, decompositionRefusal, acsForGroup, (l: string) => logs.push(l));
     return { ...out, logs } as {
       proceeded: boolean;
       discoveryRefusal: { phase: string; why: string } | null;
@@ -519,6 +519,36 @@ describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap
     const r = run(block, EIGHT, answer);
     expect(r.proceeded).toBe(false);
     expect(r.logs.join("\n")).toContain("Phase 1 keeps AC-99, which discovery never produced");
+  });
+
+  // #2716 review round 1. Several ACs can share a spec section, so "kept"
+  // is decided by the AC's own id, never by a section it shares with a kept
+  // one: that reading counted a dropped AC as placed, and the refusal this
+  // describe exists for never fired.
+  test("a dropped AC that shares its spec section with a kept AC is still refused", () => {
+    const shared = EIGHT.map(a => ({ ...a, specElement: "SC-9101" }));
+    const r = run(block, shared, SEVEN_KEPT);
+    const dropped = ids(1, 7).filter(id => !r.kept.includes(id));
+    expect(dropped.length, "the cap kept all seven, so this case tests nothing").toBe(1);
+    expect(r.proceeded).toBe(false);
+    expect(r.logs.filter(l => l.startsWith("DECOMPOSITION_REFUSED:")).join("\n")).toContain(dropped[0]);
+  });
+
+  // The deferral's sub-issue is found by the same matcher the sub-issue's
+  // body is built from, `acsForGroup`, which splits a comma-separated
+  // section list. The lookup compared the whole list, and a dropped AC with
+  // two sections got no sub-issue number while one carried it.
+  test("a dropped AC with two spec sections records the sub-issue that carries one of them", () => {
+    const first = run(block, EIGHT, SEVEN_KEPT);
+    const dropped = ids(1, 7).filter(id => !first.kept.includes(id))[0];
+    const two = EIGHT.map(a => (a.id === dropped ? { ...a, specElement: `${a.specElement}, SC-9200` } : a));
+    const answer: Answer = { phase1AcIds: ids(1, 7), subIssues: [{ number: 90, acIds: ["AC-8"] }, { number: 91, acIds: ["SC-9200"] }] };
+    const r = run(block, two, answer);
+    expect(ids(1, 7).filter(id => !r.kept.includes(id)), "the cap dropped a different AC").toEqual([dropped]);
+    expect(r.logs.filter(l => l.startsWith("DECOMPOSITION_REFUSED:"))).toEqual([]);
+    expect(r.proceeded).toBe(true);
+    const spec = two.find(a => a.id === dropped)!.specElement;
+    expect(r.acDeferrals.find(d => d.specElement === spec)?.subIssue).toBe(91);
   });
 
   test("an AC the cap drops that a sub-issue carries is deferred to it, not refused as a duplicate", () => {

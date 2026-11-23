@@ -2878,8 +2878,9 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
         .map(ac => ({
           specElement: acCoversIds(ac).join(', ') || ac.specElement || ac.id,
           reason: `deferred by decomposition — ${discovery.acs.length} of ${originalAcs.length} ACs fit the ${MAX_ACS_PER_ISSUE}-AC limit for one run`,
-          subIssue: (decomposeResult.subIssues || [])
-            .find(s => (s.acIds || []).includes(ac.id) || (s.acIds || []).includes(ac.specElement))?.number,
+          // #2716 review: the matcher the sub-issue's body is built from, so a
+          // comma-separated specElement finds the group that carries one of it.
+          subIssue: (decomposeResult.subIssues || []).find(s => acsForGroup([ac], s).length > 0)?.number,
         }))
       // #79 — the structural half, before anything downstream reads the
       // split. An AC in Phase 1 AND in a sub-issue is a deferral that

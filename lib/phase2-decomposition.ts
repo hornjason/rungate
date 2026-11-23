@@ -108,14 +108,20 @@ export function decompositionRefusal(
   }
 
   // AC-3. The #70 failure mode exactly: a deferred AC that restates one
-  // already being shipped. Flagged, never written. "Shipped" is what Phase 1
-  // keeps, by any id the AC answers to, when the caller says what that is.
+  // already being shipped. Flagged, never written.
   const acIds = (ac: DecomposedAc): string[] =>
     [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s: string) => s.trim()) : [])].filter(Boolean);
-  const phase1Set = new Set(Array.isArray(keptAcs) ? keptAcs.flatMap(acIds) : phase1);
-  const agentPhase1 = new Set(phase1);
+  const phase1Set = new Set(phase1);
+  // What Phase 1 holds, when the caller says (#2710): decided by each AC's
+  // own id, never by a spec section it shares with a kept AC. Several ACs
+  // can share a section, and reading one let a dropped AC count as kept
+  // (#2716 review).
+  const keptIds = Array.isArray(keptAcs) ? new Set(keptAcs.map(ac => ac.id)) : null;
+  const isKept = (ac: DecomposedAc): boolean =>
+    keptIds !== null ? keptIds.has(ac.id) : acIds(ac).some(id => phase1Set.has(id));
   for (const [id, labels] of claimedBy) {
-    if (phase1Set.has(id)) {
+    const inPhase1 = keptIds !== null ? acs.some(ac => isKept(ac) && acIds(ac).includes(id)) : phase1Set.has(id);
+    if (inPhase1) {
       out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
     }
     if (labels.length > 1) {
@@ -127,10 +133,10 @@ export function decompositionRefusal(
   // dropped, and every count the run prints still adds up.
   for (const ac of acs) {
     const ids = acIds(ac);
-    const placed = ids.some(id => phase1Set.has(id) || claimedBy.has(id));
+    const placed = isKept(ac) || ids.some(id => claimedBy.has(id));
     if (placed) continue;
     out.push(
-      ids.some(id => agentPhase1.has(id))
+      ids.some(id => phase1Set.has(id))
         ? `${ac.id} was in the agent's Phase 1, the run's cap dropped it, and no sub-issue carries it — it is gone, and nothing else would say so`
         : `${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`,
     );
