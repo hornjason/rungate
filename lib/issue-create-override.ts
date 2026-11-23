@@ -277,6 +277,8 @@ export function clauses(cmd: string, depth = 0): string[][] {
  */
 function substitutionEnd(cmd: string, from: number): number {
   let depth = 0;
+  // Open `case` statements: inside one, a pattern's `)` closes nothing (#2723 review).
+  let cases = 0;
   let quote: '"' | "'" | null = null;
   for (let j = from; j < cmd.length; j++) {
     const c = cmd[j];
@@ -292,9 +294,13 @@ function substitutionEnd(cmd: string, from: number): number {
       while (j < cmd.length && cmd[j] !== "\n") j++;
       continue;
     }
+    const wordStart = j === from || /[\s;&|(]/.test(cmd[j - 1]);
+    if (wordStart && /^case\s/.test(cmd.slice(j, j + 5))) cases++;
+    else if (wordStart && /^esac(?![\w-])/.test(cmd.slice(j, j + 5)) && cases > 0) cases--;
     if (c === "'" || c === '"') quote = c;
     else if (c === "(") depth++;
     else if (c === ")") {
+      if (depth === 0 && cases > 0) continue;
       if (depth === 0) return j;
       depth--;
     }
@@ -380,8 +386,10 @@ function heredocView(cmd: string): string {
  * The inner scope's directory is discarded and only a filing found inside it
  * is kept, because a wrapper's `cd` does not outlive the wrapper.
  *
- * `$(…)` needs nothing: `tokenize` already emits `$` and `(` separately, so
- * a command substitution pushes and pops through the same stack.
+ * An unquoted `$(…)` needs nothing: `tokenize` already emits `$` and `(`
+ * separately, so it pushes and pops through the same stack. One inside double
+ * quotes is a single word to `tokenize`, so `scanTokens` records it and the
+ * scan below reads it, in the directory its word is read in (#2723 review).
  *
  * ## Two documented limits, both asserted rather than assumed
  *

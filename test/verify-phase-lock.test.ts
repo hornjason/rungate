@@ -380,6 +380,34 @@ describe("#2723 review round 1: one scanner, and the directory reader reads what
   });
 });
 
+describe("#2723 review round 2", () => {
+  test("a case pattern's ) inside a quoted substitution does not end it", () => {
+    for (const cmd of [
+      `echo "$(case x in x) gh issue create --title t;; esac)"`,
+      `echo "$(case x in (x) gh issue create --title t;; esac)"`,
+    ]) {
+      expect(verifyPhaseRefusal(cmd), cmd).not.toBeNull();
+    }
+  });
+
+  test("CONTROL: a word that only contains case is not one", () => {
+    expect(clauses(`echo "$(echo showcase) x"; echo done`).some(createsIssue)).toBe(false);
+  });
+
+  test("the comment rule, in both scans, on its edge inputs", () => {
+    for (const cmd of [
+      `echo a;# it's\necho "$(gh issue create)"`,
+      `echo ok # it's\r\necho "$(gh issue create)"`,
+      `echo "$(echo a;# it's\n)"; gh issue create`,
+    ]) {
+      expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    }
+    for (const cmd of [`echo a#b "x"`, `echo "# it's" '$(gh issue create)'`]) {
+      expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
+    }
+  });
+});
+
 describe("#365 SC-827: the hook reaches the decision", () => {
   /**
    * Spawn the real hook with a real VERIFY workflow state.
