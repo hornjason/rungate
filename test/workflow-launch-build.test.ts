@@ -399,7 +399,7 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
         "rootPathRefusal", "resolveEvidencePath", "validateEvidenceCommand", "buildSafeSSHCommand",
       ],
       // #2688, SC-2775 wave 5: ship.js's REFUSAL-CURRENCY copy.
-      "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals"],
+      "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals", "failureCheckName"],
     });
   });
 
@@ -421,6 +421,8 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
       "pathRefusal", "validateFilePaths", "isSafeBranchName", "buildSafeSSHCommand", "SHELL_METACHARACTERS",
       // #2688: the refusal-currency rule.
       "resolvedCheckNames", "retireSupersededRefusals",
+      // #2690: the one rule for which check a failure line belongs to.
+      "failureCheckName",
     ]) {
       expect(bundle.defined).toContain(name);
       expect(() => buildWorkflowLaunch(`${source}\nfunction ${name}() { return null; }`, WORKFLOW_SCRIPT_CAP, bundle)).toThrow(

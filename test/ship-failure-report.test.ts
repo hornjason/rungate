@@ -36,10 +36,24 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 import { structuralCut } from "../lib/source-slice";
+import { bundleLibCores, LAUNCH_BUNDLE } from "../scripts/build-workflow-launch";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP_PATH = join(REPO_ROOT, "workflows", "ship.js");
 const shipSource = readFileSync(SHIP_PATH, "utf-8");
+
+/**
+ * lib/gate-refusal-currency.ts as the launch file bundles it (#2690).
+ * `recordGateRefusal` tags each refusal with that module's
+ * `failureCheckName`, which ship.js does not carry. The real rule, not a stub:
+ * which check a failure line belongs to is part of what this file asserts.
+ */
+const REFUSAL_CURRENCY_MODULE = "lib/gate-refusal-currency.ts";
+const REFUSAL_CURRENCY_BUNDLE: string = (() => {
+  const names = LAUNCH_BUNDLE[REFUSAL_CURRENCY_MODULE];
+  if (names === undefined) throw new Error(`LAUNCH_BUNDLE no longer carries ${REFUSAL_CURRENCY_MODULE}`);
+  return bundleLibCores({ [REFUSAL_CURRENCY_MODULE]: names }, path => readFileSync(join(REPO_ROOT, path), "utf-8")).text;
+})();
 
 const START = "// ──── FAILURE-LEDGER-START ────";
 const END = "// ──── FAILURE-LEDGER-END ────";
@@ -125,7 +139,9 @@ function loadLedger(block: string, logs: string[] = []): Ledger {
     "var gateRefusalIntake = async () => ({ reading: 'UNMEASURED', line: 'stubbed' });\n" +
     // #889: the funnel returns the retry note, so the binding has to be here.
     // ship.js's own declaration, not a copy — see NOTE_DECLARATION above.
-    `${NOTE_DECLARATION}\n`;
+    `${NOTE_DECLARATION}\n` +
+    // #2690: the launch bundle's failureCheckName, which recordGateRefusal calls.
+    `${REFUSAL_CURRENCY_BUNDLE}\n`;
   const out = new Function(
     "__log__",
     `var log = __log__;\n${prelude}${block}\n` +

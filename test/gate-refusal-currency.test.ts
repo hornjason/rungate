@@ -30,6 +30,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import {
+  failureCheckName as libFailureCheckName,
   resolvedCheckNames as libResolved,
   retireSupersededRefusals as libRetire,
 } from "../lib/gate-refusal-currency";
@@ -59,17 +60,65 @@ const BLOCK: string = (() => {
 })();
 
 const shipCopy = new Function(
-  `${BLOCK}\nreturn { resolvedCheckNames, retireSupersededRefusals }`,
+  `${BLOCK}\nreturn { resolvedCheckNames, retireSupersededRefusals, failureCheckName }`,
 )() as {
   resolvedCheckNames: (r: unknown) => string[] | null;
   retireSupersededRefusals: (e: any[], r: unknown) => any[];
+  failureCheckName: (line: unknown, failedChecks: unknown) => string | undefined;
 };
 
 /** One row run through both copies, so neither can be right alone. */
 const IMPLS = [
-  ["lib", { resolvedCheckNames: libResolved as any, retireSupersededRefusals: libRetire as any }],
+  [
+    "lib",
+    {
+      resolvedCheckNames: libResolved as any,
+      retireSupersededRefusals: libRetire as any,
+      failureCheckName: libFailureCheckName as any,
+    },
+  ],
   ["the launch bundle", shipCopy],
 ] as const;
+
+// #2690. A gate's agent copies the failing check names into `failedChecks`
+// from its `failures` lines. A partial copy left a still-failing check out of
+// the list, so it counted as resolved and its earlier refusal was retired.
+// A line is claimed only when exactly one reported name prefixes it (#532),
+// and a report with an unclaimed line retires nothing.
+describe("#2690: a report whose failedChecks does not claim every failure retires nothing", () => {
+  const TESTS = "verify checks > tests-pass: test suite passes";
+  const TSC = "verify checks > tsc-pass: typecheck passes";
+  const LINT = "verify checks > lint-pass: lint passes";
+  for (const [name, impl] of IMPLS) {
+    test(`${name}: two failing lines, one named — nothing is resolved, nothing retired`, () => {
+      const report = {
+        checksRun: [TESTS, TSC],
+        failures: [`${TESTS}: 3 failed`, `${TSC}: 2 errors`],
+        failedChecks: [TSC],
+      };
+      const ledger = [{ check: TESTS }];
+      expect(impl.resolvedCheckNames(report)).toBeNull();
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([]);
+      expect(ledger, "the refusal for a check that still fails was retired").toEqual([{ check: TESTS }]);
+    });
+
+    test(`${name}: CONTROL: every failing line claimed — the check that passed is resolved`, () => {
+      const report = { checksRun: [TESTS, TSC, LINT], failures: [`${TSC}: 2 errors`], failedChecks: [TSC] };
+      const ledger = [{ check: TESTS }, { check: TSC }];
+      expect(impl.resolvedCheckNames(report)).toEqual([TESTS, LINT]);
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([{ check: TESTS }]);
+      expect(ledger).toEqual([{ check: TSC }]);
+    });
+
+    test(`${name}: a line two reported names both prefix is unclaimed`, () => {
+      expect(impl.failureCheckName("a-b: broke", ["a", "a-b"])).toBeUndefined();
+      expect(impl.failureCheckName("a-b: broke", ["a-b"])).toBe("a-b");
+      expect(impl.failureCheckName("c: broke", ["a-b"])).toBeUndefined();
+      expect(impl.failureCheckName("", ["a"])).toBeUndefined();
+      expect(impl.resolvedCheckNames({ checksRun: ["x"], failures: ["a-b: broke"], failedChecks: ["a", "a-b"] })).toBeNull();
+    });
+  }
+});
 
 // ── what a later gate retires ───────────────────────────────────────────────
 

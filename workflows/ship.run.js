@@ -792,8 +792,21 @@ function buildSafeSSHCommand(host, command) {
 function resolvedCheckNames(report) {
     if (!report || !Array.isArray(report.checksRun) || !Array.isArray(report.failedChecks))
         return null;
+    if (Array.isArray(report.failures)) {
+        for (const line of report.failures) {
+            if (typeof line === "string" && line !== "" && failureCheckName(line, report.failedChecks) === undefined)
+                return null;
+        }
+    }
     const failed = new Set(report.failedChecks.filter((c) => typeof c === "string" && c !== ""));
     return report.checksRun.filter((c) => typeof c === "string" && c !== "" && !failed.has(c));
+}
+function failureCheckName(line, failedChecks) {
+    if (typeof line !== "string" || line === "")
+        return undefined;
+    const reported = (Array.isArray(failedChecks) ? failedChecks : []).filter((c) => typeof c === "string" && c !== "");
+    const hits = reported.filter(c => line.startsWith(c));
+    return hits.length === 1 ? hits[0] : undefined;
 }
 function retireSupersededRefusals(entries, report) {
     const resolved = resolvedCheckNames(report);
@@ -1815,18 +1828,11 @@ function recordGateRefusal(phaseName, gateName, result) {
   if (lines.length === 0) {
     return [recordRefusal('GATE_FAIL', phaseName, `${tag} ${result.result || 'did not report a result'} with no failures listed`)]
   }
-  const reported = Array.isArray(result.failedChecks)
-    ? result.failedChecks.filter(c => typeof c === 'string' && c)
-    : []
-  const nameFor = line => {
-    const hits = reported.filter(c => line.startsWith(c))
-    return hits.length === 1 ? hits[0] : undefined
-  }
   return lines.map(line => recordRefusal(
     UNPOPULATED_SLOT_LINE.test(line) ? 'UNPOPULATED_SLOT' : 'GATE_FAIL',
     phaseName,
     `${tag}: ${line}`,
-    nameFor(line),
+    failureCheckName(line, result.failedChecks),
   ))
 }
 
