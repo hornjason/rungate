@@ -3038,8 +3038,10 @@ Recorded because each one invalidates a naive reading of the criteria above.
       needs: test
       proved-by: test/ai-review-credentialed-job.test.ts "CRC-B12: the review action is handed the job's own token, so no Claude GitHub App is needed"
       fingerprint: ac7c066d
-- [ ] CRC-B13: docs/guides/AI-REVIEW.md states every credential the generated job resolves, who pays for each, the per-pull-request cost on the default model, and that a tree with no credential spends nothing.
+- [x] CRC-B13: docs/guides/AI-REVIEW.md states every credential the generated job resolves, who pays for each, the per-pull-request cost on the default model, and that a tree with no credential spends nothing.
       needs: test
+      proved-by: test/agents-md-refs.test.ts "CRC-B13: the consumer AI review guide says what the job resolves, who pays, what a pull request costs, and that no credential spends nothing"
+      fingerprint: 24845144
 - [x] CRC-M19: CRC-M18 is retired, and the diff-budget script it named is deleted. The reading module CRC-M13 needs is kept.
       needs: test
       proved-by: test/review-execution-reading.test.ts "CRC-M19: CRC-M18 is retired with its diff-budget script, and the census half stays"
