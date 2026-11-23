@@ -4611,6 +4611,16 @@ describe("#1407: write intent is read per call, not only by character distance",
   // the transcript sweep, every one an edit of docs or config. An unclosed
   // quote is built, not accidental: the evasion WRITE_INTENT's docblock
   // concedes. If this turns red, the guard got wider; measure the corpus again.
+  // A decoy spelling of the name elsewhere in the body makes the body the view
+  // read, and a write target split across literals is then not whole in it.
+  // Reading dequote's view as well, every time, was measured: it refused four
+  // more real commands, all of them a `#` inside a string read as a comment
+  // once the quotes are stripped. A decoy plus a split name is built.
+  test("CONCESSION: a decoy spelling beside a split write target", () => {
+    const cmd = `python3 -c "import shutil; shutil.copy('${LONG}/x', '${LIVE}/workflow-''state.json'); pad = '${"z".repeat(90)}'; print('${LIVE}/${STATE}')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
   test("CONCESSION: a body whose quotes never close gets the window alone", () => {
     const cmd = `python3 - <<'PY'\nimport shutil\nnote = \"it's\nshutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
