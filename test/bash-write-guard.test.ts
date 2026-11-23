@@ -4633,6 +4633,40 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
+  // Eighth security review: a guessed comment rule and a literal read too
+  // narrowly. Both readings of `#` are taken, and a literal is found by its
+  // own quotes, adjacent literals and triple quotes included.
+  test("WITNESS: a private field after a closing brace is code, not a comment", () => {
+    const cmd = `node - <<'JS'\nclass A { m() {}\n  #f = require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}') }\nnew A()\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a protected directory bound with the file name after it", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\ndst = '${LIVE}/witnesses/run.json'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a triple-quoted path bound to a variable", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\ndst = '''${LIVE}/${STATE}'''\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // The `-c` form: a stdin program names only an ABSOLUTE spelling (#1240's
+  // rule, `absoluteNamesOutsideScratch`), and a path split across literals
+  // spells none, on main as here. Which names a body is read for is not this
+  // issue's question.
+  test("WITNESS: a path of adjacent literals bound to a variable", () => {
+    for (const lit of [`'${LIVE}/' '${STATE}'`, `'${LIVE}/' r'${STATE}'`, `'${LIVE}/''${STATE}'`]) {
+      const cmd = `python3 -c "import shutil; dst = ${lit}; src = '${LONG}/x'; shutil.copy(src, dst)"`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    }
+  });
+
+  test("CONTROL: a file name merely starting with a protected one is not bound", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\ndst = '${LIVE}/${STATE}.bak'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
   test("CONTROL: a binding inside a string being edited is not a binding", () => {
     // Padded so the write sits outside the window, where main allows it too:
     // only the binding could refuse this.

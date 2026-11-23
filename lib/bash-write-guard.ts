@@ -2430,77 +2430,104 @@ function writesNear(body: string, protectedName: string): boolean {
  * would read a `#` inside a string as a comment.
  */
 function callWrites(program: string, protectedName: string): boolean {
-  for (const m of program.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))) {
-    const at = m.index ?? 0;
-    if (enclosingCalls(program, at).some(call => WRITE_INTENT.test(call))) return true;
-    // #2699 review: `dst = '<…>/workflow-state.json'` and then
-    // `shutil.copy(src, dst)` lines later. One level of binding is followed:
-    // the identifier the name's literal is assigned to counts as the name
-    // wherever a write call takes it. Deeper data flow is the evasion
-    // `WRITE_INTENT`'s docblock concedes.
-    const bound = boundIdentifier(program, at, at + protectedName.length);
-    if (bound !== null) {
-      for (const use of program.matchAll(new RegExp(`\\b${bound}\\b`, 'g'))) {
-        const u = use.index ?? 0;
-        if (u === at) continue;
-        if (enclosingCalls(program, u).some(call => WRITE_INTENT.test(call))) return true;
+  const pattern = new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+  return HASH_READINGS.some(reading => {
+    const view = codeMask(program, reading);
+    for (const m of program.matchAll(pattern)) {
+      const at = m.index ?? 0;
+      if (enclosingCalls(program, at, view).some(call => WRITE_INTENT.test(call))) return true;
+      // #2699 review: `dst = '<…>/workflow-state.json'` and then
+      // `shutil.copy(src, dst)` lines later. One level of binding is followed:
+      // the identifier the name's literal is assigned to counts as the name
+      // wherever a write call takes it. Deeper data flow is the evasion
+      // `WRITE_INTENT`'s docblock concedes.
+      const bound = boundIdentifier(program, at, protectedName, view);
+      if (bound !== null) {
+        for (const use of program.matchAll(new RegExp(`\\b${bound}\\b`, 'g'))) {
+          const u = use.index ?? 0;
+          if (u === at) continue;
+          if (enclosingCalls(program, u, view).some(call => WRITE_INTENT.test(call))) return true;
+        }
       }
     }
-  }
-  return false;
+    return false;
+  });
 }
 
 /**
- * The identifier a literal holding offset `at` is assigned to (`x = '…'`),
- * or null. The literal is the code-level one holding `at`, found through
- * `codeMask`, and it must END at the name: the variable then holds the path,
- * not text that mentions it. An assignment spelled inside another string (a
- * docblock being edited) is therefore not read as a binding.
+ * The identifier a literal holding the name at `at` is assigned to
+ * (`x = '…'`), or null. The literal is found by its own quotes, and it must
+ * END at the name, or for a directory name at a file name after it, and hold
+ * no newline: the variable then holds the path, not text that mentions it. An
+ * assignment spelled inside another string (a docblock being edited) is
+ * therefore not a binding. Literals separated only by spaces or a string
+ * prefix are one (`'a/' 'b'`, `'a/' r'b'`), which is also how a
+ * triple-quoted literal reads here: `''`, `'…'`, `''`.
  */
-function boundIdentifier(program: string, at: number, end: number): string | null {
-  const { mask } = codeMask(program);
-  if (mask[at] !== 1) return null;
-  let quoteAt = at;
-  while (quoteAt > 0 && mask[quoteAt - 1] === 1) quoteAt--;
-  const q = program[quoteAt];
-  if (program[end] !== q || mask[end + 1] === 1) return null;
-  const m = /(?:^|[\s;(,])([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[A-Za-z_][\w.]*\s*)?=\s*[rbfuRBFU]{0,2}$/.exec(program.slice(Math.max(0, quoteAt - 80), quoteAt));
+function boundIdentifier(program: string, at: number, protectedName: string, view: CodeView): string | null {
+  const k = view.literals.findIndex(([open, close]) => open < at && at < close);
+  if (k < 0) return null;
+  const [open, close] = view.literals[k];
+  const tail = program.slice(at + protectedName.length, close);
+  if (tail !== '' && !(protectedName.endsWith('/') && /^[\w.\-/]+$/.test(tail))) return null;
+  if (program.slice(open, close).includes('\n')) return null;
+  let start = open;
+  for (let j = k - 1; j >= 0 && /^[ \t]*(?:[rbfuRBFU]{1,2})?$/.test(program.slice(view.literals[j][1] + 1, start)); j--) {
+    start = view.literals[j][0];
+  }
+  const m = /(?:^|[\s;(,])([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[A-Za-z_][\w.]*\s*)?=\s*[rbfuRBFU]{0,2}$/.exec(program.slice(Math.max(0, start - 80), start));
   return m ? m[1] : null;
 }
 
-/** Whether the `#` at `i` begins a JavaScript private name rather than a comment. */
-function opensPrivateName(body: string, i: number): boolean {
-  if (!/[A-Za-z_$]/.test(body[i + 1] ?? '')) return false;
-  const before = body.slice(Math.max(0, i - 40), i).replace(/\s+$/, '');
-  return /[{;(,]$/.test(before) || /\b(?:static|get|set|async|in)$/.test(before);
+/**
+ * How a `#` reads. The body's language is not known here (a stdin program
+ * reaches this module without its interpreter's name), and `#` means opposite
+ * things: a comment in Python and shell, with or without a space after it
+ * (`#don't`), and a private name in JavaScript (`this.#x`, `{ #x = 1 }`,
+ * `} #f = …`). Guessing which from the tokens before it was walked around
+ * (#2699 security review). So both readings are taken and a write either one
+ * finds is refused: `word` reads a `#` starting a word as a comment, and
+ * `spaced` only one followed by whitespace. A misreading costs the reading
+ * it happens in; the other still sees the code.
+ */
+type HashReading = 'word' | 'spaced';
+const HASH_READINGS: readonly HashReading[] = ['word', 'spaced'];
+
+/** A body read as code: per offset 0 code, 1 quoted, 2 a `#` comment; each literal's quote offsets; whether every quote closed. */
+interface CodeView {
+  mask: Uint8Array;
+  literals: Array<[number, number]>;
+  balanced: boolean;
 }
 
-/** Per offset: 0 code, 1 inside a quote, 2 inside a `#` comment; and whether every quote closed. */
-function codeMask(body: string): { mask: Uint8Array; balanced: boolean } {
+function codeMask(body: string, reading: HashReading): CodeView {
   const mask = new Uint8Array(body.length);
+  const literals: Array<[number, number]> = [];
   let quote: string | null = null;
+  let opened = 0;
   for (let i = 0; i < body.length; i++) {
     const ch = body[i];
     if (quote !== null) {
       mask[i] = 1;
       if (ch === '\\' && i + 1 < body.length) mask[++i] = 1;
-      else if (ch === quote) quote = null;
+      else if (ch === quote) {
+        quote = null;
+        literals.push([opened, i]);
+      }
       continue;
     }
     if (ch === "'" || ch === '"' || ch === '`') {
       quote = ch;
+      opened = i;
       mask[i] = 1;
-    } else if (ch === '#' && (i === 0 || /\s/.test(body[i - 1])) && !opensPrivateName(body, i)) {
+    } else if (ch === '#' && (i === 0 || /\s/.test(body[i - 1])) && (reading === 'word' || /^\s?$/.test(body[i + 1] ?? ''))) {
       // A comment runs to the end of the line. An apostrophe in one ("don't")
       // would otherwise open a quote that swallows the brackets after it. Only
-      // a `#` that starts a word, so `this.#x` and `$#` stay code, and not
-      // one that opens a JavaScript private name after `{`, `;`, `(`, `,`
-      // or a class keyword (`{ #x = 1 }`, `static #x`). Python's `#comment`
-      // with no space is still a comment (#2699 review, security review).
+      // a `#` that starts a word, so `this.#x` and `$#` stay code.
       while (i < body.length && body[i] !== '\n') mask[i++] = 2;
     }
   }
-  return { mask, balanced: quote === null };
+  return { mask, literals, balanced: quote === null };
 }
 
 /**
@@ -2514,8 +2541,8 @@ function codeMask(body: string): { mask: Uint8Array; balanced: boolean } {
  * Reading such a body whole was tried and measured: it refused eight real
  * commands, all edits of docs and config, and none a write of an artifact.
  */
-function enclosingCalls(body: string, at: number): string[] {
-  const { mask, balanced } = codeMask(body);
+function enclosingCalls(body: string, at: number, view: CodeView): string[] {
+  const { mask, balanced } = view;
   if (!balanced) return [];
   const open: { at: number; ch: string }[] = [];
   for (let i = 0; i < at; i++) {
