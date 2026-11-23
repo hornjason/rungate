@@ -13,7 +13,7 @@ const at = (body: string, needle: string): number => {
 };
 
 describe("#2702: readJsCalls", () => {
-  test("a body that is not JavaScript reads as null, so the guard falls back", () => {
+  test("a body that is not JavaScript reads as null", () => {
     for (const body of [
       "import shutil\nshutil.copy('a', 'b')",
       "with open('x', 'w') as f:\n    f.write('y')",
@@ -53,6 +53,10 @@ describe("#2702: readJsCalls", () => {
       ["const dst = '/b/state.json'", "dst"],
       ["let dst; dst = '/b/state.json'", "dst"],
       ["var dst = '/b/' + 'state.json'", "dst"],
+      // Either operand of a `+` (#2702 security review): main's mask binds the
+      // left one, so a parser that climbed only from the right was narrower.
+      ["const dst = '/b/state.json' + suffix", "dst"],
+      ["const dst = ROOT + '/b/state.json'", "dst"],
       ["function f(dst = '/b/state.json') {}", "dst"],
       ["const dst = `/b/state.json`", "dst"],
     ];

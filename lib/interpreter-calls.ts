@@ -11,10 +11,12 @@
  * regex literals and template literals as the language does.
  *
  * Only a body that parses as JavaScript is read here; `readJsCalls` returns
- * null for anything else (Python, shell, a body whose quotes never close), and
- * the guard keeps its mask for those. A Python body that happens to parse as
- * JavaScript (`open('/x', 'w').write('{}')`) has the same call shape in both
- * languages, so reading it here gives the same answer.
+ * null for anything else (Python, shell, a body whose quotes never close).
+ * The guard reads every body with its mask as well, and refuses what either
+ * reading finds: parsing is not knowing the language. Python's
+ * `d: str = '/x/workflow-state.json'` parses as a JavaScript label and an
+ * assignment to `str`, so this reading binds the wrong name, and only the
+ * mask sees the copy onto `d`.
  *
  * Kept apart from the guard so the guard's mutation batteries, which copy it
  * into a scratch directory, carry one more file rather than the parser's
@@ -136,7 +138,9 @@ export function readJsCalls(body: string): JsCallReading | null {
       let top = lit;
       for (;;) {
         const p = parentOf.get(top);
-        if (p && p.type === 'BinaryExpression' && p.operator === '+' && p.right === top) top = p;
+        // Either operand: `ROOT + '/…/x.json'` and `'…/witnesses/' + f` both
+        // put the name in what the whole concatenation holds.
+        if (p && p.type === 'BinaryExpression' && p.operator === '+') top = p;
         else break;
       }
       const holder = parentOf.get(top);

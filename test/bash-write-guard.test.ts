@@ -4816,8 +4816,32 @@ describe("#1407: write intent is read per call, not only by character distance",
   test.each([
     ["a regex class holding /* before a later */", `// don't\nif (x) /[/*]/.test(s); require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}') /* end */`],
     ["a property named like a keyword, spaced from its dot", `// don't\nconst r = o. in / 2; require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')`],
-    ["a regex holding a quote after a closing paren", `// don't\nif (x) /'/.test(s); require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')`],
+    ["a regex holding a quote after a for header", `// don't\nfor (;;) /"/.test(s); require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')`],
   ])("WITNESS (#2702): %s is read by the parser", (_l, body) => {
+    const cmd = `node - <<'JS'\n${body}\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // #2702 security review. The parser ADDS a reading; it never replaces the
+  // mask's. Each REGRESSION row is refused on main by the mask and was allowed
+  // by a parser-only reading: the first two because that reading climbed a `+`
+  // only from its right operand, the third because a Python annotation parses
+  // as a JavaScript label (`d:`) and an assignment to `str`, so the parser
+  // binds the wrong name. The WITNESS rows are refused only through the
+  // parser: the mask is blinded (the first) or never follows a `+` (the second).
+  const PAD2702 = `const pad = '${"z".repeat(90)}';`;
+  test.each([
+    ["a directory literal on the left of a +", `const f = 'a.json'; const d = '${LIVE}/.rungate/x/witnesses/' + f; ${PAD2702} require('fs').writeFileSync(d, '{}')`],
+    ["a file literal on the left of a +", `const d = '${LIVE}/${STATE}' + ''; ${PAD2702} require('fs').writeFileSync(d, '{}')`],
+    ["a Python annotated binding that parses as JavaScript", `d: str = '${LIVE}/${STATE}'\n${PAD2702}\nshutil.copy(s, d)`],
+  ])("REGRESSION (#2702): %s is still refused", (_l, body) => {
+    const cmd = `node - <<'JS'\n${body}\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+  test.each([
+    ["a directory literal on the left of a +, the mask blinded", `// don't\nfor (;;) /"/.test(s); const f = 'a.json'; const d = '${LIVE}/.rungate/x/witnesses/' + f; ${PAD2702} require('fs').writeFileSync(d, '{}')`],
+    ["a file literal on the right of a +", `const H = '${LIVE}' + '/${STATE}'; ${PAD2702} require('fs').writeFileSync(H, '{}')`],
+  ])("WITNESS (#2702): %s is bound by the parser", (_l, body) => {
     const cmd = `node - <<'JS'\n${body}\nJS`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });

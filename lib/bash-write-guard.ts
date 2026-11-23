@@ -2473,11 +2473,14 @@ function callIsWrite(call: string): boolean {
  */
 function callWrites(program: string, protectedName: string): boolean {
   const pattern = new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
-  // #2702: a body that parses as JavaScript is read by the parser, which
+  // #2702: a body that parses as JavaScript is also read by the parser, which
   // reads comments, regex literals and template literals as the language
   // does. Four reviews of #2699 each found a JavaScript form the mask below
-  // misread, and a misread switched this reader off for the body. Anything
-  // that does not parse (Python, shell, an unclosed quote) keeps the mask.
+  // misread, and a misread switched that reading off for the body. The parser
+  // ADDS a reading; it never replaces the mask's. Parsing is not knowing the
+  // language: Python's `d: str = '…'` parses as a JavaScript label and an
+  // assignment to `str`, so a parser-only reading binds the wrong name and
+  // allows a copy onto `d` that the mask refuses (#2702 security review).
   const js = readJsCalls(program);
   if (js !== null) {
     for (const m of program.matchAll(pattern)) {
@@ -2486,7 +2489,6 @@ function callWrites(program: string, protectedName: string): boolean {
       const bound = js.boundIdentifier(at, at + protectedName.length);
       if (bound !== null && js.references(bound).some(u => js.enclosingCalls(u).some(callIsWrite))) return true;
     }
-    return false;
   }
   return READINGS.some(reading => {
     const view = codeMask(program, reading);
