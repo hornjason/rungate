@@ -289,9 +289,11 @@ describe("#2719 review round 6", () => {
   });
 
   test("a value-taking link flag's value is not read as an issue", async () => {
+    // Outside the family, so every issue named is looked up: a value read as
+    // an issue is one nobody can name, and refused.
     seen.length = 0;
-    await decide("gh issue edit 2655 --parent 2600 --type bug");
-    expect(seen).toEqual([["2655", null]]);
+    expect(await decide("gh issue edit 2714 --parent 2600 --add-sub-issue 2601 --remove-sub-issue 2602 --type bug")).toBeNull();
+    expect(seen).toEqual([["2714", null]]);
   });
 
   test("CONTROL: assignees, the repository and help stay allowed", async () => {
