@@ -4670,7 +4670,7 @@ describe("#1407: write intent is read per call, not only by character distance",
 
   // #2699 review round 2.
   test("WITNESS: open-for-write whose path nests three calls before the mode", () => {
-    for (const mode of ["'w'", "mode='w'"]) {
+    for (const mode of ["'w'", "mode='w'", "'w' if 1 else 'r'", "u'w'"]) {
       const cmd = `python3 -c "import os; open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '${STATE}'), ${mode}).close()"`;
       expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
     }
@@ -4708,6 +4708,31 @@ describe("#1407: write intent is read per call, not only by character distance",
     // the next slash, inside the path, and the body no longer balances.
     const cmd = `python3 -c "import shutil; n = 4; shutil.copy('${LONG}' if n / 2 else '', '${LIVE}/${STATE}')"`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // Security review of the round-2 commit: one misread must not blind every
+  // reading, and the window keeps reading an unparseable body.
+  test("WITNESS: a slash misread as a regex does not hide the call", () => {
+    // Python's positional-only marker: a `/` after `,`, and a later `/` in a
+    // string on the same line. Read as a regex, the body no longer balances.
+    const cmd = `python3 - <<'PY'\nimport shutil\ndef f(a, /, b='/tmp'):\n    pass\nshutil.copy('${LONG}/x', '${LIVE}/${STATE}')\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: in a body whose quotes never close, the window still reads a nested open", () => {
+    const cmd = `python3 - <<'PY'\nnote = "it's\nimport os\nopen(os.path.join(os.environ['R'], '${LIVE}/${STATE}'), 'w').close()\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: in a body whose quotes never close, the window still reads an unmatched ( in the path", () => {
+    const cmd = `python3 - <<'PY'\nnote = "it's\nopen('${LIVE}(/${STATE}', 'w').close()\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("CONTROL: a mode-like key inside the path argument is not the mode", () => {
+    // Padded so the window misses: only the open's own argument reading decides.
+    const cmd = `python3 -c "d = {}; print(open(d.get('a', '${"z".repeat(90)}' and '${LIVE}/${STATE}')).read())"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
   test("CONTROL: a file name merely starting with a protected one is not bound", () => {

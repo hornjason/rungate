@@ -2426,7 +2426,7 @@ function writesNear(body: string, protectedName: string): boolean {
 function opensForWrite(call: string): boolean {
   const head = /^(?:[A-Za-z_$][\w$]*\s*\.\s*)*open\s*\(/.exec(call);
   if (!head) return false;
-  return HASH_READINGS.some(reading => {
+  return READINGS.some(reading => {
     const { mask } = codeMask(call, reading);
     const args: string[] = [];
     let depth = 0;
@@ -2444,7 +2444,10 @@ function opensForWrite(call: string): boolean {
         from = i + 1;
       }
     }
-    return args.some(arg => OPEN_MODE_ARGUMENT.test(arg.trim()));
+    // Searched, not matched whole: `'w' if new else 'r'` and `u'w'` are write
+    // modes too. Never in the first argument unless it is `mode=`: that is
+    // the path, and a key in it (`d.get('a')`) is not a mode.
+    return args.some((arg, k) => (k > 0 || /^\s*mode\s*=/.test(arg)) && WRITE_MODE.test(arg));
   });
 }
 
@@ -2468,7 +2471,7 @@ function callIsWrite(call: string): boolean {
  */
 function callWrites(program: string, protectedName: string): boolean {
   const pattern = new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
-  return HASH_READINGS.some(reading => {
+  return READINGS.some(reading => {
     const view = codeMask(program, reading);
     for (const m of program.matchAll(pattern)) {
       const at = m.index ?? 0;
@@ -2523,13 +2526,25 @@ function boundIdentifier(program: string, at: number, protectedName: string, vie
  * things: a comment in Python and shell, with or without a space after it
  * (`#don't`), and a private name in JavaScript (`this.#x`, `{ #x = 1 }`,
  * `} #f = …`). Guessing which from the tokens before it was walked around
- * (#2699 security review). So both readings are taken and a write either one
- * finds is refused: `word` reads a `#` starting a word as a comment, and
- * `spaced` only one followed by whitespace. A misreading costs the reading
- * it happens in; the other still sees the code.
+ * (#2699 security review). So both readings are taken: `word` reads a `#`
+ * starting a word as a comment, and `spaced` only one followed by whitespace.
+ *
+ * A `/` is the same kind of guess: a regex literal in JavaScript (`/\)/g`),
+ * a division or Python's positional-only marker (`def f(a, /, b)`) elsewhere.
+ * Each `#` reading is taken with regex literals masked and without, and a
+ * write any of the four finds is refused. A misreading costs the reading it
+ * happens in; another still sees the code.
  */
-type HashReading = 'word' | 'spaced';
-const HASH_READINGS: readonly HashReading[] = ['word', 'spaced'];
+interface Reading {
+  hash: 'word' | 'spaced';
+  regex: boolean;
+}
+const READINGS: readonly Reading[] = [
+  { hash: 'word', regex: false },
+  { hash: 'spaced', regex: false },
+  { hash: 'word', regex: true },
+  { hash: 'spaced', regex: true },
+];
 
 /** A body read as code: per offset 0 code, 1 quoted or a regex literal, 2 a `#` comment; each literal's quote offsets; whether every quote closed. */
 interface CodeView {
@@ -2560,7 +2575,7 @@ function regexLiteralEnd(body: string, i: number): number {
   return -1;
 }
 
-function codeMask(body: string, reading: HashReading): CodeView {
+function codeMask(body: string, reading: Reading): CodeView {
   const mask = new Uint8Array(body.length);
   const literals: Array<[number, number]> = [];
   let quote: string | null = null;
@@ -2580,12 +2595,12 @@ function codeMask(body: string, reading: HashReading): CodeView {
       quote = ch;
       opened = i;
       mask[i] = 1;
-    } else if (ch === '#' && (i === 0 || /\s/.test(body[i - 1])) && (reading === 'word' || /^\s?$/.test(body[i + 1] ?? ''))) {
+    } else if (ch === '#' && (i === 0 || /\s/.test(body[i - 1])) && (reading.hash === 'word' || /^\s?$/.test(body[i + 1] ?? ''))) {
       // A comment runs to the end of the line. An apostrophe in one ("don't")
       // would otherwise open a quote that swallows the brackets after it. Only
       // a `#` that starts a word, so `this.#x` and `$#` stay code.
       while (i < body.length && body[i] !== '\n') mask[i++] = 2;
-    } else if (ch === '/' && opensRegexLiteral(body, i)) {
+    } else if (reading.regex && ch === '/' && opensRegexLiteral(body, i)) {
       // A regex literal (`/\)/g`): its brackets are not code. Only after a
       // character a division cannot follow, so `n / 2` stays code (#2699
       // review). Python has no regex literal and no valid `/` there.
@@ -2745,14 +2760,17 @@ function shellBody(segment: string): string {
 }
 
 /**
- * A quoted `open` mode that writes (#2699 review): up to three of r w a x b t
- * +, at most one of r w a x and one of b t, with w, a, x or + among them. So 'w', 'wb', 'a+', 'r+'
- * and 'w+b' write; 'r', 'rb' and 'rt' do not, nor a word like 'raw' or 'bat'. The mode used to be
- * `[wax]\+?`, so `open(p, 'wb')` was not a write, on main too. `WRITE_INTENT`
- * and `opensForWrite` both read it from here: one decider for one question.
+ * A quoted `open` mode that writes (#2699 review): up to three of r w a x b
+ * t +, at most one of r w a x and one of b t, with w, a, x or + among them.
+ * So 'w', 'wb', 'a+', 'r+' and 'w+b' write; 'r', 'rb' and 'rt' do not, nor a
+ * word like 'raw' or 'bat'. The mode used to be `[wax]\+?`, so
+ * `open(p, 'wb')` was not a write, on main too. `WRITE_INTENT` and
+ * `opensForWrite` both read it from here: one decider for one question. It
+ * captures nothing, so it composes into a pattern any number of times.
  */
-const WRITE_MODE_SOURCE = String.raw`(?<q>['"])(?=[rwaxbt+]{1,3}\k<q>)(?![^'"]*[rwax][^'"]*[rwax])(?![^'"]*[bt][^'"]*[bt])(?=[^'"]*[wax+])[rwaxbt+]{1,3}\k<q>`;
-const OPEN_MODE_ARGUMENT = new RegExp(String.raw`^(?:mode\s*=\s*)?` + WRITE_MODE_SOURCE + '$');
+const MODE_BODY = String.raw`(?=[rwaxbt+]{1,3}['"])(?![^'"]*[rwax][^'"]*[rwax])(?![^'"]*[bt][^'"]*[bt])(?=[^'"]*[wax+])[rwaxbt+]{1,3}`;
+const WRITE_MODE_SOURCE = `(?:'${MODE_BODY}'|"${MODE_BODY}")`;
+const WRITE_MODE = new RegExp(WRITE_MODE_SOURCE);
 
 /**
  * Declared write intent inside an interpreter body.
@@ -2837,7 +2855,13 @@ const OPEN_MODE_ARGUMENT = new RegExp(String.raw`^(?:mode\s*=\s*)?` + WRITE_MODE
  * reach for the obvious fix gets a red suite naming what it costs.
  */
 const WRITE_INTENT = new RegExp(
-  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\([^)]*` + WRITE_MODE_SOURCE,
+  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\([^)]*` +
+    WRITE_MODE_SOURCE +
+    // #2699 review: the mode after nested calls in the path, two levels deep.
+    // `opensForWrite` reads any depth, but only in a body that parses; this is
+    // what the window still reads in one whose quotes never close.
+    String.raw`|\bopen\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*` +
+    WRITE_MODE_SOURCE,
 );
 
 /**
