@@ -72,6 +72,8 @@ describe("#2702: readJsCalls", () => {
       // #2718 review: an optional chain wraps the call in a ChainExpression.
       ["const dst = path?.join(R, '/b/state.json')", "dst"],
       ["const dst = path.join?.(R, '/b/state.json')", "dst"],
+      // #2718 review round 2: `ok && '…'` is the literal whenever ok is truthy.
+      ["const dst = ok && '/b/state.json'", "dst"],
       ["function f(dst = '/b/state.json') {}", "dst"],
       ["const dst = `/b/state.json`", "dst"],
     ];

@@ -117,8 +117,8 @@ function buildsPath(call: AstNode): boolean {
 
 /**
  * Whether `parent`'s value can be `child`'s, so a name `child` holds is in
- * what `parent` holds (#2714): either operand of `+`, the right side of `||`
- * or `??` (the left one too, since a fallback can be either), either branch
+ * what `parent` holds (#2714): either operand of `+`, either side of `||`,
+ * `??` or `&&` (each can be the value), either branch
  * of `?:` but never its test, and any argument of a path-building call.
  */
 function carriesValue(parent: AstNode, child: AstNode): boolean {
@@ -126,7 +126,8 @@ function carriesValue(parent: AstNode, child: AstNode): boolean {
     case 'BinaryExpression':
       return parent.operator === '+';
     case 'LogicalExpression':
-      return parent.operator === '||' || parent.operator === '??';
+      // `ok && '…'` holds the literal whenever `ok` is truthy (#2718 review).
+      return parent.operator === '||' || parent.operator === '??' || parent.operator === '&&';
     case 'ConditionalExpression':
       return parent.consequent === child || parent.alternate === child;
     case 'CallExpression':

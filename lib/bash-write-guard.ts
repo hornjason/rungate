@@ -2528,9 +2528,10 @@ function callWrites(program: string, protectedName: string): boolean {
  */
 /**
  * The name the literal starting at `start` is assigned to, read BACKWARD from
- * it: a string prefix, any `operand +` chain of names, attribute paths and
- * literals, then `=`, an optional type annotation, and the name, which must
- * start the statement (after `;`, `(`, `,`, whitespace or the body's start).
+ * it: a string prefix, any chain of names, attribute paths and literals joined
+ * by `+`, `or` or `and`, then `=`, an optional type annotation, and the name,
+ * which must start the statement (after `;`, `(`, `,`, whitespace or the
+ * body's start).
  * No look-back window (#2718 review): a fixed one cut a long chain and could
  * start inside a name, binding `ictimpath` for `victimpath`.
  */
@@ -2552,8 +2553,12 @@ function bindingBefore(program: string, start: number, view: CodeView): string |
   for (;;) {
     back(/\s/);
     if (program[i - 1] === '=') break;
-    if (program[i - 1] !== '+') return null;
-    i--;
+    // A link in the chain: `+`, or Python's `or` / `and`, each of which can
+    // leave the literal as the value (#2718 review).
+    const word = /(?:^|\W)(or|and)$/.exec(program.slice(Math.max(0, i - 4), i));
+    if (program[i - 1] === '+') i--;
+    else if (word) i -= word[1].length;
+    else return null;
     back(/\s/);
     const lit = view.literals.find(([, close]) => close === i - 1);
     if (lit) {

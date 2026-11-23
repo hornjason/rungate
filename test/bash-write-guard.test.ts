@@ -4872,6 +4872,11 @@ describe("#1407: write intent is read per call, not only by character distance",
     ["a Python + chain longer than any window", `python3 - <<'PY'\nimport shutil\nd = ${"a + ".repeat(70)}'${LIVE}/${STATE}'\n${PYPAD2714}\nshutil.copy(src, d)\nPY`],
     ["a Python + chain whose old window began inside the name", `python3 - <<'PY'\nimport shutil\nvictimpath = ${"a + ".repeat(57)}'${LIVE}/.rungate/x/witnesses/'\n${PYPAD2714}\nshutil.copy('/tmp/x', victimpath)\nPY`],
     ["an optional-chain path call", `node - <<'JS'\nconst d = path?.join(R, '${LIVE}/${STATE}'); ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
+    // #2718 review round 2: `&&` in the parser, and Python's `or` / `and` in
+    // the mask's backward chain.
+    ["the value side of &&", `node - <<'JS'\nconst d = ok && '${LIVE}/${STATE}'; ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
+    ["a Python or fallback", `python3 - <<'PY'\nimport shutil\nd = base or '${LIVE}/.rungate/x/witnesses/'\n${PYPAD2714}\nshutil.copy('/tmp/src.json', d)\nPY`],
+    ["a Python and", `python3 - <<'PY'\nimport shutil\nd = ok and '${LIVE}/${STATE}'\n${PYPAD2714}\nshutil.copy('/tmp/src.json', d)\nPY`],
   ])("WITNESS (#2714): %s binds the variable it flows into", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
@@ -4881,6 +4886,7 @@ describe("#1407: write intent is read per call, not only by character distance",
     ["the fallback of ||", `node - <<'JS'\nconst d = base || '${LIVE}/${STATE}'; ${PAD2714} console.log(require('fs').readFileSync(d, 'utf8'))\nJS`],
     ["a template literal with values on both sides", `node - <<'JS'\nconst d = \`\${R}${LIVE}/.rungate/x/witnesses/\${f}\`; ${PAD2714} console.log(require('fs').readFileSync(d, 'utf8'))\nJS`],
     ["a Python + chain, file", `python3 - <<'PY'\nimport json\nd = ROOT + '${LIVE}/${STATE}'\n${PYPAD2714}\nprint(json.load(open(d)))\nPY`],
+    ["a Python or fallback", `python3 - <<'PY'\nimport json\nd = base or '${LIVE}/${STATE}'\n${PYPAD2714}\nprint(json.load(open(d)))\nPY`],
   ])("CONTROL (#2714): %s, only read, is allowed", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
