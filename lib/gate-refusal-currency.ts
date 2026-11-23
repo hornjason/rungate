@@ -70,11 +70,16 @@ export interface RefusalEntry {
  * load-bearing return rather than an empty array: a caller has to be able
  * to tell "this gate said nothing about what it ran" from "this gate ran
  * nothing".
+ *
+ * Also `null` when `failedChecks` is absent or not a list (#2688). A report
+ * naming what it ran but not what it failed says nothing about which checks
+ * passed. Reading the missing list as "nothing failed" retired a refusal for a
+ * check the same gate had just failed again.
  */
 export function resolvedCheckNames(report: GateReport | null | undefined): string[] | null {
-  if (!report || !Array.isArray(report.checksRun)) return null;
+  if (!report || !Array.isArray(report.checksRun) || !Array.isArray(report.failedChecks)) return null;
   const failed = new Set(
-    (Array.isArray(report.failedChecks) ? report.failedChecks : []).filter(
+    report.failedChecks.filter(
       (c: unknown): c is string => typeof c === "string" && c !== "",
     ),
   );

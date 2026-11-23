@@ -790,9 +790,9 @@ function buildSafeSSHCommand(host, command) {
     ];
 }
 function resolvedCheckNames(report) {
-    if (!report || !Array.isArray(report.checksRun))
+    if (!report || !Array.isArray(report.checksRun) || !Array.isArray(report.failedChecks))
         return null;
-    const failed = new Set((Array.isArray(report.failedChecks) ? report.failedChecks : []).filter((c) => typeof c === "string" && c !== ""));
+    const failed = new Set(report.failedChecks.filter((c) => typeof c === "string" && c !== ""));
     return report.checksRun.filter((c) => typeof c === "string" && c !== "" && !failed.has(c));
 }
 function retireSupersededRefusals(entries, report) {

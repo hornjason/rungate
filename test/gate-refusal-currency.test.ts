@@ -184,6 +184,30 @@ describe("#532: a refusal a later gate re-ran and did not reproduce", () => {
 
 // ── the two copies agree ────────────────────────────────────────────────────
 
+// #2688 review. A FAIL gate re-ran a check and failed it again, but its report
+// carried `checksRun` and no `failedChecks` (the gate's schema requires only
+// `result`). Reading the absent list as "nothing failed" retired the earlier
+// refusal for a check that had just failed.
+describe("#2688: a report that does not say what failed retires nothing", () => {
+  const TESTS_PASS = "verify checks > tests-pass: test suite passes";
+  for (const [name, impl] of IMPLS) {
+    test(`${name}: failedChecks absent or not a list reads as unknown, not as none`, () => {
+      for (const report of [{ checksRun: [TESTS_PASS] }, { checksRun: [TESTS_PASS], failedChecks: "x" }]) {
+        const ledger = [{ check: TESTS_PASS }];
+        expect(impl.resolvedCheckNames(report), JSON.stringify(report)).toBeNull();
+        expect(impl.retireSupersededRefusals(ledger, report), JSON.stringify(report)).toEqual([]);
+        expect(ledger, "the refusal for a check that just failed was retired").toEqual([{ check: TESTS_PASS }]);
+      }
+    });
+
+    test(`${name}: CONTROL: the same report with an empty failedChecks retires it`, () => {
+      const ledger = [{ check: TESTS_PASS }];
+      expect(impl.retireSupersededRefusals(ledger, { checksRun: [TESTS_PASS], failedChecks: [] })).toEqual([{ check: TESTS_PASS }]);
+      expect(ledger).toEqual([]);
+    });
+  }
+});
+
 describe("#532: the inlined copy and the library agree", () => {
   const MATRIX: Array<{ label: string; report: unknown; ledger: () => any[] }> = [
     { label: "no report at all", report: undefined, ledger: () => [{ check: "a" }] },
@@ -199,11 +223,11 @@ describe("#532: the inlined copy and the library agree", () => {
     // turn this row red and did not, because no row made the two lists
     // overlap. Twelve rows, none of them exercising the subtraction.
     { label: "a name in both lists", report: { checksRun: ["a", "b"], failedChecks: ["a"] }, ledger: () => [{ check: "a" }, { check: "b" }] },
-    { label: "non-string names are ignored", report: { checksRun: ["a", 3, null, ""] }, ledger: () => [{ check: "a" }, { check: "" }] },
-    { label: "a non-string check on the entry", report: { checksRun: ["a"] }, ledger: () => [{ check: 7 }, { check: "a" }] },
+    { label: "non-string names are ignored", report: { checksRun: ["a", 3, null, ""], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "" }] },
+    { label: "a non-string check on the entry", report: { checksRun: ["a"], failedChecks: [] }, ledger: () => [{ check: 7 }, { check: "a" }] },
     { label: "duplicate names", report: { checksRun: ["a", "a"], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "a" }] },
-    { label: "nothing matches", report: { checksRun: ["z"] }, ledger: () => [{ check: "a" }] },
-    { label: "an empty ledger", report: { checksRun: ["a"] }, ledger: () => [] },
+    { label: "nothing matches", report: { checksRun: ["z"], failedChecks: [] }, ledger: () => [{ check: "a" }] },
+    { label: "an empty ledger", report: { checksRun: ["a"], failedChecks: [] }, ledger: () => [] },
   ];
 
   test("SC-1869: both copies give the same answer on every row", () => {
@@ -269,11 +293,14 @@ describe("#532: the inlined copy and the library agree", () => {
     // up as this list shrinking rather than as nothing at all.
     expect(separating).toContain("checksRun not an array");
     expect(separating).toContain("no report at all");
-    // And the rows that do NOT separate them are named too, because the
-    // interesting ones are where the fail-open is accidentally right:
-    // `failedChecks absent` with every name resolved gives the same answer
-    // either way, which is why picking a row by name was the wrong method.
-    expect(separating).not.toContain("failedChecks absent");
+    // #2688 review: a report naming what it ran but not what it failed says
+    // nothing about which checks passed, so the real rule retires nothing on
+    // it and the fail-open retires everything. Until then this row was where
+    // the two agreed, and this line asserted that they did.
+    expect(separating).toContain("failedChecks absent");
+    // Not `failedChecks not an array`: its value is the string "a", and the
+    // fail-open's `new Set("a")` happens to hold "a", so the two agree there.
+    expect(separating).not.toContain("failedChecks not an array");
   });
 });
 
