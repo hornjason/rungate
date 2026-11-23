@@ -2562,8 +2562,9 @@ function opensRegexLiteral(body: string, i: number): boolean {
   while (j >= 0 && /\s/.test(body[j])) j--;
   if (j < 0 || '(,=:[!&|?{};~+-*%<>^'.includes(body[j])) return true;
   // After a keyword, not an operand: `return /'/` (#2699 review round 3). A
-  // name that only ends in one (`begin / 2`) is an operand.
-  return /(?<![\w$])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/.test(body.slice(Math.max(0, j - 11), j + 1));
+  // name that only ends in one (`begin / 2`), or a property named like one
+  // (`o.in / 2`), is an operand.
+  return /(?<![\w$.])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/.test(body.slice(Math.max(0, j - 11), j + 1));
 }
 
 /** The offset of the `/` closing the regex literal opened at `i`, on the same line, or -1. */
@@ -2608,10 +2609,10 @@ function codeMask(body: string, reading: Reading): CodeView {
     } else if (reading.js && ch === '/' && body[i + 1] === '/') {
       // A JavaScript line comment, read like a `#` one (#2699 review round 3).
       while (i < body.length && body[i] !== '\n') mask[i++] = 2;
-    } else if (reading.js && ch === '/' && body[i + 1] === '*') {
-      // A JavaScript block comment, to its `*/` or the end of the body.
-      const close = body.indexOf('*/', i + 2);
-      const end = close < 0 ? body.length : close + 2;
+    } else if (reading.js && ch === '/' && body[i + 1] === '*' && body.indexOf('*/', i + 2) >= 0) {
+      // A JavaScript block comment, to its `*/`. One that never closes is not
+      // one (`/[/*]/` read from the wrong `/`), so it masks nothing.
+      const end = body.indexOf('*/', i + 2) + 2;
       while (i < end) mask[i++] = 2;
       i--;
     } else if (reading.js && ch === '/' && opensRegexLiteral(body, i)) {

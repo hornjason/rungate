@@ -4749,6 +4749,18 @@ describe("#1407: write intent is read per call, not only by character distance",
     ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
+  // Security review of the round-3 commit. Each needs the other readings
+  // blinded too, by `// don't`, which leaves the plain readings unbalanced.
+  test("WITNESS: an unclosed /* is not a comment", () => {
+    const cmd = `node - <<'JS'\n// don't\nif (x) /[/*]/.test(s); require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a property named like a keyword is an operand", () => {
+    const cmd = `node - <<'JS'\n// don't\nconst r = o.in / 2; require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
   test("CONTROL: a file name merely starting with a protected one is not bound", () => {
     const cmd = `python3 - <<'PY'\nimport shutil\ndst = '${LIVE}/${STATE}.bak'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
