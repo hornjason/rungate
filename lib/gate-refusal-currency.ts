@@ -40,15 +40,14 @@
  * and only one of them is a measurement
  * (.claude/rules/config-access.md, Silent Default Substitution).
  *
- * ## Why this is duplicated into ship.js
+ * ## How ship.js runs this
  *
  * `workflows/ship.js` runs in a sandbox with no module loading (#69), so it
- * cannot import this. It carries an inlined copy inside
- * `REFUSAL-CURRENCY` markers, and `test/gate-refusal-currency.test.ts`
- * extracts that copy, executes it, and runs both over one input matrix —
- * the same technique `test/suite-measurement-parity.test.ts` uses for
- * `suiteCurrency`, and for the same reason: two copies of a rule is a
- * defect waiting for one of them to drift, and the drift is silent.
+ * cannot import this. Until #2688 it carried a hand copy; now
+ * `scripts/build-workflow-launch.ts` bundles this module's code into
+ * `workflows/ship.run.js`, and `test/gate-refusal-currency.test.ts` runs
+ * the launch file's bundled copy and this module over one input matrix, as
+ * `test/suite-measurement-parity.test.ts` does for `suiteCurrency`.
  */
 
 /** What a gate run reported back: the names it measured and the ones it failed. */
@@ -71,11 +70,16 @@ export interface RefusalEntry {
  * load-bearing return rather than an empty array: a caller has to be able
  * to tell "this gate said nothing about what it ran" from "this gate ran
  * nothing".
+ *
+ * Also `null` when `failedChecks` is absent or not a list (#2688). A report
+ * naming what it ran but not what it failed says nothing about which checks
+ * passed. Reading the missing list as "nothing failed" retired a refusal for a
+ * check the same gate had just failed again.
  */
 export function resolvedCheckNames(report: GateReport | null | undefined): string[] | null {
-  if (!report || !Array.isArray(report.checksRun)) return null;
+  if (!report || !Array.isArray(report.checksRun) || !Array.isArray(report.failedChecks)) return null;
   const failed = new Set(
-    (Array.isArray(report.failedChecks) ? report.failedChecks : []).filter(
+    report.failedChecks.filter(
       (c: unknown): c is string => typeof c === "string" && c !== "",
     ),
   );

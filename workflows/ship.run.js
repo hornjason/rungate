@@ -789,6 +789,26 @@ function buildSafeSSHCommand(host, command) {
         command,
     ];
 }
+function resolvedCheckNames(report) {
+    if (!report || !Array.isArray(report.checksRun) || !Array.isArray(report.failedChecks))
+        return null;
+    const failed = new Set(report.failedChecks.filter((c) => typeof c === "string" && c !== ""));
+    return report.checksRun.filter((c) => typeof c === "string" && c !== "" && !failed.has(c));
+}
+function retireSupersededRefusals(entries, report) {
+    const resolved = resolvedCheckNames(report);
+    if (resolved === null || resolved.length === 0)
+        return [];
+    const names = new Set(resolved);
+    const dropped = [];
+    for (let i = entries.length - 1; i >= 0; i--) {
+        const check = entries[i]?.check;
+        if (typeof check === "string" && check !== "" && names.has(check)) {
+            dropped.unshift(entries.splice(i, 1)[0]);
+        }
+    }
+    return dropped;
+}
 // ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----
 
 
@@ -1766,26 +1786,6 @@ const refusals = []
 
 const UNPOPULATED_SLOT_LINE = /not populated/i
 
-function resolvedCheckNames(report) {
-  if (!report || !Array.isArray(report.checksRun)) return null
-  const failed = new Set((Array.isArray(report.failedChecks) ? report.failedChecks : [])
-    .filter(c => typeof c === 'string' && c !== ''))
-  return report.checksRun.filter(c => typeof c === 'string' && c !== '' && !failed.has(c))
-}
-
-function retireSupersededRefusals(entries, report) {
-  const resolved = resolvedCheckNames(report)
-  if (resolved === null || resolved.length === 0) return []
-  const names = new Set(resolved)
-  const dropped = []
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const check = entries[i] && entries[i].check
-    if (typeof check === 'string' && check !== '' && names.has(check)) {
-      dropped.unshift(entries.splice(i, 1)[0])
-    }
-  }
-  return dropped
-}
 
 function recordRefusal(kind, phaseName, detail, check) {
   const entry = {

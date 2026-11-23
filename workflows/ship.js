@@ -1916,36 +1916,9 @@ const refusals = []
 /** A gate failure line that says a fan-out slot was never written. */
 const UNPOPULATED_SLOT_LINE = /not populated/i
 
-// ──── REFUSAL-CURRENCY-START ────
-/**
- * Retire refusals a later gate re-ran and did not reproduce (#532).
- *
- * An inlined copy of lib/gate-refusal-currency.ts — ship.js has no module
- * loading (#69). test/gate-refusal-currency.test.ts extracts this block,
- * executes it, and runs both copies over one matrix, so the duplication
- * cannot drift silently.
- */
-function resolvedCheckNames(report) {
-  if (!report || !Array.isArray(report.checksRun)) return null
-  const failed = new Set((Array.isArray(report.failedChecks) ? report.failedChecks : [])
-    .filter(c => typeof c === 'string' && c !== ''))
-  return report.checksRun.filter(c => typeof c === 'string' && c !== '' && !failed.has(c))
-}
-
-function retireSupersededRefusals(entries, report) {
-  const resolved = resolvedCheckNames(report)
-  if (resolved === null || resolved.length === 0) return []
-  const names = new Set(resolved)
-  const dropped = []
-  for (let i = entries.length - 1; i >= 0; i--) {
-    const check = entries[i] && entries[i].check
-    if (typeof check === 'string' && check !== '' && names.has(check)) {
-      dropped.unshift(entries.splice(i, 1)[0])
-    }
-  }
-  return dropped
-}
-// ──── REFUSAL-CURRENCY-END ────
+// resolvedCheckNames and retireSupersededRefusals (#532) are
+// lib/gate-refusal-currency.ts's own code, carried into workflows/ship.run.js
+// by the launch bundle (#2688, SC-2775 wave 5). ship.js holds no copy.
 
 function recordRefusal(kind, phaseName, detail, check) {
   const entry = {

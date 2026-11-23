@@ -33,12 +33,11 @@ import {
   resolvedCheckNames as libResolved,
   retireSupersededRefusals as libRetire,
 } from "../lib/gate-refusal-currency";
+import { BUNDLE_END, BUNDLE_START } from "../scripts/build-workflow-launch";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
 
-const START = "// ──── REFUSAL-CURRENCY-START ────";
-const END = "// ──── REFUSAL-CURRENCY-END ────";
 
 /**
  * Module scope on purpose. If the markers go missing this throws while the
@@ -47,12 +46,16 @@ const END = "// ──── REFUSAL-CURRENCY-END ────";
  * into a quiet green run.
  */
 const BLOCK: string = (() => {
-  const start = SHIP.indexOf(START);
-  const end = SHIP.indexOf(END);
+  // The bundled lib region of the launch file, the code a run executes, not a
+  // hand copy in ship.js (#2688, SC-2775; the same shape as #2400's
+  // suiteCurrency). It fails to load if the build stops bundling the module.
+  const launch = readFileSync(join(REPO_ROOT, "workflows", "ship.run.js"), "utf-8");
+  const start = launch.indexOf(BUNDLE_START);
+  const end = launch.indexOf(BUNDLE_END);
   if (start === -1 || end === -1) {
-    throw new Error(`workflows/ship.js is missing the ${START} / ${END} markers`);
+    throw new Error("workflows/ship.run.js carries no bundled lib region, so the code a run launches has no retirement rule to test");
   }
-  return SHIP.slice(start, end);
+  return launch.slice(start + BUNDLE_START.length, end);
 })();
 
 const shipCopy = new Function(
@@ -65,7 +68,7 @@ const shipCopy = new Function(
 /** One row run through both copies, so neither can be right alone. */
 const IMPLS = [
   ["lib", { resolvedCheckNames: libResolved as any, retireSupersededRefusals: libRetire as any }],
-  ["ship.js", shipCopy],
+  ["the launch bundle", shipCopy],
 ] as const;
 
 // ── what a later gate retires ───────────────────────────────────────────────
@@ -181,6 +184,30 @@ describe("#532: a refusal a later gate re-ran and did not reproduce", () => {
 
 // ── the two copies agree ────────────────────────────────────────────────────
 
+// #2688 review. A FAIL gate re-ran a check and failed it again, but its report
+// carried `checksRun` and no `failedChecks` (the gate's schema requires only
+// `result`). Reading the absent list as "nothing failed" retired the earlier
+// refusal for a check that had just failed.
+describe("#2688: a report that does not say what failed retires nothing", () => {
+  const TESTS_PASS = "verify checks > tests-pass: test suite passes";
+  for (const [name, impl] of IMPLS) {
+    test(`${name}: failedChecks absent or not a list reads as unknown, not as none`, () => {
+      for (const report of [{ checksRun: [TESTS_PASS] }, { checksRun: [TESTS_PASS], failedChecks: "x" }]) {
+        const ledger = [{ check: TESTS_PASS }];
+        expect(impl.resolvedCheckNames(report), JSON.stringify(report)).toBeNull();
+        expect(impl.retireSupersededRefusals(ledger, report), JSON.stringify(report)).toEqual([]);
+        expect(ledger, "the refusal for a check that just failed was retired").toEqual([{ check: TESTS_PASS }]);
+      }
+    });
+
+    test(`${name}: CONTROL: the same report with an empty failedChecks retires it`, () => {
+      const ledger = [{ check: TESTS_PASS }];
+      expect(impl.retireSupersededRefusals(ledger, { checksRun: [TESTS_PASS], failedChecks: [] })).toEqual([{ check: TESTS_PASS }]);
+      expect(ledger).toEqual([]);
+    });
+  }
+});
+
 describe("#532: the inlined copy and the library agree", () => {
   const MATRIX: Array<{ label: string; report: unknown; ledger: () => any[] }> = [
     { label: "no report at all", report: undefined, ledger: () => [{ check: "a" }] },
@@ -196,11 +223,11 @@ describe("#532: the inlined copy and the library agree", () => {
     // turn this row red and did not, because no row made the two lists
     // overlap. Twelve rows, none of them exercising the subtraction.
     { label: "a name in both lists", report: { checksRun: ["a", "b"], failedChecks: ["a"] }, ledger: () => [{ check: "a" }, { check: "b" }] },
-    { label: "non-string names are ignored", report: { checksRun: ["a", 3, null, ""] }, ledger: () => [{ check: "a" }, { check: "" }] },
-    { label: "a non-string check on the entry", report: { checksRun: ["a"] }, ledger: () => [{ check: 7 }, { check: "a" }] },
+    { label: "non-string names are ignored", report: { checksRun: ["a", 3, null, ""], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "" }] },
+    { label: "a non-string check on the entry", report: { checksRun: ["a"], failedChecks: [] }, ledger: () => [{ check: 7 }, { check: "a" }] },
     { label: "duplicate names", report: { checksRun: ["a", "a"], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "a" }] },
-    { label: "nothing matches", report: { checksRun: ["z"] }, ledger: () => [{ check: "a" }] },
-    { label: "an empty ledger", report: { checksRun: ["a"] }, ledger: () => [] },
+    { label: "nothing matches", report: { checksRun: ["z"], failedChecks: [] }, ledger: () => [{ check: "a" }] },
+    { label: "an empty ledger", report: { checksRun: ["a"], failedChecks: [] }, ledger: () => [] },
   ];
 
   test("SC-1869: both copies give the same answer on every row", () => {
@@ -266,11 +293,14 @@ describe("#532: the inlined copy and the library agree", () => {
     // up as this list shrinking rather than as nothing at all.
     expect(separating).toContain("checksRun not an array");
     expect(separating).toContain("no report at all");
-    // And the rows that do NOT separate them are named too, because the
-    // interesting ones are where the fail-open is accidentally right:
-    // `failedChecks absent` with every name resolved gives the same answer
-    // either way, which is why picking a row by name was the wrong method.
-    expect(separating).not.toContain("failedChecks absent");
+    // #2688 review: a report naming what it ran but not what it failed says
+    // nothing about which checks passed, so the real rule retires nothing on
+    // it and the fail-open retires everything. Until then this row was where
+    // the two agreed, and this line asserted that they did.
+    expect(separating).toContain("failedChecks absent");
+    // Not `failedChecks not an array`: its value is the string "a", and the
+    // fail-open's `new Set("a")` happens to hold "a", so the two agree there.
+    expect(separating).not.toContain("failedChecks not an array");
   });
 });
 
@@ -391,8 +421,12 @@ describe("#532: the retirement runs where it has to", () => {
     expect(recordAt, "gateExit does not record this gate's refusals").toBeGreaterThan(-1);
     expect(retireAt, "the retirement runs after the recording").toBeLessThan(recordAt);
 
-    // One block, so there is one binding to mutate.
-    expect(SHIP.split("REFUSAL-CURRENCY-START").length - 1).toBe(1);
+    // One binding to mutate: the library's, bundled into the launch file.
+    // ship.js holds no copy of either function (#2688).
+    for (const name of ["resolvedCheckNames", "retireSupersededRefusals"]) {
+      expect(SHIP, `ship.js declares its own ${name} again`).not.toContain(`function ${name}(`);
+      expect(BLOCK.split(`function ${name}(`).length - 1, `the launch bundle declares ${name} once`).toBe(1);
+    }
   });
 
   test("the gate prompt asks for the names, and forbids reconstructing them", () => {
