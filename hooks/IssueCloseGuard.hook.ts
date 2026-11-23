@@ -65,7 +65,7 @@ async function main() {
   const input = await parseHookInput();
   if (!input || input.tool_name !== 'Bash') process.exit(0);
   const command = input.tool_input?.command || '';
-  const editRefusal = payloadEditRefusal(command); if (editRefusal) block(editRefusal); // #2713
+  const editRefusal = await payloadEditRefusal(command); if (editRefusal) block(editRefusal); // #2713
   if (COMMENT_INVOCATION.test(command)) {
     validateCommentTemplate(command);
     process.exit(0);

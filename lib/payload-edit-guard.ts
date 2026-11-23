@@ -32,10 +32,17 @@
  *
  * An issue whose milestone cannot be read is refused: the edit would need the
  * same access, so the refusal costs nothing an allowed edit would not.
+ *
+ * The milestone is read through `lib/github.ts`, never a `gh` subprocess
+ * (SC-893). The repository is the command's own `-R`/`--repo` or issue URL,
+ * then `GH_REPO`, then the session's `origin`: gh's own fallbacks, close
+ * enough for a speed bump. A `cd` into another repository before the edit is
+ * not followed, which is the kind of gap #144 says not to file.
  */
 import { spawnSync } from "child_process";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { basename, join } from "path";
+import { createGitHubClient, getIssue } from "./github";
 
 /** The `gh issue edit` flags whose write `scripts/hand-edits.ts` counts as a hand edit. */
 export const BOARD_WRITE_FLAGS: readonly string[] = [
@@ -122,32 +129,42 @@ function boardEdits(command: string): BoardEdit[] {
   return edits;
 }
 
-/** The milestone title of an issue, through gh, so the repository resolves as the edit's would. */
-function ghMilestone(issue: string, repo: string | null): string {
-  const r = spawnSync("gh", ["issue", "view", issue, "--json", "milestone", "-q", '.milestone.title // ""', ...(repo ? ["-R", repo] : [])], {
-    encoding: "utf-8",
-    timeout: 20_000,
-  });
-  if (r.status !== 0) throw new Error((r.stderr || r.error?.message || `gh exited ${r.status}`).trim().slice(0, 200));
-  return r.stdout.trim();
+/** `owner/name` from a GitHub remote URL, or null. */
+function remoteRepo(url: string): string | null {
+  return /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(url.trim())?.[1] ?? null;
+}
+
+/** The repository an edit naming none acts on: `GH_REPO`, then this session's `origin`. */
+function defaultRepo(): string | null {
+  if (process.env.GH_REPO) return process.env.GH_REPO;
+  const r = spawnSync("git", ["remote", "get-url", "origin"], { encoding: "utf-8", timeout: 5_000 });
+  return r.status === 0 ? remoteRepo(r.stdout) : null;
+}
+
+/** The milestone title of an issue, through the GitHub API (SC-893). */
+async function apiMilestone(issue: string, repo: string | null): Promise<string> {
+  const slug = repo ?? defaultRepo();
+  if (slug === null) throw new Error("the command names no repository and this session has no GitHub origin to read");
+  const data = await getIssue(createGitHubClient(), slug, Number(issue));
+  return (data?.milestone?.title as string | undefined) ?? "";
 }
 
 export interface PayloadEditOptions {
   /** The payload's milestone prefix; defaults to this tree's payload spec. `null` means no payload. */
   prefix?: string | null;
-  /** The milestone title of an issue; defaults to asking gh. Throws when it cannot read it. */
-  milestoneOf?: (issue: string, repo: string | null) => string;
+  /** The milestone title of an issue; defaults to the GitHub API. Throws when it cannot read it. */
+  milestoneOf?: (issue: string, repo: string | null) => string | Promise<string>;
 }
 
 /** The reason to refuse the command, or null to let it run. */
-export function payloadEditRefusal(command: string, opts: PayloadEditOptions = {}): string | null {
+export async function payloadEditRefusal(command: string, opts: PayloadEditOptions = {}): Promise<string | null> {
   if (!EDIT_INVOCATION.test(command)) return null;
   const edits = boardEdits(command);
   if (edits.length === 0) return null;
   const prefix = opts.prefix !== undefined ? opts.prefix : payloadPrefix(join(import.meta.dir, ".."));
   if (!prefix) return null;
   const family = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} Phase \\d+`);
-  const milestoneOf = opts.milestoneOf ?? ghMilestone;
+  const milestoneOf = opts.milestoneOf ?? apiMilestone;
   const why = "(#2713: a speed bump; scripts/hand-edits.ts reads the outcome)";
 
   for (const edit of edits) {
@@ -159,7 +176,7 @@ export function payloadEditRefusal(command: string, opts: PayloadEditOptions = {
       if (issue === null) return `Cannot check this gh issue edit — "${raw}" does not name an issue it can read. ${why}`;
       let title: string;
       try {
-        title = milestoneOf(issue, repo);
+        title = await milestoneOf(issue, repo);
       } catch (e) {
         return `Cannot check this edit of #${issue} — its milestone could not be read (${String((e as Error)?.message ?? e)}). ${why}`;
       }
