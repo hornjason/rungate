@@ -799,6 +799,8 @@ function resolvedCheckNames(report) {
         }
     }
     const failed = new Set(report.failedChecks.filter((c) => typeof c === "string" && c !== ""));
+    if (report.result !== "PASS" && failed.size === 0)
+        return null;
     if (Array.isArray(report.failures)) {
         for (const line of report.failures) {
             if (typeof line !== "string" || line === "")

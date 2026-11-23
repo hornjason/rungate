@@ -52,6 +52,8 @@
 
 /** What a gate run reported back: the names it measured and the ones it failed. */
 export interface GateReport {
+  /** "PASS" or "FAIL". Anything but "PASS" is a gate that did not pass. */
+  result?: unknown;
   checksRun?: unknown;
   failedChecks?: unknown;
   /** The gate's free-text failure lines, each meant to begin with its check's name. */
@@ -87,6 +89,10 @@ export interface RefusalEntry {
  * from `failedChecks` (#2691 review round 1). Check names can contain ": ", so
  * a truncated copy can still claim a line at a boundary; the line naming a
  * ran-but-unlisted check in full is the report contradicting itself.
+ *
+ * And `null` when the gate did not report PASS and names no failed check
+ * (#2691 review round 3). An empty list from a gate that did not pass says
+ * nothing about which of its checks passed, failure lines or not.
  */
 export function resolvedCheckNames(report: GateReport | null | undefined): string[] | null {
   if (!report || !Array.isArray(report.checksRun) || !Array.isArray(report.failedChecks)) return null;
@@ -100,6 +106,7 @@ export function resolvedCheckNames(report: GateReport | null | undefined): strin
       (c: unknown): c is string => typeof c === "string" && c !== "",
     ),
   );
+  if (report.result !== "PASS" && failed.size === 0) return null;
   if (Array.isArray(report.failures)) {
     for (const line of report.failures) {
       if (typeof line !== "string" || line === "") continue;

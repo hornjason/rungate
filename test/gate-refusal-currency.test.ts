@@ -159,6 +159,29 @@ describe("#2690: a report whose failedChecks does not claim every failure retire
       expect(ledger, "tests-pass still fails, so its refusal stays").toEqual([{ check: TESTS }]);
     });
 
+    // Review round 3 (#2691). A gate that did not pass and names no failed
+    // check says nothing about which of its checks passed. Reading the empty
+    // list as "none failed" retired every refusal for the checks it ran, while
+    // the same gate was refusing the run.
+    test(`${name}: a report that did not pass and names no failed check retires nothing`, () => {
+      const TESTS = "verify checks > tests-pass";
+      for (const report of [
+        { result: "FAIL", checksRun: [TESTS], failures: [], failedChecks: [] },
+        { result: "FAIL", checksRun: [TESTS], failedChecks: [] },
+        { checksRun: [TESTS], failedChecks: [] },
+      ]) {
+        const ledger = [{ check: TESTS }];
+        expect(impl.resolvedCheckNames(report), JSON.stringify(report)).toBeNull();
+        expect(impl.retireSupersededRefusals(ledger, report), JSON.stringify(report)).toEqual([]);
+        expect(ledger, "a refusal was retired by a gate that did not pass").toEqual([{ check: TESTS }]);
+      }
+      const passed = { result: "PASS", checksRun: [TESTS], failedChecks: [] };
+      const ledger = [{ check: TESTS }];
+      expect(impl.retireSupersededRefusals(ledger, passed), "CONTROL: a gate that passed retires it").toEqual([{ check: TESTS }]);
+      const failedOther = { result: "FAIL", checksRun: [TESTS, "verify checks > tsc"], failures: ["verify checks > tsc: 1 error"], failedChecks: ["verify checks > tsc"] };
+      expect(impl.resolvedCheckNames(failedOther), "CONTROL: a FAIL that names its failure resolves the rest").toEqual([TESTS]);
+    });
+
     // Names may contain ": ", so two names can both claim one line at a
     // boundary. Such a line is unclaimed.
     test(`${name}: a line two reported names both claim is unclaimed`, () => {
@@ -223,8 +246,9 @@ describe("#532: a refusal a later gate re-ran and did not reproduce", () => {
       expect(impl.resolvedCheckNames({ failedChecks: [] }), "null, not []").toBeNull();
       expect(impl.resolvedCheckNames(undefined)).toBeNull();
       expect(impl.resolvedCheckNames({ checksRun: "not an array" })).toBeNull();
-      // …and a gate that genuinely ran nothing is an EMPTY list, not null.
-      expect(impl.resolvedCheckNames({ checksRun: [], failedChecks: [] })).toEqual([]);
+      // …and a gate that passed and genuinely ran nothing is an EMPTY list,
+      // not null.
+      expect(impl.resolvedCheckNames({ result: "PASS", checksRun: [], failedChecks: [] })).toEqual([]);
     });
 
     test(`SC-1866 (${name}): a refusal with no check name is never retired`, () => {
@@ -237,6 +261,7 @@ describe("#532: a refusal a later gate re-ran and did not reproduce", () => {
         { kind: "GATE_FAIL", phase: "Verify", check: "verify checks > tsc-pass: no new TypeScript errors above baseline" },
       ];
       const dropped = impl.retireSupersededRefusals(ledger, {
+        result: "PASS",
         checksRun: ["verify checks > tsc-pass: no new TypeScript errors above baseline"],
         failedChecks: [],
       });
@@ -257,6 +282,7 @@ describe("#532: a refusal a later gate re-ran and did not reproduce", () => {
       ];
       const same = ledger;
       const dropped = impl.retireSupersededRefusals(ledger, {
+        result: "PASS",
         checksRun: ["a", "c"],
         failedChecks: [],
       });
@@ -303,7 +329,7 @@ describe("#2688: a report that does not say what failed retires nothing", () => 
 
     test(`${name}: CONTROL: the same report with an empty failedChecks retires it`, () => {
       const ledger = [{ check: TESTS_PASS }];
-      expect(impl.retireSupersededRefusals(ledger, { checksRun: [TESTS_PASS], failedChecks: [] })).toEqual([{ check: TESTS_PASS }]);
+      expect(impl.retireSupersededRefusals(ledger, { result: "PASS", checksRun: [TESTS_PASS], failedChecks: [] })).toEqual([{ check: TESTS_PASS }]);
       expect(ledger).toEqual([]);
     });
   }
@@ -324,11 +350,13 @@ describe("#532: the inlined copy and the library agree", () => {
     // turn this row red and did not, because no row made the two lists
     // overlap. Twelve rows, none of them exercising the subtraction.
     { label: "a name in both lists", report: { checksRun: ["a", "b"], failedChecks: ["a"] }, ledger: () => [{ check: "a" }, { check: "b" }] },
-    { label: "non-string names are ignored", report: { checksRun: ["a", 3, null, ""], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "" }] },
-    { label: "a non-string check on the entry", report: { checksRun: ["a"], failedChecks: [] }, ledger: () => [{ check: 7 }, { check: "a" }] },
-    { label: "duplicate names", report: { checksRun: ["a", "a"], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "a" }] },
-    { label: "nothing matches", report: { checksRun: ["z"], failedChecks: [] }, ledger: () => [{ check: "a" }] },
-    { label: "an empty ledger", report: { checksRun: ["a"], failedChecks: [] }, ledger: () => [] },
+    { label: "non-string names are ignored", report: { result: "PASS", checksRun: ["a", 3, null, ""], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "" }] },
+    { label: "a non-string check on the entry", report: { result: "PASS", checksRun: ["a"], failedChecks: [] }, ledger: () => [{ check: 7 }, { check: "a" }] },
+    { label: "duplicate names", report: { result: "PASS", checksRun: ["a", "a"], failedChecks: [] }, ledger: () => [{ check: "a" }, { check: "a" }] },
+    { label: "nothing matches", report: { result: "PASS", checksRun: ["z"], failedChecks: [] }, ledger: () => [{ check: "a" }] },
+    { label: "an empty ledger", report: { result: "PASS", checksRun: ["a"], failedChecks: [] }, ledger: () => [] },
+    // #2691 review round 3: a gate that did not pass and names no failed check.
+    { label: "FAIL naming no failed check", report: { result: "FAIL", checksRun: ["a"], failedChecks: [] }, ledger: () => [{ check: "a" }] },
   ];
 
   test("SC-1869: both copies give the same answer on every row", () => {
