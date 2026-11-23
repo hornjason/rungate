@@ -2526,11 +2526,59 @@ function callWrites(program: string, protectedName: string): boolean {
  * `d = ROOT + '/witnesses/' + f` binds `d`, as the parser binds it in a body
  * that parses as JavaScript.
  */
-/** `name =` (with an optional type annotation), then any `operand +` chain, then a string prefix, at the end of the text before a literal. */
-const BOUND_BEFORE_LITERAL =
-  /(?:^|[\s;(,])([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[A-Za-z_][\w.]*\s*)?=\s*(?:(?:[A-Za-z_][\w.]*|'[^'\n]*'|"[^"\n]*")\s*\+\s*)*[rbfuRBFU]{0,2}$/;
-/** How far back the binding is looked for: room for a `+` chain of a few names and literals. */
-const BOUND_LOOKBACK = 240;
+/**
+ * The name the literal starting at `start` is assigned to, read BACKWARD from
+ * it: a string prefix, any `operand +` chain of names, attribute paths and
+ * literals, then `=`, an optional type annotation, and the name, which must
+ * start the statement (after `;`, `(`, `,`, whitespace or the body's start).
+ * No look-back window (#2718 review): a fixed one cut a long chain and could
+ * start inside a name, binding `ictimpath` for `victimpath`.
+ */
+function bindingBefore(program: string, start: number, view: CodeView): string | null {
+  let i = start;
+  const back = (re: RegExp): string => {
+    let j = i;
+    while (j > 0 && re.test(program[j - 1])) j--;
+    const s = program.slice(j, i);
+    i = j;
+    return s;
+  };
+  const prefix = (): void => {
+    let j = i;
+    while (j > 0 && i - j < 2 && /[rbfuRBFU]/.test(program[j - 1])) j--;
+    if (j === 0 || !/\w/.test(program[j - 1])) i = j;
+  };
+  prefix();
+  for (;;) {
+    back(/\s/);
+    if (program[i - 1] === '=') break;
+    if (program[i - 1] !== '+') return null;
+    i--;
+    back(/\s/);
+    const lit = view.literals.find(([, close]) => close === i - 1);
+    if (lit) {
+      i = lit[0];
+      prefix();
+    } else if (back(/[\w.]/) === '') {
+      return null;
+    }
+  }
+  i--;
+  // `==`, `!=`, `<=`, `>=`, an augmented assignment, or `:=`: not a binding.
+  if (i > 0 && '=!<>+-*/%&|^:~@'.includes(program[i - 1])) return null;
+  back(/\s/);
+  let name = back(/[\w.]/);
+  let nameAt = i;
+  back(/\s/);
+  if (program[i - 1] === ':') {
+    i--;
+    back(/\s/);
+    name = back(/\w/);
+    nameAt = i;
+  }
+  if (!/^[A-Za-z_]\w*$/.test(name)) return null;
+  return nameAt === 0 || /[\s;(,]/.test(program[nameAt - 1]) ? name : null;
+}
 function boundIdentifier(program: string, at: number, protectedName: string, view: CodeView): string | null {
   const k = view.literals.findIndex(([open, close]) => open < at && at < close);
   if (k < 0) return null;
@@ -2543,8 +2591,7 @@ function boundIdentifier(program: string, at: number, protectedName: string, vie
   for (let j = k - 1; j >= 0 && /^[ \t]*(?:[rbfuRBFU]{1,2})?$/.test(program.slice(view.literals[j][1] + 1, start)); j--) {
     start = view.literals[j][0];
   }
-  const m = BOUND_BEFORE_LITERAL.exec(program.slice(Math.max(0, start - BOUND_LOOKBACK), start));
-  return m ? m[1] : null;
+  return bindingBefore(program, start, view);
 }
 
 /**

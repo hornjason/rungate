@@ -69,6 +69,9 @@ describe("#2702: readJsCalls", () => {
       ["const dst = ok ? other : '/b/state.json'", "dst"],
       ["const dst = `${R}/b/state.json`", "dst"],
       ["const dst = path.join(R, `${w}/b/state.json`)", "dst"],
+      // #2718 review: an optional chain wraps the call in a ChainExpression.
+      ["const dst = path?.join(R, '/b/state.json')", "dst"],
+      ["const dst = path.join?.(R, '/b/state.json')", "dst"],
       ["function f(dst = '/b/state.json') {}", "dst"],
       ["const dst = `/b/state.json`", "dst"],
     ];

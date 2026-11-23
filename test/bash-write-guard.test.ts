@@ -4865,6 +4865,13 @@ describe("#1407: write intent is read per call, not only by character distance",
     ["a template literal with values on both sides", `node - <<'JS'\nconst d = \`\${R}${LIVE}/.rungate/x/witnesses/\${f}\`; ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
     ["a Python + chain, directory", `python3 - <<'PY'\nimport shutil\nROOT = '${LIVE}'\nd = ROOT + '/.rungate/x/witnesses/' + f\n${PYPAD2714}\nshutil.copy(src, d)\nPY`],
     ["a Python + chain, file", `python3 - <<'PY'\nimport shutil\nd = ROOT + '${LIVE}/${STATE}'\n${PYPAD2714}\nshutil.copy(src, d)\nPY`],
+    // #2718 review round 1. The mask read the binding from a 240-character
+    // window: a longer `+` chain bound nothing, and a window starting inside
+    // a name bound its tail (`ictimpath`). It now reads backward with no
+    // window. And `path?.join(…)` is a ChainExpression the parser climbs.
+    ["a Python + chain longer than any window", `python3 - <<'PY'\nimport shutil\nd = ${"a + ".repeat(70)}'${LIVE}/${STATE}'\n${PYPAD2714}\nshutil.copy(src, d)\nPY`],
+    ["a Python + chain whose old window began inside the name", `python3 - <<'PY'\nimport shutil\nvictimpath = ${"a + ".repeat(57)}'${LIVE}/.rungate/x/witnesses/'\n${PYPAD2714}\nshutil.copy('/tmp/x', victimpath)\nPY`],
+    ["an optional-chain path call", `node - <<'JS'\nconst d = path?.join(R, '${LIVE}/${STATE}'); ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
   ])("WITNESS (#2714): %s binds the variable it flows into", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });

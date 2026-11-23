@@ -131,6 +131,10 @@ function carriesValue(parent: AstNode, child: AstNode): boolean {
       return parent.consequent === child || parent.alternate === child;
     case 'CallExpression':
       return buildsPath(parent) && (parent.arguments as AstNode[]).includes(child);
+    // `path?.join(…)`: acorn wraps an optional chain, and the wrapper's value
+    // is the call's (#2718 review).
+    case 'ChainExpression':
+      return parent.expression === child;
     default:
       return false;
   }
