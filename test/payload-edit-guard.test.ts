@@ -128,6 +128,47 @@ describe("#2719 review round 1", () => {
   });
 });
 
+describe("#2719 review round 2: the command is read by the shell tokenizer the filing guard uses", () => {
+  test("an escaped quote inside double quotes does not swallow the flags after it", async () => {
+    expect(await decide('gh issue edit 2655 --add-assignee "x\\"y" --body "new"')).toContain("#2655");
+  });
+
+  test("a short flag with its value attached is the flag it is", async () => {
+    expect(await decide("gh issue edit 2655 -bnew")).toContain("#2655");
+    expect(await decide(`gh issue edit 2714 -m"${PAYLOAD}"`)).toContain("#2714");
+    seen.length = 0;
+    expect(await decide("gh issue edit 2655 -Ro/r --body x")).toContain("#2655");
+    expect(seen).toEqual([["2655", "o/r"]]);
+  });
+
+  test("a redirection is not an issue, and an edit outside the family with one stays allowed", async () => {
+    expect(await decide("gh issue edit 2714 --body-file b.md 2>&1")).toBeNull();
+    expect(await decide("gh issue edit 2714 --body x >/dev/null")).toBeNull();
+    expect(await decide("gh issue edit 2714 --body x > /tmp/out 2>/dev/null")).toBeNull();
+    expect(await decide("gh issue edit 2714 --body x &> /tmp/out")).toBeNull();
+    // The same redirections on a payload issue are still refused.
+    expect(await decide("gh issue edit 2655 --body x 2>&1")).toContain("#2655");
+    expect(await decide("gh issue edit 2655 2>&1 --body x")).toContain("#2655");
+  });
+
+  test("an edit inside bash -c is read too", async () => {
+    expect(await decide("bash -c 'gh issue edit 2655 --body x'")).toContain("#2655");
+  });
+
+  test("board.prefix is read as YAML: a quoted prefix is the prefix, and unparsable frontmatter is a broken declaration", () => {
+    const tree = (pay: string) => {
+      const root = mkdtempSync(join(tmpdir(), "peg-yaml-"));
+      mkdirSync(join(root, "specs"));
+      writeFileSync(join(root, "specs", "ENGINE.md"), "---\ngoverns: THE ENGINE. Payload: PAY.md\n---\n");
+      writeFileSync(join(root, "specs", "PAY.md"), pay);
+      return root;
+    };
+    expect(payloadPrefix(tree('---\nboard:\n  scope: active\n  prefix: "Convergence"\n---\n'))).toBe("Convergence");
+    expect(payloadPrefix(tree("---\nboard:\n  prefix: 'Convergence'\n---\n"))).toBe("Convergence");
+    expect(() => payloadPrefix(tree("---\nboard: [unclosed\n---\n"))).toThrow(/PAY\.md/);
+  });
+});
+
 describe("#2713: the hook runs the guard", () => {
   // A GitHub API that answers the milestone lookup, so the hook is driven end
   // to end through lib/github.ts with no network: issue 2655 is in the

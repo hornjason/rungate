@@ -22,10 +22,12 @@
  * blocked-by and blocking links, and project adds and removals. An assignee
  * is not a board write there, so claiming an issue stays allowed.
  *
- * The command is split into simple commands on `;`, `|`, `&` and newlines
- * outside quotes, and a backslash-newline is the line continuation it is
- * (#2719 review): a separator inside a comment's quoted body is not a second
- * command, and a continued edit keeps its issue and its flags together.
+ * The command is read by `clauses()` from `lib/issue-create-override.ts`,
+ * the shell tokenizer the filing guard already uses (#2719 review round 2).
+ * Quotes, backslash escapes, line continuations, comments, heredocs and
+ * `bash -c` are its job, not a second reader's. A short flag may carry its
+ * value attached (`-bTEXT`, `-mTITLE`, `-Rowner/name`), as gh's flag parser
+ * allows, and a redirection is not an argument.
  *
  * ## Which issues
  *
@@ -55,6 +57,7 @@ import { spawnSync } from "child_process";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { basename, join } from "path";
 import { createGitHubClient, getIssue } from "./github";
+import { clauses } from "./issue-create-override";
 
 /** The `gh issue edit` flags whose write `scripts/hand-edits.ts` counts as a hand edit. */
 export const BOARD_WRITE_FLAGS: readonly string[] = [
@@ -83,68 +86,22 @@ export function payloadPrefix(root: string): string | null {
     if (payload === undefined) continue;
     const path = join(dir, payload);
     if (!existsSync(path)) throw new Error(`specs/${file} names Payload: ${payload}, and specs/${payload} does not exist`);
-    const prefix = readFileSync(path, "utf-8").match(/^board:\n(?:\s+.*\n)*?\s+prefix: (\S+)/m)?.[1];
-    if (prefix === undefined) throw new Error(`specs/${payload}, the payload specs/${file} names, has no board.prefix`);
+    // Read as YAML, so a quoted prefix is the prefix and not its quotes (#2719
+    // review round 2); frontmatter that does not parse is a broken declaration.
+    const front = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(readFileSync(path, "utf-8"))?.[1];
+    let board: unknown;
+    try {
+      board = front === undefined ? undefined : (Bun.YAML.parse(front) as { board?: unknown } | null)?.board;
+    } catch (e) {
+      throw new Error(`specs/${payload}, the payload specs/${file} names, has frontmatter that does not parse (${(e as Error).message})`);
+    }
+    const prefix = (board as { prefix?: unknown } | null | undefined)?.prefix;
+    if (typeof prefix !== "string" || prefix === "") {
+      throw new Error(`specs/${payload}, the payload specs/${file} names, has no board.prefix`);
+    }
     return prefix;
   }
   return null;
-}
-
-/**
- * The command's simple commands: split on `;`, `|`, `&` and newlines outside
- * quotes, with a backslash-newline read as a line continuation (#2719
- * review). Enough for a speed bump: heredocs and `$(…)` are not parsed.
- */
-function segments(command: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let quote: string | null = null;
-  for (let i = 0; i < command.length; i++) {
-    const c = command[i];
-    if (c === "\\" && quote !== "'") {
-      if (command[i + 1] === "\n") cur += " ";
-      else cur += c + (command[i + 1] ?? "");
-      i++;
-    } else if (quote !== null) {
-      if (c === quote) quote = null;
-      cur += c;
-    } else if (c === "'" || c === '"') {
-      quote = c;
-      cur += c;
-    } else if (/[;|&\n]/.test(c)) {
-      out.push(cur);
-      cur = "";
-    } else {
-      cur += c;
-    }
-  }
-  out.push(cur);
-  return out;
-}
-
-/** A segment's words, honouring single and double quotes. Enough for a speed bump. */
-function words(segment: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let quote: string | null = null;
-  let quoted = false;
-  for (const c of segment) {
-    if (quote !== null) {
-      if (c === quote) quote = null;
-      else cur += c;
-    } else if (c === "'" || c === '"') {
-      quote = c;
-      quoted = true;
-    } else if (/\s/.test(c)) {
-      if (cur !== "" || quoted) out.push(cur);
-      cur = "";
-      quoted = false;
-    } else {
-      cur += c;
-    }
-  }
-  if (cur !== "" || quoted) out.push(cur);
-  return out;
 }
 
 interface BoardEdit {
@@ -158,25 +115,51 @@ interface BoardEdit {
   milestones: string[];
 }
 
+/**
+ * Short flags of `gh issue edit` whose value may be attached: `-b` body, `-F`
+ * body file, `-t` title, `-m` milestone, `-R` repository. pflag reads `-bTEXT`
+ * as `-b TEXT`, as `lib/issue-create-override.ts` reads `gh issue create`'s.
+ */
+const VALUE_SHORT_FLAGS = new Set(["b", "F", "t", "m", "R"]);
+const ATTACHED_SHORT = /^-([A-Za-z])([^-=][\s\S]*)$/;
+/** A redirection, with its target attached (`>/dev/null`) or not (`2>`). */
+const REDIRECT = /^\d*(?:>>?|<)/;
+const BARE_REDIRECT = /^\d*(?:>>?|<)$/;
+
 /** Every `gh issue edit` in the command that carries a board-write flag. */
 function boardEdits(command: string): BoardEdit[] {
   const edits: BoardEdit[] = [];
-  for (const segment of segments(command)) {
-    if (!EDIT_INVOCATION.test(segment)) continue;
-    const w = words(segment);
+  // `2>&1` and `&>` are redirections, not the `&` the tokenizer splits on.
+  const text = command.replace(/(\d*[<>])&(\d+|-)/g, "$1$2").replace(/&>/g, ">");
+  for (const w of clauses(text)) {
     const at = w.findIndex((x, i) => x === "edit" && w[i - 1] === "issue" && basename(w[i - 2] ?? "") === "gh");
     if (at < 0) continue;
     const envRepo = w.slice(0, at - 2).map(x => /^GH_REPO=(.+)$/.exec(x)?.[1]).filter(Boolean).pop() ?? null;
     const edit: BoardEdit = { issues: [], repo: null, envRepo, flags: [], milestones: [] };
     for (let i = at + 1; i < w.length; i++) {
       const word = w[i];
-      if (!word.startsWith("-")) {
+      if (REDIRECT.test(word)) {
+        if (BARE_REDIRECT.test(word)) i++; // its target is the next word
+        continue;
+      }
+      if (!word.startsWith("-") || word === "-") {
         edit.issues.push(word);
         continue;
       }
+      const attached = ATTACHED_SHORT.exec(word);
       const eq = word.indexOf("=");
-      const name = eq < 0 ? word : word.slice(0, eq);
-      const value = eq >= 0 ? word.slice(eq + 1) : VALUELESS_FLAGS.has(name) ? null : (w[++i] ?? null);
+      let name: string;
+      let value: string | null;
+      if (attached !== null && VALUE_SHORT_FLAGS.has(attached[1])) {
+        name = `-${attached[1]}`;
+        value = attached[2];
+      } else if (eq >= 0) {
+        name = word.slice(0, eq);
+        value = word.slice(eq + 1);
+      } else {
+        name = word;
+        value = VALUELESS_FLAGS.has(name) ? null : (w[++i] ?? null);
+      }
       if (name === "-R" || name === "--repo") edit.repo = value;
       if (BOARD_WRITE_FLAGS.includes(name)) edit.flags.push(name);
       if ((name === "--milestone" || name === "-m") && value !== null) edit.milestones.push(value);
