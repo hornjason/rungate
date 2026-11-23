@@ -4940,8 +4940,9 @@ shutil.copy('/tmp/rg2704a/${STATE}', '/tmp/rg2704b/${STATE}')"`;
   });
 
   test("CONTROL: importing the library's own name is not a shadow", () => {
-    const cmd = `mkdir -p /tmp/rg2704a /tmp/rg2704b && python3 -I -c "from shutil import copy
-copy('/tmp/rg2704a/${STATE}', '/tmp/rg2704b/${STATE}')"`;
+    const cmd = `mkdir -p /tmp/rg2704a /tmp/rg2704b && python3 -I -c "import shutil
+from shutil import copy
+copy('/tmp/rg2704a/${STATE}', '/tmp/rg2704b/${STATE}'); shutil.copy('/tmp/rg2704a/${STATE}', '/tmp/rg2704b/${STATE}')"`;
     const d = decideBashWrite(cmd);
     expect(d.blocked, `refused: ${d.reason}`).toBe(false);
   });
