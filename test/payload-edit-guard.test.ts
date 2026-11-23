@@ -9,7 +9,7 @@
  * which reads the outcome. A bypass found here is not a defect to file.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -241,6 +241,40 @@ describe("#2719 review round 4", () => {
     });
     expect(r).toContain("could not be read");
     expect(r).toContain("GITHUB_TOKEN");
+  });
+});
+
+describe("#2719 review round 5", () => {
+  const tree = (files: Record<string, string>) => {
+    const root = mkdtempSync(join(tmpdir(), "peg-r5-"));
+    mkdirSync(join(root, "specs"));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, "specs", name), text);
+    return root;
+  };
+
+  test("trailing spaces on a frontmatter fence do not hide a declaration", () => {
+    expect(payloadPrefix(tree({
+      "ENGINE.md": "---  \ngoverns: THE ENGINE. Payload: PAY.md\n---   \n",
+      "PAY.md": "--- \nboard:\n  prefix: Convergence\n---\t\n",
+    }))).toBe("Convergence");
+  });
+
+  test("an issue URL names its own repository, whatever -R says", async () => {
+    seen.length = 0;
+    await decide("gh issue edit https://github.com/o/rungate/issues/2655 -R o/other --body x");
+    expect(seen).toEqual([["2655", "o/rungate"]]);
+  });
+
+  test(">& with a space before its target is a redirection", async () => {
+    expect(await decide('gh issue edit 2655 >& /dev/null --body "x"')).toContain("#2655");
+    expect(await decide("gh issue edit 2655 2>& 1 --body x")).toContain("#2655");
+    expect(await decide("gh issue edit 2714 >& /dev/null --body x")).toBeNull();
+  });
+
+  test("the module says an unreadable milestone costs a credential, not nothing", () => {
+    const src = readFileSync(join(ROOT, "lib", "payload-edit-guard.ts"), "utf-8");
+    expect(src).not.toContain("costs nothing an allowed edit would not");
+    expect(src).toContain("GITHUB_TOKEN");
   });
 });
 

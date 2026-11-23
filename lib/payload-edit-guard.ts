@@ -43,15 +43,29 @@
  * has now, since moving an issue onto the payload board is itself a board
  * write `hand-edits` counts (#2719 review).
  *
- * An issue whose milestone cannot be read is refused: the edit would need the
- * same access, so the refusal costs nothing an allowed edit would not.
+ * An issue whose milestone cannot be read is refused. The read goes through
+ * `lib/github.ts` with GITHUB_TOKEN or GH_TOKEN, never a `gh` subprocess
+ * (SC-893), so a session that has only gh's stored login cannot read it and
+ * every board edit in a payload tree is refused until one is set; the refusal
+ * says so. The repository is the issue URL's, then the command's own
+ * `-R`/`--repo`, then a `GH_REPO=` in its env prefix, then `GH_REPO`, then
+ * the session's `origin`.
  *
- * The milestone is read through `lib/github.ts`, never a `gh` subprocess
- * (SC-893). The repository is the command's own `-R`/`--repo` or issue URL,
- * then a `GH_REPO=` in the command's own env prefix, then `GH_REPO`, then
- * the session's `origin`: gh's own fallbacks, close
- * enough for a speed bump. A `cd` into another repository before the edit is
- * not followed, which is the kind of gap #144 says not to file.
+ * ## Out of scope on purpose, and not a gap to file
+ *
+ * As in `lib/issue-create-override.ts`, which this reads commands with:
+ *
+ * - `gh api -X PATCH …` and the GitHub MCP tools, which name none of this.
+ * - A `cd` into another repository in an earlier clause; following it needs
+ *   directory state across clauses.
+ * - Variable indirection (`GH=gh; $GH issue edit …`, `N=2655; … $N`); an
+ *   issue it cannot name is refused, but a command built in a variable is
+ *   not resolved.
+ * - A script that runs `gh issue edit`.
+ *
+ * Each takes a decision to get around the guard, and `scripts/hand-edits.ts`
+ * reads the outcome whatever spelling made it. A spelling of `gh issue edit`
+ * an agent types by reflex that this misreads is a defect; one of these is not.
  */
 import { spawnSync } from "child_process";
 import { existsSync, readdirSync, readFileSync } from "fs";
@@ -118,12 +132,13 @@ export function payloadPrefix(root: string): string | null {
 }
 
 /**
- * A spec's frontmatter, with CRLF endings and a byte-order mark read as the
- * file they are (#2719 review round 4): a declaration saved on Windows is
- * still a declaration.
+ * A spec's frontmatter, with CRLF endings, a byte-order mark and spaces after
+ * a `---` fence read as the file they are (#2719 review rounds 4 and 5): a
+ * declaration saved on Windows, or by an editor that leaves trailing space,
+ * is still a declaration.
  */
 function frontmatter(text: string): string | undefined {
-  return /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n"))?.[1];
+  return /^---[ \t]*\n([\s\S]*?)\n---[ \t]*(?:\n|$)/.exec(text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n"))?.[1];
 }
 
 /** The `governs:` value in a frontmatter, with any indented lines that continue it. */
@@ -156,9 +171,9 @@ const BARE_REDIRECT = /^\d*(?:>>?|<)$/;
 /** Every `gh issue edit` in the command that carries a board-write flag. */
 function boardEdits(command: string): BoardEdit[] {
   const edits: BoardEdit[] = [];
-  // `2>&1`, `>&file`, `<&3` and `&>` are redirections, not the `&` the
-  // tokenizer splits on (#2719 review round 3).
-  const text = command.replace(/([<>])&(?=[^\s&;|])/g, "$1").replace(/&>/g, ">");
+  // `2>&1`, `>&file`, `>& file`, `<&3` and `&>` are redirections, not the `&`
+  // the tokenizer splits on (#2719 review rounds 3 and 5).
+  const text = command.replace(/([<>])&(?=[ \t]*[^\s&;|])/g, "$1").replace(/&>/g, ">");
   for (const w of clauses(text)) {
     const at = w.findIndex((x, i) => x === "edit" && w[i - 1] === "issue" && basename(w[i - 2] ?? "") === "gh");
     if (at < 0) continue;
@@ -253,7 +268,8 @@ export async function payloadEditRefusal(command: string, opts: PayloadEditOptio
     for (const raw of edit.issues) {
       const url = ISSUE_URL.exec(raw);
       const issue = url ? url[2] : /^#?\d+$/.test(raw) ? raw.replace(/^#/, "") : null;
-      const repo = edit.repo ?? (url ? url[1] : null) ?? edit.envRepo;
+      // An issue URL names its own repository, as gh reads it (#2719 review round 5).
+      const repo = (url ? url[1] : null) ?? edit.repo ?? edit.envRepo;
       if (issue === null) return `Cannot check this gh issue edit — "${raw}" does not name an issue it can read. ${why}`;
       const into = edit.milestones.find(m => family.test(m));
       if (into !== undefined) {
