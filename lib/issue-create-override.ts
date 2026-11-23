@@ -275,6 +275,25 @@ export function clauses(cmd: string, depth = 0): string[][] {
  * of `cmd`. Inside it the quoting starts afresh, and a `#` starting a word is a
  * comment to the end of the line, as `tokenize` reads one (#2723 review).
  */
+/**
+ * Whether the word at `j` starts a command, which is where the shell reads
+ * `case` and `esac` as keywords: at the substitution's start, after `;`, `&`,
+ * `|`, `(`, `{` or a newline, after a pattern's `)` (`case`), or after a
+ * keyword that a command follows (`then`, `do`, `!`, …; `in` for an empty
+ * `case x in esac`). Anywhere else the word is an argument: `echo case x`
+ * opens nothing (#2723 review).
+ */
+function commandStart(cmd: string, from: number, j: number, keyword: "case" | "esac"): boolean {
+  let k = j - 1;
+  while (k >= from && (cmd[k] === " " || cmd[k] === "\t")) k--;
+  if (k < from) return true;
+  if (/[;&|({\n]/.test(cmd[k]) || (keyword === "case" && cmd[k] === ")")) return true;
+  let w = k;
+  while (w > from && /[\w!]/.test(cmd[w - 1])) w--;
+  const before = cmd.slice(w, k + 1);
+  return /^(?:then|do|else|elif|if|while|until|time|!)$/.test(before) || (keyword === "esac" && before === "in");
+}
+
 function substitutionEnd(cmd: string, from: number): number {
   let depth = 0;
   // Open `case` statements: inside one, a pattern's `)` closes nothing (#2723 review).
@@ -295,8 +314,8 @@ function substitutionEnd(cmd: string, from: number): number {
       continue;
     }
     const wordStart = j === from || /[\s;&|(]/.test(cmd[j - 1]);
-    if (wordStart && /^case\s/.test(cmd.slice(j, j + 5))) cases++;
-    else if (wordStart && /^esac(?![\w-])/.test(cmd.slice(j, j + 5)) && cases > 0) cases--;
+    if (wordStart && /^case\s/.test(cmd.slice(j, j + 5)) && commandStart(cmd, from, j, "case")) cases++;
+    else if (wordStart && /^esac(?![\w-])/.test(cmd.slice(j, j + 5)) && cases > 0 && commandStart(cmd, from, j, "esac")) cases--;
     if (c === "'" || c === '"') quote = c;
     else if (c === "(") depth++;
     else if (c === ")") {

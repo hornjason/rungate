@@ -410,6 +410,47 @@ describe("#2723 review round 2", () => {
   });
 });
 
+describe("#2723 review round 3", () => {
+  test("case as an argument opens no case statement, so the substitution closes at its )", () => {
+    // Round 2 counted every word `case`; the `)` was then read as a pattern's,
+    // and the filing after the closing quote was swallowed into the word.
+    for (const cmd of [
+      `echo "$(printf case x)" ; gh issue create --title t`,
+      `echo "$(echo case )" ; gh issue create --label bug`,
+      `gh issue comment 2714 --body "$(grep case )" && gh issue create --label bug`,
+      `gh issue comment 2714 --body "$(git log --grep=x case )" && gh issue create --label bug`,
+    ]) {
+      expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    }
+  });
+
+  test("esac as an argument closes no case statement", () => {
+    // Read as one, the next pattern's `)` would end the substitution early,
+    // and the filing in that branch would sit in the outer word as text.
+    const cmd = `echo "$(case x in x) echo esac;; y) gh issue create --title t;; esac)"`;
+    expect(verifyPhaseRefusal(cmd), cmd).not.toBeNull();
+  });
+
+  test("case at a command's start still opens one: after ;, &&, a newline, then, and a pattern's )", () => {
+    for (const cmd of [
+      `echo "$(true; case x in x) gh issue create --title t;; esac)"`,
+      `echo "$(true && case x in x) gh issue create --title t;; esac)"`,
+      `echo "$(true\ncase x in x) gh issue create --title t;; esac)"`,
+      `echo "$(if true; then case x in x) gh issue create --title t;; esac; fi)"`,
+      `echo "$(case a in a) case b in b) gh issue create --title t;; esac;; esac)"`,
+      // The nested case counted: else the outer `c)` ends the substitution.
+      `echo "$(case a in a) case b in b) true;; esac;; c) gh issue create --title t;; esac)"`,
+    ]) {
+      expect(verifyPhaseRefusal(cmd), cmd).not.toBeNull();
+    }
+  });
+
+  test("an empty case closes at the esac after in", () => {
+    const cmd = `echo "$(case x in esac)"; gh issue create --title t`;
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+  });
+});
+
 describe("#365 SC-827: the hook reaches the decision", () => {
   /**
    * Spawn the real hook with a real VERIFY workflow state.
