@@ -4944,6 +4944,8 @@ describe("#1407: write intent is read per call, not only by character distance",
     ["an attribute target", PY(`class W:\n    def __init__(self):\n        self.p = '${LIVE}/${STATE}'\n    def load(self):\n        ${PYPAD2714}\n        print(json.load(open(self.p)))`, "W().load()")],
     // A longer attribute that starts with the bound one is another name.
     ["a longer attribute, written", PY(`self.p = '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', self.path)")],
+    // The dot is a dot: `self_p` is another name.
+    ["a name that differs at the dot, written", PY(`self.p = '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', self_p)")],
   ])("CONTROL (#2721): %s is allowed", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
