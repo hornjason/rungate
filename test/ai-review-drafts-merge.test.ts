@@ -296,6 +296,7 @@ describe("#2648: the merge's contract, over generated drafts", () => {
   test("400 generated rounds keep every rule of the union", () => {
     let collisions = 0;
     let withheld = 0;
+    let failedClean = 0;
     for (let seed = 1; seed <= 400; seed++) {
       const r = prng(seed);
       const planned = 1 + Math.floor(r() * 3);
@@ -309,7 +310,12 @@ describe("#2648: the merge's contract, over generated drafts", () => {
       const rep = roundRepresentative(m, runs);
       const firstHeard = all.findIndex(d => d !== null);
       const firstSilent = all.findIndex(d => d === null);
-      if (m.payload !== null) {
+      const firstFailed = runs.findIndex(x => x.outcome !== "success");
+      if (m.payload !== null && !blocksSomewhere && firstFailed !== -1) {
+        // #2678: a pass is never measured from a run whose step failed.
+        failedClean++;
+        expect(rep, `${at}: a written payload that blocks nothing is reported by the first run whose step did not succeed`).toEqual({ run: firstFailed, ...runs[firstFailed] });
+      } else if (m.payload !== null) {
         expect(rep, `${at}: a written payload is reported by the first run heard, as a success`).toEqual({ run: firstHeard, outcome: "success", execution: runs[firstHeard].execution });
       } else {
         const gap = firstSilent === -1 ? 0 : firstSilent;
@@ -350,6 +356,7 @@ describe("#2648: the merge's contract, over generated drafts", () => {
     }
     expect(collisions, "the generator produced no cross-draft duplicates, so the strictness rule was never exercised").toBeGreaterThan(100);
     expect(withheld, "no generated round was partial and blocked nothing, so the partial rule was never exercised").toBeGreaterThan(5);
+    expect(failedClean, "no generated round wrote a payload that blocks nothing beside a failed step, so #2678's rule was never exercised").toBeGreaterThan(5);
   });
 });
 
@@ -369,7 +376,8 @@ describe("#2661: the run a round reports", () => {
 
   test("each row names the run and the outcome the round reports", () => {
     const rows: [string, (string | null)[], { run: number; outcome: string; execution: string }][] = [
-      ["every draft parsed: the first, as a success", [pass, pass, pass], { run: 0, outcome: "success", execution: "/x/execution-1.json" }],
+      ["every draft parsed, nothing blocks, run 2's step failed: run 2, as its failure (#2678)", [pass, pass, pass], { run: 1, outcome: "failure", execution: "" }],
+      ["every draft parsed and one blocks, run 2's step failed: the first, as a success", [block, pass, pass], { run: 0, outcome: "success", execution: "/x/execution-1.json" }],
       ["run 1 silent, the rest block: the first parsed run, run 2's slot", [null, block, pass], { run: 1, outcome: "success", execution: "" }],
       ["partial and nothing blocks: the first run that did not parse", [pass, null, pass], { run: 1, outcome: "failure", execution: "" }],
       ["partial and nothing blocks, run 1 the gap", [null, pass, pass], { run: 0, outcome: "success", execution: "/x/execution-1.json" }],
@@ -382,10 +390,26 @@ describe("#2661: the run a round reports", () => {
     }
   });
 
-  test("a written payload is never reported as anything but a success, and a withheld one never as a success it did not earn", () => {
+  // #2678. With one run, a failed action step is UNMEASURED even when a
+  // findings file exists; the merge must not loosen that. A payload that
+  // blocks nothing is a pass only when every run's step succeeded. A block
+  // stands as it would alone, whatever another run's step said.
+  test("#2678: a written payload that blocks nothing is a success only when every run's step succeeded", () => {
+    const merged = (texts: (string | null)[]) => mergeDrafts(texts.map((text, i) => ({ path: `d${i}`, text })));
+    const succeeded = runs.map(r => ({ ...r, outcome: "success" }));
     const failing = runs.map(r => ({ ...r, outcome: "failure" }));
-    const written = mergeDrafts([pass, pass, pass].map((text, i) => ({ path: `d${i}`, text })));
-    expect(roundRepresentative(written, failing).outcome).toBe("success");
+    const clean = merged([pass, pass, pass]);
+    expect(roundRepresentative(clean, succeeded)).toEqual({ run: 0, outcome: "success", execution: "/x/execution-1.json" });
+    expect(roundRepresentative(clean, failing)).toEqual({ run: 0, outcome: "failure", execution: "/x/execution-1.json" });
+    for (const outcome of ["failure", "cancelled", "skipped"]) {
+      const third = succeeded.map((r, i) => (i === 2 ? { ...r, outcome } : r));
+      expect(roundRepresentative(clean, third), `run 3 ${outcome}`).toEqual({ run: 2, outcome, execution: "/x/execution-3.json" });
+    }
+    expect(roundRepresentative(merged([pass, block, pass]), failing).outcome, "a block was withheld because another run failed").toBe("success");
+  });
+
+  test("a withheld payload is never reported as a success it did not earn", () => {
+    const failing = runs.map(r => ({ ...r, outcome: "failure" }));
     const withheld = mergeDrafts([pass, null, pass].map((text, i) => ({ path: `d${i}`, text })));
     expect(roundRepresentative(withheld, failing).outcome).toBe("failure");
   });

@@ -196,12 +196,8 @@ export function mergeDrafts(inputs: readonly DraftInput[]): MergedDrafts {
     }
   }
 
-  // A partial round establishes a block or nothing. `severityBlocks` is the
-  // one answer to whether a finding blocks; a finding that is not an object
-  // cannot block, and the adjudicator would refuse it anyway.
-  const blocks = kept.some(
-    f => f !== null && typeof f === "object" && severityBlocks((f as Record<string, unknown>)[AI_REVIEW_FINDING_FIELDS.severity]) === true,
-  );
+  // A partial round establishes a block or nothing.
+  const blocks = findingsBlock(kept);
   if (objs.length < inputs.length && !blocks) {
     return {
       payload: null,
@@ -236,6 +232,18 @@ export function mergeDrafts(inputs: readonly DraftInput[]): MergedDrafts {
   return { payload, drafts, kept: kept.length, duplicates };
 }
 
+/**
+ * Whether any of these findings blocks. `severityBlocks` is the one answer to
+ * whether a finding blocks; a finding that is not an object cannot block, and
+ * the adjudicator would refuse it anyway. One binding for the merge's partial
+ * rule and the round's outcome (#2678), so the two cannot disagree.
+ */
+export function findingsBlock(findings: readonly unknown[]): boolean {
+  return findings.some(
+    f => f !== null && typeof f === "object" && severityBlocks((f as Record<string, unknown>)[AI_REVIEW_FINDING_FIELDS.severity]) === true,
+  );
+}
+
 /** One review run as the job saw it: its action step's outcome, and its copied execution file ("" when it wrote none). */
 export interface RoundRun {
   outcome: string;
@@ -247,8 +255,15 @@ export interface RoundRun {
  * action outcome and ONE execution file, so with several runs this decides,
  * once, which run supplies them:
  *
- * - a written payload is reported by the first run whose draft parsed, as
- *   `success` — it is a run that reviewed and wrote, whatever its step said;
+ * - a written payload that blocks is reported by the first run whose draft
+ *   parsed, as `success`: one run's block stands as it would alone, whatever
+ *   another run's step said;
+ * - a written payload that blocks nothing is a `success` only when every
+ *   run's step succeeded. Otherwise it is reported by the first run whose
+ *   step did not, with that run's own outcome and execution file (#2678).
+ *   With one run a failed step reads UNMEASURED even when a findings file
+ *   exists, and three runs must not loosen that: a pass is never measured
+ *   from a run whose step failed, as it is never measured from fewer drafts;
  * - a withheld payload is reported by the first run whose draft did NOT
  *   parse, with that run's own outcome and execution file. So a partial round
  *   is reported by the run that made it partial, and a round where every run
@@ -262,6 +277,10 @@ export function roundRepresentative(m: MergedDrafts, runs: readonly RoundRun[]):
     throw new Error(`${m.drafts.length} drafts and ${runs.length} runs — each draft needs the run that wrote it`);
   }
   const written = m.payload !== null;
+  if (written && !findingsBlock(m.payload![AI_REVIEW_FINDINGS_KEY] as unknown[])) {
+    const failed = runs.findIndex(r => r.outcome !== "success");
+    if (failed !== -1) return { run: failed, ...runs[failed] };
+  }
   const at = m.drafts.findIndex(d => (d.status === "parsed") === written);
   // Total: a written payload has a parsed draft, and a withheld one has a
   // draft that did not parse (every draft parsed always writes the union).
