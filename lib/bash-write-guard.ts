@@ -2408,11 +2408,310 @@ export function argumentsOf(segment: string): string[] {
 function writesNear(body: string, protectedName: string): boolean {
   const WINDOW = 80;
   for (const m of body.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))) {
-    const from = Math.max(0, (m.index ?? 0) - WINDOW);
-    const slice = body.slice(from, (m.index ?? 0) + protectedName.length + WINDOW);
+    const at = m.index ?? 0;
+    const from = Math.max(0, at - WINDOW);
+    const slice = body.slice(from, at + protectedName.length + WINDOW);
     if (WRITE_INTENT.test(slice)) return true;
   }
   return false;
+}
+
+/**
+ * Whether a call's text is `open(…)` with a write mode among its arguments
+ * (#2699 review). A regular expression counts nested calls only to a fixed
+ * depth, and `open(os.path.join(os.path.dirname(os.path.abspath(f)), n), 'w')`
+ * is three deep, so the argument list is read here with brackets and quotes
+ * tracked, at any depth; the mode is a whole argument, positional or `mode=`.
+ */
+function opensForWrite(call: string): boolean {
+  const head = /^(?:[A-Za-z_$][\w$]*\s*\.\s*)*open\s*\(/.exec(call);
+  if (!head) return false;
+  return READINGS.some(reading => {
+    const { mask } = codeMask(call, reading);
+    const args: string[] = [];
+    let depth = 0;
+    let from = head[0].length;
+    for (let i = from; i < call.length; i++) {
+      if (mask[i] !== 0) continue;
+      const ch = call[i];
+      if (ch === '(' || ch === '[' || ch === '{') depth++;
+      else if (ch === ')' || ch === ']' || ch === '}') {
+        if (depth-- > 0) continue;
+        args.push(call.slice(from, i));
+        break;
+      } else if (ch === ',' && depth === 0) {
+        args.push(call.slice(from, i));
+        from = i + 1;
+      }
+    }
+    // Searched, not matched whole: `'w' if new else 'r'` and `u'w'` are write
+    // modes too. Any argument, the first included: `Path(p).open('w')` takes
+    // its mode first, and `WRITE_INTENT`'s open pattern, which reads the same
+    // call, has always counted a mode-like literal anywhere in it.
+    return args.some(arg => WRITE_MODE.test(arg));
+  });
+}
+
+/** A call that writes: by `WRITE_INTENT`, or an `open` with a write mode at any depth. */
+function callIsWrite(call: string): boolean {
+  return WRITE_INTENT.test(call) || opensForWrite(call);
+}
+
+/**
+ * Whether any call holding `protectedName` as an argument, at any depth, is
+ * a write (#1407). `writesNear`'s window misses a verb separated from the
+ * name by a long argument: in `shutil.copy(SRC, DST)` the verb comes before
+ * SRC, so a SRC longer than the window put DST's name out of its reach, and a
+ * copy onto the artifact spelled in full was allowed; a realpath'd macOS
+ * $TMPDIR is long enough. A name that is no call's argument (text in a string
+ * assigned to a variable, a docblock being edited) is left to the window.
+ *
+ * `program` must be the program text with its quotes: the reading masks
+ * strings and comments, and `dequote`'s view, which strips every quote,
+ * would read a `#` inside a string as a comment.
+ */
+function callWrites(program: string, protectedName: string): boolean {
+  const pattern = new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+  return READINGS.some(reading => {
+    const view = codeMask(program, reading);
+    for (const m of program.matchAll(pattern)) {
+      const at = m.index ?? 0;
+      if (enclosingCalls(program, at, view).some(callIsWrite)) return true;
+      // #2699 review: `dst = '<…>/workflow-state.json'` and then
+      // `shutil.copy(src, dst)` lines later. One level of binding is followed:
+      // the identifier the name's literal is assigned to counts as the name
+      // wherever a write call takes it. Deeper data flow is the evasion
+      // `WRITE_INTENT`'s docblock concedes.
+      const bound = boundIdentifier(program, at, protectedName, view);
+      if (bound !== null) {
+        for (const use of program.matchAll(new RegExp(`\\b${bound}\\b`, 'g'))) {
+          const u = use.index ?? 0;
+          if (u === at) continue;
+          if (enclosingCalls(program, u, view).some(callIsWrite)) return true;
+        }
+      }
+    }
+    return false;
+  });
+}
+
+/**
+ * The identifier a literal holding the name at `at` is assigned to
+ * (`x = '…'`), or null. The literal is found by its own quotes, and it must
+ * END at the name, or for a directory name at a file name after it, and hold
+ * no newline but a line continuation: the variable then holds the path, not text that mentions it. An
+ * assignment spelled inside another string (a docblock being edited) is
+ * therefore not a binding. Literals separated only by spaces or a string
+ * prefix are one (`'a/' 'b'`, `'a/' r'b'`), which is also how a
+ * triple-quoted literal reads here: `''`, `'…'`, `''`.
+ */
+function boundIdentifier(program: string, at: number, protectedName: string, view: CodeView): string | null {
+  const k = view.literals.findIndex(([open, close]) => open < at && at < close);
+  if (k < 0) return null;
+  const [open, close] = view.literals[k];
+  const tail = program.slice(at + protectedName.length, close);
+  if (tail !== '' && !(protectedName.endsWith('/') && /^[\w.\-/]+$/.test(tail))) return null;
+  // A backslash-newline inside a literal is a line continuation, not a newline.
+  if (program.slice(open, close).replace(/\\\n/g, '').includes('\n')) return null;
+  let start = open;
+  for (let j = k - 1; j >= 0 && /^[ \t]*(?:[rbfuRBFU]{1,2})?$/.test(program.slice(view.literals[j][1] + 1, start)); j--) {
+    start = view.literals[j][0];
+  }
+  const m = /(?:^|[\s;(,])([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[A-Za-z_][\w.]*\s*)?=\s*[rbfuRBFU]{0,2}$/.exec(program.slice(Math.max(0, start - 80), start));
+  return m ? m[1] : null;
+}
+
+/**
+ * How a `#` reads. The body's language is not known here (a stdin program
+ * reaches this module without its interpreter's name), and `#` means opposite
+ * things: a comment in Python and shell, with or without a space after it
+ * (`#don't`), and a private name in JavaScript (`this.#x`, `{ #x = 1 }`,
+ * `} #f = …`). Guessing which from the tokens before it was walked around
+ * (#2699 security review). So both readings are taken: `word` reads a `#`
+ * starting a word as a comment, and `spaced` only one followed by whitespace.
+ *
+ * A `/` is the same kind of guess: in JavaScript it opens a regex literal
+ * (`/\)/g`, `return /'/`) or a comment (`// don't`, or a block comment); in Python it
+ * is a division, a floor division or the positional-only marker
+ * (`def f(a, /, b)`). Each `#` reading is taken with JavaScript's `/` forms
+ * masked (`js`) and without, and a write any of the four finds is refused.
+ * A misreading costs the reading it happens in; another still sees the code.
+ */
+interface Reading {
+  hash: 'word' | 'spaced';
+  js: boolean;
+}
+const READINGS: readonly Reading[] = [
+  { hash: 'word', js: false },
+  { hash: 'spaced', js: false },
+  { hash: 'word', js: true },
+  { hash: 'spaced', js: true },
+];
+
+/** A body read as code: per offset 0 code, 1 quoted or a regex literal, 2 a `#` comment; each literal's quote offsets; whether every quote closed. */
+interface CodeView {
+  mask: Uint8Array;
+  literals: Array<[number, number]>;
+  balanced: boolean;
+}
+
+/** Whether the `/` at `i` can open a regex literal: after an operator or opener, never `//` or `/*`. */
+function opensRegexLiteral(body: string, i: number): boolean {
+  if (body[i + 1] === '/' || body[i + 1] === '*') return false;
+  let j = i - 1;
+  while (j >= 0 && /\s/.test(body[j])) j--;
+  if (j < 0 || '(,=:[!&|?{};~+-*%<>^'.includes(body[j])) return true;
+  // After a keyword, not an operand: `return /'/` (#2699 review round 3). A
+  // name that only ends in one (`begin / 2`), or a property named like one
+  // (`o.in / 2`), is an operand.
+  return /(?<![\w$.])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/.test(body.slice(Math.max(0, j - 11), j + 1));
+}
+
+/** The offset of the `/` closing the regex literal opened at `i`, on the same line, or -1. */
+function regexLiteralEnd(body: string, i: number): number {
+  let inClass = false;
+  for (let j = i + 1; j < body.length; j++) {
+    const ch = body[j];
+    if (ch === '\n') return -1;
+    if (ch === '\\') j++;
+    else if (ch === '[') inClass = true;
+    else if (ch === ']') inClass = false;
+    else if (ch === '/' && !inClass) return j;
+  }
+  return -1;
+}
+
+function codeMask(body: string, reading: Reading): CodeView {
+  const mask = new Uint8Array(body.length);
+  const literals: Array<[number, number]> = [];
+  let quote: string | null = null;
+  let opened = 0;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (quote !== null) {
+      mask[i] = 1;
+      if (ch === '\\' && i + 1 < body.length) mask[++i] = 1;
+      else if (ch === quote) {
+        quote = null;
+        literals.push([opened, i]);
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      quote = ch;
+      opened = i;
+      mask[i] = 1;
+    } else if (ch === '#' && (i === 0 || /\s/.test(body[i - 1])) && (reading.hash === 'word' || /^\s?$/.test(body[i + 1] ?? ''))) {
+      // A comment runs to the end of the line. An apostrophe in one ("don't")
+      // would otherwise open a quote that swallows the brackets after it. Only
+      // a `#` that starts a word, so `this.#x` and `$#` stay code.
+      while (i < body.length && body[i] !== '\n') mask[i++] = 2;
+    } else if (reading.js && ch === '/' && body[i + 1] === '/') {
+      // A JavaScript line comment, read like a `#` one (#2699 review round 3).
+      while (i < body.length && body[i] !== '\n') mask[i++] = 2;
+    } else if (reading.js && ch === '/' && body[i + 1] === '*' && body.indexOf('*/', i + 2) >= 0) {
+      // A JavaScript block comment, to its `*/`. One that never closes is not
+      // one (`/[/*]/` read from the wrong `/`), so it masks nothing.
+      const end = body.indexOf('*/', i + 2) + 2;
+      while (i < end) mask[i++] = 2;
+      i--;
+    } else if (reading.js && ch === '/' && opensRegexLiteral(body, i)) {
+      // A regex literal (`/\)/g`): its brackets are not code. Only after a
+      // character a division cannot follow, so `n / 2` stays code (#2699
+      // review). Python has no regex literal and no valid `/` there.
+      const end = regexLiteralEnd(body, i);
+      if (end > i) {
+        for (let j = i; j <= end; j++) mask[j] = 1;
+        i = end;
+      }
+    }
+  }
+  return { mask, literals, balanced: quote === null };
+}
+
+/**
+ * The text of every call whose argument list holds offset `at`, innermost
+ * first: callee, argument list, and any method chain after it (`.f(…).g(…)`).
+ * Read over code only, with quotes and `#` comments masked, so a call over
+ * several lines, a `;` in a path string, or an apostrophe in a comment does
+ * not split or hide it. A callee may be computed (`fs['copyFileSync'](…)`,
+ * `(shutil.copy)(…)`). A body whose quotes never close cannot be read, so
+ * none is returned and the window alone decides, as it did before #1407.
+ * Reading such a body whole was tried and measured: it refused eight real
+ * commands, all edits of docs and config, and none a write of an artifact.
+ */
+function enclosingCalls(body: string, at: number, view: CodeView): string[] {
+  const { mask, balanced } = view;
+  if (!balanced) return [];
+  const open: { at: number; ch: string }[] = [];
+  for (let i = 0; i < at; i++) {
+    if (mask[i] !== 0) continue;
+    const ch = body[i];
+    if (ch === '(' || ch === '[' || ch === '{') open.push({ at: i, ch });
+    else if ((ch === ')' || ch === ']' || ch === '}') && open.length > 0) open.pop();
+  }
+  const calls: string[] = [];
+  for (let k = open.length - 1; k >= 0; k--) {
+    if (open[k].ch !== '(') continue;
+    const paren = open[k].at;
+    const start = calleeStart(body, mask, paren);
+    if (start === paren) continue;
+    calls.push(body.slice(start, chainEnd(body, mask, closingParen(body, mask, paren))));
+  }
+  return calls;
+}
+
+/** Where the callee before the `(` at `paren` starts: identifiers, dots, and bracketed groups. */
+function calleeStart(body: string, mask: Uint8Array, paren: number): number {
+  let j = paren - 1;
+  while (j >= 0 && /\s/.test(body[j])) j--;
+  let start = j + 1;
+  while (j >= 0) {
+    const ch = body[j];
+    if (mask[j] === 0 && (ch === ']' || ch === ')')) {
+      const opener = ch === ']' ? '[' : '(';
+      let depth = 0;
+      while (j >= 0) {
+        if (mask[j] === 0 && body[j] === ch) depth++;
+        else if (mask[j] === 0 && body[j] === opener && --depth === 0) break;
+        j--;
+      }
+      if (j < 0) return start;
+      start = j;
+      j--;
+    } else if (/[\w.$]/.test(ch)) {
+      start = j;
+      j--;
+    } else break;
+  }
+  return start;
+}
+
+/** The offset just past the `)` matching the `(` at `paren`, over code only, or the body's end. */
+function closingParen(body: string, mask: Uint8Array, paren: number): number {
+  let depth = 0;
+  for (let i = paren; i < body.length; i++) {
+    if (mask[i] !== 0) continue;
+    const ch = body[i];
+    if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if ((ch === ')' || ch === ']' || ch === '}') && --depth === 0) return i + 1;
+  }
+  return body.length;
+}
+
+/** Past any method chain starting at `from`: `.name`, optionally called, repeated. */
+function chainEnd(body: string, mask: Uint8Array, from: number): number {
+  let i = from;
+  for (;;) {
+    let j = i;
+    while (j < body.length && (/\s/.test(body[j]) || body[j] === '\\' || mask[j] === 2)) j++;
+    if (body[j] !== '.') return i;
+    j++;
+    while (j < body.length && /[\w$]/.test(body[j])) j++;
+    if (body[j] === '(') j = closingParen(body, mask, j);
+    if (j === i) return i;
+    i = j;
+  }
 }
 
 /**
@@ -2474,6 +2773,19 @@ function shellBody(segment: string): string {
   const m = /\s-[a-z]*c\s+([\s\S]+)$/.exec(segment);
   return m ? dequote(m[1]).trim() : '';
 }
+
+/**
+ * A quoted `open` mode that writes (#2699 review): up to three of r w a x b
+ * t +, at most one of r w a x and one of b t, with w, a, x or + among them.
+ * So 'w', 'wb', 'a+', 'r+' and 'w+b' write; 'r', 'rb' and 'rt' do not, nor a
+ * word like 'raw' or 'bat'. The mode used to be `[wax]\+?`, so
+ * `open(p, 'wb')` was not a write, on main too. `WRITE_INTENT` and
+ * `opensForWrite` both read it from here: one decider for one question. It
+ * captures nothing, so it composes into a pattern any number of times.
+ */
+const MODE_BODY = String.raw`(?=[rwaxbt+]{1,3}['"])(?![^'"]*[rwax][^'"]*[rwax])(?![^'"]*[bt][^'"]*[bt])(?=[^'"]*[wax+])[rwaxbt+]{1,3}`;
+const WRITE_MODE_SOURCE = `(?:'${MODE_BODY}'|"${MODE_BODY}")`;
+const WRITE_MODE = new RegExp(WRITE_MODE_SOURCE);
 
 /**
  * Declared write intent inside an interpreter body.
@@ -2557,8 +2869,15 @@ function shellBody(segment: string): string {
  * as prose: the sanctioned commands must stay ALLOWED, so the next person to
  * reach for the obvious fix gets a red suite naming what it costs.
  */
-const WRITE_INTENT =
-  /\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\([^)]*['"][wax]\+?['"]/;
+const WRITE_INTENT = new RegExp(
+  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\([^)]*` +
+    WRITE_MODE_SOURCE +
+    // #2699 review: the mode after nested calls in the path, two levels deep.
+    // `opensForWrite` reads any depth, but only in a body that parses; this is
+    // what the window still reads in one whose quotes never close.
+    String.raw`|\bopen\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*` +
+    WRITE_MODE_SOURCE,
+);
 
 /**
  * #1176 measured the suggested widening of WRITE_INTENT to shell idioms —
@@ -3333,7 +3652,7 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
     // all — so the `.replace` spelling #1276 closed for `-e` was still open
     // here, in a heredoc, for as long as the stopgap existed.
     const pf = absoluteNamesOutsideScratch(program, bodyTargetsAreScratch(program, exempt) ? exempt : NO_EXEMPTION).find(p =>
-      writesNear(program, p),
+      writesNear(program, p) || callWrites(program, p),
     );
     if (pf) {
       return {
@@ -3447,9 +3766,13 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
             ? bodyJudge
             : NO_EXEMPTION;
       const candidates = namesOutsideScratch(bare, ALL_PROTECTED, bodyExempt);
+      // #1407: `callWrites` reads the body, which keeps its quotes; `bare`
+      // has had every quote stripped by `dequote`. A name the body does not
+      // spell as written (split across adjacent literals, say) is whole only
+      // in `bare`, so it is read there instead (security review).
       const pf = isMutatingFind
         ? (candidates[0] ?? null)
-        : (candidates.find(p => writesNear(bare, p)) ?? null);
+        : (candidates.find(p => writesNear(bare, p) || callWrites(body !== '' && body.includes(p) ? body : bare, p)) ?? null);
       if (pf) {
         return {
           blocked: true,

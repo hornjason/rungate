@@ -4530,3 +4530,303 @@ describe("#1367 BYPASS 6: a write that runs LATER than a step after it", () => {
     });
   });
 });
+
+// #1407. Arm 3 and the stdin-program arm refused only when a write verb sat
+// within 80 characters of the protected name. In `shutil.copy(SRC, DST)` the
+// verb comes before SRC, so a source path over about 80 characters put DST's
+// name out of range, and a copy onto the artifact, spelled in full, was
+// allowed. A realpath'd macOS $TMPDIR is long enough on its own. Write intent
+// is now also read over every call the name is an argument of.
+describe("#1407: write intent is read per call, not only by character distance", () => {
+  const LONG = `/private/var/folders/m7/${"x".repeat(32)}/T/rg1407-${"y".repeat(24)}`;
+
+  test("WITNESS: a copy onto the artifact with a long source path is refused", () => {
+    const cmd = `python3 -c "import shutil; shutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')"`;
+    expect(LONG.length, "the source path must be long enough to have escaped the window").toBeGreaterThan(80);
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: the same copy as a stdin program", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\nshutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: node, with the write call holding a long first argument", () => {
+    const cmd = `node -e "require('fs').copyFileSync('${LONG}/${STATE}', '${LIVE}/${STATE}')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // Security review of the first draft: a statement split on every `;` and
+  // newline is walked around by a call formatted over several lines, and by a
+  // `;` inside the source string. Calls are read with quotes and brackets
+  // tracked.
+  test("WITNESS: a call formatted over several lines is one call", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\nshutil.copy(\n    '${LONG}/${STATE}',\n    '${LIVE}/${STATE}',\n)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a ; inside the source string does not end the call", () => {
+    const cmd = `python3 -c "import shutil; shutil.copy('${LONG};x/${STATE}', '${LIVE}/${STATE}')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // Second security review: the call reading must not fail open where its
+  // parse cannot be trusted, nor miss a write reached by a computed callee or
+  // a method chain after the call.
+  test("WITNESS: an apostrophe in a comment does not hide the call", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\n# don't touch the original\nshutil.copy(\n    '${LONG}/${STATE}',\n    '${LIVE}/${STATE}',\n)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a computed callee is still the call", () => {
+    for (const cmd of [
+      `node -e "require('fs')['copyFileSync']('${LONG}/${STATE}', '${LIVE}/${STATE}')"`,
+      `python3 -c "import shutil; (shutil.copy)('${LONG}/${STATE}', '${LIVE}/${STATE}')"`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a write method chained after the call holding the name", () => {
+    const chain = ".resolve()".repeat(10);
+    const cmd = `python3 -c "import pathlib; pathlib.Path('${LIVE}/${STATE}')${chain}.write_text('x')"`;
+    expect(chain.length).toBeGreaterThan(80);
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // Fifth security review: a name split across adjacent literals is whole
+  // in `bare`, which strips quotes, but not in the body, so the call reading
+  // falls back to `bare` when the body does not spell the name.
+  test("WITNESS: a name split across adjacent string literals", () => {
+    const cmd = `python3 -c "import shutil; shutil.copy('${LONG}/x', '${LIVE}/workflow-''state.json')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // #2699 review round 1.
+  test("WITNESS: open-for-write whose mode follows a nested call in the path", () => {
+    for (const cmd of [
+      `python3 -c "import os; open(os.path.join(os.environ['RUN_STORE'], '${STATE}'), 'w').close()"`,
+      `python3 -c "import os; open(os.path.join(os.getcwd(), '${STATE}'), 'w').close()"`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a JavaScript private field is code, not a comment", () => {
+    for (const field of ["{ #x = 1 }", "{ static #x = 1 }"]) {
+      const cmd = `node - <<'JS'\nclass A ${field}; require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')\nJS`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    }
+  });
+
+  test("WITNESS: a name bound to a variable that a later write call takes", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\ndst = '${LIVE}/${STATE}'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // Seventh security review.
+  test("WITNESS: an unmatched ( inside the path string of an open-for-write", () => {
+    // `.close()`, not `.write(`: a chained write would refuse this on its own,
+    // and the case must hang on the open pattern alone.
+    const cmd = `python3 -c "open('${LONG}(/${STATE}', 'w').close()"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a Python comment with no space after # still hides its apostrophe", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\nx = 1 #don't\nshutil.copy(\n    '${LONG}/${STATE}',\n    '${LIVE}/${STATE}')\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // Eighth security review: a guessed comment rule and a literal read too
+  // narrowly. Both readings of `#` are taken, and a literal is found by its
+  // own quotes, adjacent literals and triple quotes included.
+  test("WITNESS: a private field after a closing brace is code, not a comment", () => {
+    const cmd = `node - <<'JS'\nclass A { m() {}\n  #f = require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}') }\nnew A()\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a protected directory bound with the file name after it", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\ndst = '${LIVE}/witnesses/run.json'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a triple-quoted path bound to a variable", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\ndst = '''${LIVE}/${STATE}'''\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // The `-c` form: a stdin program names only an ABSOLUTE spelling (#1240's
+  // rule, `absoluteNamesOutsideScratch`), and a path split across literals
+  // spells none, on main as here. Which names a body is read for is not this
+  // issue's question.
+  test("WITNESS: a path of adjacent literals bound to a variable", () => {
+    for (const lit of [`'${LIVE}/' '${STATE}'`, `'${LIVE}/' r'${STATE}'`, `'${LIVE}/''${STATE}'`]) {
+      const cmd = `python3 -c "import shutil; dst = ${lit}; src = '${LONG}/x'; shutil.copy(src, dst)"`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    }
+  });
+
+  test("WITNESS: a path literal continued with a backslash-newline", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\ndst = '\\\n${LIVE}/${STATE}'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
+    expect(cmd).toContain("'\\\n");
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // #2699 review round 2.
+  test("WITNESS: open-for-write whose path nests three calls before the mode", () => {
+    for (const mode of ["'w'", "mode='w'", "'w' if 1 else 'r'", "u'w'"]) {
+      const cmd = `python3 -c "import os; open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '${STATE}'), ${mode}).close()"`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    }
+  });
+
+  test("WITNESS: binary and read-write open modes are writes", () => {
+    for (const mode of ["wb", "r+", "w+b", "ab", "rb+"]) {
+      const cmd = `python3 - <<'PY'\nimport pickle\nwith open('${LIVE}/${STATE}', '${mode}') as f:\n    pickle.dump({}, f)\nPY`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    }
+  });
+
+  test("CONTROL: read-only open modes are not writes", () => {
+    for (const mode of ["r", "rb", "rt"]) {
+      const cmd = `python3 - <<'PY'\nwith open('${LIVE}/${STATE}', '${mode}') as f:\n    print(len(f.read()))\nPY`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+    }
+  });
+
+  test("CONTROL: a word spelled in mode letters is not a mode", () => {
+    for (const word of ["raw", "bat"]) {
+      const cmd = `python3 -c "print(open('${LIVE}/${STATE}' if 0 else '${word}').read())"`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+    }
+  });
+
+  test("WITNESS: a bracket inside a JavaScript regex literal does not close the call", () => {
+    const cmd = `node -e "require('fs').copyFileSync('${LONG}'.replace(/\\)/g, ''), '${LIVE}/${STATE}')"`;
+    expect(cmd).toContain("/\\)/g");
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("CONTROL: a division is not a regex literal, so it invents no write around the name", () => {
+    // Read as a regex, `/ 2)); x = n /` would be masked, its two `)` with it,
+    // and the name would sit inside the `.write(` call. Padded so the window
+    // misses: only a misread could refuse this.
+    // `begin` ends in the keyword `in`, and is still an operand.
+    for (const n of ["n", "begin"]) {
+      const cmd = `python3 -c "${n} = 4; open('/tmp/rg1407-o.txt', 'w').write(str(${n} / 2)); x = ${n} / 3; pad = '${"z".repeat(90)}'; print('${LIVE}/${STATE}')"`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+    }
+  });
+
+  // Security review of the round-2 commit: one misread must not blind every
+  // reading, and the window keeps reading an unparseable body.
+  test("WITNESS: a slash misread as a regex does not hide the call", () => {
+    // Python's positional-only marker: a `/` after `,`, and a later `/` in a
+    // string on the same line. Read as a regex, the body no longer balances.
+    const cmd = `python3 - <<'PY'\nimport shutil\ndef f(a, /, b='/tmp'):\n    pass\nshutil.copy('${LONG}/x', '${LIVE}/${STATE}')\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: in a body whose quotes never close, the window still reads a nested open", () => {
+    const cmd = `python3 - <<'PY'\nnote = "it's\nimport os\nopen(os.path.join(os.environ['R'], '${LIVE}/${STATE}'), 'w').close()\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: in a body whose quotes never close, the window still reads an unmatched ( in the path", () => {
+    const cmd = `python3 - <<'PY'\nnote = "it's\nopen('${LIVE}(/${STATE}', 'w').close()\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // #2699 review round 3 (rule 5: the same problem as round 2's regex finding,
+  // JavaScript syntax the mask did not know, folded in rather than split).
+  test("WITNESS: an apostrophe in a JavaScript comment does not hide the call", () => {
+    for (const comment of ["// don't overwrite the run store", "/* don't overwrite it */", "/*\n * it's the run store\n */"]) {
+      const cmd = `node - <<'JS'\n${comment}\nrequire('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')\nJS`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    }
+  });
+
+  test("WITNESS: a regex literal after a keyword is a regex literal", () => {
+    for (const cmd of [
+      `node -e "const ok = s => { return /'/.test(s) }; require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')"`,
+      `node -e "require('fs').copyFileSync((() => { return /\\)/ })() && '${LONG}/x', '${LIVE}/${STATE}')"`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // Security review of the round-3 commit. Each needs the other readings
+  // blinded too, by `// don't`, which leaves the plain readings unbalanced.
+  test("WITNESS: an unclosed /* is not a comment", () => {
+    const cmd = `node - <<'JS'\n// don't\nif (x) /[/*]/.test(s); require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a property named like a keyword is an operand", () => {
+    const cmd = `node - <<'JS'\n// don't\nconst r = o.in / 2; require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("CONTROL: a file name merely starting with a protected one is not bound", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\ndst = '${LIVE}/${STATE}.bak'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  test("CONTROL: a string over several lines that ends at the name is text, not a path", () => {
+    const cmd = `python3 - <<'PY'\np = 'notes.md'\nnew = """example:\n  p = ${LIVE}/${STATE}"""\nnote = '${"z".repeat(90)}'\nopen(p, 'w').write(new)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  test("CONTROL: a binding inside a string being edited is not a binding", () => {
+    // Padded so the write sits outside the window, where main allows it too:
+    // only the binding could refuse this.
+    const cmd = `python3 - <<'PY'\np = 'notes.md'\ns = open(p).read()\nnew = """example: p = '${LIVE}/${STATE}'"""\nnote = '${"z".repeat(90)}'\nopen(p, 'w').write(s + new)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  test("CONTROL: a name bound to a variable that only a read takes", () => {
+    const cmd = `python3 - <<'PY'\nimport json\np = '${LIVE}/${STATE}'\nnote = '${LONG}'\nd = json.load(open(p))\nprint(d)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  test("WITNESS: a chain continued on the next line", () => {
+    const cmd = `python3 - <<'PY'\nimport pathlib\n(pathlib.Path('${LIVE}/${STATE}')\n    ${".resolve()".repeat(10)}\n    .write_text('x'))\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // What this does NOT claim, pinned so the limit is a test and not prose. A
+  // body whose quotes never close cannot be parsed, so the window alone
+  // decides, as before #1407. Reading it whole refused eight real commands in
+  // the transcript sweep, every one an edit of docs or config. An unclosed
+  // quote is built, not accidental: the evasion WRITE_INTENT's docblock
+  // concedes. If this turns red, the guard got wider; measure the corpus again.
+  // A decoy spelling of the name elsewhere in the body makes the body the view
+  // read, and a write target split across literals is then not whole in it.
+  // Reading dequote's view as well, every time, was measured: it refused four
+  // more real commands, all of them a `#` inside a string read as a comment
+  // once the quotes are stripped. A decoy plus a split name is built.
+  test("CONCESSION: a decoy spelling beside a split write target", () => {
+    const cmd = `python3 -c "import shutil; shutil.copy('${LONG}/x', '${LIVE}/workflow-''state.json'); pad = '${"z".repeat(90)}'; print('${LIVE}/${STATE}')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  // The limit of a lexical mask, pinned. A `// don't` blinds the plain
+  // readings, and a `/*` inside a regex character class, read from a `/` the
+  // mask takes for a division, pairs with a later `*/` and blinds the
+  // JavaScript ones. Built to defeat every reading at once: the evasion
+  // WRITE_INTENT's docblock concedes. The window, main's rule, still answers.
+  test("CONCESSION: a construction built to blind every reading gets the window alone", () => {
+    const cmd = `node - <<'JS'\n// don't\nif (x) /[/*]/.test(s); require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}') /* end */\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  test("CONCESSION: a body whose quotes never close gets the window alone", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\nnote = \"it's\nshutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  test("CONTROL: a read with the same long path is allowed", () => {
+    const cmd = `python3 -c "import json; d = json.load(open('${LONG}/${STATE}')); print(d)"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  test("CONTROL: a write in another call, out of the window, is not read as writing the name", () => {
+    const pad = "z".repeat(90);
+    const cmd = `python3 -c "import json; d = json.load(open('${LIVE}/${STATE}')); note = '${pad}'; open('/tmp/rg1407-out.txt', 'w').write(str(d))"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+});
