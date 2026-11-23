@@ -446,11 +446,10 @@ describe("#2723 review round 3", () => {
   });
 
   test("esac closes a case wherever the shell reads it as a keyword", () => {
-    // Each ends in a string holding `esac )`: an esac missed leaves the case
-    // open, the outer quotes read inverted, and the scan closes there, with
-    // the filing inside it, where the fallback cannot see it.
-    const LATER = ` ; gh issue create --title t ; echo " ; esac )"`;
-    for (const sub of [
+    // A second case follows each, with a filing in its branch: an esac missed
+    // leaves the first case open, the case-aware scan never closes, and only
+    // the case-blind reading is left, which stops at the second pattern's `)`.
+    for (const first of [
       `case x in esac`,
       // An empty branch: the pattern's `)` then `esac`.
       `case x in x) esac`,
@@ -460,31 +459,39 @@ describe("#2723 review round 3", () => {
       `case x in x) { true; } esac`,
       `case a in a) case b in b) true;; esac esac`,
     ]) {
-      const cmd = `echo "$(${sub})"${LATER}`;
-      expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+      const cmd = `echo "$(${first}; case y in y) gh issue create --title t;; esac)"`;
+      expect(verifyPhaseRefusal(cmd), cmd).not.toBeNull();
     }
   });
 
-  test("an argument case before a later esac does not move the close", () => {
-    // Counted, `case` skips the real `)`, the outer quote reads inverted, and
-    // the `esac )` inside the last string closes the scan there, with the
-    // filing inside it. No fallback can see this: the scan did close.
-    for (const cmd of [
-      `echo "$(echo case )" ; gh issue create --title t ; echo " ; esac )"`,
-      // After a word part's `)` or `}`, the word goes on: `case` is an argument.
-      `echo "$(echo $(date) case )" ; gh issue create --title t ; echo " ; esac )"`,
-      `echo "$(echo <(date) case )" ; gh issue create --title t ; echo " ; esac )"`,
-      `echo "$(echo \${x} case )" ; gh issue create --title t ; echo " ; esac )"`,
-    ]) {
-      expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
-    }
-  });
-
-  test("a scan that never closes falls back to the first skipped )", () => {
-    // A case the scan counts and no esac closes (a syntax error to the shell):
-    // the scan runs to the end, and falls back to the first skipped `)`.
-    const cmd = `echo "$(echo x; case )"; gh issue create --title t`;
+  test("the outer word goes on from the first ), whatever the case reading says", () => {
+    // `echo fi case` counts a case (the word before is `fi`), so the
+    // case-aware scan skips the real `)`, reads the outer quotes inverted, and
+    // closes inside the last string. The outer reading does not follow it.
+    const cmd = `echo "$(echo fi case )" ; gh issue create --title t ; echo " ; esac )"`;
     expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+  });
+
+  test("CONTROL: an argument case adds no reading, so a filing quoted later is text", () => {
+    // Counted, each would add a case-aware reading that ends inside the last
+    // string and reads the filing quoted there as a command.
+    for (const cmd of [
+      `echo "$(echo case )" ; echo " ; gh issue create --title t ; esac )"`,
+      // After a word part's `)` or `}`, the word goes on: `case` is an argument.
+      `echo "$(echo $(date) case )" ; echo " ; gh issue create --title t ; esac )"`,
+      `echo "$(echo <(date) case )" ; echo " ; gh issue create --title t ; esac )"`,
+      `echo "$(echo \${x} case )" ; echo " ; gh issue create --title t ; esac )"`,
+    ]) {
+      expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
+    }
+  });
+
+  test("CONTROL: a case scan that never closes adds no reading", () => {
+    // A case no esac closes (a syntax error to the shell): the scan runs to
+    // the end and falls back to the case-blind close, so the filing quoted in
+    // the next command stays text.
+    const cmd = `echo "$(echo x; case )"; echo "; gh issue create --title t"`;
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
   });
 });
 

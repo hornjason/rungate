@@ -183,8 +183,17 @@ function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[]
       continue;
     }
     if (quote === '"' && c === "$" && cmd[i + 1] === "(") {
-      const end = substitutionEnd(cmd, i + 2);
+      // Two readings of where it ends (#2723 review). The word goes on from
+      // the first `)` at depth 0, read as if no `case` were open, so no
+      // miscounted case can carry later text into the substitution and out of
+      // the outer reading. A case-aware reading that ends later is recorded
+      // too, so a filing in a case branch after a pattern's `)` is read. A
+      // filing either reading finds is refused; a miscount costs at most a
+      // refusal.
+      const end = substitutionEnd(cmd, i + 2, false);
       subs.push({ token: out.length, text: cmd.slice(i + 2, end) });
+      const cased = substitutionEnd(cmd, i + 2, true);
+      if (cased > end) subs.push({ token: out.length, text: cmd.slice(i + 2, cased) });
       cur += cmd.slice(i, end + 1);
       i = end;
       continue;
@@ -271,11 +280,6 @@ export function clauses(cmd: string, depth = 0): string[][] {
 }
 
 /**
- * The offset of the `)` closing a `$(` whose text starts at `from`, or the end
- * of `cmd`. Inside it the quoting starts afresh, and a `#` starting a word is a
- * comment to the end of the line, as `tokenize` reads one (#2723 review).
- */
-/**
  * Whether the word at `j` sits where the shell reads `case` and `esac` as
  * keywords: bash's `reserved_word_acceptable` tokens. That is the
  * substitution's start; after `;`, `&`, `|`, `(`, `)`, `{` or a newline; after
@@ -284,7 +288,10 @@ export function clauses(cmd: string, depth = 0): string[][] {
  * (and `in`, for an empty `case x in esac`). So `case x in x) esac` and `fi
  * esac` close a case, and `echo case x` opens nothing (#2723 review). A `)`
  * that closed a word part (`$(date) case`, offsets in `wordCloses`) is no
- * token: the word goes on.
+ * token: the word goes on. Reading the word before is not the shell's
+ * grammar (`echo fi case` counts a case), and a miscount here costs at most a
+ * refusal, since the outer word never goes on from the case-aware close
+ * (`scanTokens`).
  */
 function commandStart(cmd: string, from: number, j: number, keyword: "case" | "esac", wordCloses: ReadonlySet<number>): boolean {
   let k = j - 1;
@@ -300,13 +307,19 @@ function commandStart(cmd: string, from: number, j: number, keyword: "case" | "e
   return /^(?:!|do|done|elif|else|esac|fi|if|then|time|until|while|coproc)$/.test(before) || (keyword === "esac" && before === "in");
 }
 
-function substitutionEnd(cmd: string, from: number): number {
+/**
+ * The offset of the `)` closing a `$(` whose text starts at `from`, or the end
+ * of `cmd`. Inside it the quoting starts afresh, and a `#` starting a word is a
+ * comment to the end of the line, as `tokenize` reads one (#2723 review).
+ * With `caseAware`, a pattern's `)` inside an open `case` closes nothing.
+ */
+function substitutionEnd(cmd: string, from: number, caseAware: boolean): number {
   let depth = 0;
   // Open `case` statements: inside one, a pattern's `)` closes nothing (#2723 review).
   let cases = 0;
   // The first `)` skipped as a pattern's. A scan that never closes read a
-  // case that was not one, so it falls back to the reading with no case
-  // counting, as main reads it (#2723 review).
+  // case that was not one, so it falls back to the case-blind close and adds
+  // no reading (#2723 review).
   let skipped = -1;
   // Per open `(`, whether it opened a word part (`$(`, `<(`, `>(`, an extglob
   // `@(`), and the offsets of the `)` that closed one.
@@ -327,7 +340,7 @@ function substitutionEnd(cmd: string, from: number): number {
       while (j < cmd.length && cmd[j] !== "\n") j++;
       continue;
     }
-    const wordStart = j === from || /[\s;&|(]/.test(cmd[j - 1]);
+    const wordStart = caseAware && (j === from || /[\s;&|(]/.test(cmd[j - 1]));
     if (wordStart && /^case\s/.test(cmd.slice(j, j + 5)) && commandStart(cmd, from, j, "case", wordCloses)) cases++;
     else if (wordStart && /^esac(?![\w-])/.test(cmd.slice(j, j + 5)) && cases > 0 && commandStart(cmd, from, j, "esac", wordCloses)) cases--;
     if (c === "'" || c === '"') quote = c;
