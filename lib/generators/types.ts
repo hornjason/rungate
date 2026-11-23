@@ -126,6 +126,8 @@ export interface ProjectScan {
   repoUrl: string;
   /** Test command (e.g., "bun test") */
   testCmd: string;
+  /** What agents run before committing, when not the full suite: `dev.agentTestCmd`, or null (#2707) */
+  agentTestCmd?: string | null;
   /** Key files for agent reference */
   keyFiles: KeyFile[];
   /** Spec files with governs/testable metadata */
