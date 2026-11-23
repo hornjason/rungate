@@ -4592,6 +4592,14 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
+  // Fifth security review: a name split across adjacent literals is whole
+  // in `bare`, which strips quotes, but not in the body, so the call reading
+  // falls back to `bare` when the body does not spell the name.
+  test("WITNESS: a name split across adjacent string literals", () => {
+    const cmd = `python3 -c "import shutil; shutil.copy('${LONG}/x', '${LIVE}/workflow-''state.json')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
   test("WITNESS: a chain continued on the next line", () => {
     const cmd = `python3 - <<'PY'\nimport pathlib\n(pathlib.Path('${LIVE}/${STATE}')\n    ${".resolve()".repeat(10)}\n    .write_text('x'))\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);

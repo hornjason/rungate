@@ -3580,10 +3580,12 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
             : NO_EXEMPTION;
       const candidates = namesOutsideScratch(bare, ALL_PROTECTED, bodyExempt);
       // #1407: `callWrites` reads the body, which keeps its quotes; `bare`
-      // has had every quote stripped by `dequote`.
+      // has had every quote stripped by `dequote`. A name the body does not
+      // spell as written (split across adjacent literals, say) is whole only
+      // in `bare`, so it is read there instead (security review).
       const pf = isMutatingFind
         ? (candidates[0] ?? null)
-        : (candidates.find(p => writesNear(bare, p) || (body !== '' && callWrites(body, p))) ?? null);
+        : (candidates.find(p => writesNear(bare, p) || callWrites(body !== '' && body.includes(p) ? body : bare, p)) ?? null);
       if (pf) {
         return {
           blocked: true,
