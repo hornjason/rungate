@@ -4662,6 +4662,12 @@ describe("#1407: write intent is read per call, not only by character distance",
     }
   });
 
+  test("WITNESS: a path literal continued with a backslash-newline", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\ndst = '\\\n${LIVE}/${STATE}'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
+    expect(cmd).toContain("'\\\n");
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
   test("CONTROL: a file name merely starting with a protected one is not bound", () => {
     const cmd = `python3 - <<'PY'\nimport shutil\ndst = '${LIVE}/${STATE}.bak'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);

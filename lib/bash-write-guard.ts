@@ -2458,7 +2458,7 @@ function callWrites(program: string, protectedName: string): boolean {
  * The identifier a literal holding the name at `at` is assigned to
  * (`x = '…'`), or null. The literal is found by its own quotes, and it must
  * END at the name, or for a directory name at a file name after it, and hold
- * no newline: the variable then holds the path, not text that mentions it. An
+ * no newline but a line continuation: the variable then holds the path, not text that mentions it. An
  * assignment spelled inside another string (a docblock being edited) is
  * therefore not a binding. Literals separated only by spaces or a string
  * prefix are one (`'a/' 'b'`, `'a/' r'b'`), which is also how a
@@ -2470,7 +2470,8 @@ function boundIdentifier(program: string, at: number, protectedName: string, vie
   const [open, close] = view.literals[k];
   const tail = program.slice(at + protectedName.length, close);
   if (tail !== '' && !(protectedName.endsWith('/') && /^[\w.\-/]+$/.test(tail))) return null;
-  if (program.slice(open, close).includes('\n')) return null;
+  // A backslash-newline inside a literal is a line continuation, not a newline.
+  if (program.slice(open, close).replace(/\\\n/g, '').includes('\n')) return null;
   let start = open;
   for (let j = k - 1; j >= 0 && /^[ \t]*(?:[rbfuRBFU]{1,2})?$/.test(program.slice(view.literals[j][1] + 1, start)); j--) {
     start = view.literals[j][0];
