@@ -851,7 +851,7 @@ function retireSupersededRefusals(entries, report) {
     }
     return dropped;
 }
-function decompositionRefusal(allAcs, phase1AcIds, subIssues) {
+function decompositionRefusal(allAcs, phase1AcIds, subIssues, keptAcs) {
     const acs = Array.isArray(allAcs) ? allAcs : [];
     const phase1 = Array.isArray(phase1AcIds) ? phase1AcIds : [];
     const groups = Array.isArray(subIssues) ? subIssues : [];
@@ -884,7 +884,9 @@ function decompositionRefusal(allAcs, phase1AcIds, subIssues) {
             claimedBy.set(id, [...(claimedBy.get(id) ?? []), label]);
         }
     }
-    const phase1Set = new Set(phase1);
+    const acIds = (ac) => [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s) => s.trim()) : [])].filter(Boolean);
+    const phase1Set = new Set(Array.isArray(keptAcs) ? keptAcs.flatMap(acIds) : phase1);
+    const agentPhase1 = new Set(phase1);
     for (const [id, labels] of claimedBy) {
         if (phase1Set.has(id)) {
             out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
@@ -894,10 +896,13 @@ function decompositionRefusal(allAcs, phase1AcIds, subIssues) {
         }
     }
     for (const ac of acs) {
-        const ids = [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s) => s.trim()) : [])].filter(Boolean);
+        const ids = acIds(ac);
         const placed = ids.some(id => phase1Set.has(id) || claimedBy.has(id));
-        if (!placed)
-            out.push(`${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`);
+        if (placed)
+            continue;
+        out.push(ids.some(id => agentPhase1.has(id))
+            ? `${ac.id} was in the agent's Phase 1, the run's cap dropped it, and no sub-issue carries it — it is gone, and nothing else would say so`
+            : `${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`);
     }
     return out;
 }
@@ -2522,6 +2527,7 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
         originalAcs,
         decomposeResult.phase1AcIds,
         decomposeResult.subIssues,
+        discovery.acs,
       )
       if (splitViolations.length > 0) {
         for (const v of splitViolations) log(`DECOMPOSITION_REFUSED: ${v}`)

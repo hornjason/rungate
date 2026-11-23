@@ -60,11 +60,19 @@ export interface SubIssuePlan {
  * Returns a LIST, not a boolean or a first error: a decomposition that drops
  * one AC and duplicates another has two problems, and reporting one of them
  * invites a second round that discovers the other.
+ *
+ * `keptAcs` is what Phase 1 holds after the caller's own cap, when it caps
+ * (#2710). ship.js keeps at most `MAX_ACS_PER_ISSUE` of the agent's Phase 1,
+ * so an agent that keeps seven loses one, and a partition read off the
+ * agent's seven ids is clean while that AC sits in no sub-issue. The split is
+ * judged on what the run keeps; the agent's ids are still read for ones
+ * discovery never produced, and for a Phase 1 that holds nothing.
  */
 export function decompositionRefusal(
   allAcs: readonly DecomposedAc[] | null | undefined,
   phase1AcIds: readonly string[] | null | undefined,
   subIssues: readonly SubIssuePlan[] | null | undefined,
+  keptAcs?: readonly DecomposedAc[] | null,
 ): string[] {
   const acs = Array.isArray(allAcs) ? allAcs : [];
   const phase1 = Array.isArray(phase1AcIds) ? phase1AcIds : [];
@@ -100,8 +108,12 @@ export function decompositionRefusal(
   }
 
   // AC-3. The #70 failure mode exactly: a deferred AC that restates one
-  // already being shipped. Flagged, never written.
-  const phase1Set = new Set(phase1);
+  // already being shipped. Flagged, never written. "Shipped" is what Phase 1
+  // keeps, by any id the AC answers to, when the caller says what that is.
+  const acIds = (ac: DecomposedAc): string[] =>
+    [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s: string) => s.trim()) : [])].filter(Boolean);
+  const phase1Set = new Set(Array.isArray(keptAcs) ? keptAcs.flatMap(acIds) : phase1);
+  const agentPhase1 = new Set(phase1);
   for (const [id, labels] of claimedBy) {
     if (phase1Set.has(id)) {
       out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
@@ -114,9 +126,14 @@ export function decompositionRefusal(
   // The silent half. An AC in neither Phase 1 nor any sub-issue has been
   // dropped, and every count the run prints still adds up.
   for (const ac of acs) {
-    const ids: string[] = [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s: string) => s.trim()) : [])].filter(Boolean);
+    const ids = acIds(ac);
     const placed = ids.some(id => phase1Set.has(id) || claimedBy.has(id));
-    if (!placed) out.push(`${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`);
+    if (placed) continue;
+    out.push(
+      ids.some(id => agentPhase1.has(id))
+        ? `${ac.id} was in the agent's Phase 1, the run's cap dropped it, and no sub-issue carries it — it is gone, and nothing else would say so`
+        : `${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`,
+    );
   }
 
   return out;

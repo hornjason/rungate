@@ -2887,10 +2887,14 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
       // this run prints still adds up. Both are refusals rather than
       // repairs: a decomposition the harness quietly fixes is an acceptance
       // criterion nobody reviewed (#217).
+      // #2710: judged on what Phase 1 KEPT after the cap above, not on the
+      // agent's list. An AC the cap dropped and no sub-issue carries is
+      // otherwise shipped neither measured nor filed.
       const splitViolations = decompositionRefusal(
         originalAcs,
         decomposeResult.phase1AcIds,
         decomposeResult.subIssues,
+        discovery.acs,
       )
       if (splitViolations.length > 0) {
         for (const v of splitViolations) log(`DECOMPOSITION_REFUSED: ${v}`)

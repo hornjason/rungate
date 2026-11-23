@@ -35,6 +35,7 @@ import {
 } from "../lib/phase2-decomposition";
 import { verifyPhase2, readPlan, readSplitPlan, REFUSE_EXIT } from "../scripts/verify-phase2-bodies";
 import { enclosingChain } from "../lib/reachability";
+import { structuralCut } from "../lib/source-slice";
 import { BUNDLE_END, BUNDLE_START } from "../scripts/build-workflow-launch";
 
 const ROOT = join(import.meta.dir, "..");
@@ -422,6 +423,111 @@ describe("SC-1487: the launch file's bundled copy and the library agree", () => 
     expect(returnChain.slice(0, guardChain.length)).toEqual(guardChain);
     expect(ifs(returnChain), `the return is conditional — chain ${returnChain.join(" > ")}`)
       .toBe(ifs(guardChain));
+  });
+});
+
+// ── #2710 ───────────────────────────────────────────────────────────────────
+
+/**
+ * #2710: the refusal judges the split the run ships. ship.js caps Phase 1 at
+ * `MAX_ACS_PER_ISSUE` after the decompose agent answers, so an agent that keeps
+ * seven ACs loses one to the cap. A refusal reading the agent's seven ids saw
+ * a clean partition while that AC went into no sub-issue: neither measured nor
+ * filed, the silent drop #79 exists to stop.
+ *
+ * The block runs as ship.js holds it, cut out by structure, with ship.js's
+ * own cap (the AC-COVERAGE block) and the library's refusal. A mutant of the
+ * same block that hands the refusal the agent's ids back runs beside it, so
+ * the case is watched allowed by the reading it replaces.
+ */
+describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap", () => {
+  const src = readFileSync(SHIP, "utf-8");
+  const coverage = structuralCut(src, "// ──── AC-COVERAGE-START ────", { endAnchor: "// ──── AC-COVERAGE-END ────" });
+  const block = structuralCut(src, "if (decomposeResult?.phase1AcIds?.length > 0) {", { balanced: "{" });
+  const caps = [...src.matchAll(/const MAX_ACS_PER_ISSUE = (\d+)/g)];
+  const KEPT_ARG = "        discovery.acs,\n";
+
+  type Answer = { phase1AcIds: string[]; subIssues: { number: number; acIds: string[] }[] };
+  const run = (cut: string, acs: DecomposedAc[], answer: Answer) => {
+    const logs: string[] = [];
+    const out = new Function("discovery", "decomposeResult", "decompositionRefusal", "log", `
+      ${coverage}
+      const MAX_ACS_PER_ISSUE = ${caps[0]?.[1]}
+      let acDeferrals = []
+      let discoveryRefusal = null
+      const shipFailed = (phase, why) => ({ phase, why })
+      const proceeded = (() => { ${cut}
+        return true })()
+      return { proceeded, discoveryRefusal, acDeferrals, kept: discovery.acs.map(a => a.id) }
+    `)({ acs: [...acs] }, answer, decompositionRefusal, (l: string) => logs.push(l));
+    return { ...out, logs } as {
+      proceeded: boolean;
+      discoveryRefusal: { phase: string; why: string } | null;
+      acDeferrals: { specElement: string; subIssue?: number }[];
+      kept: string[];
+      logs: string[];
+    };
+  };
+  const mutant = () => {
+    expect(block.split(KEPT_ARG).length - 1, "the call site hands the refusal what Phase 1 kept, once").toBe(1);
+    return block.replace(KEPT_ARG, "");
+  };
+
+  const EIGHT: DecomposedAc[] = Array.from({ length: 8 }, (_, i) => ({
+    id: `AC-${i + 1}`,
+    statement: `statement ${i + 1}`,
+    specElement: `SC-${9101 + i}`,
+  }));
+  const ids = (from: number, to: number) => EIGHT.slice(from - 1, to).map(a => a.id);
+  const SEVEN_KEPT: Answer = { phase1AcIds: ids(1, 7), subIssues: [{ number: 90, acIds: ["AC-8"] }] };
+
+  test("the cap is one number, so the run below caps where ship.js does", () => {
+    expect(caps.length).toBe(1);
+    expect(Number(caps[0][1])).toBeGreaterThan(0);
+  });
+
+  test("seven Phase-1 ids and one sub-issue: the AC the cap drops is refused by name", () => {
+    const r = run(block, EIGHT, SEVEN_KEPT);
+    const dropped = ids(1, 7).filter(id => !r.kept.includes(id));
+    expect(dropped.length, "the cap kept all seven, so this case tests nothing").toBe(1);
+    expect(r.proceeded).toBe(false);
+    expect(r.discoveryRefusal?.phase).toBe("Discovery");
+    expect(r.logs.filter(l => l.startsWith("DECOMPOSITION_REFUSED:")).join("\n")).toContain(dropped[0]);
+  });
+
+  test("MUTANT: handing the refusal the agent's ids back lets that AC ship in no sub-issue", () => {
+    const r = run(mutant(), EIGHT, SEVEN_KEPT);
+    const dropped = ids(1, 7).filter(id => !r.kept.includes(id));
+    expect(r.proceeded).toBe(true);
+    const deferral = r.acDeferrals.find(d => d.specElement === EIGHT.find(a => a.id === dropped[0])!.specElement);
+    expect(deferral, "the dropped AC is not even deferred").toBeDefined();
+    expect(deferral!.subIssue, "the dropped AC was filed after all").toBeUndefined();
+  });
+
+  test("CONTROL: six Phase-1 ids and sub-issues for the other two still proceed", () => {
+    const answer: Answer = { phase1AcIds: ids(1, 6), subIssues: [{ number: 90, acIds: ["AC-7", "AC-8"] }] };
+    const r = run(block, EIGHT, answer);
+    expect(r.logs.filter(l => l.startsWith("DECOMPOSITION_REFUSED:"))).toEqual([]);
+    expect(r.proceeded).toBe(true);
+    expect(r.kept).toEqual(ids(1, 6));
+  });
+
+  test("CONTROL: an id the agent kept that discovery never produced is still refused", () => {
+    const answer: Answer = { phase1AcIds: [...ids(1, 6), "AC-99"], subIssues: [{ number: 90, acIds: ["AC-7", "AC-8"] }] };
+    const r = run(block, EIGHT, answer);
+    expect(r.proceeded).toBe(false);
+    expect(r.logs.join("\n")).toContain("Phase 1 keeps AC-99, which discovery never produced");
+  });
+
+  test("an AC the cap drops that a sub-issue carries is deferred to it, not refused as a duplicate", () => {
+    const first = run(block, EIGHT, SEVEN_KEPT);
+    const dropped = ids(1, 7).filter(id => !first.kept.includes(id))[0];
+    const answer: Answer = { phase1AcIds: ids(1, 7), subIssues: [{ number: 90, acIds: [dropped, "AC-8"] }] };
+    const r = run(block, EIGHT, answer);
+    expect(r.logs.filter(l => l.startsWith("DECOMPOSITION_REFUSED:"))).toEqual([]);
+    expect(r.proceeded).toBe(true);
+    const spec = EIGHT.find(a => a.id === dropped)!.specElement;
+    expect(r.acDeferrals.find(d => d.specElement === spec)?.subIssue).toBe(90);
   });
 });
 
