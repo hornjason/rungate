@@ -276,28 +276,42 @@ export function clauses(cmd: string, depth = 0): string[][] {
  * comment to the end of the line, as `tokenize` reads one (#2723 review).
  */
 /**
- * Whether the word at `j` starts a command, which is where the shell reads
- * `case` and `esac` as keywords: at the substitution's start, after `;`, `&`,
- * `|`, `(`, `{` or a newline, after a pattern's `)` (`case`), or after a
- * keyword that a command follows (`then`, `do`, `!`, …; `in` for an empty
- * `case x in esac`). Anywhere else the word is an argument: `echo case x`
- * opens nothing (#2723 review).
+ * Whether the word at `j` sits where the shell reads `case` and `esac` as
+ * keywords: bash's `reserved_word_acceptable` tokens. That is the
+ * substitution's start; after `;`, `&`, `|`, `(`, `)`, `{` or a newline; after
+ * a `}` or `]]` that is its own word; or after `!`, `do`, `done`, `elif`,
+ * `else`, `esac`, `fi`, `if`, `then`, `time`, `until`, `while` or `coproc`
+ * (and `in`, for an empty `case x in esac`). So `case x in x) esac` and `fi
+ * esac` close a case, and `echo case x` opens nothing (#2723 review). A `)`
+ * that closed a word part (`$(date) case`, offsets in `wordCloses`) is no
+ * token: the word goes on.
  */
-function commandStart(cmd: string, from: number, j: number, keyword: "case" | "esac"): boolean {
+function commandStart(cmd: string, from: number, j: number, keyword: "case" | "esac", wordCloses: ReadonlySet<number>): boolean {
   let k = j - 1;
   while (k >= from && (cmd[k] === " " || cmd[k] === "\t")) k--;
   if (k < from) return true;
-  if (/[;&|({\n]/.test(cmd[k]) || (keyword === "case" && cmd[k] === ")")) return true;
+  if (cmd[k] === ")") return !wordCloses.has(k);
+  if (/[;&|({\n]/.test(cmd[k])) return true;
+  const closer = cmd[k] === "}" ? k : cmd[k] === "]" && cmd[k - 1] === "]" ? k - 1 : -1;
+  if (closer >= 0) return closer === from || /[\s;&|]/.test(cmd[closer - 1]);
   let w = k;
   while (w > from && /[\w!]/.test(cmd[w - 1])) w--;
   const before = cmd.slice(w, k + 1);
-  return /^(?:then|do|else|elif|if|while|until|time|!)$/.test(before) || (keyword === "esac" && before === "in");
+  return /^(?:!|do|done|elif|else|esac|fi|if|then|time|until|while|coproc)$/.test(before) || (keyword === "esac" && before === "in");
 }
 
 function substitutionEnd(cmd: string, from: number): number {
   let depth = 0;
   // Open `case` statements: inside one, a pattern's `)` closes nothing (#2723 review).
   let cases = 0;
+  // The first `)` skipped as a pattern's. A scan that never closes read a
+  // case that was not one, so it falls back to the reading with no case
+  // counting, as main reads it (#2723 review).
+  let skipped = -1;
+  // Per open `(`, whether it opened a word part (`$(`, `<(`, `>(`, an extglob
+  // `@(`), and the offsets of the `)` that closed one.
+  const parts: boolean[] = [];
+  const wordCloses = new Set<number>();
   let quote: '"' | "'" | null = null;
   for (let j = from; j < cmd.length; j++) {
     const c = cmd[j];
@@ -314,17 +328,24 @@ function substitutionEnd(cmd: string, from: number): number {
       continue;
     }
     const wordStart = j === from || /[\s;&|(]/.test(cmd[j - 1]);
-    if (wordStart && /^case\s/.test(cmd.slice(j, j + 5)) && commandStart(cmd, from, j, "case")) cases++;
-    else if (wordStart && /^esac(?![\w-])/.test(cmd.slice(j, j + 5)) && cases > 0 && commandStart(cmd, from, j, "esac")) cases--;
+    if (wordStart && /^case\s/.test(cmd.slice(j, j + 5)) && commandStart(cmd, from, j, "case", wordCloses)) cases++;
+    else if (wordStart && /^esac(?![\w-])/.test(cmd.slice(j, j + 5)) && cases > 0 && commandStart(cmd, from, j, "esac", wordCloses)) cases--;
     if (c === "'" || c === '"') quote = c;
-    else if (c === "(") depth++;
-    else if (c === ")") {
-      if (depth === 0 && cases > 0) continue;
+    else if (c === "(") {
+      depth++;
+      const p = cmd[j - 1] ?? "";
+      parts.push(/[$<>@?+*]/.test(p));
+    } else if (c === ")") {
+      if (depth === 0 && cases > 0) {
+        if (skipped < 0) skipped = j;
+        continue;
+      }
       if (depth === 0) return j;
       depth--;
+      if (parts.pop() === true) wordCloses.add(j);
     }
   }
-  return cmd.length;
+  return skipped >= 0 ? skipped : cmd.length;
 }
 
 /**

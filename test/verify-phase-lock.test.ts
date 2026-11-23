@@ -445,8 +445,45 @@ describe("#2723 review round 3", () => {
     }
   });
 
-  test("an empty case closes at the esac after in", () => {
-    const cmd = `echo "$(case x in esac)"; gh issue create --title t`;
+  test("esac closes a case wherever the shell reads it as a keyword", () => {
+    // Each ends in a string holding `esac )`: an esac missed leaves the case
+    // open, the outer quotes read inverted, and the scan closes there, with
+    // the filing inside it, where the fallback cannot see it.
+    const LATER = ` ; gh issue create --title t ; echo " ; esac )"`;
+    for (const sub of [
+      `case x in esac`,
+      // An empty branch: the pattern's `)` then `esac`.
+      `case x in x) esac`,
+      `case x in (x) esac`,
+      // After a compound command's closer, with no `;;`.
+      `case x in x) if true; then true; fi esac`,
+      `case x in x) { true; } esac`,
+      `case a in a) case b in b) true;; esac esac`,
+    ]) {
+      const cmd = `echo "$(${sub})"${LATER}`;
+      expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    }
+  });
+
+  test("an argument case before a later esac does not move the close", () => {
+    // Counted, `case` skips the real `)`, the outer quote reads inverted, and
+    // the `esac )` inside the last string closes the scan there, with the
+    // filing inside it. No fallback can see this: the scan did close.
+    for (const cmd of [
+      `echo "$(echo case )" ; gh issue create --title t ; echo " ; esac )"`,
+      // After a word part's `)` or `}`, the word goes on: `case` is an argument.
+      `echo "$(echo $(date) case )" ; gh issue create --title t ; echo " ; esac )"`,
+      `echo "$(echo <(date) case )" ; gh issue create --title t ; echo " ; esac )"`,
+      `echo "$(echo \${x} case )" ; gh issue create --title t ; echo " ; esac )"`,
+    ]) {
+      expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    }
+  });
+
+  test("a scan that never closes falls back to the first skipped )", () => {
+    // A case the scan counts and no esac closes (a syntax error to the shell):
+    // the scan runs to the end, and falls back to the first skipped `)`.
+    const cmd = `echo "$(echo x; case )"; gh issue create --title t`;
     expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
   });
 });
