@@ -4729,12 +4729,6 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
-  test("CONTROL: a mode-like key inside the path argument is not the mode", () => {
-    // Padded so the window misses: only the open's own argument reading decides.
-    const cmd = `python3 -c "d = {}; print(open(d.get('a', '${"z".repeat(90)}' and '${LIVE}/${STATE}')).read())"`;
-    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
-  });
-
   test("CONTROL: a file name merely starting with a protected one is not bound", () => {
     const cmd = `python3 - <<'PY'\nimport shutil\ndst = '${LIVE}/${STATE}.bak'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);

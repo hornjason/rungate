@@ -2445,9 +2445,10 @@ function opensForWrite(call: string): boolean {
       }
     }
     // Searched, not matched whole: `'w' if new else 'r'` and `u'w'` are write
-    // modes too. Never in the first argument unless it is `mode=`: that is
-    // the path, and a key in it (`d.get('a')`) is not a mode.
-    return args.some((arg, k) => (k > 0 || /^\s*mode\s*=/.test(arg)) && WRITE_MODE.test(arg));
+    // modes too. Any argument, the first included: `Path(p).open('w')` takes
+    // its mode first, and `WRITE_INTENT`'s open pattern, which reads the same
+    // call, has always counted a mode-like literal anywhere in it.
+    return args.some(arg => WRITE_MODE.test(arg));
   });
 }
 
