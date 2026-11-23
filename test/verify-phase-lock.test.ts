@@ -488,6 +488,19 @@ describe("#2723 review round 3", () => {
     expect(filingDirectory(`cd /wt/a && echo "$(case x in x) echo '"';; esac)"; gh issue create --title t`, "/main")).toBe("/wt/a");
   });
 
+  test("a command is read at most twice, however many case substitutions it holds", () => {
+    // One second reading per command, not one per substitution. Read once per
+    // substitution, each re-read recursed again: 16 of these gave 283,778
+    // clauses and 2.7 seconds. The count is asserted, not the time.
+    const k = 16;
+    const sub = `"$(case x in x) echo a;; esac)"`;
+    const cmd = `echo ${Array(k).fill(sub).join(" ")}; gh issue create --title t`;
+    const read = clauses(cmd);
+    expect(read.some(createsIssue)).toBe(true);
+    expect(read.length).toBeLessThan(10 * k);
+    expect(filingDirectory(`cd /wt/a && ${cmd}`, "/main")).toBe("/wt/a");
+  }, 30_000);
+
   test("CONTROL: an argument case adds no reading, so a filing quoted later is text", () => {
     // Counted, each would add a case-aware reading that ends inside the last
     // string and reads the filing quoted there as a command.
