@@ -201,6 +201,49 @@ describe("#2719 review round 3", () => {
   });
 });
 
+describe("#2719 review round 4", () => {
+  const tree = (files: Record<string, string>) => {
+    const root = mkdtempSync(join(tmpdir(), "peg-r4-"));
+    mkdirSync(join(root, "specs"));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, "specs", name), text);
+    return root;
+  };
+
+  test("CRLF line endings and a byte-order mark do not hide a payload declaration", () => {
+    const pay = "---\r\nboard:\r\n  prefix: Convergence\r\n---\r\n";
+    expect(payloadPrefix(tree({ "ENGINE.md": "---\r\ngoverns: THE ENGINE. Payload: PAY.md\r\n---\r\n", "PAY.md": pay }))).toBe("Convergence");
+    expect(payloadPrefix(tree({ "ENGINE.md": "﻿---\ngoverns: THE ENGINE. Payload: PAY.md\n---\n", "PAY.md": "﻿" + pay }))).toBe("Convergence");
+  });
+
+  test("only the governs value declares a payload; Payload: elsewhere in frontmatter is not a declaration", () => {
+    const root = tree({
+      "ENGINE.md": "---\ngoverns: THE ENGINE. Payload: PAY.md\n---\n",
+      // Sorts before ENGINE.md, so it is read first.
+      "A-NOTES.md": "---\ntitle: Payload: release notes\n---\n",
+      "PAY.md": "---\nboard:\n  prefix: Convergence\n---\n",
+    });
+    expect(payloadPrefix(root)).toBe("Convergence");
+  });
+
+  test("an unknown flag takes no value, so it cannot swallow a board flag", async () => {
+    expect(await decide("gh issue edit 2655 --some-valueless-flag --body new")).toContain("#2655");
+    // And a value an unknown flag did take reads as an issue it cannot name: refused.
+    expect(await decide("gh issue edit 2714 --some-flag value --body new")).toContain("does not name an issue");
+    // The value flags it knows still take their value.
+    expect(await decide("gh issue edit 2655 --add-assignee @me")).toBeNull();
+    expect(await decide("gh issue edit 2655 --remove-assignee someone")).toBeNull();
+  });
+
+  test("a milestone that cannot be read names the credential it needs", async () => {
+    const r = await payloadEditRefusal("gh issue edit 2655 --body x", {
+      prefix: "Convergence",
+      milestoneOf: () => { throw new Error("401 Bad credentials"); },
+    });
+    expect(r).toContain("could not be read");
+    expect(r).toContain("GITHUB_TOKEN");
+  });
+});
+
 describe("#2713: the hook runs the guard", () => {
   // A GitHub API that answers the milestone lookup, so the hook is driven end
   // to end through lib/github.ts with no network: issue 2655 is in the

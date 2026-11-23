@@ -68,8 +68,17 @@ export const BOARD_WRITE_FLAGS: readonly string[] = [
   "--add-project", "--remove-project",
 ];
 
-/** The `gh issue edit` flags that take no value, so the next word is not theirs. */
-const VALUELESS_FLAGS = new Set(["--remove-milestone", "--remove-parent", "--remove-type", "--help", "-h"]);
+/**
+ * The `gh issue edit` flags that take a value. Any other flag takes none
+ * (#2719 review round 4): a flag this does not know cannot swallow the board
+ * flag after it, and a value it did take reads as an issue nobody can name,
+ * which is refused. Failing closed on the unknown, instead of listing more
+ * spellings.
+ */
+const VALUE_FLAGS = new Set([
+  ...BOARD_WRITE_FLAGS.filter(f => f !== "--remove-milestone"),
+  "--add-assignee", "--remove-assignee", "-R", "--repo",
+]);
 const ISSUE_URL = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)\/?$/;
 
 /**
@@ -81,10 +90,10 @@ export function payloadPrefix(root: string): string | null {
   const dir = join(root, "specs");
   if (!existsSync(dir)) return null;
   for (const file of readdirSync(dir).filter(f => f.endsWith(".md")).sort()) {
-    // Read across the frontmatter, so a wrapped `governs:` line still names
-    // its payload; a `Payload:` it cannot read is a broken declaration, not
-    // an absent one (#2719 review round 3).
-    const declaring = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(readFileSync(join(dir, file), "utf-8"))?.[1];
+    // The `governs:` value, wrapped lines included, is the declaration (#2719
+    // review rounds 3 and 4): `Payload:` anywhere else in the frontmatter is
+    // not one, and a `Payload:` there it cannot read is broken, not absent.
+    const declaring = governsValue(frontmatter(readFileSync(join(dir, file), "utf-8")));
     if (declaring === undefined || !/\bPayload:/.test(declaring)) continue;
     const payload = /\bPayload:\s*(\S+\.md)\b/.exec(declaring)?.[1];
     if (payload === undefined) throw new Error(`specs/${file} declares a payload ("Payload:") and names no spec file this can read`);
@@ -92,7 +101,7 @@ export function payloadPrefix(root: string): string | null {
     if (!existsSync(path)) throw new Error(`specs/${file} names Payload: ${payload}, and specs/${payload} does not exist`);
     // Read as YAML, so a quoted prefix is the prefix and not its quotes (#2719
     // review round 2); frontmatter that does not parse is a broken declaration.
-    const front = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(readFileSync(path, "utf-8"))?.[1];
+    const front = frontmatter(readFileSync(path, "utf-8"));
     let board: unknown;
     try {
       board = front === undefined ? undefined : (Bun.YAML.parse(front) as { board?: unknown } | null)?.board;
@@ -106,6 +115,20 @@ export function payloadPrefix(root: string): string | null {
     return prefix;
   }
   return null;
+}
+
+/**
+ * A spec's frontmatter, with CRLF endings and a byte-order mark read as the
+ * file they are (#2719 review round 4): a declaration saved on Windows is
+ * still a declaration.
+ */
+function frontmatter(text: string): string | undefined {
+  return /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n"))?.[1];
+}
+
+/** The `governs:` value in a frontmatter, with any indented lines that continue it. */
+function governsValue(front: string | undefined): string | undefined {
+  return front === undefined ? undefined : /^governs:(.*(?:\n[ \t]+.*)*)/m.exec(front)?.[1];
 }
 
 interface BoardEdit {
@@ -165,7 +188,7 @@ function boardEdits(command: string): BoardEdit[] {
         value = word.slice(eq + 1);
       } else {
         name = word;
-        value = VALUELESS_FLAGS.has(name) ? null : (w[++i] ?? null);
+        value = VALUE_FLAGS.has(name) ? (w[++i] ?? null) : null;
       }
       if (name === "-R" || name === "--repo") edit.repo = value;
       if (BOARD_WRITE_FLAGS.includes(name)) edit.flags.push(name);
@@ -244,7 +267,11 @@ export async function payloadEditRefusal(command: string, opts: PayloadEditOptio
       try {
         title = await milestoneOf(issue, repo);
       } catch (e) {
-        return `Cannot check this edit of #${issue} — its milestone could not be read (${String((e as Error)?.message ?? e)}). ${why}`;
+        return (
+          `Cannot check this edit of #${issue} — its milestone could not be read (${String((e as Error)?.message ?? e)}). ` +
+          `The read goes through the GitHub API with GITHUB_TOKEN or GH_TOKEN, not gh's stored login, so set one ` +
+          `in the environment the hook runs in. ${why}`
+        );
       }
       if (family.test(title)) {
         return (
