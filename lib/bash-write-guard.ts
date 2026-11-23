@@ -2530,21 +2530,22 @@ function boundIdentifier(program: string, at: number, protectedName: string, vie
  * (#2699 security review). So both readings are taken: `word` reads a `#`
  * starting a word as a comment, and `spaced` only one followed by whitespace.
  *
- * A `/` is the same kind of guess: a regex literal in JavaScript (`/\)/g`),
- * a division or Python's positional-only marker (`def f(a, /, b)`) elsewhere.
- * Each `#` reading is taken with regex literals masked and without, and a
- * write any of the four finds is refused. A misreading costs the reading it
- * happens in; another still sees the code.
+ * A `/` is the same kind of guess: in JavaScript it opens a regex literal
+ * (`/\)/g`, `return /'/`) or a comment (`// don't`, or a block comment); in Python it
+ * is a division, a floor division or the positional-only marker
+ * (`def f(a, /, b)`). Each `#` reading is taken with JavaScript's `/` forms
+ * masked (`js`) and without, and a write any of the four finds is refused.
+ * A misreading costs the reading it happens in; another still sees the code.
  */
 interface Reading {
   hash: 'word' | 'spaced';
-  regex: boolean;
+  js: boolean;
 }
 const READINGS: readonly Reading[] = [
-  { hash: 'word', regex: false },
-  { hash: 'spaced', regex: false },
-  { hash: 'word', regex: true },
-  { hash: 'spaced', regex: true },
+  { hash: 'word', js: false },
+  { hash: 'spaced', js: false },
+  { hash: 'word', js: true },
+  { hash: 'spaced', js: true },
 ];
 
 /** A body read as code: per offset 0 code, 1 quoted or a regex literal, 2 a `#` comment; each literal's quote offsets; whether every quote closed. */
@@ -2559,7 +2560,10 @@ function opensRegexLiteral(body: string, i: number): boolean {
   if (body[i + 1] === '/' || body[i + 1] === '*') return false;
   let j = i - 1;
   while (j >= 0 && /\s/.test(body[j])) j--;
-  return j < 0 || '(,=:[!&|?{};~+-*%<>^'.includes(body[j]);
+  if (j < 0 || '(,=:[!&|?{};~+-*%<>^'.includes(body[j])) return true;
+  // After a keyword, not an operand: `return /'/` (#2699 review round 3). A
+  // name that only ends in one (`begin / 2`) is an operand.
+  return /(?<![\w$])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/.test(body.slice(Math.max(0, j - 11), j + 1));
 }
 
 /** The offset of the `/` closing the regex literal opened at `i`, on the same line, or -1. */
@@ -2601,7 +2605,16 @@ function codeMask(body: string, reading: Reading): CodeView {
       // would otherwise open a quote that swallows the brackets after it. Only
       // a `#` that starts a word, so `this.#x` and `$#` stay code.
       while (i < body.length && body[i] !== '\n') mask[i++] = 2;
-    } else if (reading.regex && ch === '/' && opensRegexLiteral(body, i)) {
+    } else if (reading.js && ch === '/' && body[i + 1] === '/') {
+      // A JavaScript line comment, read like a `#` one (#2699 review round 3).
+      while (i < body.length && body[i] !== '\n') mask[i++] = 2;
+    } else if (reading.js && ch === '/' && body[i + 1] === '*') {
+      // A JavaScript block comment, to its `*/` or the end of the body.
+      const close = body.indexOf('*/', i + 2);
+      const end = close < 0 ? body.length : close + 2;
+      while (i < end) mask[i++] = 2;
+      i--;
+    } else if (reading.js && ch === '/' && opensRegexLiteral(body, i)) {
       // A regex literal (`/\)/g`): its brackets are not code. Only after a
       // character a division cannot follow, so `n / 2` stays code (#2699
       // review). Python has no regex literal and no valid `/` there.

@@ -4707,8 +4707,11 @@ describe("#1407: write intent is read per call, not only by character distance",
     // Read as a regex, `/ 2)); x = n /` would be masked, its two `)` with it,
     // and the name would sit inside the `.write(` call. Padded so the window
     // misses: only a misread could refuse this.
-    const cmd = `python3 -c "n = 4; open('/tmp/rg1407-o.txt', 'w').write(str(n / 2)); x = n / 3; pad = '${"z".repeat(90)}'; print('${LIVE}/${STATE}')"`;
-    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+    // `begin` ends in the keyword `in`, and is still an operand.
+    for (const n of ["n", "begin"]) {
+      const cmd = `python3 -c "${n} = 4; open('/tmp/rg1407-o.txt', 'w').write(str(${n} / 2)); x = ${n} / 3; pad = '${"z".repeat(90)}'; print('${LIVE}/${STATE}')"`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+    }
   });
 
   // Security review of the round-2 commit: one misread must not blind every
@@ -4728,6 +4731,22 @@ describe("#1407: write intent is read per call, not only by character distance",
   test("WITNESS: in a body whose quotes never close, the window still reads an unmatched ( in the path", () => {
     const cmd = `python3 - <<'PY'\nnote = "it's\nopen('${LIVE}(/${STATE}', 'w').close()\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // #2699 review round 3 (rule 5: the same problem as round 2's regex finding,
+  // JavaScript syntax the mask did not know, folded in rather than split).
+  test("WITNESS: an apostrophe in a JavaScript comment does not hide the call", () => {
+    for (const comment of ["// don't overwrite the run store", "/* don't overwrite it */", "/*\n * it's the run store\n */"]) {
+      const cmd = `node - <<'JS'\n${comment}\nrequire('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')\nJS`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    }
+  });
+
+  test("WITNESS: a regex literal after a keyword is a regex literal", () => {
+    for (const cmd of [
+      `node -e "const ok = s => { return /'/.test(s) }; require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')"`,
+      `node -e "require('fs').copyFileSync((() => { return /\\)/ })() && '${LONG}/x', '${LIVE}/${STATE}')"`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
   test("CONTROL: a file name merely starting with a protected one is not bound", () => {
