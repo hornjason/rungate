@@ -47,6 +47,10 @@
  * verdict. Only a name on that list is resolved, and a report without it
  * retires nothing.
  *
+ * The agent still carries that list to ship.js, and a copy error would bring
+ * the defect back (#2695 review). So the gate writes `checksPassedDigest`
+ * beside it, and a list that no longer matches its digest retires nothing.
+ *
  * ## How ship.js runs this
  *
  * `workflows/ship.js` runs in a sandbox with no module loading (#69), so it
@@ -64,6 +68,8 @@ export interface GateReport {
   checksRun?: unknown;
   /** The checks the gate ran with no FAIL or WARN verdict, computed by the gate (#2692). */
   checksPassed?: unknown;
+  /** `checksPassedDigest(checksPassed)` as the gate wrote it, so a mis-copied list is caught. */
+  checksPassedDigest?: unknown;
   failedChecks?: unknown;
   /** The gate's free-text failure lines, each meant to begin with its check's name. */
   failures?: unknown;
@@ -106,6 +112,7 @@ export interface RefusalEntry {
 export function resolvedCheckNames(report: GateReport | null | undefined): string[] | null {
   if (!report || !Array.isArray(report.checksRun) || !Array.isArray(report.failedChecks)) return null;
   if (!Array.isArray(report.checksPassed)) return null;
+  if (typeof report.checksPassedDigest !== "string" || report.checksPassedDigest !== checksPassedDigest(report.checksPassed)) return null;
   if (Array.isArray(report.failures)) {
     for (const line of report.failures) {
       if (typeof line === "string" && line !== "" && failureCheckName(line, report.failedChecks) === undefined) return null;
@@ -163,6 +170,24 @@ export function failureCheckName(line: unknown, failedChecks: unknown): string |
  */
 function checkNameClaimsLine(name: string, line: string): boolean {
   return line === name || line.startsWith(`${name}: `);
+}
+
+/**
+ * A fingerprint of the gate's `checksPassed` list, written beside it (#2695
+ * review). The gate's agent copies both to ship.js, and a copy that changed
+ * the list (an entry added, dropped or reordered, or `checksRun` copied in its
+ * place) no longer matches, so nothing is retired on it. FNV-1a over the list's
+ * JSON: deterministic, and import-free so the launch bundle carries it. It is
+ * there to catch an accidental copy error, not a forgery.
+ */
+export function checksPassedDigest(names: unknown): string {
+  const text = JSON.stringify(Array.isArray(names) ? names : null);
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 
 /**

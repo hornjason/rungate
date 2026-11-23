@@ -10,6 +10,7 @@ import { computeACHash } from "../lib/workflow-security";
 import { verifiedPush, leftWorkLocal, type PushOutcome } from "../lib/verified-push";
 import { acProvenance, beginRun } from "./run-attribution";
 import { unionNames } from "../lib/junit-checks";
+import { checksPassedDigest } from "../lib/gate-refusal-currency";
 import { recordStateWrite } from "../lib/trajectory";
 
 /**
@@ -221,7 +222,7 @@ export function writeGateResult(
     attempt,
     failures,
     ...(measuredChecks === null ? {} : { checksRun: measuredChecks }),
-    ...(passedChecks === null ? {} : { checksPassed: passedChecks }),
+    ...(passedChecks === null ? {} : { checksPassed: passedChecks, checksPassedDigest: checksPassedDigest(passedChecks) }),
     ts,
     commitSha: sha,
   };

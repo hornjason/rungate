@@ -30,6 +30,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import {
+  checksPassedDigest as libDigest,
   failureCheckName as libFailureCheckName,
   resolvedCheckNames as libResolved,
   retireSupersededRefusals as libRetire,
@@ -61,8 +62,9 @@ const BLOCK: string = (() => {
 })();
 
 const shipCopy = new Function(
-  `${BLOCK}\nreturn { resolvedCheckNames, retireSupersededRefusals, failureCheckName }`,
+  `${BLOCK}\nreturn { resolvedCheckNames, retireSupersededRefusals, failureCheckName, checksPassedDigest }`,
 )() as {
+  checksPassedDigest: (names: unknown) => string;
   resolvedCheckNames: (r: unknown) => string[] | null;
   retireSupersededRefusals: (e: any[], r: unknown) => any[];
   failureCheckName: (line: unknown, failedChecks: unknown) => string | undefined;
@@ -76,6 +78,7 @@ const RAW_IMPLS = [
       resolvedCheckNames: libResolved as any,
       retireSupersededRefusals: libRetire as any,
       failureCheckName: libFailureCheckName as any,
+      checksPassedDigest: libDigest as any,
     },
   ],
   ["the launch bundle", shipCopy],
@@ -88,16 +91,21 @@ const RAW_IMPLS = [
  * one of the older rules, and without the list each would come back null for
  * the new reason instead of its own. So those fixtures run through
  * `gateWrote`: the report as the gate writes it when the agent's lists agree
- * with it, `checksPassed` being `checksRun` minus `failedChecks`. A fixture
- * that sets `checksPassed` itself passes through untouched, and #2692's own
- * cases use `RAW_IMPLS`.
+ * with it, `checksPassed` being `checksRun` minus `failedChecks`, signed with
+ * the digest the gate writes beside it. A fixture that sets `checksPassed`
+ * itself passes through untouched, and #2692's own cases use `RAW_IMPLS`.
  */
 function gateWrote(report: unknown): unknown {
   if (!report || typeof report !== "object" || "checksPassed" in report) return report;
   const r = report as { checksRun?: unknown; failedChecks?: unknown };
   if (!Array.isArray(r.checksRun)) return report;
   const failed: unknown[] = Array.isArray(r.failedChecks) ? r.failedChecks : [];
-  return { ...report, checksPassed: r.checksRun.filter(c => !failed.includes(c)) };
+  return signed({ ...report, checksPassed: r.checksRun.filter(c => !failed.includes(c)) });
+}
+
+/** A report carrying the digest the gate writes for its own `checksPassed` (#2695 review). */
+function signed<T extends { checksPassed?: unknown }>(report: T): T & { checksPassedDigest: string } {
+  return { ...report, checksPassedDigest: libDigest(report.checksPassed) };
 }
 
 const IMPLS = RAW_IMPLS.map(([name, impl]) => [
@@ -119,7 +127,7 @@ describe("#2692: a refusal is retired only on a check the gate listed as passed"
   const dropped = { result: "FAIL", checksRun: [A, B, C], failures: [`${C}: 1 error`], failedChecks: [C] };
   for (const [name, impl] of RAW_IMPLS) {
     test(`${name}: a failing check left out of both lists stays refused, because the gate did not list it as passed`, () => {
-      const report = { ...dropped, checksPassed: [A] };
+      const report = signed({ ...dropped, checksPassed: [A] });
       const ledger = [{ check: A }, { check: B }];
       expect(impl.resolvedCheckNames(report)).toEqual([A]);
       expect(impl.retireSupersededRefusals(ledger, report)).toEqual([{ check: A }]);
@@ -127,13 +135,13 @@ describe("#2692: a refusal is retired only on a check the gate listed as passed"
     });
 
     test(`${name}: CONTROL: the same report with tsc in checksPassed retires it`, () => {
-      const report = { ...dropped, checksPassed: [A, B] };
+      const report = signed({ ...dropped, checksPassed: [A, B] });
       const ledger = [{ check: A }, { check: B }];
       expect(impl.retireSupersededRefusals(ledger, report)).toEqual([{ check: A }, { check: B }]);
     });
 
     test(`${name}: a report with no checksPassed, or not a list, retires nothing`, () => {
-      for (const report of [dropped, { ...dropped, checksPassed: A }]) {
+      for (const report of [dropped, signed({ ...dropped, checksPassed: A })]) {
         const ledger = [{ check: A }];
         expect(impl.resolvedCheckNames(report), JSON.stringify(report)).toBeNull();
         expect(impl.retireSupersededRefusals(ledger, report)).toEqual([]);
@@ -142,8 +150,38 @@ describe("#2692: a refusal is retired only on a check the gate listed as passed"
     });
 
     test(`${name}: checksPassed resolves only names that ran and that the report does not list as failed`, () => {
-      const report = { ...dropped, checksPassed: [A, C, "verify checks > never-ran"] };
+      const report = signed({ ...dropped, checksPassed: [A, C, "verify checks > never-ran"] });
       expect(impl.resolvedCheckNames(report)).toEqual([A]);
+    });
+
+    // #2695 review round 1. The agent copies checksPassed too, so a copy
+    // error, such as checksRun copied in its place, would bring #2692's defect
+    // back. The gate writes a digest of its own list beside it, and a list
+    // that no longer matches it retires nothing.
+    test(`${name}: a checksPassed that does not match the gate's digest retires nothing`, () => {
+      const TSC = "verify checks > tsc-pass";
+      const TESTS = "verify checks > tests-pass";
+      const gateList: string[] = [];
+      const copiedWrong = {
+        result: "FAIL", checksRun: [TSC, TESTS], failures: [`${TESTS}: 3 failing`], failedChecks: [TESTS],
+        checksPassed: [TSC, TESTS], checksPassedDigest: impl.checksPassedDigest(gateList),
+      };
+      const ledger = [{ check: TSC }];
+      expect(impl.resolvedCheckNames(copiedWrong)).toBeNull();
+      expect(impl.retireSupersededRefusals(ledger, copiedWrong)).toEqual([]);
+      expect(ledger, "tsc-pass failed at the gate and its refusal was retired").toEqual([{ check: TSC }]);
+      const { checksPassedDigest: _, ...unsigned } = copiedWrong;
+      expect(impl.resolvedCheckNames(unsigned), "a report with no digest").toBeNull();
+      expect(impl.resolvedCheckNames({ ...copiedWrong, checksPassedDigest: 7 }), "a digest that is not a string").toBeNull();
+    });
+
+    test(`${name}: the digest is the list's own: order, content and length each change it`, () => {
+      const base = impl.checksPassedDigest(["a", "b"]);
+      expect(typeof base).toBe("string");
+      expect(impl.checksPassedDigest(["a", "b"])).toBe(base);
+      for (const other of [["b", "a"], ["a"], ["a", "b", "c"], ["a", "bb"], [], ["ab"]]) {
+        expect(impl.checksPassedDigest(other), JSON.stringify(other)).not.toBe(base);
+      }
     });
   }
 });
@@ -604,10 +642,12 @@ describe("#532: the gate runner records what it measured, not only what it faile
     expect(gate.checksPassed.filter((c: string) => failedSet.has(c)), "checksPassed names a check this gate failed")
       .toEqual([]);
     expect(gate.checksPassed.length).toBeGreaterThan(0);
+    expect(gate.checksPassedDigest, "the gate wrote no digest of its checksPassed").toBe(libDigest(gate.checksPassed));
     const resolved = libResolved({
       result: gate.result,
       checksRun: gate.checksRun,
       checksPassed: gate.checksPassed,
+      checksPassedDigest: gate.checksPassedDigest,
       failedChecks: failed,
     });
     expect(resolved).toEqual(gate.checksPassed);
@@ -628,6 +668,21 @@ describe("#532: the gate runner records what it measured, not only what it faile
       const verify = JSON.parse(readFileSync(sf, "utf-8")).gates.verify;
       expect(verify.checksRun).toEqual(["a", "b", "c"]);
       expect(verify.checksPassed).toEqual(["a"]);
+      expect(verify.checksPassedDigest).toBe(libDigest(["a"]));
+
+      // #2695 review round 1, end to end from the written state: the report
+      // the gate's agent sends, copied right and copied wrong.
+      const agentReport = (checksPassed: unknown) => ({
+        result: verify.result,
+        checksRun: verify.checksRun,
+        failures: verify.failures.map((f: any) => `${f.check}: ${f.detail}`),
+        failedChecks: verify.failures.map((f: any) => f.check),
+        checksPassed,
+        checksPassedDigest: verify.checksPassedDigest,
+      });
+      expect(libResolved(agentReport(verify.checksPassed)), "copied verbatim").toEqual(["a"]);
+      expect(libResolved(agentReport(verify.checksRun)), "checksRun copied in its place").toBeNull();
+      expect(libResolved(agentReport(["a", "c"])), "a WARN check added").toBeNull();
 
       // CONTROL: no reading of what ran, so no list of what passed. An empty
       // list would say nothing passed, which is a claim.
@@ -635,6 +690,7 @@ describe("#532: the gate runner records what it measured, not only what it faile
       const scope = JSON.parse(readFileSync(sf, "utf-8")).gates.scope;
       expect(scope.checksRun).toBeUndefined();
       expect(scope.checksPassed).toBeUndefined();
+      expect(scope.checksPassedDigest).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -674,5 +730,8 @@ describe("#532: the retirement runs where it has to", () => {
     expect(SHIP).toContain("checksPassed: { type: 'array', items: { type: 'string' } }");
     expect(SHIP).toContain("checksPassed: its \\`checksPassed\\` array exactly as it appears");
     expect(SHIP).toContain("Do NOT build it from\n     checksRun and failedChecks");
+    // #2695 review: and the digest that lets a copy error be caught.
+    expect(SHIP).toContain("checksPassedDigest: { type: 'string' }");
+    expect(SHIP).toContain("checksPassedDigest: its \\`checksPassedDigest\\` string exactly as it\n     appears");
   });
 });

@@ -294,6 +294,8 @@ export const GateResultSchema = z.object({
    * refusal; absent, nothing is retired.
    */
   checksPassed: z.array(z.string()).optional(),
+  /** `checksPassedDigest(checksPassed)`, so a mis-copied list retires nothing (#2695 review). */
+  checksPassedDigest: z.string().optional(),
   ts: z.string().optional(),
   commitSha: z.string().optional(),
 }).optional();

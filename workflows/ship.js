@@ -115,6 +115,9 @@ const GATE_RESULT_SCHEMA = {
     // #2692 — the checks the gate itself recorded as passed. The only list a
     // refusal is retired on; absence from `failedChecks` is not a pass.
     checksPassed: { type: 'array', items: { type: 'string' } },
+    // #2695 review — the gate's digest of that list, so a mis-copied list
+    // is caught rather than trusted.
+    checksPassedDigest: { type: 'string' },
     category: { type: 'string', enum: ['STATE', 'CODE', 'DISCOVERY', 'ENVIRONMENT', 'NON_RETRYABLE'] },
     regressionTarget: { type: 'string', enum: ['BUILD', 'DISCOVERY'] },
     // #59 SC-4 — `state.evidencePrevalidation`, carried out of
@@ -2187,6 +2190,9 @@ Run the ${gateName} gate and classify any failures:
      If the key is absent, report an empty array. Do NOT build it from
      checksRun and failedChecks: a name missing from failedChecks is not a
      pass, and this list is the gate's own record of what passed.
+   - checksPassedDigest: its \`checksPassedDigest\` string exactly as it
+     appears. If the key is absent, report an empty string. It is checked
+     against checksPassed, so a changed list retires nothing.
 5. Also report evidencePrevalidation, copied from \`state.evidencePrevalidation\`
    in that same workflow-state.json: {verdict, brokenAcs}, where brokenAcs is
    the \`id\` of every entry in its \`acs\` array whose \`status\` is "broken".
