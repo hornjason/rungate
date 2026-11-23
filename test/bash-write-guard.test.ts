@@ -4667,6 +4667,11 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
+  test("CONTROL: a string over several lines that ends at the name is text, not a path", () => {
+    const cmd = `python3 - <<'PY'\np = 'notes.md'\nnew = """example:\n  p = ${LIVE}/${STATE}"""\nnote = '${"z".repeat(90)}'\nopen(p, 'w').write(new)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
   test("CONTROL: a binding inside a string being edited is not a binding", () => {
     // Padded so the write sits outside the window, where main allows it too:
     // only the binding could refuse this.
