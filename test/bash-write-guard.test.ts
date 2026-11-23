@@ -70,6 +70,20 @@ const STATE = "workflow-" + "state.json";
 const LIVE = "/opt/bwprobe";
 
 /**
+ * A mutation battery copies the guard into a scratch directory and imports
+ * the copy, so the copy's imports must resolve there too: the two sibling
+ * modules it imports, and `node_modules` for `acorn`, which
+ * `lib/interpreter-calls.ts` imports (#2702). Without them the mutant dies on
+ * module resolution, which reads as a refusal on the merits.
+ */
+function carryGuardImports(dir: string): void {
+  for (const mod of ["interpreters.ts", "interpreter-calls.ts"]) {
+    writeFileSync(join(dir, mod), readFileSync(join(import.meta.dir, "..", "lib", mod), "utf8"));
+  }
+  symlinkSync(join(import.meta.dir, "..", "node_modules"), join(dir, "node_modules"));
+}
+
+/**
  * A fresh, real directory under the platform temp root, removed afterwards
  * (#1367). The scratch exemption now holds only for a destination whose
  * directories are REAL, so a fixture row makes the directory it writes into
@@ -1428,10 +1442,7 @@ describe("#1411 WITNESS: a link made by a verb that is not `ln`", () => {
     const dir = mkdtempSync(join(tmpdir(), "bw1429-"));
     const base = mkdtempSync(join(tmpdir(), "bw1429-fx-"));
     try {
-      writeFileSync(
-        join(dir, "interpreters.ts"),
-        readFileSync(join(import.meta.dir, "..", "lib", "interpreters.ts"), "utf8"),
-      );
+      carryGuardImports(dir);
       writeFileSync(join(dir, "noNest.ts"), src.replace(site, `${site}\n  return [];`));
       const mutant = (await import(`file://${join(dir, "noNest.ts")}`)) as {
         decideBashWrite: (c: string) => { blocked: boolean };
@@ -1641,10 +1652,7 @@ describe("#1411 WITNESS: a link made by a verb that is not `ln`", () => {
     const tmp = mkdtempSync(join(tmpdir(), "bwbyte-"));
     const fixture = realpathSync(mkdtempSync(join(tmpdir(), "bw-byte-fx-")));
     try {
-      writeFileSync(
-        join(tmp, "interpreters.ts"),
-        readFileSync(join(import.meta.dir, "..", "lib", "interpreters.ts"), "utf8"),
-      );
+      carryGuardImports(tmp);
       writeFileSync(
         join(tmp, "asCodePoint.ts"),
         src.replace(site, "pending += String.fromCharCode(parseInt(oct, 8) & 0xff);"),
@@ -1691,10 +1699,7 @@ describe("#1411 WITNESS: a link made by a verb that is not `ln`", () => {
 
     const dir = mkdtempSync(join(tmpdir(), "bwansi-"));
     try {
-      writeFileSync(
-        join(dir, "interpreters.ts"),
-        readFileSync(join(import.meta.dir, "..", "lib", "interpreters.ts"), "utf8"),
-      );
+      carryGuardImports(dir);
       writeFileSync(join(dir, "noAnsiC.ts"), src.replace(site, "if (false) {"));
       const mutant = (await import(`file://${join(dir, "noAnsiC.ts")}`)) as {
         decideBashWrite: (c: string) => { blocked: boolean };
@@ -3848,15 +3853,13 @@ function __standsAloneAfter(body: string, start: number, end: number): boolean {
     }
     // The mutant runs from a temp directory, so a relative specifier it
     // cannot resolve would read as a refusal rather than as a module that
-    // failed to load. Exactly one is allowed, and it is carried.
-    expect([...src.matchAll(/from '(\.[^']*)'/g)].map(m => m[1])).toEqual(["./interpreters"]);
+    // failed to load. Exactly these two are allowed, and `carryGuardImports`
+    // carries both.
+    expect([...src.matchAll(/from '(\.[^']*)'/g)].map(m => m[1])).toEqual(["./interpreters", "./interpreter-calls"]);
 
     const dir = mkdtempSync(join(tmpdir(), "bw1371-"));
     try {
-      writeFileSync(
-        join(dir, "interpreters.ts"),
-        readFileSync(join(import.meta.dir, "..", "lib", "interpreters.ts"), "utf8"),
-      );
+      carryGuardImports(dir);
       // EVERY mutant is written before ANY of them is imported. Bun caches
       // the directory listing at the first dynamic import from a directory,
       // so a file created after it is reported `Cannot find module` — a red
@@ -4804,14 +4807,43 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
-  // The limit of a lexical mask, pinned. A `// don't` blinds the plain
-  // readings, and a `/*` inside a regex character class, read from a `/` the
-  // mask takes for a division, pairs with a later `*/` and blinds the
-  // JavaScript ones. Built to defeat every reading at once: the evasion
-  // WRITE_INTENT's docblock concedes. The window, main's rule, still answers.
-  test("CONCESSION: a construction built to blind every reading gets the window alone", () => {
-    const cmd = `node - <<'JS'\n// don't\nif (x) /[/*]/.test(s); require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}') /* end */\nJS`;
-    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  // #2702: pinned as a CONCESSION until a parser read JavaScript bodies. A
+  // `// don't` blinds the mask's plain readings, and a `/*` inside a regex
+  // character class, read from a `/` the mask takes for a division, pairs
+  // with a later `*/` and blinds its JavaScript ones. The parser reads the
+  // regex as a regex and finds the copy. Each row is refused only through it:
+  // the window misses (the long source) and every mask reading is blinded.
+  test.each([
+    ["a regex class holding /* before a later */", `// don't\nif (x) /[/*]/.test(s); require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}') /* end */`],
+    ["a property named like a keyword, spaced from its dot", `// don't\nconst r = o. in / 2; require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')`],
+    ["a regex holding a quote after a for header", `// don't\nfor (;;) /"/.test(s); require('fs').copyFileSync('${LONG}/x', '${LIVE}/${STATE}')`],
+  ])("WITNESS (#2702): %s is read by the parser", (_l, body) => {
+    const cmd = `node - <<'JS'\n${body}\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // #2702 security review. The parser ADDS a reading; it never replaces the
+  // mask's. Each REGRESSION row is refused on main by the mask and was allowed
+  // by a parser-only reading: the first two because that reading climbed a `+`
+  // only from its right operand, the third because a Python annotation parses
+  // as a JavaScript label (`d:`) and an assignment to `str`, so the parser
+  // binds the wrong name. The WITNESS rows are refused only through the
+  // parser: the mask is blinded (the first) or never follows a `+` (the second).
+  const PAD2702 = `const pad = '${"z".repeat(90)}';`;
+  test.each([
+    ["a directory literal on the left of a +", `const f = 'a.json'; const d = '${LIVE}/.rungate/x/witnesses/' + f; ${PAD2702} require('fs').writeFileSync(d, '{}')`],
+    ["a file literal on the left of a +", `const d = '${LIVE}/${STATE}' + ''; ${PAD2702} require('fs').writeFileSync(d, '{}')`],
+    ["a Python annotated binding that parses as JavaScript", `d: str = '${LIVE}/${STATE}'\n${PAD2702}\nshutil.copy(s, d)`],
+  ])("REGRESSION (#2702): %s is still refused", (_l, body) => {
+    const cmd = `node - <<'JS'\n${body}\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+  test.each([
+    ["a directory literal on the left of a +, the mask blinded", `// don't\nfor (;;) /"/.test(s); const f = 'a.json'; const d = '${LIVE}/.rungate/x/witnesses/' + f; ${PAD2702} require('fs').writeFileSync(d, '{}')`],
+    ["a file literal on the right of a +", `const H = '${LIVE}' + '/${STATE}'; ${PAD2702} require('fs').writeFileSync(H, '{}')`],
+  ])("WITNESS (#2702): %s is bound by the parser", (_l, body) => {
+    const cmd = `node - <<'JS'\n${body}\nJS`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
   test("CONCESSION: a body whose quotes never close gets the window alone", () => {

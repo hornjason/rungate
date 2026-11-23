@@ -90,6 +90,7 @@ import { lstatSync, realpathSync, statSync, type Stats } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join, resolve } from 'path';
 import { isInterpreterWord, isShellWord } from './interpreters';
+import { readJsCalls } from './interpreter-calls';
 
 /** Gate artifacts. A write to any of these must come from the gate runner. */
 export const PROTECTED_FILES = ['workflow-state.json', '.gate-salt', '/witnesses/'];
@@ -2472,6 +2473,23 @@ function callIsWrite(call: string): boolean {
  */
 function callWrites(program: string, protectedName: string): boolean {
   const pattern = new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+  // #2702: a body that parses as JavaScript is also read by the parser, which
+  // reads comments, regex literals and template literals as the language
+  // does. Four reviews of #2699 each found a JavaScript form the mask below
+  // misread, and a misread switched that reading off for the body. The parser
+  // ADDS a reading; it never replaces the mask's. Parsing is not knowing the
+  // language: Python's `d: str = '…'` parses as a JavaScript label and an
+  // assignment to `str`, so a parser-only reading binds the wrong name and
+  // allows a copy onto `d` that the mask refuses (#2702 security review).
+  const js = readJsCalls(program);
+  if (js !== null) {
+    for (const m of program.matchAll(pattern)) {
+      const at = m.index ?? 0;
+      if (js.enclosingCalls(at).some(callIsWrite)) return true;
+      const bound = js.boundIdentifier(at, at + protectedName.length);
+      if (bound !== null && js.references(bound).some(u => js.enclosingCalls(u).some(callIsWrite))) return true;
+    }
+  }
   return READINGS.some(reading => {
     const view = codeMask(program, reading);
     for (const m of program.matchAll(pattern)) {
