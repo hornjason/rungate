@@ -9,7 +9,7 @@
  * which reads the outcome. A bypass found here is not a defect to file.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -68,6 +68,63 @@ describe("#2713: a board write to a payload issue is refused", () => {
     expect(await decide("gh issue edit 999 --body x")).toContain("could not be read");
     expect(await decide("gh issue edit $N --body x")).toContain("does not name an issue");
     expect(await decide("gh issue edit --body x")).toContain("names no issue");
+  });
+});
+
+describe("#2719 review round 1", () => {
+  test("a backslash-continued edit is read as one command", async () => {
+    expect(await decide("gh issue edit 2655 \\\n  --body-file /tmp/b.md")).toContain("#2655");
+    expect(await decide("gh issue edit \\\n 2655 --title x")).toContain("#2655");
+  });
+
+  test("a milestone set that moves an issue into the payload family is refused", async () => {
+    const r = await decide(`gh issue edit 2714 --milestone '${PAYLOAD}'`);
+    expect(r).toContain("#2714");
+    expect(r).toContain(PAYLOAD);
+    expect(r).toContain("gh issue comment 2714");
+    expect(await decide(`gh issue edit 2714 -m "${PAYLOAD}"`)).toContain("#2714");
+    expect(await decide(`gh issue edit 2714 --milestone="${PAYLOAD}"`)).toContain("#2714");
+  });
+
+  test("CONTROL: a milestone set outside the family, on an issue outside it, is allowed", async () => {
+    expect(await decide("gh issue edit 2714 --milestone 'Engine Phase 1 — the engine'")).toBeNull();
+  });
+
+  test("a payload that is declared but unreadable refuses a board edit instead of turning the guard off", async () => {
+    const tree = (files: Record<string, string>) => {
+      const root = mkdtempSync(join(tmpdir(), "peg-payload-"));
+      mkdirSync(join(root, "specs"));
+      for (const [name, text] of Object.entries(files)) writeFileSync(join(root, "specs", name), text);
+      return root;
+    };
+    const gone = tree({ "ENGINE.md": "---\ngoverns: THE ENGINE. Payload: GONE.md\n---\n" });
+    expect(() => payloadPrefix(gone)).toThrow(/GONE\.md/);
+    expect(await payloadEditRefusal("gh issue edit 2655 --body x", { root: gone, milestoneOf: lookup }))
+      .toContain("payload declaration");
+    const noPrefix = tree({ "ENGINE.md": "---\ngoverns: THE ENGINE. Payload: PAY.md\n---\n", "PAY.md": "---\ntitle: x\n---\n" });
+    expect(() => payloadPrefix(noPrefix)).toThrow(/board\.prefix/);
+    expect(await payloadEditRefusal("gh issue edit 2655 --body x", { root: noPrefix, milestoneOf: lookup }))
+      .toContain("payload declaration");
+    // CONTROL: a tree that declares no payload still refuses nothing.
+    const none = tree({ "ENGINE.md": "---\ngoverns: THE ENGINE\n---\n" });
+    expect(payloadPrefix(none)).toBeNull();
+    expect(await payloadEditRefusal("gh issue edit 2655 --body x", { root: none, milestoneOf: lookup })).toBeNull();
+  });
+
+  test("GH_REPO in the command's own env prefix names the repository; -R and a URL still win", async () => {
+    seen.length = 0;
+    await decide("env GH_REPO=o/other gh issue edit 2655 --body x");
+    await decide("GH_REPO=o/other gh issue edit 2655 --body x");
+    await decide("env GH_REPO=o/other gh issue edit 2655 -R o/r --body x");
+    await decide("GH_REPO=o/other gh issue edit https://github.com/o/u/issues/2655 --body x");
+    expect(seen).toEqual([["2655", "o/other"], ["2655", "o/other"], ["2655", "o/r"], ["2655", "o/u"]]);
+  });
+
+  test("text inside quotes is not split into commands", async () => {
+    expect(await decide('gh issue comment 2655 --body "Note; gh issue edit 2655 --body x"')).toBeNull();
+    expect(await decide("gh issue comment 2655 --body 'a | gh issue edit 2655 --title y & z'")).toBeNull();
+    // A real edit after a quoted separator still counts.
+    expect(await decide('echo "a;b" && gh issue edit 2655 --body x')).toContain("#2655");
   });
 });
 

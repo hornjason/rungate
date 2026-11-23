@@ -22,20 +22,32 @@
  * blocked-by and blocking links, and project adds and removals. An assignee
  * is not a board write there, so claiming an issue stays allowed.
  *
+ * The command is split into simple commands on `;`, `|`, `&` and newlines
+ * outside quotes, and a backslash-newline is the line continuation it is
+ * (#2719 review): a separator inside a comment's quoted body is not a second
+ * command, and a continued edit keeps its issue and its flags together.
+ *
  * ## Which issues
  *
  * Those in a `<prefix> Phase N` milestone, where `<prefix>` is the payload
  * spec's `board.prefix`. The payload is the spec the engine spec's `governs:`
  * line names after `Payload:`, read the way `test/board-conformance-job.test.ts`
  * binds the board job's `--prefix`. A tree with no such spec has no payload,
- * and nothing is refused.
+ * and nothing is refused. A payload that is declared and cannot be read, a
+ * missing spec or one with no `board.prefix`, refuses every board edit: a
+ * broken declaration is not an absent one (#2719 review).
+ *
+ * A milestone set into the family is refused whatever milestone the issue
+ * has now, since moving an issue onto the payload board is itself a board
+ * write `hand-edits` counts (#2719 review).
  *
  * An issue whose milestone cannot be read is refused: the edit would need the
  * same access, so the refusal costs nothing an allowed edit would not.
  *
  * The milestone is read through `lib/github.ts`, never a `gh` subprocess
  * (SC-893). The repository is the command's own `-R`/`--repo` or issue URL,
- * then `GH_REPO`, then the session's `origin`: gh's own fallbacks, close
+ * then a `GH_REPO=` in the command's own env prefix, then `GH_REPO`, then
+ * the session's `origin`: gh's own fallbacks, close
  * enough for a speed bump. A `cd` into another repository before the edit is
  * not followed, which is the kind of gap #144 says not to file.
  */
@@ -58,7 +70,11 @@ const VALUELESS_FLAGS = new Set(["--remove-milestone", "--remove-parent", "--rem
 const EDIT_INVOCATION = /\bgh\s+issue\s+edit\b/;
 const ISSUE_URL = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)\/?$/;
 
-/** The payload spec's `board.prefix`, or null when this tree declares no payload. */
+/**
+ * The payload spec's `board.prefix`, or null when this tree declares no
+ * payload. Throws when a payload is declared and cannot be read: a broken
+ * declaration read as an absent one turned the guard off (#2719 review).
+ */
 export function payloadPrefix(root: string): string | null {
   const dir = join(root, "specs");
   if (!existsSync(dir)) return null;
@@ -66,10 +82,44 @@ export function payloadPrefix(root: string): string | null {
     const payload = readFileSync(join(dir, file), "utf-8").match(/^governs:.*Payload: (\S+\.md)/m)?.[1];
     if (payload === undefined) continue;
     const path = join(dir, payload);
-    if (!existsSync(path)) return null;
-    return readFileSync(path, "utf-8").match(/^board:\n(?:\s+.*\n)*?\s+prefix: (\S+)/m)?.[1] ?? null;
+    if (!existsSync(path)) throw new Error(`specs/${file} names Payload: ${payload}, and specs/${payload} does not exist`);
+    const prefix = readFileSync(path, "utf-8").match(/^board:\n(?:\s+.*\n)*?\s+prefix: (\S+)/m)?.[1];
+    if (prefix === undefined) throw new Error(`specs/${payload}, the payload specs/${file} names, has no board.prefix`);
+    return prefix;
   }
   return null;
+}
+
+/**
+ * The command's simple commands: split on `;`, `|`, `&` and newlines outside
+ * quotes, with a backslash-newline read as a line continuation (#2719
+ * review). Enough for a speed bump: heredocs and `$(…)` are not parsed.
+ */
+function segments(command: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (c === "\\" && quote !== "'") {
+      if (command[i + 1] === "\n") cur += " ";
+      else cur += c + (command[i + 1] ?? "");
+      i++;
+    } else if (quote !== null) {
+      if (c === quote) quote = null;
+      cur += c;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+      cur += c;
+    } else if (/[;|&\n]/.test(c)) {
+      out.push(cur);
+      cur = "";
+    } else {
+      cur += c;
+    }
+  }
+  out.push(cur);
+  return out;
 }
 
 /** A segment's words, honouring single and double quotes. Enough for a speed bump. */
@@ -99,19 +149,25 @@ function words(segment: string): string[] {
 
 interface BoardEdit {
   issues: string[];
+  /** `-R` / `--repo`. */
   repo: string | null;
+  /** A `GH_REPO=` in the command's own env prefix (#2719 review). */
+  envRepo: string | null;
   flags: string[];
+  /** The values of `--milestone` / `-m`. */
+  milestones: string[];
 }
 
 /** Every `gh issue edit` in the command that carries a board-write flag. */
 function boardEdits(command: string): BoardEdit[] {
   const edits: BoardEdit[] = [];
-  for (const segment of command.split(/[;|&\n]+/)) {
+  for (const segment of segments(command)) {
     if (!EDIT_INVOCATION.test(segment)) continue;
     const w = words(segment);
     const at = w.findIndex((x, i) => x === "edit" && w[i - 1] === "issue" && basename(w[i - 2] ?? "") === "gh");
     if (at < 0) continue;
-    const edit: BoardEdit = { issues: [], repo: null, flags: [] };
+    const envRepo = w.slice(0, at - 2).map(x => /^GH_REPO=(.+)$/.exec(x)?.[1]).filter(Boolean).pop() ?? null;
+    const edit: BoardEdit = { issues: [], repo: null, envRepo, flags: [], milestones: [] };
     for (let i = at + 1; i < w.length; i++) {
       const word = w[i];
       if (!word.startsWith("-")) {
@@ -123,6 +179,7 @@ function boardEdits(command: string): BoardEdit[] {
       const value = eq >= 0 ? word.slice(eq + 1) : VALUELESS_FLAGS.has(name) ? null : (w[++i] ?? null);
       if (name === "-R" || name === "--repo") edit.repo = value;
       if (BOARD_WRITE_FLAGS.includes(name)) edit.flags.push(name);
+      if ((name === "--milestone" || name === "-m") && value !== null) edit.milestones.push(value);
     }
     if (edit.flags.length > 0) edits.push(edit);
   }
@@ -152,28 +209,43 @@ async function apiMilestone(issue: string, repo: string | null): Promise<string>
 export interface PayloadEditOptions {
   /** The payload's milestone prefix; defaults to this tree's payload spec. `null` means no payload. */
   prefix?: string | null;
+  /** The tree whose payload spec decides; defaults to this module's own tree. */
+  root?: string;
   /** The milestone title of an issue; defaults to the GitHub API. Throws when it cannot read it. */
   milestoneOf?: (issue: string, repo: string | null) => string | Promise<string>;
 }
 
 /** The reason to refuse the command, or null to let it run. */
 export async function payloadEditRefusal(command: string, opts: PayloadEditOptions = {}): Promise<string | null> {
-  if (!EDIT_INVOCATION.test(command)) return null;
+  if (!EDIT_INVOCATION.test(command.replace(/\\\n/g, " "))) return null;
   const edits = boardEdits(command);
   if (edits.length === 0) return null;
-  const prefix = opts.prefix !== undefined ? opts.prefix : payloadPrefix(join(import.meta.dir, ".."));
+  const why = "(#2713: a speed bump; scripts/hand-edits.ts reads the outcome)";
+  let prefix: string | null;
+  try {
+    prefix = opts.prefix !== undefined ? opts.prefix : payloadPrefix(opts.root ?? join(import.meta.dir, ".."));
+  } catch (e) {
+    return `Cannot check this gh issue edit — the payload declaration is broken: ${String((e as Error)?.message ?? e)}. ${why}`;
+  }
   if (!prefix) return null;
   const family = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} Phase \\d+`);
   const milestoneOf = opts.milestoneOf ?? apiMilestone;
-  const why = "(#2713: a speed bump; scripts/hand-edits.ts reads the outcome)";
 
   for (const edit of edits) {
     if (edit.issues.length === 0) return `Cannot check this gh issue edit — it names no issue. ${why}`;
     for (const raw of edit.issues) {
       const url = ISSUE_URL.exec(raw);
       const issue = url ? url[2] : /^#?\d+$/.test(raw) ? raw.replace(/^#/, "") : null;
-      const repo = edit.repo ?? (url ? url[1] : null);
+      const repo = edit.repo ?? (url ? url[1] : null) ?? edit.envRepo;
       if (issue === null) return `Cannot check this gh issue edit — "${raw}" does not name an issue it can read. ${why}`;
+      const into = edit.milestones.find(m => family.test(m));
+      if (into !== undefined) {
+        return (
+          `--milestone "${into}" moves #${issue} onto the payload board. A milestone set is a board write, and any ` +
+          `board write by a person or an agent ends SC-2625's hand-edit run (#1722). Comment instead: ` +
+          `gh issue comment ${issue} --body-file <file>. ${why}`
+        );
+      }
       let title: string;
       try {
         title = await milestoneOf(issue, repo);
