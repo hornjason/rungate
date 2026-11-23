@@ -4536,8 +4536,8 @@ describe("#1367 BYPASS 6: a write that runs LATER than a step after it", () => {
 // verb comes before SRC, so a source path over about 80 characters put DST's
 // name out of range, and a copy onto the artifact, spelled in full, was
 // allowed. A realpath'd macOS $TMPDIR is long enough on its own. Write intent
-// is now also read over the whole statement holding the name.
-describe("#1407: write intent is read per statement, not only by character distance", () => {
+// is now also read over every call the name is an argument of.
+describe("#1407: write intent is read per call, not only by character distance", () => {
   const LONG = `/private/var/folders/m7/${"x".repeat(32)}/T/rg1407-${"y".repeat(24)}`;
 
   test("WITNESS: a copy onto the artifact with a long source path is refused", () => {
@@ -4558,14 +4558,14 @@ describe("#1407: write intent is read per statement, not only by character dista
 
   // Security review of the first draft: a statement split on every `;` and
   // newline is walked around by a call formatted over several lines, and by a
-  // `;` inside the source string. A separator ends a statement only outside
-  // strings and outside an open bracket.
-  test("WITNESS: a call formatted over several lines is one statement", () => {
+  // `;` inside the source string. Calls are read with quotes and brackets
+  // tracked.
+  test("WITNESS: a call formatted over several lines is one call", () => {
     const cmd = `python3 - <<'PY'\nimport shutil\nshutil.copy(\n    '${LONG}/${STATE}',\n    '${LIVE}/${STATE}',\n)\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
-  test("WITNESS: a ; inside the source string does not end the statement", () => {
+  test("WITNESS: a ; inside the source string does not end the call", () => {
     const cmd = `python3 -c "import shutil; shutil.copy('${LONG};x/${STATE}', '${LIVE}/${STATE}')"`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
@@ -4575,7 +4575,7 @@ describe("#1407: write intent is read per statement, not only by character dista
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
-  test("CONTROL: a write in another statement, out of the window, is not read as writing the name", () => {
+  test("CONTROL: a write in another call, out of the window, is not read as writing the name", () => {
     const pad = "z".repeat(90);
     const cmd = `python3 -c "import json; d = json.load(open('${LIVE}/${STATE}')); note = '${pad}'; open('/tmp/rg1407-out.txt', 'w').write(str(d))"`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);

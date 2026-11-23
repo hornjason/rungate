@@ -2412,31 +2412,56 @@ function writesNear(body: string, protectedName: string): boolean {
     const from = Math.max(0, at - WINDOW);
     const slice = body.slice(from, at + protectedName.length + WINDOW);
     if (WRITE_INTENT.test(slice)) return true;
-    // #1407: and the whole statement holding the name. In
+    // #1407: and every call the name is an argument of. In
     // `shutil.copy(SRC, DST)` the verb comes before SRC, so a SRC longer than
     // the window put DST's name out of its reach, and a copy onto the artifact
     // spelled in full was allowed; a realpath'd macOS $TMPDIR is long enough.
-    // A statement ends at a `;` or newline outside any string and any open
-    // bracket, so a write in the NEXT statement is still not read as writing
-    // this name, while a call formatted over several lines, or a `;` inside a
-    // path string, stays one statement (security review of the first draft).
-    if (WRITE_INTENT.test(statementAround(body, at))) return true;
+    // A call is read with quotes and brackets tracked, so one formatted over
+    // several lines, or holding a `;` in a path string, is still one call
+    // (security review of the first draft). A name that is no call's argument
+    // (text in a string assigned to a variable, a docblock being edited) gets
+    // the window alone, as before.
+    if (enclosingCalls(body, at).some(call => WRITE_INTENT.test(call))) return true;
   }
   return false;
 }
 
 /**
- * The statement of `body` holding offset `at`: the text between the
- * separators either side of it, where a separator is a `;` or newline
- * outside quotes and at bracket depth 0. A body whose quotes or brackets
- * never close runs to its end, which reads MORE as one statement: the
- * direction that refuses rather than allows.
+ * The text of every call whose argument list holds offset `at`, innermost
+ * first: callee through matching `)`. Brackets are tracked outside quotes,
+ * and a call that never closes runs to the end of the body, which reads more
+ * as the call: the direction that refuses rather than allows.
  */
-function statementAround(body: string, at: number): string {
-  let start = 0;
+function enclosingCalls(body: string, at: number): string[] {
+  const open: { at: number; ch: string }[] = [];
+  let quote: string | null = null;
+  for (let i = 0; i < at; i++) {
+    const ch = body[i];
+    if (quote !== null) {
+      if (ch === '\\') i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') quote = ch;
+    else if (ch === '(' || ch === '[' || ch === '{') open.push({ at: i, ch });
+    else if ((ch === ')' || ch === ']' || ch === '}') && open.length > 0) open.pop();
+  }
+  const calls: string[] = [];
+  for (let k = open.length - 1; k >= 0; k--) {
+    if (open[k].ch !== '(') continue;
+    const paren = open[k].at;
+    const callee = /[\w.$]+\s*$/.exec(body.slice(Math.max(0, paren - 80), paren))?.[0] ?? '';
+    if (callee.trim() === '') continue;
+    calls.push(body.slice(paren - callee.length, closingParen(body, paren)));
+  }
+  return calls;
+}
+
+/** The offset just past the `)` matching the `(` at `paren`, or the body's end. */
+function closingParen(body: string, paren: number): number {
   let depth = 0;
   let quote: string | null = null;
-  for (let i = 0; i < body.length; i++) {
+  for (let i = paren; i < body.length; i++) {
     const ch = body[i];
     if (quote !== null) {
       if (ch === '\\') i++;
@@ -2445,13 +2470,12 @@ function statementAround(body: string, at: number): string {
     }
     if (ch === "'" || ch === '"' || ch === '`') quote = ch;
     else if (ch === '(' || ch === '[' || ch === '{') depth++;
-    else if ((ch === ')' || ch === ']' || ch === '}') && depth > 0) depth--;
-    else if ((ch === ';' || ch === '\n') && depth === 0) {
-      if (i >= at) return body.slice(start, i);
-      start = i + 1;
+    else if (ch === ')' || ch === ']' || ch === '}') {
+      depth--;
+      if (depth === 0) return i + 1;
     }
   }
-  return body.slice(start);
+  return body.length;
 }
 
 /**
