@@ -391,6 +391,13 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
       "lib/worktree-repo.ts": [
         "repoSlug", "redactRemote", "looksLikeFilesystemPath", "worktreeIdentity", "worktreeIdentityViolations",
       ],
+      // #2684, SC-2775 wave 4-B: ship.js's SECURITY-HELPERS copies of these nine.
+      // shellQuote stays in ship.js's SHELL-QUOTE block, which four workflows
+      // carry byte-identical and test/workflow-prompt-top-level-cd.test.ts holds.
+      "lib/workflow-security.ts": [
+        "pathRefusal", "validateFilePaths", "buildSafeGitAdd", "isSafeBranchName", "repoSlugRefusal",
+        "rootPathRefusal", "resolveEvidencePath", "validateEvidenceCommand", "buildSafeSSHCommand",
+      ],
     });
   });
 
@@ -406,7 +413,11 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
 
   test("ship.js defines none of the names the bundle defines — its hand copy cannot come back", () => {
     const bundle = launchBundle();
-    for (const name of ["suiteCurrency", "planCoverage", "denylistViolations", "rookGateVerdict", "reviewIsCurrent", "priorWorkRefusal", "containerProbeTarget"]) {
+    for (const name of [
+      "suiteCurrency", "planCoverage", "denylistViolations", "rookGateVerdict", "reviewIsCurrent", "priorWorkRefusal", "containerProbeTarget",
+      // #2684: the security helpers, and a private rule only they use.
+      "pathRefusal", "validateFilePaths", "isSafeBranchName", "buildSafeSSHCommand", "SHELL_METACHARACTERS",
+    ]) {
       expect(bundle.defined).toContain(name);
       expect(() => buildWorkflowLaunch(`${source}\nfunction ${name}() { return null; }`, WORKFLOW_SCRIPT_CAP, bundle)).toThrow(
         `${name} is defined by both workflows/ship.js and the lib bundle`,
