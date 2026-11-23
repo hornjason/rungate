@@ -1,4 +1,4 @@
-# generated-sha: 41f879f086f3d7eb
+# generated-sha: 7e800d3bc21303ae
 # Managed by rungate — do not edit. The board is board.id in .claude/rungate/config.json.
 #
 # Moves an issue's card to the lane each event means (specs/BOARD-FLOW-SPEC.md):
@@ -134,7 +134,7 @@ jobs:
             args+=(--state-reason "$STATE_REASON")
           fi
           args+=(--write)
-          bunx rungate@0.8.45 board-flow "${args[@]}" 2>"$err" || code=$?
+          bunx rungate@0.8.46 board-flow "${args[@]}" 2>"$err" || code=$?
           cat "$err" >&2
           # A tree with no board.id is UNMEASURED, an annotation and not a red run.
           # Only that refusal is: every other exit stands.
