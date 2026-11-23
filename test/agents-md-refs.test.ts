@@ -272,8 +272,15 @@ function aiReviewGuideViolations(
   if (!guide.includes("refused as a whole") || !guide.includes("picks from the secrets as if `ci.vertex` were not set")) {
     v.push("the guide does not say a ci.vertex the scaffold refuses falls back to the secrets");
   }
-  for (const e of events) {
-    if (!guide.includes(`\`${e}\``)) v.push(`the guide does not name the ${e} event, which runs a round`);
+  // The events the guide lists, compared both ways (#2715 review round 2): a
+  // listed event the job no longer subscribes to is as wrong as a missing one.
+  const listing = /A round runs\s+on every pull request event the job subscribes to:([^.]*)\./.exec(guide)?.[1];
+  if (listing === undefined) {
+    v.push("the guide does not list the pull request events a round runs on");
+  } else {
+    const listed = [...listing.matchAll(/`([a-z_]+)`/g)].map(m => m[1]);
+    for (const e of events) if (!listed.includes(e)) v.push(`the guide does not name the ${e} event, which runs a round`);
+    for (const e of listed) if (!events.includes(e)) v.push(`the guide names the ${e} event, which the job does not subscribe to`);
   }
   if (!guide.includes(`\`${AI_REVIEW_REQUIRE_VAR}\` to exactly \`${AI_REVIEW_REQUIRE_VALUE}\``)) {
     v.push(`the guide does not name ${AI_REVIEW_REQUIRE_VAR} and the exact value that makes a missing credential fail`);
@@ -363,6 +370,8 @@ describe("CRC-B13: the consumer AI review guide says what the job resolves, who 
 
   test("CONTROL: an event the job runs a round on, missing from the guide, is reported", () => {
     expect(broken("`reopened`", "reopened")).toContain("the guide does not name the reopened event, which runs a round");
+    expect(aiReviewGuideViolations(guide, AI_REVIEW_AUTH_PRECEDENCE, AI_REVIEW_PULL_REQUEST_TYPES.filter(e => e !== "unlabeled")))
+      .toContain("the guide names the unlabeled event, which the job does not subscribe to");
     expect(aiReviewGuideViolations(guide, AI_REVIEW_AUTH_PRECEDENCE, [...AI_REVIEW_PULL_REQUEST_TYPES, "edited"]))
       .toContain("the guide does not name the edited event, which runs a round");
   });
