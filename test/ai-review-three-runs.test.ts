@@ -46,6 +46,9 @@ import {
   AI_REVIEW_MERGE_STEP_ID,
   AI_REVIEW_PREPARE_STEP_ID,
   AI_REVIEW_EXECUTION_LIST_BASENAME,
+  AI_REVIEW_EVERY_RUN_LIST_BASENAME,
+  AI_REVIEW_EVERY_RUN_LIST_VAR,
+  AI_REVIEW_PERSIST_STEP_ID,
   aiReviewRunDriftStepId,
   AI_REVIEW_SEAL_INPUTS_STEP_ID,
   AI_REVIEW_INPUTS_MANIFEST_BASENAME,
@@ -495,7 +498,9 @@ describe("#2648: the merge step", () => {
     const f = kept({ 1: { draft: "d1" } });
     const r = runMerge(recorder(join(f.root, "argv")), f, OUTCOMES);
     expect(r.status).toBe(0);
-    expect(readFileSync(f.out, "utf-8")).toBe(`execution_list=${join(f.kept, AI_REVIEW_EXECUTION_LIST_BASENAME)}\n`);
+    expect(readFileSync(f.out, "utf-8")).toBe(
+      `execution_list=${join(f.kept, AI_REVIEW_EXECUTION_LIST_BASENAME)}\nevery_run_list=${join(f.kept, AI_REVIEW_EVERY_RUN_LIST_BASENAME)}\n`,
+    );
   });
 
   // #2674 round 1. The round's payload is every run's draft, so the checks on
@@ -516,6 +521,29 @@ describe("#2648: the merge step", () => {
     expect(list).toBe(`${join(f.kept, aiReviewExecutionCopyBasename(1))}\n\n`);
   });
 
+  // #2674 round 3. The ledger's turn count asks whether any run reached its
+  // budget (#1380), and a run that spent its budget writing nothing has no
+  // draft, so the list of contributing runs cannot answer it.
+  test("#2674: it lists every run's kept transcript for the ledger, drafted or not, and an empty line for one it cannot vouch for", () => {
+    const f = kept({
+      1: { draft: "d1", execution: "e1" },
+      2: { draft: "d2", execution: "e2" },
+      3: { execution: "e3" },
+    });
+    writeFileSync(join(f.kept, aiReviewExecutionCopyBasename(2)), "forged");
+    runMerge(recorder(join(f.root, "argv")), f, OUTCOMES);
+    const every = readFileSync(join(f.kept, AI_REVIEW_EVERY_RUN_LIST_BASENAME), "utf-8");
+    // Run 3 wrote no draft and is listed all the same; run 2's transcript
+    // changed after its run, so its line is empty.
+    expect(every).toBe(`${join(f.kept, aiReviewExecutionCopyBasename(1))}\n\n${join(f.kept, aiReviewExecutionCopyBasename(3))}\n`);
+  });
+
+  test("#2674: the ledger step reads the merge step's list of every run, not the list of contributing runs", () => {
+    const env = step(AI_REVIEW_PERSIST_STEP_ID).env ?? {};
+    expect(env[AI_REVIEW_EVERY_RUN_LIST_VAR]).toBe(`\${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.every_run_list }}`);
+    expect(Object.values(env).join("\n"), "the ledger still reads the contributing runs' list").not.toContain("outputs.execution_list");
+  });
+
   for (const [name, path] of [
     ["refused", (f: ReturnType<typeof kept>) => recorder(join(f.root, "argv"), 2)],
     ["could not run at all", () => stubBunxAbsent()],
@@ -526,7 +554,7 @@ describe("#2648: the merge step", () => {
       expect(r.status).toBe(0);
       expect(existsSync(f.payload)).toBe(false);
       expect(readFileSync(f.out, "utf-8")).toBe(
-        `execution_list=${join(f.kept, AI_REVIEW_EXECUTION_LIST_BASENAME)}\noutcome=failure\nexecution_file=${join(f.kept, aiReviewExecutionCopyBasename(1))}\n`,
+        `execution_list=${join(f.kept, AI_REVIEW_EXECUTION_LIST_BASENAME)}\nevery_run_list=${join(f.kept, AI_REVIEW_EVERY_RUN_LIST_BASENAME)}\noutcome=failure\nexecution_file=${join(f.kept, aiReviewExecutionCopyBasename(1))}\n`,
       );
       expect(r.stdout).toMatch(/::error title=AI review drafts::UNMEASURED/);
     });

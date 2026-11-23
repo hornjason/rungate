@@ -1322,8 +1322,23 @@ export const AI_REVIEW_EXECUTION_LIST_VAR = "AI_REVIEW_EXECUTION_LIST";
 export const AI_REVIEW_EXECUTION_LIST_BASENAME = "ai-review-round-executions.txt";
 
 /**
+ * The ledger's env name for EVERY run's transcript, one per line, whether or
+ * not its draft is in the round, with an empty line for a run whose transcript
+ * the merge cannot vouch for (#2674 round 3). The round's turn count asks
+ * whether any run reached its budget (#1380), and a run that spent its budget
+ * and wrote no draft is in no list of contributing runs, so that list cannot
+ * answer it.
+ */
+export const AI_REVIEW_EVERY_RUN_LIST_VAR = "AI_REVIEW_EVERY_RUN_LIST";
+
+/** Where the merge writes that list, beside the other. */
+export const AI_REVIEW_EVERY_RUN_LIST_BASENAME = "ai-review-every-run-execution.txt";
+
+/**
  * The shell that reads the round's transcripts into the bash array `arr`
- * (#2674): every line of the merge step's list, or, with no list named (a
+ * (#2674): every line of the merge step's list named by `listVar` (the
+ * contributing runs' list unless a caller names the every-run one), or, with
+ * no list named (a
  * one-run workflow), the one transcript the round reports. A list that is
  * named and missing or empty becomes one empty entry, a run nothing can vouch
  * for, so every reader treats it as unread. One builder for every step that
@@ -1331,14 +1346,14 @@ export const AI_REVIEW_EXECUTION_LIST_BASENAME = "ai-review-round-executions.txt
  * ways. The array always has an entry, so `"${arr[@]}"` is safe under
  * `set -u` on the bash 3.2 a laptop runs the tests with.
  */
-function roundTranscriptsShell(arr: string, indent: string): string {
+function roundTranscriptsShell(arr: string, indent: string, listVar: string = AI_REVIEW_EXECUTION_LIST_VAR): string {
   return [
     `${arr}=("\${${AI_REVIEW_EXECUTION_FILE_VAR}:-}")`,
-    `if [ -n "\${${AI_REVIEW_EXECUTION_LIST_VAR}:-}" ]; then`,
+    `if [ -n "\${${listVar}:-}" ]; then`,
     `  ${arr}=("")`,
-    `  if [ -f "\${${AI_REVIEW_EXECUTION_LIST_VAR}}" ]; then`,
+    `  if [ -f "\${${listVar}}" ]; then`,
     `    ${arr}_listed=()`,
-    `    while IFS= read -r ${arr}_line || [ -n "\${${arr}_line}" ]; do ${arr}_listed+=("\${${arr}_line}"); done < "\${${AI_REVIEW_EXECUTION_LIST_VAR}}"`,
+    `    while IFS= read -r ${arr}_line || [ -n "\${${arr}_line}" ]; do ${arr}_listed+=("\${${arr}_line}"); done < "\${${listVar}}"`,
     `    if [ "\${#${arr}_listed[@]}" -gt 0 ]; then ${arr}=("\${${arr}_listed[@]}"); fi`,
     `  fi`,
     `fi`,
@@ -3760,11 +3775,16 @@ export function buildMergeDraftsScript(version: string): string {
     `list="$kept/${AI_REVIEW_EXECUTION_LIST_BASENAME}"`,
     `list_ok=1`,
     `: > "$list" 2>/dev/null || list_ok=0`,
+    `# Every run's transcript, drafted or not, for the ledger's turn count (#2674 round 3).`,
+    `every="$kept/${AI_REVIEW_EVERY_RUN_LIST_BASENAME}"`,
+    `every_ok=1`,
+    `: > "$every" 2>/dev/null || every_ok=0`,
     `args=(--out "$payload" --github-output "\${GITHUB_OUTPUT}")`,
     `drafts=()`,
     ...runs.flatMap(k => [
       `check "$kept/${aiReviewExecutionCopyBasename(k)}" "\${${aiReviewRunDigestVar(k, "EXECUTION")}:-}" "run ${k}'s execution file"`,
       `e="$REPLY"`,
+      `printf '%s\\n' "$e" >> "$every" 2>/dev/null || every_ok=0`,
       `args+=(--outcome "\${${aiReviewRunOutcomeVar(k)}:-failure}" --execution "$e")`,
       `check "$kept/${aiReviewDraftBasename(k)}" "\${${aiReviewRunDigestVar(k, "DRAFT")}:-}" "run ${k}'s draft"`,
       // An absent draft is passed by its own name, which the merge reports as
@@ -3786,7 +3806,12 @@ export function buildMergeDraftsScript(version: string): string {
     `  rm -f "$list"`,
     `  echo "::warning title=AI review drafts::could not write the round's list of transcripts, so the report cannot tell how this round's drafts were produced and will refuse"`,
     `fi`,
+    `if [ "$every_ok" != 1 ]; then`,
+    `  rm -f "$every"`,
+    `  echo "::warning title=AI review drafts::could not write the list of every run's transcript, so this round's turn count is recorded as unmeasured"`,
+    `fi`,
     `printf 'execution_list=%s\\n' "$list" >> "\${GITHUB_OUTPUT}"`,
+    `printf 'every_run_list=%s\\n' "$every" >> "\${GITHUB_OUTPUT}"`,
     `merge_code=0`,
     `merge_out="$(${AI_REVIEW_FRESH_CWD} && ${merger} "\${args[@]}" "\${drafts[@]}" 2>&1)" || merge_code=$?`,
     `printf '%s\\n' "$merge_out"`,
@@ -11336,11 +11361,12 @@ fi
 # so there is exactly one thing a mutation can point back at the root.
 #
 # #2674: a round is several runs, so the count recorded is the MOST any run
-# whose draft is in the round took, read from each transcript in the merge
-# step's list. The question it answers is whether a run reached its budget
-# (#1380), and one run's count is not the round's. Any listed transcript that
-# cannot be read leaves the round null, never a number from the others.
-${roundTranscriptsShell("turn_files", "")}
+# took, read from EVERY run's transcript, not only the runs whose drafts are
+# in the round. The question it answers is whether a run reached its budget
+# (#1380), and a run that spent its budget and wrote no draft is that case
+# exactly (round 3). Any run's transcript that cannot be read, including one
+# that never arrived, leaves the round null, never a number from the others.
+${roundTranscriptsShell("turn_files", "", AI_REVIEW_EVERY_RUN_LIST_VAR)}
 turns="null"
 turns_max=-1
 turns_unreadable=0
@@ -12388,8 +12414,8 @@ export function buildReviewRunStep(
     // of exactly that. The commit the reviewer READ needs no binding — it is
     // `GITHUB_SHA`, which the runner sets on every step.
     `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_file }}`,
-    // #2674. Every contributing run's transcript, for the round's turn count.
-    `    ${AI_REVIEW_EXECUTION_LIST_VAR}: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_list }}`,
+    // #2674. Every run's transcript, drafted or not, for the round's turn count.
+    `    ${AI_REVIEW_EVERY_RUN_LIST_VAR}: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.every_run_list }}`,
     `    ${AI_REVIEW_LEDGER_REPO_VAR}: \${{ github.repository }}`,
     `    ${AI_REVIEW_LEDGER_API_VAR}: \${{ github.api_url }}`,
     `    ${AI_REVIEW_LEDGER_TOKEN_VAR}: \${{ secrets.GITHUB_TOKEN }}`,

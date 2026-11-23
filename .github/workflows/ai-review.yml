@@ -1,4 +1,4 @@
-# generated-sha: 90635d6637ddb21f
+# generated-sha: 5530997e0a220783
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -4771,10 +4771,15 @@ jobs:
           list="$kept/ai-review-round-executions.txt"
           list_ok=1
           : > "$list" 2>/dev/null || list_ok=0
+          # Every run's transcript, drafted or not, for the ledger's turn count (#2674 round 3).
+          every="$kept/ai-review-every-run-execution.txt"
+          every_ok=1
+          : > "$every" 2>/dev/null || every_ok=0
           args=(--out "$payload" --github-output "${GITHUB_OUTPUT}")
           drafts=()
           check "$kept/ai-review-execution-1.json" "${AI_REVIEW_RUN_1_EXECUTION_SHA:-}" "run 1's execution file"
           e="$REPLY"
+          printf '%s\n' "$e" >> "$every" 2>/dev/null || every_ok=0
           args+=(--outcome "${AI_REVIEW_RUN_1_OUTCOME:-failure}" --execution "$e")
           check "$kept/ai-review-draft-1.json" "${AI_REVIEW_RUN_1_DRAFT_SHA:-}" "run 1's draft"
           d="$kept/ai-review-draft-1.json"; if [ -z "$REPLY" ] && [ -f "$d" ]; then d="$d.changed-after-its-run"; fi
@@ -4782,6 +4787,7 @@ jobs:
           if [ -n "$REPLY" ]; then printf '%s\n' "$e" >> "$list" 2>/dev/null || list_ok=0; fi
           check "$kept/ai-review-execution-2.json" "${AI_REVIEW_RUN_2_EXECUTION_SHA:-}" "run 2's execution file"
           e="$REPLY"
+          printf '%s\n' "$e" >> "$every" 2>/dev/null || every_ok=0
           args+=(--outcome "${AI_REVIEW_RUN_2_OUTCOME:-failure}" --execution "$e")
           check "$kept/ai-review-draft-2.json" "${AI_REVIEW_RUN_2_DRAFT_SHA:-}" "run 2's draft"
           d="$kept/ai-review-draft-2.json"; if [ -z "$REPLY" ] && [ -f "$d" ]; then d="$d.changed-after-its-run"; fi
@@ -4789,6 +4795,7 @@ jobs:
           if [ -n "$REPLY" ]; then printf '%s\n' "$e" >> "$list" 2>/dev/null || list_ok=0; fi
           check "$kept/ai-review-execution-3.json" "${AI_REVIEW_RUN_3_EXECUTION_SHA:-}" "run 3's execution file"
           e="$REPLY"
+          printf '%s\n' "$e" >> "$every" 2>/dev/null || every_ok=0
           args+=(--outcome "${AI_REVIEW_RUN_3_OUTCOME:-failure}" --execution "$e")
           check "$kept/ai-review-draft-3.json" "${AI_REVIEW_RUN_3_DRAFT_SHA:-}" "run 3's draft"
           d="$kept/ai-review-draft-3.json"; if [ -z "$REPLY" ] && [ -f "$d" ]; then d="$d.changed-after-its-run"; fi
@@ -4798,7 +4805,12 @@ jobs:
             rm -f "$list"
             echo "::warning title=AI review drafts::could not write the round's list of transcripts, so the report cannot tell how this round's drafts were produced and will refuse"
           fi
+          if [ "$every_ok" != 1 ]; then
+            rm -f "$every"
+            echo "::warning title=AI review drafts::could not write the list of every run's transcript, so this round's turn count is recorded as unmeasured"
+          fi
           printf 'execution_list=%s\n' "$list" >> "${GITHUB_OUTPUT}"
+          printf 'every_run_list=%s\n' "$every" >> "${GITHUB_OUTPUT}"
           merge_code=0
           merge_out="$(rungate_bunx_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && cd "$rungate_bunx_dir" && bunx rungate@0.8.46 ai-review-merge-drafts "${args[@]}" "${drafts[@]}" 2>&1)" || merge_code=$?
           printf '%s\n' "$merge_out"
@@ -5395,7 +5407,7 @@ jobs:
           AI_REVIEW_LEDGER_PR: ${{ github.event.pull_request.number }}
           AI_REVIEW_LEDGER_SHA: ${{ github.event.pull_request.head.sha }}
           AI_REVIEW_EXECUTION_FILE: ${{ steps.ai-review-merge.outputs.execution_file }}
-          AI_REVIEW_EXECUTION_LIST: ${{ steps.ai-review-merge.outputs.execution_list }}
+          AI_REVIEW_EVERY_RUN_LIST: ${{ steps.ai-review-merge.outputs.every_run_list }}
           AI_REVIEW_LEDGER_REPO: ${{ github.repository }}
           AI_REVIEW_LEDGER_API: ${{ github.api_url }}
           AI_REVIEW_LEDGER_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -5855,16 +5867,17 @@ jobs:
           # so there is exactly one thing a mutation can point back at the root.
           #
           # #2674: a round is several runs, so the count recorded is the MOST any run
-          # whose draft is in the round took, read from each transcript in the merge
-          # step's list. The question it answers is whether a run reached its budget
-          # (#1380), and one run's count is not the round's. Any listed transcript that
-          # cannot be read leaves the round null, never a number from the others.
+          # took, read from EVERY run's transcript, not only the runs whose drafts are
+          # in the round. The question it answers is whether a run reached its budget
+          # (#1380), and a run that spent its budget and wrote no draft is that case
+          # exactly (round 3). Any run's transcript that cannot be read, including one
+          # that never arrived, leaves the round null, never a number from the others.
           turn_files=("${AI_REVIEW_EXECUTION_FILE:-}")
-          if [ -n "${AI_REVIEW_EXECUTION_LIST:-}" ]; then
+          if [ -n "${AI_REVIEW_EVERY_RUN_LIST:-}" ]; then
             turn_files=("")
-            if [ -f "${AI_REVIEW_EXECUTION_LIST}" ]; then
+            if [ -f "${AI_REVIEW_EVERY_RUN_LIST}" ]; then
               turn_files_listed=()
-              while IFS= read -r turn_files_line || [ -n "${turn_files_line}" ]; do turn_files_listed+=("${turn_files_line}"); done < "${AI_REVIEW_EXECUTION_LIST}"
+              while IFS= read -r turn_files_line || [ -n "${turn_files_line}" ]; do turn_files_listed+=("${turn_files_line}"); done < "${AI_REVIEW_EVERY_RUN_LIST}"
               if [ "${#turn_files_listed[@]}" -gt 0 ]; then turn_files=("${turn_files_listed[@]}"); fi
             fi
           fi
