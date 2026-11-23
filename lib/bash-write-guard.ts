@@ -2416,18 +2416,42 @@ function writesNear(body: string, protectedName: string): boolean {
     // `shutil.copy(SRC, DST)` the verb comes before SRC, so a SRC longer than
     // the window put DST's name out of its reach, and a copy onto the artifact
     // spelled in full was allowed; a realpath'd macOS $TMPDIR is long enough.
-    // A statement ends at `;` or a newline, so a write in the NEXT statement
-    // is still not read as writing this name.
-    if (WRITE_INTENT.test(statementAround(body, at, at + protectedName.length))) return true;
+    // A statement ends at a `;` or newline outside any string and any open
+    // bracket, so a write in the NEXT statement is still not read as writing
+    // this name, while a call formatted over several lines, or a `;` inside a
+    // path string, stays one statement (security review of the first draft).
+    if (WRITE_INTENT.test(statementAround(body, at))) return true;
   }
   return false;
 }
 
-/** The text between the statement separators (`;`, newline) either side of [start, end). */
-function statementAround(body: string, start: number, end: number): string {
-  const before = Math.max(body.lastIndexOf(';', start - 1), body.lastIndexOf('\n', start - 1));
-  const ends = [body.indexOf(';', end), body.indexOf('\n', end)].filter(i => i !== -1);
-  return body.slice(before + 1, ends.length > 0 ? Math.min(...ends) : body.length);
+/**
+ * The statement of `body` holding offset `at`: the text between the
+ * separators either side of it, where a separator is a `;` or newline
+ * outside quotes and at bracket depth 0. A body whose quotes or brackets
+ * never close runs to its end, which reads MORE as one statement: the
+ * direction that refuses rather than allows.
+ */
+function statementAround(body: string, at: number): string {
+  let start = 0;
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (quote !== null) {
+      if (ch === '\\') i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') quote = ch;
+    else if (ch === '(' || ch === '[' || ch === '{') depth++;
+    else if ((ch === ')' || ch === ']' || ch === '}') && depth > 0) depth--;
+    else if ((ch === ';' || ch === '\n') && depth === 0) {
+      if (i >= at) return body.slice(start, i);
+      start = i + 1;
+    }
+  }
+  return body.slice(start);
 }
 
 /**

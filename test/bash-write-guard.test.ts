@@ -4556,6 +4556,20 @@ describe("#1407: write intent is read per statement, not only by character dista
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
+  // Security review of the first draft: a statement split on every `;` and
+  // newline is walked around by a call formatted over several lines, and by a
+  // `;` inside the source string. A separator ends a statement only outside
+  // strings and outside an open bracket.
+  test("WITNESS: a call formatted over several lines is one statement", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\nshutil.copy(\n    '${LONG}/${STATE}',\n    '${LIVE}/${STATE}',\n)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a ; inside the source string does not end the statement", () => {
+    const cmd = `python3 -c "import shutil; shutil.copy('${LONG};x/${STATE}', '${LIVE}/${STATE}')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
   test("CONTROL: a read with the same long path is allowed", () => {
     const cmd = `python3 -c "import json; d = json.load(open('${LONG}/${STATE}')); print(d)"`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
