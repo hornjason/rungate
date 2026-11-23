@@ -18,7 +18,9 @@ job needs to run, who pays for it, and what a pull request costs.
 With no credential, no review runs and nothing is spent. The job writes a
 warning saying the review is UNMEASURED, and the check passes. A tree with no
 credential has not passed a review; it has not had one, and the warning says
-so.
+so. The missing credential never fails the check. Another step can: the one
+that counts review rounds fails the job if it cannot read GitHub's API after
+three tries.
 
 To make a missing credential fail the check instead, set the repository
 variable `RUNGATE_REQUIRE_AI_REVIEW` to exactly `true`. No other spelling
@@ -70,7 +72,9 @@ a full round.
 - The per-run figure is the cost Claude Code reported for each run in the
   audit's replay, which ran the CI prompt locally against a Vertex project
   (audit section 3). Vertex bills the tokens at Google Cloud's rate for the
-  model.
+  model, and the Anthropic API at Anthropic's. The table is an estimate from
+  that measurement, not a quote for either bill: check the model's price on
+  the bill you pay.
 - On a subscription there is no per-token bill. The runs count against the
   token owner's usage limits instead.
 - Rounds per pull request is this repository's figure, and it counts every
