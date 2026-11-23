@@ -4977,6 +4977,9 @@ describe("#1407: write intent is read per call, not only by character distance",
     ["a list target", PY(`[d, e] = ['${LIVE}/${STATE}', 1]`, COPY)],
     ["a starred tuple target", PY(`d, *rest = '${LIVE}/${STATE}', 1, 2`, COPY)],
     ["a nested tuple target", PY(`(a, (d, e)) = 1, ('${LIVE}/${STATE}', 2)`, COPY)],
+    // Kept from round 2: a comprehension's iterable holds its items.
+    ["a list comprehension over a list", PY(`d = [p for p in ['${LIVE}/${STATE}']][0]`, COPY)],
+    ["a list comprehension over a tuple", PY(`d = [p for p in ('${LIVE}/${STATE}',)][0]`, COPY)],
     // JavaScript's comma operator assigns the literal to the LAST name, and the
     // mask does not know the language, so every name binds.
     ["the last name, which JavaScript's comma operator assigns", JS3(`let d, e; d, e = '${LIVE}/${STATE}', 1;`, "e")],
@@ -4995,6 +4998,8 @@ describe("#1407: write intent is read per call, not only by character distance",
     ["an annotation continued over a CRLF line end", PY(`d: str \\\r\n    = '${LIVE}/${STATE}'`, COPY)],
     ["a target continued onto the operator's line", PY(`d \\\n    = '${LIVE}/${STATE}'`, COPY)],
     ["a literal continued over a CRLF line end", PY(`d = '\\\r\n${LIVE}/${STATE}'`, COPY)],
+    ["an annotation after a one-line if's colon, continued over CRLF", PY(`if ok: \\\r\n    d: str = '${LIVE}/${STATE}'`, COPY)],
+    ["a tuple target continued over CRLF", PY(`d, \\\r\n    e = '${LIVE}/${STATE}', 1`, COPY)],
     ["??=", JS3(`let d; d ??= '${LIVE}/${STATE}';`)],
     ["||=", JS3(`let d; d ||= '${LIVE}/${STATE}';`)],
     ["&&=", JS3(`let d = 1; d &&= '${LIVE}/${STATE}';`)],

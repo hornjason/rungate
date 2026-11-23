@@ -2552,14 +2552,16 @@ const MASK_PATH_BUILDERS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Keywords before `(` or `[` whose expression's value is the bracket's own:
- * `x or ['…']`, `[] if ok else ('…')`, `await ('…')`. After any other word the
+ * Keywords before `(` or `[` whose expression's value is the bracket's own,
+ * or holds its items: `x or ['…']`, `[] if ok else ('…')`, `await ('…')`, and
+ * a comprehension's iterable, `[p for p in ['…']]`. After any other word the
  * bracket is a call or a subscript. Every other keyword makes a different
- * value (`not`, `typeof`, `in`) or starts a statement that assigns nothing
+ * value (`not`, `typeof`) or starts a statement that assigns nothing
  * (`return`, `match`, `case`), and many are names in the other language or as
  * Python's soft keywords: `d = match['…']` is a subscript (#2721 review).
+ * `in` is reserved in both languages, so it names nothing.
  */
-const VALUE_KEYWORDS = new Set(['and', 'or', 'else', 'await']);
+const VALUE_KEYWORDS = new Set(['and', 'or', 'else', 'await', 'in']);
 
 /**
  * Whether the value inside the bracket opened at `open` is part of the value
