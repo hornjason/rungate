@@ -2871,12 +2871,13 @@ const WRITE_MODE = new RegExp(WRITE_MODE_SOURCE);
  */
 const WRITE_INTENT = new RegExp(
   // #2701: the callback forms beside the `Sync` ones (`writeFile`, `appendFile`,
-  // `copyFile`, which also covers `fs.promises.*`), `write_bytes` beside
-  // `write_text`, `shutil`'s other copies (`copy\b` cannot reach `copy2`: a
-  // digit is a word character), any `.rename(` (`fs.rename`, `Path.rename`),
-  // `openSync` beside `open`, and the deletions in the same class: any
-  // `.unlink(`, `.rm(` or `.truncate(` (`fs.unlink`, `Path.unlink`, #2704 review).
-  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|writeFile|appendFile|copyFile|write_text|write_bytes|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy2?|copyfile|copytree|move|rmtree))\b|\.(?:rename|unlink|rm|truncate)\s*\(|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen(?:Sync)?\s*\([^)]*` +
+  // `copyFile`, which also covers `fs.promises.*`), `cpSync` and any `.cp(`,
+  // `write_bytes` beside `write_text`, `shutil`'s other copies (`copy\b`
+  // cannot reach `copy2`: a digit is a word character), any `.rename(`,
+  // `.unlink(`, `.rm(` or `.truncate(` (`fs.unlink`, `Path.unlink`), `os.open`
+  // with a write flag, and `openSync` beside `open`. None of these joins
+  // `WRITE_CALLEES`; its docblock says why.
+  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|writeFile|appendFile|copyFile|cpSync|write_text|write_bytes|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy2?|copyfile|copytree|move|rmtree))\b|\.(?:rename|unlink|rm|truncate|cp)\s*\(|\bos\.open\s*\([^)]*\bO_(?:WRONLY|RDWR|CREAT|TRUNC|APPEND)\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen(?:Sync)?\s*\([^)]*` +
     WRITE_MODE_SOURCE +
     // #2699 review: the mode after nested calls in the path, two levels deep.
     // `opensForWrite` reads any depth, but only in a body that parses; this is
@@ -3327,14 +3328,22 @@ const WHITESPACE = new Set([' ', '\t', '\n', '\r']);
  * the first place — so a verb missing here is a verb that never brought a
  * command to this question.
  *
- * `remove`, `replace` and `write` are qualified rather than matched bare: `str.replace` and `stdout.write` are not writes to a file,
- * and a bare match would read a transform as a write position, which is the
- * denylist's failure wearing a whitelist's clothes. `rename`, `unlink`, `rm`
- * and `truncate` are bare since #2701: no string or array type has one, and `require('fs').rename(` is
- * read here as `.rename`, which the qualified `os.rename` never matched. Its
- * destination is argument 1 in the function forms; in `Path(src).rename(dst)`
- * it is argument 0, so a scratch `Path.rename` reads its literal as an
- * argument and is refused — the conservative direction.
+ * `remove`, `rename`, `replace`, `unlink` and `write` are qualified rather
+ * than matched bare: `str.replace` and `stdout.write` are not writes to a
+ * file, and a bare match would read a transform as a write position, which
+ * is the denylist's failure wearing a whitelist's clothes.
+ *
+ * The verbs #2701 added to `WRITE_INTENT` are deliberately NOT here, so this
+ * list is no longer exactly `WRITE_INTENT`'s names. A name here is trusted
+ * by its last segment alone, and a body can define its own function under
+ * it: with `rm` listed, `def rm(p): os.remove(os.environ['RG'])` and then
+ * `rm('/tmp/fix/workflow-state.json')` read the scratch literal as the
+ * write's target and exempted the body, a shape main refused (#2704 review).
+ * Matching the binding forms was tried and walked around twice (a compound
+ * statement, a parameter, a loop variable, a tuple). Left out, an unlisted
+ * callee ends the exemption, which is the direction above: a fixture writing
+ * through one of #2701's verbs is refused. The names already here carry that
+ * hole (`def copy`), pinned as a CONCESSION row and owned by #2705.
  */
 const WRITE_CALLEES = new Set([
   'writeFileSync',
@@ -3345,20 +3354,10 @@ const WRITE_CALLEES = new Set([
   'unlinkSync',
   'rmSync',
   'truncateSync',
-  'writeFile',
-  'appendFile',
-  'copyFile',
-  'rename',
-  'unlink',
-  'rm',
-  'truncate',
   'write_text',
-  'write_bytes',
   'open',
-  'openSync',
   'dump',
   'copy',
-  'copy2',
   'copyfile',
   'copytree',
   'move',
@@ -3398,18 +3397,15 @@ const QUALIFIED_WRITE_CALLEES = new Set([
  */
 const DEST_INDEX = new Map<string, number>([
   ['copy', 1],
-  ['copy2', 1],
   ['copyfile', 1],
   ['copytree', 1],
   ['copyFileSync', 1],
-  ['copyFile', 1],
   ['move', 1],
   ['rename', 1],
   ['renameSync', 1],
   ['replace', 1],
   ['dump', -1],
   ['write_text', -1],
-  ['write_bytes', -1],
 ]);
 
 function destIndexOf(name: string): number {
@@ -3580,27 +3576,6 @@ function standsAlone(body: string, start: number, end: number): boolean {
 }
 
 /**
- * Whether the body defines or binds a name `inWritePosition` recognises a
- * write call by (#2704 security review). The callee is known by its last name
- * only, so `def rm(p): os.remove(os.environ['RG'])` and then
- * `rm('/tmp/fix/workflow-state.json')` read the scratch literal as the
- * write's target, and exempted a body whose real write went elsewhere. Main
- * refused that `rm` form only because `rm` was not yet in the list; the same
- * shape under `copy` was allowed there. A body that defines or binds its own
- * `rm`, `copy` or `open` gets no exemption: its calls to that name are not
- * the library's. Importing the library's own name (`from shutil import
- * copy`, `const { rm } = require('fs')`) binds the real call and is not a
- * shadow; a name that only contains one (`copy_all`) is not either.
- */
-function shadowsWriteCallee(body: string): boolean {
-  const names = [...WRITE_CALLEES].join('|');
-  return new RegExp(
-    String.raw`\b(?:def|function|class)\s+(?:${names})\b|\b(?:const|let|var)\s+(?:${names})\b|\bas\s+(?:${names})\b|(?:^|[;{])\s*(?:${names})\s*=(?!=)`,
-    'm',
-  ).test(body);
-}
-
-/**
  * Can every write this body could make to a protected artifact be shown to
  * land in a scratch tree?
  *
@@ -3639,7 +3614,6 @@ function shadowsWriteCallee(body: string): boolean {
  * `.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape.
  */
 function bodyTargetsAreScratch(body: string, exempt: Exemption): boolean {
-  if (shadowsWriteCallee(body)) return false;
   const { targets, fragments, protectedLiterals, unplaceable, unreadable } = bodyTargets(body);
   if (unreadable || fragments.length > 0) return false;
   if (protectedLiterals.length > 0 || unplaceable.length > 0) return false;
