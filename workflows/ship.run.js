@@ -851,6 +851,80 @@ function retireSupersededRefusals(entries, report) {
     }
     return dropped;
 }
+function decompositionRefusal(allAcs, phase1AcIds, subIssues) {
+    const acs = Array.isArray(allAcs) ? allAcs : [];
+    const phase1 = Array.isArray(phase1AcIds) ? phase1AcIds : [];
+    const groups = Array.isArray(subIssues) ? subIssues : [];
+    const out = [];
+    if (acs.length === 0)
+        return ["decomposition was asked for with no ACs to decompose"];
+    const known = new Set();
+    for (const ac of acs) {
+        if (ac?.id)
+            known.add(ac.id);
+        if (ac?.specElement)
+            for (const s of ac.specElement.split(","))
+                known.add(s.trim());
+    }
+    if (phase1.length === 0)
+        out.push("no AC was kept for Phase 1 — the whole issue was deferred");
+    for (const id of phase1) {
+        if (!known.has(id))
+            out.push(`Phase 1 keeps ${id}, which discovery never produced`);
+    }
+    const claimedBy = new Map();
+    for (const [i, g] of groups.entries()) {
+        const label = g?.number ? `#${g.number}` : (g?.phase || `group ${i + 1}`);
+        const ids = Array.isArray(g?.acIds) ? g.acIds : [];
+        if (ids.length === 0)
+            out.push(`${label} was created carrying no ACs`);
+        for (const id of ids) {
+            if (!known.has(id))
+                out.push(`${label} claims ${id}, which discovery never produced`);
+            claimedBy.set(id, [...(claimedBy.get(id) ?? []), label]);
+        }
+    }
+    const phase1Set = new Set(phase1);
+    for (const [id, labels] of claimedBy) {
+        if (phase1Set.has(id)) {
+            out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
+        }
+        if (labels.length > 1) {
+            out.push(`${id} is claimed by ${labels.join(" and ")} — two phases cannot both own one AC`);
+        }
+    }
+    for (const ac of acs) {
+        const ids = [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s) => s.trim()) : [])].filter(Boolean);
+        const placed = ids.some(id => phase1Set.has(id) || claimedBy.has(id));
+        if (!placed)
+            out.push(`${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`);
+    }
+    return out;
+}
+function acsForGroup(acs, group) {
+    const ids = new Set(Array.isArray(group?.acIds) ? group.acIds : []);
+    if (ids.size === 0)
+        return [];
+    const list = Array.isArray(acs) ? acs : [];
+    return list.filter(ac => {
+        if (ids.has(ac.id))
+            return true;
+        if (!ac.specElement)
+            return false;
+        return ac.specElement.split(",").some((s) => ids.has(s.trim()));
+    });
+}
+function shellSingleQuote(value) {
+    return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+function acListBlock(acs) {
+    return acs.map(ac => `- [ ] ${ac.id}: ${ac.statement}`).join("\n");
+}
+function phase2AcsCommand(harnessRoot, workDir, acs) {
+    const payload = JSON.stringify(acs.map(a => ({ id: a.id, statement: a.statement, specElement: a.specElement })));
+    return (`bun --cwd ${shellSingleQuote(harnessRoot)} -e 'require("fs").writeFileSync(process.argv[1], process.argv[2])' ` +
+        `${workDir}/phase2-acs.json ${shellSingleQuote(payload)}`);
+}
 // ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----
 
 
@@ -1713,79 +1787,6 @@ function coverageRecord(successCriteria, acs, deferrals) {
   }
 }
 
-function acsForGroup(acs, group) {
-  const ids = new Set(Array.isArray(group && group.acIds) ? group.acIds : [])
-  if (ids.size === 0) return []
-  return (Array.isArray(acs) ? acs : []).filter(ac => {
-    if (ids.has(ac.id)) return true
-    if (!ac.specElement) return false
-    return ac.specElement.split(',').some(s => ids.has(s.trim()))
-  })
-}
-
-function shellSingleQuote(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`
-}
-
-function acListBlock(acs) {
-  return acs.map(ac => `- [ ] ${ac.id}: ${ac.statement}`).join('\n')
-}
-
-function phase2AcsCommand(harnessRoot, workDir, acs) {
-  const payload = JSON.stringify(acs.map(a => ({ id: a.id, statement: a.statement, specElement: a.specElement })))
-  return `bun --cwd ${shellSingleQuote(harnessRoot)} -e 'require("fs").writeFileSync(process.argv[1], process.argv[2])' ` +
-    `${workDir}/phase2-acs.json ${shellSingleQuote(payload)}`
-}
-
-function decompositionRefusal(allAcs, phase1AcIds, subIssues) {
-  const acs = Array.isArray(allAcs) ? allAcs : []
-  const phase1 = Array.isArray(phase1AcIds) ? phase1AcIds : []
-  const groups = Array.isArray(subIssues) ? subIssues : []
-  const out = []
-
-  if (acs.length === 0) return ['decomposition was asked for with no ACs to decompose']
-
-  const known = new Set()
-  for (const ac of acs) {
-    if (ac && ac.id) known.add(ac.id)
-    if (ac && ac.specElement) for (const s of ac.specElement.split(',')) known.add(s.trim())
-  }
-
-  if (phase1.length === 0) out.push('no AC was kept for Phase 1 — the whole issue was deferred')
-  for (const id of phase1) {
-    if (!known.has(id)) out.push(`Phase 1 keeps ${id}, which discovery never produced`)
-  }
-
-  const claimedBy = new Map()
-  for (let i = 0; i < groups.length; i++) {
-    const g = groups[i]
-    const label = g && g.number ? `#${g.number}` : ((g && g.phase) || `group ${i + 1}`)
-    const ids = Array.isArray(g && g.acIds) ? g.acIds : []
-    if (ids.length === 0) out.push(`${label} was created carrying no ACs`)
-    for (const id of ids) {
-      if (!known.has(id)) out.push(`${label} claims ${id}, which discovery never produced`)
-      claimedBy.set(id, [...(claimedBy.get(id) || []), label])
-    }
-  }
-
-  const phase1Set = new Set(phase1)
-  for (const [id, labels] of claimedBy) {
-    if (phase1Set.has(id)) {
-      out.push(`${id} is in Phase 1 AND deferred to ${labels.join(' and ')} — a deferral that duplicates shipped work`)
-    }
-    if (labels.length > 1) {
-      out.push(`${id} is claimed by ${labels.join(' and ')} — two phases cannot both own one AC`)
-    }
-  }
-
-  for (const ac of acs) {
-    const ids = [ac.id, ...(ac.specElement ? ac.specElement.split(',').map(s => s.trim()) : [])].filter(Boolean)
-    const placed = ids.some(id => phase1Set.has(id) || claimedBy.has(id))
-    if (!placed) out.push(`${ac.id} was neither kept nor deferred — it is gone, and nothing else would say so`)
-  }
-
-  return out
-}
 
 const AC_PAYLOAD_ARGV_INDEX = 1
 

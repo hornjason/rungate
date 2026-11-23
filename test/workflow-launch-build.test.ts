@@ -400,6 +400,8 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
       ],
       // #2688, SC-2775 wave 5: ship.js's REFUSAL-CURRENCY copy.
       "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals", "failureCheckName"],
+      // #2693, SC-2775 wave 6a: ship.js's PHASE2-DECOMPOSITION copy.
+      "lib/phase2-decomposition.ts": ["acsForGroup", "shellSingleQuote", "acListBlock", "phase2AcsCommand", "decompositionRefusal"],
     });
   });
 
@@ -423,6 +425,8 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
       "resolvedCheckNames", "retireSupersededRefusals",
       // #2690: the one rule for which check a failure line belongs to.
       "failureCheckName",
+      // #2693: the phase-2 decomposition rules and the quoting they share.
+      "acsForGroup", "shellSingleQuote", "acListBlock", "phase2AcsCommand", "decompositionRefusal",
     ]) {
       expect(bundle.defined).toContain(name);
       expect(() => buildWorkflowLaunch(`${source}\nfunction ${name}() { return null; }`, WORKFLOW_SCRIPT_CAP, bundle)).toThrow(

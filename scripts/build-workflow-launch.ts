@@ -649,6 +649,8 @@ export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
   ],
   // #2688, SC-2775 wave 5: ship.js's REFUSAL-CURRENCY copy.
   "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals", "failureCheckName"],
+  // #2693, SC-2775 wave 6a: ship.js's PHASE2-DECOMPOSITION copy.
+  "lib/phase2-decomposition.ts": ["acsForGroup", "shellSingleQuote", "acListBlock", "phase2AcsCommand", "decompositionRefusal"],
 };
 
 /** The bundle the launch file is built with, read from this checkout's lib/. */

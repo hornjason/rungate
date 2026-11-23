@@ -35,6 +35,7 @@ import {
 } from "../lib/phase2-decomposition";
 import { verifyPhase2, readPlan, readSplitPlan, REFUSE_EXIT } from "../scripts/verify-phase2-bodies";
 import { enclosingChain } from "../lib/reachability";
+import { BUNDLE_END, BUNDLE_START } from "../scripts/build-workflow-launch";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "verify-phase2-bodies.ts");
@@ -323,22 +324,27 @@ describe("SC-1486: the reference copy of the ACs does not pass through the model
   });
 });
 
-// ── SC-1487: ship.js's inline copy matches the library ──────────────────────
+// ── SC-1487: the code ship runs matches the library ─────────────────────────
 
 const SHIP = join(ROOT, "workflows", "ship.js");
-const BLOCK_START = "// ──── PHASE2-DECOMPOSITION-START ────";
-const BLOCK_END = "// ──── PHASE2-DECOMPOSITION-END ────";
 
+/**
+ * The launch file's bundled lib region, the code a run executes (#2693,
+ * SC-2775 wave 6a). Until then ship.js carried a hand copy of this module in a
+ * PHASE2-DECOMPOSITION block, and this matrix held the two together; now the
+ * build bundles the library itself, and the matrix holds the launch file to
+ * it. Refused, naming the file, if the region or any of the five is missing.
+ */
 function inlineBlock(): Record<string, Function> {
-  const src = readFileSync(SHIP, "utf-8");
-  const a = src.indexOf(BLOCK_START);
-  const b = src.indexOf(BLOCK_END);
-  if (a < 0 || b < 0 || b < a) throw new Error("the PHASE2-DECOMPOSITION block is not in workflows/ship.js");
-  const body = src.slice(a + BLOCK_START.length, b);
+  const launch = readFileSync(join(ROOT, "workflows", "ship.run.js"), "utf-8");
+  const a = launch.indexOf(BUNDLE_START);
+  const b = launch.indexOf(BUNDLE_END);
+  if (a < 0 || b < 0 || b < a) throw new Error("workflows/ship.run.js carries no bundled lib region");
+  const body = launch.slice(a + BUNDLE_START.length, b);
   return new Function(`${body}; return { acsForGroup, decompositionRefusal, shellSingleQuote, acListBlock, phase2AcsCommand }`)();
 }
 
-describe("SC-1487: ship.js's inline copy and the library agree", () => {
+describe("SC-1487: the launch file's bundled copy and the library agree", () => {
   const inline = inlineBlock();
 
   const MATRIX: Array<[string, readonly DecomposedAc[], string[], any[]]> = [

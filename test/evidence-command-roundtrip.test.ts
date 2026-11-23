@@ -56,6 +56,7 @@ import {
 import { autoPopulateACs } from "../gates/gate-executor";
 import { prevalidateEvidence } from "../lib/evidence-prevalidator";
 import { EvidenceMethodSchema } from "../gates/schema";
+import { phase2DecompositionBundle } from "./helpers/ship-block";
 
 const REPO = join(import.meta.dir, "..");
 const SHIP = join(REPO, "workflows", "ship.js");
@@ -280,8 +281,6 @@ describe("#614 SC-2053: the execution boundary hands the runner the authored com
  */
 const TRANSPORT_START = "// ──── AC-PAYLOAD-TRANSPORT-START ────";
 const TRANSPORT_END = "// ──── AC-PAYLOAD-TRANSPORT-END ────";
-const PHASE2_START = "// ──── PHASE2-DECOMPOSITION-START ────";
-const PHASE2_END = "// ──── PHASE2-DECOMPOSITION-END ────";
 
 export function markedBlock(src: string, start: string, end: string): string {
   const a = src.indexOf(start);
@@ -293,11 +292,12 @@ export function markedBlock(src: string, start: string, end: string): string {
 }
 
 const inlined = (() => {
-  // The transport block calls `shellSingleQuote`, which ship.js declares in
-  // the phase-2 block. Both bodies are loaded so the extracted copy is the
-  // one ship.js runs rather than a variant with its quoting stubbed out.
+  // The transport block calls `shellSingleQuote`, which the launch file
+  // carries from lib/phase2-decomposition.ts's bundle (#2693). That bundle is
+  // loaded in front, built as ship.run.js builds it, so the extracted copy
+  // runs the quoting ship runs rather than a variant with it stubbed out.
   const body =
-    markedBlock(shipSource, PHASE2_START, PHASE2_END) +
+    phase2DecompositionBundle() +
     "\n" +
     markedBlock(shipSource, TRANSPORT_START, TRANSPORT_END);
   const fns = new Function(

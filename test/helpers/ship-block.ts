@@ -26,6 +26,13 @@ export const WORKTREE_REPO_MODULE = "lib/worktree-repo.ts";
 /** The module the SECURITY-HELPERS region's bundled half comes from (#2684). */
 export const WORKFLOW_SECURITY_MODULE = "lib/workflow-security.ts";
 
+/**
+ * The module the AC-PAYLOAD-TRANSPORT region's `shellSingleQuote` comes from
+ * (#2693, SC-2775 wave 6a). ship.js's PHASE2-DECOMPOSITION copy is gone; the
+ * launch bundle carries the library's code in its place.
+ */
+export const PHASE2_DECOMPOSITION_MODULE = "lib/phase2-decomposition.ts";
+
 /** One module as ship.run.js bundles it; refused, naming the region, if the bundle no longer carries it. */
 function moduleBundle(module: string, region: string): string {
   const names = LAUNCH_BUNDLE[module];
@@ -43,6 +50,15 @@ export function worktreeRepoBundle(): string {
 /** lib/workflow-security.ts as ship.run.js bundles it; refused if the bundle no longer carries it. */
 export function workflowSecurityBundle(): string {
   return moduleBundle(WORKFLOW_SECURITY_MODULE, "SECURITY-HELPERS");
+}
+
+/**
+ * lib/phase2-decomposition.ts as ship.run.js bundles it, the code the
+ * AC-PAYLOAD-TRANSPORT region's `shellSingleQuote` resolves to; refused if the
+ * bundle no longer carries it.
+ */
+export function phase2DecompositionBundle(): string {
+  return moduleBundle(PHASE2_DECOMPOSITION_MODULE, "AC-PAYLOAD-TRANSPORT");
 }
 
 /**
