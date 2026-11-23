@@ -33,12 +33,11 @@ import {
   resolvedCheckNames as libResolved,
   retireSupersededRefusals as libRetire,
 } from "../lib/gate-refusal-currency";
+import { BUNDLE_END, BUNDLE_START } from "../scripts/build-workflow-launch";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
 
-const START = "// ──── REFUSAL-CURRENCY-START ────";
-const END = "// ──── REFUSAL-CURRENCY-END ────";
 
 /**
  * Module scope on purpose. If the markers go missing this throws while the
@@ -47,12 +46,16 @@ const END = "// ──── REFUSAL-CURRENCY-END ────";
  * into a quiet green run.
  */
 const BLOCK: string = (() => {
-  const start = SHIP.indexOf(START);
-  const end = SHIP.indexOf(END);
+  // The bundled lib region of the launch file, the code a run executes, not a
+  // hand copy in ship.js (#2688, SC-2775; the same shape as #2400's
+  // suiteCurrency). It fails to load if the build stops bundling the module.
+  const launch = readFileSync(join(REPO_ROOT, "workflows", "ship.run.js"), "utf-8");
+  const start = launch.indexOf(BUNDLE_START);
+  const end = launch.indexOf(BUNDLE_END);
   if (start === -1 || end === -1) {
-    throw new Error(`workflows/ship.js is missing the ${START} / ${END} markers`);
+    throw new Error("workflows/ship.run.js carries no bundled lib region, so the code a run launches has no retirement rule to test");
   }
-  return SHIP.slice(start, end);
+  return launch.slice(start + BUNDLE_START.length, end);
 })();
 
 const shipCopy = new Function(
@@ -65,7 +68,7 @@ const shipCopy = new Function(
 /** One row run through both copies, so neither can be right alone. */
 const IMPLS = [
   ["lib", { resolvedCheckNames: libResolved as any, retireSupersededRefusals: libRetire as any }],
-  ["ship.js", shipCopy],
+  ["the launch bundle", shipCopy],
 ] as const;
 
 // ── what a later gate retires ───────────────────────────────────────────────
@@ -391,8 +394,12 @@ describe("#532: the retirement runs where it has to", () => {
     expect(recordAt, "gateExit does not record this gate's refusals").toBeGreaterThan(-1);
     expect(retireAt, "the retirement runs after the recording").toBeLessThan(recordAt);
 
-    // One block, so there is one binding to mutate.
-    expect(SHIP.split("REFUSAL-CURRENCY-START").length - 1).toBe(1);
+    // One binding to mutate: the library's, bundled into the launch file.
+    // ship.js holds no copy of either function (#2688).
+    for (const name of ["resolvedCheckNames", "retireSupersededRefusals"]) {
+      expect(SHIP, `ship.js declares its own ${name} again`).not.toContain(`function ${name}(`);
+      expect(BLOCK.split(`function ${name}(`).length - 1, `the launch bundle declares ${name} once`).toBe(1);
+    }
   });
 
   test("the gate prompt asks for the names, and forbids reconstructing them", () => {

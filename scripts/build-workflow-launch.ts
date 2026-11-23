@@ -621,7 +621,7 @@ function libModuleOf(from: string, spec: string): string | null {
   return posix.normalize(posix.join(posix.dirname(from), spec)).replace(/\.(js|ts)$/, "") + ".ts";
 }
 
-/** What `workflows/ship.run.js` carries from lib/ (#2400 wave 2a, #2404 wave 2b, #2408 wave 2c, #2410 wave 3a, #2417 wave 3b, #2436 wave 3c-B, #2684 wave 4-B). */
+/** What `workflows/ship.run.js` carries from lib/ (#2400 wave 2a, #2404 wave 2b, #2408 wave 2c, #2410 wave 3a, #2417 wave 3b, #2436 wave 3c-B, #2684 wave 4-B, #2688 wave 5). */
 export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
   "lib/suite-measurement.ts": ["suiteCurrency"],
   "lib/scope-denylist.ts": [
@@ -647,6 +647,8 @@ export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
     "pathRefusal", "validateFilePaths", "buildSafeGitAdd", "isSafeBranchName", "repoSlugRefusal",
     "rootPathRefusal", "resolveEvidencePath", "validateEvidenceCommand", "buildSafeSSHCommand",
   ],
+  // #2688, SC-2775 wave 5: ship.js's REFUSAL-CURRENCY copy.
+  "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals"],
 };
 
 /** The bundle the launch file is built with, read from this checkout's lib/. */

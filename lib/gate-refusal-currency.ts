@@ -40,15 +40,14 @@
  * and only one of them is a measurement
  * (.claude/rules/config-access.md, Silent Default Substitution).
  *
- * ## Why this is duplicated into ship.js
+ * ## How ship.js runs this
  *
  * `workflows/ship.js` runs in a sandbox with no module loading (#69), so it
- * cannot import this. It carries an inlined copy inside
- * `REFUSAL-CURRENCY` markers, and `test/gate-refusal-currency.test.ts`
- * extracts that copy, executes it, and runs both over one input matrix —
- * the same technique `test/suite-measurement-parity.test.ts` uses for
- * `suiteCurrency`, and for the same reason: two copies of a rule is a
- * defect waiting for one of them to drift, and the drift is silent.
+ * cannot import this. Until #2688 it carried a hand copy; now
+ * `scripts/build-workflow-launch.ts` bundles this module's code into
+ * `workflows/ship.run.js`, and `test/gate-refusal-currency.test.ts` runs
+ * the launch file's bundled copy and this module over one input matrix, as
+ * `test/suite-measurement-parity.test.ts` does for `suiteCurrency`.
  */
 
 /** What a gate run reported back: the names it measured and the ones it failed. */

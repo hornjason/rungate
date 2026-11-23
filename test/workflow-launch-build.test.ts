@@ -398,6 +398,8 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
         "pathRefusal", "validateFilePaths", "buildSafeGitAdd", "isSafeBranchName", "repoSlugRefusal",
         "rootPathRefusal", "resolveEvidencePath", "validateEvidenceCommand", "buildSafeSSHCommand",
       ],
+      // #2688, SC-2775 wave 5: ship.js's REFUSAL-CURRENCY copy.
+      "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals"],
     });
   });
 
@@ -417,6 +419,8 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
       "suiteCurrency", "planCoverage", "denylistViolations", "rookGateVerdict", "reviewIsCurrent", "priorWorkRefusal", "containerProbeTarget",
       // #2684: the security helpers, and a private rule only they use.
       "pathRefusal", "validateFilePaths", "isSafeBranchName", "buildSafeSSHCommand", "SHELL_METACHARACTERS",
+      // #2688: the refusal-currency rule.
+      "resolvedCheckNames", "retireSupersededRefusals",
     ]) {
       expect(bundle.defined).toContain(name);
       expect(() => buildWorkflowLaunch(`${source}\nfunction ${name}() { return null; }`, WORKFLOW_SCRIPT_CAP, bundle)).toThrow(
