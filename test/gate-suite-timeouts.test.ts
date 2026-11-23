@@ -45,7 +45,8 @@ import {
 // The bunfig reading lives beside the timeout-population check it was
 // written for (#621, lib/junit-checks.ts). One owner, one binding to
 // mutate — a second parser here would survive any mutation of that one.
-import { bunfigTestTimeoutMs } from "../lib/junit-checks";
+import { bunfigTestTimeoutMs, checksRunFrom, readJunitCheckNames, readJunitOutcomes } from "../lib/junit-checks";
+import { junitReportPath, prepareGateReport } from "../gates/gate-executor";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const GATE_SUITE = join(REPO_ROOT, "gates", "workflow.test.ts");
@@ -327,4 +328,59 @@ describe("#550: tsc-pass against a typecheck slower than bun's default", () => {
     // Red for the stated reason. A mutant that failed to load is also red.
     expect(r.output, "red, but not from the timeout").toContain("timed out after");
   }, 240000);
+});
+
+// #2697. A suite killed at GATE_SUITE_TIMEOUT_MS writes no JUnit report, and
+// the report path is fixed per gate, so the previous run's report was read as
+// this run's: its testcases became this run's checksRun, and passed. The
+// gate removes its report before the suite runs, so a run that writes none
+// reads as UNMEASURED and retires nothing.
+describe("#2697: a gate run that writes no report does not read the last one", () => {
+  const REPORT = `<?xml version="1.0"?><testsuites><testsuite name="gates"><testcase name="tests-pass" classname="verify checks"/></testsuite></testsuites>`;
+
+  test("a previous run's report is gone before the suite runs, so nothing is read from it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg2697-"));
+    try {
+      writeFileSync(junitReportPath(dir, "ship"), REPORT);
+      expect(readJunitCheckNames(junitReportPath(dir, "ship")).names, "the planted report is readable").toEqual(["tests-pass"]);
+      const path = prepareGateReport(dir, "ship");
+      expect(path).toBe(junitReportPath(dir, "ship"));
+      // The suite was killed and wrote nothing: the reading is UNMEASURED.
+      expect(readJunitCheckNames(path).names).toBeNull();
+      expect(checksRunFrom(readJunitCheckNames(path), ["tests-pass"])).toBeNull();
+      expect(readJunitOutcomes(path).passed).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("CONTROL: a report the run writes after the removal is read as its own", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg2697-"));
+    try {
+      writeFileSync(junitReportPath(dir, "ship"), REPORT.replace("tests-pass", "stale"));
+      const path = prepareGateReport(dir, "ship");
+      writeFileSync(path, REPORT);
+      expect(readJunitCheckNames(path).names).toEqual(["tests-pass"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("CONTROL: no previous report is not an error", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg2697-"));
+    try {
+      expect(prepareGateReport(dir, "verify")).toBe(junitReportPath(dir, "verify"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("runGateTests takes its report path from prepareGateReport, before it spawns the suite", () => {
+    const src = readFileSync(join(REPO_ROOT, "gates", "gate-executor.ts"), "utf-8");
+    const body = src.slice(src.indexOf("function runGateTests("));
+    const prepared = body.indexOf("prepareGateReport(workDir, gate)");
+    const spawned = body.indexOf("execSync(");
+    expect(prepared, "runGateTests does not remove the previous report").toBeGreaterThan(-1);
+    expect(prepared, "the report is removed after the suite runs").toBeLessThan(spawned);
+  });
 });
