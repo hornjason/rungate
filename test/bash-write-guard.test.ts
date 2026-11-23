@@ -4846,6 +4846,51 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
+  // #2714. Each WITNESS is allowed on main: the name reaches the variable
+  // through an expression neither reading followed, and the write is out of
+  // the window's reach. The parser now climbs a path-building call, `||`,
+  // `??`, either branch of `?:`, and a template literal's text; the mask
+  // follows a `+` chain in a body that does not parse. Each CONTROL is the
+  // same body reading the variable, and stays allowed.
+  const PAD2714 = `const pad = '${"z".repeat(90)}';`;
+  const PYPAD2714 = `pad = '${"z".repeat(90)}'`;
+  test.each([
+    ["a path.join argument", `node - <<'JS'\nconst path = require('path'); const d = path.join('${LIVE}/.rungate/x/witnesses/', f); ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
+    ["a bare file name in path.join, under -e", `node -e "const path = require('path'); const d = path.join(process.env.HOME, '.rungate', 'w', '${STATE}'); ${PAD2714} require('fs').writeFileSync(d, '{}')"`],
+    ["a resolve call on a member chain", `node - <<'JS'\nconst d = require('path').posix.resolve(R, '${LIVE}/${STATE}'); ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
+    ["the fallback of ||", `node - <<'JS'\nconst d = base || '${LIVE}/${STATE}'; ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
+    ["the fallback of ??", `node - <<'JS'\nconst d = base ?? '${LIVE}/${STATE}'; ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
+    ["a ternary's first branch", `node - <<'JS'\nconst d = ok ? '${LIVE}/${STATE}' : other; ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
+    ["a ternary's second branch", `node - <<'JS'\nconst d = ok ? other : '${LIVE}/${STATE}'; ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
+    ["a template literal with values on both sides", `node - <<'JS'\nconst d = \`\${R}${LIVE}/.rungate/x/witnesses/\${f}\`; ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
+    ["a Python + chain, directory", `python3 - <<'PY'\nimport shutil\nROOT = '${LIVE}'\nd = ROOT + '/.rungate/x/witnesses/' + f\n${PYPAD2714}\nshutil.copy(src, d)\nPY`],
+    ["a Python + chain, file", `python3 - <<'PY'\nimport shutil\nd = ROOT + '${LIVE}/${STATE}'\n${PYPAD2714}\nshutil.copy(src, d)\nPY`],
+    // #2718 review round 1. The mask read the binding from a 240-character
+    // window: a longer `+` chain bound nothing, and a window starting inside
+    // a name bound its tail (`ictimpath`). It now reads backward with no
+    // window. And `path?.join(…)` is a ChainExpression the parser climbs.
+    ["a Python + chain longer than any window", `python3 - <<'PY'\nimport shutil\nd = ${"a + ".repeat(70)}'${LIVE}/${STATE}'\n${PYPAD2714}\nshutil.copy(src, d)\nPY`],
+    ["a Python + chain whose old window began inside the name", `python3 - <<'PY'\nimport shutil\nvictimpath = ${"a + ".repeat(57)}'${LIVE}/.rungate/x/witnesses/'\n${PYPAD2714}\nshutil.copy('/tmp/x', victimpath)\nPY`],
+    ["an optional-chain path call", `node - <<'JS'\nconst d = path?.join(R, '${LIVE}/${STATE}'); ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
+    // #2718 review round 2: `&&` in the parser, and Python's `or` / `and` in
+    // the mask's backward chain.
+    ["the value side of &&", `node - <<'JS'\nconst d = ok && '${LIVE}/${STATE}'; ${PAD2714} require('fs').writeFileSync(d, '{}')\nJS`],
+    ["a Python or fallback", `python3 - <<'PY'\nimport shutil\nd = base or '${LIVE}/.rungate/x/witnesses/'\n${PYPAD2714}\nshutil.copy('/tmp/src.json', d)\nPY`],
+    ["a Python and", `python3 - <<'PY'\nimport shutil\nd = ok and '${LIVE}/${STATE}'\n${PYPAD2714}\nshutil.copy('/tmp/src.json', d)\nPY`],
+  ])("WITNESS (#2714): %s binds the variable it flows into", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+  test.each([
+    ["a path.join argument", `node - <<'JS'\nconst path = require('path'); const d = path.join('${LIVE}/.rungate/x/witnesses/', f); ${PAD2714} console.log(require('fs').readFileSync(d, 'utf8'))\nJS`],
+    ["a bare file name in path.join, under -e", `node -e "const path = require('path'); const d = path.join(process.env.HOME, '.rungate', 'w', '${STATE}'); ${PAD2714} console.log(require('fs').readFileSync(d, 'utf8'))"`],
+    ["the fallback of ||", `node - <<'JS'\nconst d = base || '${LIVE}/${STATE}'; ${PAD2714} console.log(require('fs').readFileSync(d, 'utf8'))\nJS`],
+    ["a template literal with values on both sides", `node - <<'JS'\nconst d = \`\${R}${LIVE}/.rungate/x/witnesses/\${f}\`; ${PAD2714} console.log(require('fs').readFileSync(d, 'utf8'))\nJS`],
+    ["a Python + chain, file", `python3 - <<'PY'\nimport json\nd = ROOT + '${LIVE}/${STATE}'\n${PYPAD2714}\nprint(json.load(open(d)))\nPY`],
+    ["a Python or fallback", `python3 - <<'PY'\nimport json\nd = base or '${LIVE}/${STATE}'\n${PYPAD2714}\nprint(json.load(open(d)))\nPY`],
+  ])("CONTROL (#2714): %s, only read, is allowed", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
   test("CONCESSION: a body whose quotes never close gets the window alone", () => {
     const cmd = `python3 - <<'PY'\nimport shutil\nnote = \"it's\nshutil.copy('${LONG}/${STATE}', '${LIVE}/${STATE}')\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);

@@ -58,6 +58,22 @@ describe("#2702: readJsCalls", () => {
       // left one, so a parser that climbed only from the right was narrower.
       ["const dst = '/b/state.json' + suffix", "dst"],
       ["const dst = ROOT + '/b/state.json'", "dst"],
+      // #2714: through a path-building call, a fallback, a branch, and a
+      // template literal's text between its values.
+      ["const dst = path.join(ROOT, '/b/state.json')", "dst"],
+      ["const dst = join(ROOT, 'b', 'state.json')", "dst"],
+      ["const dst = require('path').posix.resolve(R, '/b/state.json')", "dst"],
+      ["const dst = base || '/b/state.json'", "dst"],
+      ["const dst = base ?? '/b/state.json'", "dst"],
+      ["const dst = ok ? '/b/state.json' : other", "dst"],
+      ["const dst = ok ? other : '/b/state.json'", "dst"],
+      ["const dst = `${R}/b/state.json`", "dst"],
+      ["const dst = path.join(R, `${w}/b/state.json`)", "dst"],
+      // #2718 review: an optional chain wraps the call in a ChainExpression.
+      ["const dst = path?.join(R, '/b/state.json')", "dst"],
+      ["const dst = path.join?.(R, '/b/state.json')", "dst"],
+      // #2718 review round 2: `ok && '…'` is the literal whenever ok is truthy.
+      ["const dst = ok && '/b/state.json'", "dst"],
       ["function f(dst = '/b/state.json') {}", "dst"],
       ["const dst = `/b/state.json`", "dst"],
     ];
@@ -69,6 +85,14 @@ describe("#2702: readJsCalls", () => {
       "const note = 'see /b/state.json for details'",
       "const t = `/b/${x}/state.json!`",
       "console.log('/b/state.json')",
+      // A call that does not build a path transforms its argument; the
+      // test of a branch is never its value; a member of the literal is not it.
+      "const n = count('/b/state.json')",
+      "const v = '/b/state.json' ? a : b",
+      // #2718 review round 3: a truthy literal on the left of && is never the value.
+      "const dst = '/b/state.json' && '/tmp/out.json'",
+      "const n = '/b/state.json'.length",
+      "const t = `${R}/b/state.json.bak`",
     ]) {
       const i = at(body, "state.json");
       expect(readJsCalls(body)!.boundIdentifier(i, i + "state.json".length), body).toBeNull();

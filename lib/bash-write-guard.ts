@@ -2514,6 +2514,65 @@ function callWrites(program: string, protectedName: string): boolean {
 }
 
 /**
+ * The name the literal starting at `start` is assigned to, read BACKWARD from
+ * it: a string prefix, any chain of names, attribute paths and literals joined
+ * by `+`, `or` or `and`, then `=`, an optional type annotation, and the name,
+ * which must start the statement (after `;`, `(`, `,`, whitespace or the
+ * body's start).
+ * No look-back window (#2718 review): a fixed one cut a long chain and could
+ * start inside a name, binding `ictimpath` for `victimpath`.
+ */
+function bindingBefore(program: string, start: number, view: CodeView): string | null {
+  let i = start;
+  const back = (re: RegExp): string => {
+    let j = i;
+    while (j > 0 && re.test(program[j - 1])) j--;
+    const s = program.slice(j, i);
+    i = j;
+    return s;
+  };
+  const prefix = (): void => {
+    let j = i;
+    while (j > 0 && i - j < 2 && /[rbfuRBFU]/.test(program[j - 1])) j--;
+    if (j === 0 || !/\w/.test(program[j - 1])) i = j;
+  };
+  prefix();
+  for (;;) {
+    back(/\s/);
+    if (program[i - 1] === '=') break;
+    // A link in the chain: `+`, or Python's `or` / `and`, each of which can
+    // leave the literal as the value (#2718 review).
+    const word = /(?:^|\W)(or|and)$/.exec(program.slice(Math.max(0, i - 4), i));
+    if (program[i - 1] === '+') i--;
+    else if (word) i -= word[1].length;
+    else return null;
+    back(/\s/);
+    const lit = view.literals.find(([, close]) => close === i - 1);
+    if (lit) {
+      i = lit[0];
+      prefix();
+    } else if (back(/[\w.]/) === '') {
+      return null;
+    }
+  }
+  i--;
+  // `==`, `!=`, `<=`, `>=`, an augmented assignment, or `:=`: not a binding.
+  if (i > 0 && '=!<>+-*/%&|^:~@'.includes(program[i - 1])) return null;
+  back(/\s/);
+  let name = back(/[\w.]/);
+  let nameAt = i;
+  back(/\s/);
+  if (program[i - 1] === ':') {
+    i--;
+    back(/\s/);
+    name = back(/\w/);
+    nameAt = i;
+  }
+  if (!/^[A-Za-z_]\w*$/.test(name)) return null;
+  return nameAt === 0 || /[\s;(,]/.test(program[nameAt - 1]) ? name : null;
+}
+
+/**
  * The identifier a literal holding the name at `at` is assigned to
  * (`x = '…'`), or null. The literal is found by its own quotes, and it must
  * END at the name, or for a directory name at a file name after it, and hold
@@ -2521,7 +2580,11 @@ function callWrites(program: string, protectedName: string): boolean {
  * assignment spelled inside another string (a docblock being edited) is
  * therefore not a binding. Literals separated only by spaces or a string
  * prefix are one (`'a/' 'b'`, `'a/' r'b'`), which is also how a
- * triple-quoted literal reads here: `''`, `'…'`, `''`.
+ * triple-quoted literal reads here: `''`, `'…'`, `''`. A chain of names and
+ * literals joined by `+`, `or` or `and` may stand between the `=` and the
+ * literal (#2714), read by `bindingBefore`:
+ * `d = ROOT + '/witnesses/' + f` binds `d`, as the parser binds it in a body
+ * that parses as JavaScript.
  */
 function boundIdentifier(program: string, at: number, protectedName: string, view: CodeView): string | null {
   const k = view.literals.findIndex(([open, close]) => open < at && at < close);
@@ -2535,8 +2598,7 @@ function boundIdentifier(program: string, at: number, protectedName: string, vie
   for (let j = k - 1; j >= 0 && /^[ \t]*(?:[rbfuRBFU]{1,2})?$/.test(program.slice(view.literals[j][1] + 1, start)); j--) {
     start = view.literals[j][0];
   }
-  const m = /(?:^|[\s;(,])([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[A-Za-z_][\w.]*\s*)?=\s*[rbfuRBFU]{0,2}$/.exec(program.slice(Math.max(0, start - 80), start));
-  return m ? m[1] : null;
+  return bindingBefore(program, start, view);
 }
 
 /**
