@@ -4891,11 +4891,12 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
-  // #2720. For a body that does not parse as JavaScript, the mask binds a
-  // protected literal to the target of the assignment whose right-hand side
-  // holds it, whatever expression it sits in: one rule, not one link per
-  // form. Each WITNESS is allowed on main, where the mask followed only a
-  // chain of `+`, `or` and `and`.
+  // #2720. The mask binds a protected literal to the target of the assignment
+  // whose right-hand side holds it, whatever expression it sits in: one rule,
+  // not one link per form. It reads every body; one that parses as JavaScript
+  // is also read by the parser, which adds a reading and replaces none (#2702).
+  // Each WITNESS is allowed on main, where the mask followed only a chain of
+  // `+`, `or` and `and`.
   const PY = (body: string, tail: string) =>
     `python3 - <<'PY'\nimport os, shutil, json\n${body}\n${PYPAD2714}\n${tail}\nPY`;
   const COPY = "shutil.copy('/tmp/src.json', d)";
@@ -4993,6 +4994,7 @@ describe("#1407: write intent is read per call, not only by character distance",
     ["a chain continued over a CRLF line end", PY(`x = \\\r\n    d = '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', x)")],
     ["an annotation continued over a CRLF line end", PY(`d: str \\\r\n    = '${LIVE}/${STATE}'`, COPY)],
     ["a target continued onto the operator's line", PY(`d \\\n    = '${LIVE}/${STATE}'`, COPY)],
+    ["a literal continued over a CRLF line end", PY(`d = '\\\r\n${LIVE}/${STATE}'`, COPY)],
     ["??=", JS3(`let d; d ??= '${LIVE}/${STATE}';`)],
     ["||=", JS3(`let d; d ||= '${LIVE}/${STATE}';`)],
     ["&&=", JS3(`let d = 1; d &&= '${LIVE}/${STATE}';`)],
