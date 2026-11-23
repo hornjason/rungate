@@ -2,11 +2,11 @@
 
 **Current phase: Engine — a spec becomes a readable board, with nothing hand-run (ADR-009) — IN PROGRESS**
 
-**Session 102 (2026-11-22)** — ADR-024 shipped: a consumer's instruction surface is measured against its own budget, rendered in CI, and linted for dangling targets, template artifacts and stale counts, and rungate prompt-audit sorts the findings by owner. The trial Claude reviewer was deleted with Jason's approval. The AI review audit and ADR-025 merged; ADR-025's criteria wait for Jason. CI's external API calls were counted and cut. SC-2625's hand-edit reading starts a second run, approved by Jason.
+**Session 103 (2026-11-23)** — SC-2625, the engine's acceptance test, is ticked: the board job takes the hand-edit reading and a finished engine reads MET. ADR-025 was accepted and most of it shipped: Haiku 5.5 by default, the job's own token instead of the Claude GitHub App, a merge command for three-run rounds, and CRC-M18 retired. ship.js lost two more hand copies to the launch bundle, and an incomplete failed list no longer retires a refusal. Waiting on Jason: the merge of #2674.
 
-Suite: 25 PRs merged (#2569, and #2590 to #2638); no release.
-Issues opened: #2594, #2595, #2596, #2597, #2598, #2599, #2600, #2601, #2602, #2603, #2604, #2605, #2606, #2609, #2612, #2613, #2615, #2621, #2626, #2627, #2628, #2631, #2635, #2639
-Issues closed: #2544, #2552, #2568, #2589, #2594, #2595, #2596, #2597, #2598, #2599, #2600, #2601, #2602, #2603, #2606, #2609, #2612, #2613, #2615, #2621, #2626, #2627, #2628, #2631, #2635
+Suite: 25 PRs merged (#2640 to #2691); three releases, 0.8.43 to 0.8.45.
+Issues opened: #2642, #2645, #2647, #2648, #2649, #2650, #2651, #2655, #2657, #2659, #2661, #2663, #2664, #2666, #2667, #2669, #2672, #2676, #2678, #2680, #2682, #2684, #2685, #2688, #2690, #2692, #2693
+Issues closed: #1722, #2639, #2642, #2645, #2647, #2649, #2651, #2655, #2657, #2659, #2661, #2663, #2664, #2666, #2667, #2669, #2672, #2676, #2678, #2680, #2682, #2684, #2685, #2688, #2690
 
 Read this before anything else. The suite is green under a CLEAN ENVIRONMENT, which is a stronger claim than the one this file made yesterday — run `bun scripts/test-clean-env.ts`, not `bun test`, before believing any gate. Plain `bun test` passes on this machine for reasons that have nothing to do with the code.
 
@@ -100,6 +100,16 @@ Suite: 25/25 SCs done.
 
 ---
 
+**Session 2026-11-23 session 103 (the engine's acceptance test is ticked; ADR-025 accepted and mostly shipped; ship.js loses two more hand copies; refusal retirement stops trusting an incomplete failed list):**
+- MERGED: 25 PRs since session 102 (#2640 to #2691), the last of them (#2691) on 2026-11-23. Three releases: 0.8.43 (#2660), 0.8.44 (#2665) and 0.8.45 (#2673).
+- THE ENGINE'S ACCEPTANCE TEST IS TICKED: hand-edits' second run opens when the successor gap closed (#2640), the board job takes the hand-edit reading and SC-2625 is ticked (#2644, closing #1722), and a finished engine reads MET when no engine issue is open rather than 0 of 0 (#2646).
+- ADR-025 ACCEPTED, AND MOST OF ITS PLAN SHIPPED: its five criteria and plan (#2643). CRC-M19 retires CRC-M18 with its diff-budget script and keeps the census half (#2653). CRC-B10: the generated AI review defaults to Haiku 5.5 (#2652). CRC-B12: the review action is handed the job's own token, so no Claude GitHub App is needed (#2654). ai-review-merge-drafts merges a round's drafts into one payload (#2656) and names the run a three-run round reports (#2662). The per-run checks count against AI_REVIEW_RUNS (#2670), and a failed review run is not read as a pass when its draft parses (#2679).
+- THE AI REVIEW STEP'S PLUMBING: severityBlocks reads only the severity table's own keys (#2658); the threads command reads the checkout it is told (#2671); the adjudicator runs bunx from a fresh empty directory (#2668); the threads step fails when the published package lacks its command (#2675); an unknown rungate command exits with its own status (#2677).
+- SHIP.JS LOSES TWO MORE HAND COPIES (SC-2775, plan on #2290): every reader of the security-helpers region goes through one helper (#2681, #2683, #2686), and ship.run.js carries lib/workflow-security.ts (#2687) and lib/gate-refusal-currency.ts (#2689) instead of ship.js's copies.
+- REFUSAL RETIREMENT STOPS TRUSTING AN INCOMPLETE FAILED LIST (#2691): a gate report whose failedChecks misses a failing line, names a check by a bare prefix, repeats a name, or fails while naming nothing retires no earlier refusal. It took four review rounds; the fourth named the cause, that the list is re-typed by the gate's agent, and rule 5 stopped the repairs there. The producer fix is #2692.
+- IN FLIGHT: #2692 (the gate writes which checks passed, and a refusal is retired only on that list); #2693 (SC-2775 wave 6a, the phase-2 decomposition copy). #2650 (the AI review guide, CRC-B13) waits on #2674.
+- OPEN, for Jason: merging #2674 (three review runs per round, #1885), which edits ai-review.yml; #2605 and #2488 as before. 0.8.46 follows #2674.
+
 **Session 2026-11-22 session 102 (ADR-024's consumer surface checks ship; the trial reviewer is deleted; the AI review audit and ADR-025; CI's external API calls are counted and cut):**
 - MERGED: 25 PRs since session 101 (#2569, and #2590 to #2638), the last of them (#2634) on 2026-11-22. No release.
 - WHAT A CONSUMER'S AGENTS LOAD IS CHECKED BEFORE IT SHIPS (ADR-024, merged as #2569): a scaffold run reports the consumer's instruction surface (#2619), against a budget from the consumer's own config (#2622), and the generated conformity test refuses an over-budget surface (#2624). CI renders the scaffold into fixture consumers (#2620), and three lints read that rendering: a brief names only files and tables that exist (#2625, #2623), no template artifact survives (#2629), and no always-loaded rule carries a count a commit can stale (#2632, #2638). rungate prompt-audit lints what a consumer's agents load, sorts findings by owner, and drafts rungate's own as upstream reports (#2636).
@@ -120,13 +130,4 @@ Suite: 25/25 SCs done.
 - SMALLER: the work loop fences the test command exactly (#2527); stage F's retro case sets its own timeout (#2530).
 - IN FLIGHT: #2590 ticks CRC-N3 (#2544); #2589, a two-day grace in criteria-named for consumer-filed issues, is built and goes to Jason to merge because it changes what a board check counts; CRC-N4 is reworded by Jason's decision and waits on #2590 (#2552).
 - OPEN, for Jason: ADR-024 (#2569, issue #2568) needs his merge; #2488 and #2504 each still need an ADR.
-
-**Session 2026-11-20 session 100 (rungate makes and moves a consumer's board; a bot's merge places the plan; releases 0.8.36 to 0.8.38):**
-- MERGED: 31 PRs from #2443 to #2524. Releases 0.8.36, 0.8.37 and 0.8.38 are on npm.
-- ACCEPTED: ADR-022 (#2443), a merge made by automation still places the plan and closes its issues; ADR-023 (#2454), rungate makes, wires and moves a consumer's project board.
-- A CONSUMER'S BOARD (ADR-023): rungate board-init makes the board and writes its ids into the config, and refuses rather than writes a config it cannot read (#2513, #2516, SC-2789). board-flow runs as a command and reads the board from board.id (#2510), and scaffold generates board-flow.yml to move a consumer's cards (#2523, SC-2790). work-status and verify-merge-ref read the repository they are in (#2505, #2515, SC-2792). Scaffold installs /board (#2511, SC-2791) and the work loop (#2518, SC-2794). Still open: SC-2793 (#2485), the human-steps row saying whether the project token can write the board.
-- MERGES BY AUTOMATION (ADR-022): adr-accepted also runs when the named merge workflow completes (#2509, SC-2787). close-merged-references closes the issues a bot-merged pull request declares (#2506), and reads its range from the workflow's last successful run through the same function plan-issues uses (#2524). So a bot's merge does not close its issues yet (SC-2788 is open): wiring the command into adr-accepted.yml (#2497) waits on release 0.8.39 (#2525).
-- PROOF ON A TICK: a tick writes the proved-by line naming the passing test that claimed it (#2492), and a fingerprint beside it in a spec that records evidence (#2512). The generated gates job runs audit-spec-evidence, so a tick with no proof fails a check (#2500).
-- SMALLER: specs-placed waits for an adr-accepted run on its own commit (#2468); status-view prints a plan only for its own repository (#2469); criterion-label is a command and its workflow is generated (#2471, #2476); census-routing routes anti.test.ts (#2478); a half-installed rungate says so instead of crashing (#2491); unaccounted-work reads pull request bodies (#2494); harnessVersion never writes an empty pin (#2502); the findings ledger keeps population and populationSearch (#2459); the hand-edit window opens from the first rungate-bot signature (#2462); REVIEW.md asks for a summary that opens with the count (#2465); the instruction surface has room again (#2475).
-- OPEN, for Jason: #2488 and #2504 each need an ADR; #2520 asks whether scaffold repairs or refuses a malformed config.
 
