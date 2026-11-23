@@ -858,6 +858,8 @@ function decompositionRefusal(allAcs, phase1AcIds, subIssues, keptAcs) {
     const out = [];
     if (acs.length === 0)
         return ["decomposition was asked for with no ACs to decompose"];
+    if (!Array.isArray(keptAcs))
+        return ["the caller did not say what Phase 1 kept, so the split cannot be judged"];
     const known = new Set();
     for (const ac of acs) {
         if (ac?.id)
@@ -886,10 +888,10 @@ function decompositionRefusal(allAcs, phase1AcIds, subIssues, keptAcs) {
     }
     const acIds = (ac) => [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s) => s.trim()) : [])].filter(Boolean);
     const phase1Set = new Set(phase1);
-    const keptIds = Array.isArray(keptAcs) ? new Set(keptAcs.map(ac => ac.id)) : null;
-    const isKept = (ac) => keptIds !== null ? keptIds.has(ac.id) : acIds(ac).some(id => phase1Set.has(id));
+    const keptIds = new Set(keptAcs.map(ac => ac?.id));
+    const isKept = (ac) => keptIds.has(ac.id);
     for (const [id, labels] of claimedBy) {
-        const inPhase1 = keptIds !== null ? acs.some(ac => isKept(ac) && acIds(ac).includes(id)) : phase1Set.has(id);
+        const inPhase1 = acs.some(ac => isKept(ac) && acIds(ac).includes(id));
         if (inPhase1) {
             out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
         }
@@ -2486,7 +2488,7 @@ ${acListBlock(discovery.acs)}
 6. Verify the issues you created actually carry their ACs. Run:
 
    bun --cwd ${shellQuote(HARNESS_ROOT)} scripts/verify-phase2-bodies.ts --repo ${ISSUE_REPO} \\
-     --acs ${WORK_DIR}/phase2-acs.json --grouping ${WORK_DIR}/phase2-grouping.json
+     --acs ${WORK_DIR}/phase2-acs.json --grouping ${WORK_DIR}/phase2-grouping.json --cap ${MAX_ACS_PER_ISSUE}
 
    It reads each sub-issue back FROM GITHUB and compares its
    "## Success Criteria" section against the statements from step 0. If it

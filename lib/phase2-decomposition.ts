@@ -61,18 +61,23 @@ export interface SubIssuePlan {
  * one AC and duplicates another has two problems, and reporting one of them
  * invites a second round that discovers the other.
  *
- * `keptAcs` is what Phase 1 holds after the caller's own cap, when it caps
- * (#2710). ship.js keeps at most `MAX_ACS_PER_ISSUE` of the agent's Phase 1,
- * so an agent that keeps seven loses one, and a partition read off the
- * agent's seven ids is clean while that AC sits in no sub-issue. The split is
- * judged on what the run keeps; the agent's ids are still read for ones
- * discovery never produced, and for a Phase 1 that holds nothing.
+ * `keptAcs` is what Phase 1 holds after the caller's cap (#2710), and every
+ * caller passes it. ship.js keeps at most `MAX_ACS_PER_ISSUE` of the agent's
+ * Phase 1, so an agent that keeps seven loses one, and a partition read off
+ * the agent's seven ids is clean while that AC sits in no sub-issue. The
+ * split is judged on what the run keeps; the agent's ids are still read for
+ * ones discovery never produced, and for a Phase 1 that holds nothing.
+ *
+ * The argument was optional, and a caller that left it out got the agent's
+ * reading back with nothing to say so (#2716 review round 4). It is required
+ * now, and a JavaScript caller that leaves it out anyway is refused rather
+ * than judged.
  */
 export function decompositionRefusal(
   allAcs: readonly DecomposedAc[] | null | undefined,
   phase1AcIds: readonly string[] | null | undefined,
   subIssues: readonly SubIssuePlan[] | null | undefined,
-  keptAcs?: readonly DecomposedAc[] | null,
+  keptAcs: readonly DecomposedAc[],
 ): string[] {
   const acs = Array.isArray(allAcs) ? allAcs : [];
   const phase1 = Array.isArray(phase1AcIds) ? phase1AcIds : [];
@@ -80,6 +85,9 @@ export function decompositionRefusal(
   const out: string[] = [];
 
   if (acs.length === 0) return ["decomposition was asked for with no ACs to decompose"];
+  // Checked at run time as well as by the type: ship.js is JavaScript, and
+  // the type is no help there (#2716 review round 4).
+  if (!Array.isArray(keptAcs)) return ["the caller did not say what Phase 1 kept, so the split cannot be judged"];
 
   const known = new Set<string>();
   for (const ac of acs) {
@@ -112,15 +120,13 @@ export function decompositionRefusal(
   const acIds = (ac: DecomposedAc): string[] =>
     [ac.id, ...(ac.specElement ? ac.specElement.split(",").map((s: string) => s.trim()) : [])].filter(Boolean);
   const phase1Set = new Set(phase1);
-  // What Phase 1 holds, when the caller says (#2710): decided by each AC's
-  // own id, never by a spec section it shares with a kept AC. Several ACs
-  // can share a section, and reading one let a dropped AC count as kept
-  // (#2716 review).
-  const keptIds = Array.isArray(keptAcs) ? new Set(keptAcs.map(ac => ac.id)) : null;
-  const isKept = (ac: DecomposedAc): boolean =>
-    keptIds !== null ? keptIds.has(ac.id) : acIds(ac).some(id => phase1Set.has(id));
+  // What Phase 1 holds (#2710): decided by each AC's own id, never by a spec
+  // section it shares with a kept AC. Several ACs can share a section, and
+  // reading one let a dropped AC count as kept (#2716 review).
+  const keptIds = new Set(keptAcs.map(ac => ac?.id));
+  const isKept = (ac: DecomposedAc): boolean => keptIds.has(ac.id);
   for (const [id, labels] of claimedBy) {
-    const inPhase1 = keptIds !== null ? acs.some(ac => isKept(ac) && acIds(ac).includes(id)) : phase1Set.has(id);
+    const inPhase1 = acs.some(ac => isKept(ac) && acIds(ac).includes(id));
     if (inPhase1) {
       out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
     }

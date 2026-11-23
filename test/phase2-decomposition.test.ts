@@ -32,8 +32,9 @@ import {
   shellSingleQuote,
   SC_HEADING,
   type DecomposedAc,
+  type SubIssuePlan,
 } from "../lib/phase2-decomposition";
-import { verifyPhase2, readPlan, readSplitPlan, REFUSE_EXIT } from "../scripts/verify-phase2-bodies";
+import { verifyPhase2, readPlan, readSplitPlan, REFUSE_EXIT, type BodyReader, type Phase2Plan } from "../scripts/verify-phase2-bodies";
 import { enclosingChain } from "../lib/reachability";
 import { structuralCut } from "../lib/source-slice";
 import { BUNDLE_END, BUNDLE_START } from "../scripts/build-workflow-launch";
@@ -99,25 +100,29 @@ const BODY_75 = [
 // ── SC-1484 ─────────────────────────────────────────────────────────────────
 
 describe("SC-1484: the structured decomposition is refused when it loses or duplicates an AC", () => {
+  /** Each case keeps what its Phase 1 names, as a run within the cap does (#2716 review round 4). */
+  const refuse = (acs: readonly DecomposedAc[], phase1: string[], groups: SubIssuePlan[]) =>
+    decompositionRefusal(acs, phase1, groups, acsForGroup(acs, { acIds: phase1 }));
+
   test("a sound split is accepted", () => {
-    expect(decompositionRefusal(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-7", "AC-8"] }])).toEqual([]);
+    expect(refuse(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-7", "AC-8"] }])).toEqual([]);
   });
 
   test("an AC in Phase 1 AND deferred is flagged — #79 AC-3", () => {
-    const out = decompositionRefusal(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-5", "AC-7", "AC-8"] }]);
+    const out = refuse(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-5", "AC-7", "AC-8"] }]);
     expect(out.join(" | ")).toContain("AC-5 is in Phase 1 AND deferred to #75");
   });
 
   test("an AC in neither is flagged, which is the silent half", () => {
     // Every count the run prints still adds up when this happens.
-    const out = decompositionRefusal(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-7"] }]);
+    const out = refuse(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-7"] }]);
     expect(out.join(" | ")).toContain("AC-8 was neither kept nor deferred");
   });
 
   // #2716 review round 2: one group names AC-7, the other its section. Both
   // bodies carry AC-7 (acsForGroup matches either), so it is owned twice.
   test("two groups claiming one AC by different spellings is flagged", () => {
-    const out = decompositionRefusal(ALL, ["AC-1", "AC-5"], [
+    const out = refuse(ALL, ["AC-1", "AC-5"], [
       { number: 75, acIds: ["AC-7"] },
       { number: 76, acIds: ["SC-484", "AC-8"] },
     ]);
@@ -125,7 +130,7 @@ describe("SC-1484: the structured decomposition is refused when it loses or dupl
   });
 
   test("two groups claiming one AC is flagged", () => {
-    const out = decompositionRefusal(ALL, ["AC-1", "AC-5"], [
+    const out = refuse(ALL, ["AC-1", "AC-5"], [
       { number: 75, acIds: ["AC-7", "AC-8"] },
       { number: 76, acIds: ["AC-8"] },
     ]);
@@ -133,19 +138,19 @@ describe("SC-1484: the structured decomposition is refused when it loses or dupl
   });
 
   test("an id nothing produced is flagged from either side", () => {
-    expect(decompositionRefusal(ALL, ["AC-99"], [{ number: 75, acIds: ["AC-7", "AC-8"] }]).join(" | "))
+    expect(refuse(ALL, ["AC-99"], [{ number: 75, acIds: ["AC-7", "AC-8"] }]).join(" | "))
       .toContain("Phase 1 keeps AC-99, which discovery never produced");
-    expect(decompositionRefusal(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-7", "AC-8", "AC-99"] }]).join(" | "))
+    expect(refuse(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-7", "AC-8", "AC-99"] }]).join(" | "))
       .toContain("#75 claims AC-99");
   });
 
   test("deferring everything is a refusal, not a decomposition", () => {
-    const out = decompositionRefusal(ALL, [], [{ number: 75, acIds: ["AC-1", "AC-5", "AC-7", "AC-8"] }]);
+    const out = refuse(ALL, [], [{ number: 75, acIds: ["AC-1", "AC-5", "AC-7", "AC-8"] }]);
     expect(out.join(" | ")).toContain("no AC was kept for Phase 1");
   });
 
   test("a group created carrying nothing is flagged", () => {
-    const out = decompositionRefusal(ALL, ["AC-1", "AC-5", "AC-7", "AC-8"], [{ number: 75, acIds: [] }]);
+    const out = refuse(ALL, ["AC-1", "AC-5", "AC-7", "AC-8"], [{ number: 75, acIds: [] }]);
     expect(out.join(" | ")).toContain("#75 was created carrying no ACs");
   });
 
@@ -153,11 +158,11 @@ describe("SC-1484: the structured decomposition is refused when it loses or dupl
     // The control for the "neither kept nor deferred" case. The decompose
     // agent returns either format, and treating an SC id as unplaced would
     // refuse every sound split that used one.
-    expect(decompositionRefusal(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["SC-484", "SC-485"] }])).toEqual([]);
+    expect(refuse(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["SC-484", "SC-485"] }])).toEqual([]);
   });
 
   test("every problem is reported, not the first", () => {
-    const out = decompositionRefusal(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-5"] }]);
+    const out = refuse(ALL, ["AC-1", "AC-5"], [{ number: 75, acIds: ["AC-5"] }]);
     expect(out.length, "a second round would discover what the first did not report").toBeGreaterThan(1);
   });
 });
@@ -241,6 +246,7 @@ describe("SC-1485: a body is compared to the ACs it carries, statement by statem
 // ── SC-1486 ─────────────────────────────────────────────────────────────────
 
 describe("SC-1486: the verifier reads the issue back rather than trusting the report", () => {
+  const verify = (p: Phase2Plan, r: BodyReader) => verifyPhase2(p, r, 6);
   const plan = {
     phase1AcIds: ["AC-1", "AC-5"],
     acs: ALL,
@@ -248,31 +254,31 @@ describe("SC-1486: the verifier reads the issue back rather than trusting the re
   };
 
   test("a good issue passes and is counted as checked", async () => {
-    const v = await verifyPhase2(plan, async () => goodBody([AC7, AC8]));
+    const v = await verify(plan, async () => goodBody([AC7, AC8]));
     expect(v.ok).toBe(true);
     expect(v.checked, "a verdict over zero issues is not a pass").toBe(1);
   });
 
   test("#75's body refuses", async () => {
-    const v = await verifyPhase2(plan, async () => BODY_75);
+    const v = await verify(plan, async () => BODY_75);
     expect(v.ok).toBe(false);
     expect(v.violations.join(" | ")).toContain("#75: AC-7's statement is not carried verbatim");
   });
 
   test("an unreadable issue is a violation, not a pass", async () => {
-    const v = await verifyPhase2(plan, async () => { throw new Error("404"); });
+    const v = await verify(plan, async () => { throw new Error("404"); });
     expect(v.ok).toBe(false);
     expect(v.checked, "an issue that could not be read was not checked").toBe(0);
     expect(v.violations.join(" | ")).toContain("could not be read back");
   });
 
   test("a group with no number is a sub-issue that was never created", async () => {
-    const v = await verifyPhase2({ ...plan, subIssues: [{ phase: "Phase 2", acIds: ["AC-7", "AC-8"] }] }, async () => goodBody([AC7, AC8]));
+    const v = await verify({ ...plan, subIssues: [{ phase: "Phase 2", acIds: ["AC-7", "AC-8"] }] }, async () => goodBody([AC7, AC8]));
     expect(v.violations.join(" | ")).toContain("has no issue number — it was never created");
   });
 
   test("the structural refusals run too, so one call covers both halves", async () => {
-    const v = await verifyPhase2(
+    const v = await verify(
       { ...plan, subIssues: [{ number: 75, acIds: ["AC-5", "AC-7", "AC-8"] }] },
       async () => goodBody([PHASE1[1]!, AC7, AC8]),
     );
@@ -374,10 +380,19 @@ describe("SC-1487: the launch file's bundled copy and the library agree", () => 
   ];
 
   for (const [name, acs, phase1, groups, kept] of MATRIX) {
+    // A row with no kept set keeps what its Phase 1 names, as a run within the cap does.
+    const k = kept ?? acsForGroup(acs, { acIds: phase1 });
     test(`decompositionRefusal agrees: ${name}`, () => {
-      expect(inline.decompositionRefusal!(acs, phase1, groups, kept)).toEqual(decompositionRefusal(acs, phase1, groups, kept));
+      expect(inline.decompositionRefusal!(acs, phase1, groups, k)).toEqual(decompositionRefusal(acs, phase1, groups, k));
     });
   }
+
+  // #2716 review round 4: a caller that leaves the kept set out is refused by both copies.
+  test("decompositionRefusal agrees: no kept set given", () => {
+    const lib = decompositionRefusal as (...a: unknown[]) => string[];
+    expect(inline.decompositionRefusal!(ALL, ["AC-1"], [])).toEqual(lib(ALL, ["AC-1"], []));
+    expect(lib(ALL, ["AC-1"], []).join(" | ")).toContain("did not say what Phase 1 kept");
+  });
 
   test("acsForGroup agrees", () => {
     expect(inline.acsForGroup!(ALL, { acIds: ["SC-485"] })).toEqual(acsForGroup(ALL, { acIds: ["SC-485"] }));
@@ -395,6 +410,8 @@ describe("SC-1487: the launch file's bundled copy and the library agree", () => 
     expect(src, "the prompt never showed the agent the statements it was asked to carry")
       .toContain("${acListBlock(discovery.acs)}");
     expect(src).toContain("bun --cwd ${shellQuote(HARNESS_ROOT)} scripts/verify-phase2-bodies.ts --repo ${ISSUE_REPO}");
+    expect(src, "the verifier is not told the run's cap (#2716 review round 4)")
+      .toContain("--grouping ${WORK_DIR}/phase2-grouping.json --cap ${MAX_ACS_PER_ISSUE}");
     expect(src, "the structural refusal is not wired into the run").toContain("DECOMPOSITION_REFUSED");
   });
 
@@ -480,10 +497,12 @@ describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap
       logs: string[];
     };
   };
-  const mutant = () => {
+  const mutant = (replacement: string) => {
     expect(block.split(KEPT_ARG).length - 1, "the call site hands the refusal what Phase 1 kept, once").toBe(1);
-    return block.replace(KEPT_ARG, "");
+    return block.replace(KEPT_ARG, replacement);
   };
+  /** The agent's reading: what its Phase 1 names, before the cap. */
+  const AGENT_READING = "        acsForGroup(originalAcs, { acIds: decomposeResult.phase1AcIds }),\n";
 
   const EIGHT: DecomposedAc[] = Array.from({ length: 8 }, (_, i) => ({
     id: `AC-${i + 1}`,
@@ -508,12 +527,21 @@ describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap
   });
 
   test("MUTANT: handing the refusal the agent's ids back lets that AC ship in no sub-issue", () => {
-    const r = run(mutant(), EIGHT, SEVEN_KEPT);
+    const r = run(mutant(AGENT_READING), EIGHT, SEVEN_KEPT);
     const dropped = ids(1, 7).filter(id => !r.kept.includes(id));
     expect(r.proceeded).toBe(true);
     const deferral = r.acDeferrals.find(d => d.specElement === EIGHT.find(a => a.id === dropped[0])!.specElement);
     expect(deferral, "the dropped AC is not even deferred").toBeDefined();
     expect(deferral!.subIssue, "the dropped AC was filed after all").toBeUndefined();
+  });
+
+  // #2716 review round 4: the argument was optional, and leaving it out gave
+  // the agent's reading back. It is required now, and ship.js is JavaScript,
+  // so the library refuses a call without it rather than judging.
+  test("MUTANT: leaving out what Phase 1 kept is refused, not judged on the agent's ids", () => {
+    const r = run(mutant(""), EIGHT, SEVEN_KEPT);
+    expect(r.proceeded).toBe(false);
+    expect(r.logs.join("\n")).toContain("did not say what Phase 1 kept");
   });
 
   test("CONTROL: six Phase-1 ids and sub-issues for the other two still proceed", () => {
@@ -591,6 +619,62 @@ describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap
   });
 });
 
+// ── #2716 review round 4 ────────────────────────────────────────────────────
+
+/**
+ * The verifier runs inside the decompose step, before ship.js caps Phase 1,
+ * and it judged the agent's list: an agent keeping seven of eight ACs, with
+ * the eighth in a sub-issue, passed it, and the run's cap then dropped one.
+ * It now takes the run's cap: a Phase 1 within it is exactly what the run
+ * keeps, since the cap reorders and drops nothing, and one over it is refused
+ * while the agent can still move an AC to a sub-issue.
+ */
+describe("#2716 review round 4: the verifier judges the split the run will keep", () => {
+  const EIGHT: DecomposedAc[] = Array.from({ length: 8 }, (_, i) => ({
+    id: `AC-${i + 1}`,
+    statement: `statement ${i + 1}`,
+    specElement: `SC-${9101 + i}`,
+  }));
+  const ids = (from: number, to: number) => EIGHT.slice(from - 1, to).map(a => a.id);
+  const verifyWith = (phase1AcIds: string[], subIssues: { number: number; acIds: string[] }[], cap: number) =>
+    verifyPhase2(
+      { acs: EIGHT, phase1AcIds, subIssues },
+      async n => goodBody(acsForGroup(EIGHT, subIssues.find(s => s.number === n))),
+      cap,
+    );
+
+  test("seven Phase-1 ACs over a cap of six is refused before the run's cap drops one", async () => {
+    const v = await verifyWith(ids(1, 7), [{ number: 90, acIds: ["AC-8"] }], 6);
+    expect(v.ok).toBe(false);
+    expect(v.violations.join(" | ")).toContain("Phase 1 keeps 7 ACs and one run carries at most 6");
+  });
+
+  test("CONTROL: six within a cap of six, with the other two filed, passes", async () => {
+    const v = await verifyWith(ids(1, 6), [{ number: 90, acIds: ["AC-7", "AC-8"] }], 6);
+    expect(v.violations).toEqual([]);
+    expect(v.ok).toBe(true);
+  });
+
+  test("CONTROL: one AC named two ways counts once against the cap", async () => {
+    const v = await verifyWith([...ids(1, 6), "SC-9101"], [{ number: 90, acIds: ["AC-7", "AC-8"] }], 6);
+    expect(v.violations).toEqual([]);
+  });
+
+  test("the kept set is a required argument, and a call without it is refused", () => {
+    // @ts-expect-error keptAcs is required (#2716 review round 4); making it optional again fails the typecheck here
+    const out = decompositionRefusal(EIGHT, ids(1, 7), [{ number: 90, acIds: ["AC-8"] }]);
+    expect(out.join(" | ")).toContain("did not say what Phase 1 kept");
+  });
+
+  test("the script will not run without the cap: no --cap exits 2", () => {
+    const planPath = join(scratch, "no-cap.json");
+    writeFileSync(planPath, JSON.stringify({ acs: EIGHT, phase1AcIds: ids(1, 6), subIssues: [] }));
+    const r = spawnSync("bun", [SCRIPT, "--repo", "o/n", "--plan", planPath], { cwd: scratch, encoding: "utf-8" });
+    expect(r.status).toBe(2);
+    expect(`${r.stdout ?? ""}${r.stderr ?? ""}`).toContain("--cap");
+  });
+});
+
 // ── SC-1488 ─────────────────────────────────────────────────────────────────
 
 /**
@@ -623,7 +707,7 @@ function buildMutant(): string {
 }
 
 function runScript(script: string, planPath: string): { status: number | null; out: string } {
-  const r = spawnSync("bun", [script, "--repo", "o/n", "--plan", planPath], {
+  const r = spawnSync("bun", [script, "--repo", "o/n", "--plan", planPath, "--cap", "6"], {
     cwd: scratch,
     encoding: "utf-8",
     env: { ...process.env, GH_TOKEN: "" },

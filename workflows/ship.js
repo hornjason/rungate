@@ -2830,7 +2830,7 @@ ${acListBlock(discovery.acs)}
 6. Verify the issues you created actually carry their ACs. Run:
 
    bun --cwd ${shellQuote(HARNESS_ROOT)} scripts/verify-phase2-bodies.ts --repo ${ISSUE_REPO} \\
-     --acs ${WORK_DIR}/phase2-acs.json --grouping ${WORK_DIR}/phase2-grouping.json
+     --acs ${WORK_DIR}/phase2-acs.json --grouping ${WORK_DIR}/phase2-grouping.json --cap ${MAX_ACS_PER_ISSUE}
 
    It reads each sub-issue back FROM GITHUB and compares its
    "## Success Criteria" section against the statements from step 0. If it

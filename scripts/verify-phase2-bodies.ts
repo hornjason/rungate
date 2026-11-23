@@ -17,7 +17,12 @@
  * will read.
  *
  * Usage:
- *   bun scripts/verify-phase2-bodies.ts --repo owner/name --plan <file.json>
+ *   bun scripts/verify-phase2-bodies.ts --repo owner/name --plan <file.json> --cap <N>
+ *
+ * `--cap` is the most ACs one run carries, ship.js's `MAX_ACS_PER_ISSUE`.
+ * The decompose step runs this before ship.js caps Phase 1, so the split is
+ * judged on what the run will keep, which the agent's list alone does not say
+ * (#2716 review round 4).
  *
  * The plan file is written by the harness, not composed by the model:
  *   { "phase1AcIds": ["AC-1"],
@@ -64,10 +69,25 @@ export interface Phase2Verdict {
 /** Fetch one issue body. Injected so the comparison is testable without a network. */
 export type BodyReader = (issue: number) => Promise<string | null>;
 
-export async function verifyPhase2(plan: Phase2Plan, readBody: BodyReader): Promise<Phase2Verdict> {
+export async function verifyPhase2(plan: Phase2Plan, readBody: BodyReader, cap: number): Promise<Phase2Verdict> {
   const acs = plan.acs ?? [];
   const subIssues = plan.subIssues ?? [];
-  const violations = [...decompositionRefusal(acs, plan.phase1AcIds ?? [], subIssues)];
+  const phase1 = plan.phase1AcIds ?? [];
+  // What the run will keep (#2716 review round 4). This runs before ship.js
+  // caps Phase 1, so it cannot know which AC a cap would drop. A Phase 1
+  // within the cap is exactly what the run keeps, since the cap reorders and
+  // drops nothing; one over it is refused here, while the agent can still
+  // move an AC to a sub-issue. Counted by AC, so one AC named two ways counts
+  // once.
+  const kept = acsForGroup(acs, { acIds: phase1 });
+  const violations: string[] = [];
+  if (kept.length > cap) {
+    violations.push(
+      `Phase 1 keeps ${kept.length} ACs and one run carries at most ${cap}, so the run's cap would drop ` +
+        `${kept.length - cap} of them — move the rest to a sub-issue`,
+    );
+  }
+  violations.push(...decompositionRefusal(acs, phase1, subIssues, kept));
 
   let checked = 0;
   for (const group of subIssues) {
@@ -142,10 +162,11 @@ if (import.meta.main) {
   const planPath = flag("plan");
   const acsPath = flag("acs");
   const groupingPath = flag("grouping");
-  if (!repo || !(planPath || (acsPath && groupingPath))) {
+  const cap = Number(flag("cap"));
+  if (!repo || !(planPath || (acsPath && groupingPath)) || !Number.isInteger(cap) || cap < 1) {
     console.error(
       "usage: bun scripts/verify-phase2-bodies.ts --repo owner/name " +
-        "(--plan <file.json> | --acs <file.json> --grouping <file.json>)",
+        "(--plan <file.json> | --acs <file.json> --grouping <file.json>) --cap <N>",
     );
     process.exit(2);
   }
@@ -162,7 +183,7 @@ if (import.meta.main) {
     verdict = await verifyPhase2(plan, async (issue) => {
       const data = await getIssue(client, repo, issue);
       return data.body ?? null;
-    });
+    }, cap);
   } catch (e) {
     console.error(`verify-phase2-bodies: ${(e as Error).message}`);
     console.log(JSON.stringify({ ok: false, checked: 0, violations: [(e as Error).message] }));
