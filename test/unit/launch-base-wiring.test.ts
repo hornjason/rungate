@@ -44,6 +44,7 @@ import { join } from "path";
 
 import { anchorOccurrences, structuralCut } from "../../lib/source-slice";
 import { runWorkflow } from "../../lib/workflow-test-harness";
+import { shipPrelude } from "../../scripts/build-workflow-launch";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const SHIP = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -307,7 +308,11 @@ describe("SC-2181: the reply shape is declared, and the refusal is terminal", ()
       harnessRoot: "/tmp/rungate-launch-base-harness",
     };
 
-    const refused = await runWorkflow(SHIP_BODY, { args: { ...ARGS } });
+    // With the launch file's bundle in scope, in both runs (#2685): ship.js
+    // calls lib code it does not carry, and a real launch always has it
+    // (#2405). The pair still varies exactly one thing, the injected reading.
+    const prelude = shipPrelude();
+    const refused = await runWorkflow(SHIP_BODY, { prelude, args: { ...ARGS } });
     expect(refused.error, refused.error ? `the harness threw: ${refused.error.message}` : "").toBeNull();
     const out = (refused.result ?? {}) as Record<string, unknown>;
     expect(out.status).toBe("LAUNCH_BASE_FAILED");
@@ -321,6 +326,7 @@ describe("SC-2181: the reply shape is declared, and the refusal is terminal", ()
     // it the pair would be one run that refused, which is satisfied by a
     // script that refuses everything.
     const cleared = await runWorkflow(SHIP_BODY, {
+      prelude,
       args: { ...ARGS },
       overrides: {
         "launch-base": () => ({ reading: "SAME_CHECKOUT", cwd: ARGS.projectRoot, refusal: null, exitCode: 0 }),

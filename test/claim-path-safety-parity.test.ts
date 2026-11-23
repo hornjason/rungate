@@ -38,6 +38,10 @@ import { securityHelpersRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
+// The file that runs (#2685). Its one copy of the table and its decider is
+// ship.js's today and lib/workflow-security.ts's bundled code once #2684 moves
+// it, so counting here holds on both sides of that move.
+const launchSource = readFileSync(join(REPO_ROOT, "workflows", "ship.run.js"), "utf-8");
 
 const WT_A = "/tmp/wt-a";
 const WT_B = "/tmp/wt-b";
@@ -208,19 +212,19 @@ describe("SC-1532: a refused path is told which rule refused it", () => {
 });
 
 describe("SC-1533: one predicate, reached by both phases", () => {
-  test("the rule table is declared exactly once in ship.js", () => {
+  test("the rule table is declared exactly once in the launch file", () => {
     // A second table would survive any mutation of the first and the parity
     // above would go green for the wrong reason.
-    const declarations = (shipSource.match(/const CONTRIBUTABLE_PATH_RULES = \[/g) || []).length;
-    expect(declarations, "CONTRIBUTABLE_PATH_RULES must be declared once").toBe(1);
+    const declarations = (launchSource.match(/const CONTRIBUTABLE_PATH_RULES = \[/g) || []).length;
+    expect(declarations, "CONTRIBUTABLE_PATH_RULES must be declared once in workflows/ship.run.js").toBe(1);
   });
 
   test("the decider is declared once and called from both phases", () => {
     const security = securityHelpersRegion(shipSource);
     const collect = block("COLLECT-CLAIM");
-    expect((shipSource.match(/function pathRefusal\(/g) || []).length).toBe(1);
-    // Declared in the security block, which is the half mirrored by
-    // lib/workflow-security.ts, and reached from the collection block.
+    expect((launchSource.match(/function pathRefusal\(/g) || []).length, "pathRefusal declared once in the launch file").toBe(1);
+    // The security region as every reader gets it declares it; the collection
+    // block reaches it.
     expect(security).toContain("function pathRefusal(");
     expect(collect).toContain("pathRefusal(");
   });
@@ -239,7 +243,7 @@ describe("SC-1533: one predicate, reached by both phases", () => {
     // and `buildSafeSSHCommand` use them legitimately. The property is local:
     // this one function asks the decider and tests nothing itself.
     const sources: Array<[string, string]> = [
-      ["workflows/ship.js", shipSource],
+      ["workflows/ship.run.js", launchSource],
       [
         "lib/workflow-security.ts",
         readFileSync(join(REPO_ROOT, "lib", "workflow-security.ts"), "utf-8"),

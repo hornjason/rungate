@@ -40,6 +40,7 @@
 import { describe, test, expect } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { securityHelpersRegion } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP_PATH = join(REPO_ROOT, "workflows", "ship.js");
@@ -65,16 +66,18 @@ const DECISION_SIGNATURE = "function reusablePriorBranch(prior) {";
  * `.claude/rules/checks-must-be-able-to-fail.md` names as its fourth shape.
  * Slicing means a change to the real predicate changes what these rows run.
  */
-function sliceDeclaration(from: string, label: string): string {
-  const start = shipSource.indexOf(from);
+function sliceDeclaration(from: string, label: string, source: string = shipSource): string {
+  const start = source.indexOf(from);
   if (start === -1) throw new Error(`ship.js no longer declares ${label}`);
-  const end = shipSource.indexOf("\n}", start);
+  const end = source.indexOf("\n}", start);
   if (end === -1) throw new Error(`ship.js's ${label} has no closing brace`);
-  return shipSource.slice(start, end + 2);
+  return source.slice(start, end + 2);
 }
 
 const SAFE_BRANCH_SOURCE = [
-  sliceDeclaration("const SAFE_BRANCH =", "isSafeBranchName"),
+  // From the security region as every reader gets it (#2685): ship.js's copy
+  // today, lib/workflow-security.ts's bundled code once #2684 moves it.
+  sliceDeclaration("const SAFE_BRANCH =", "isSafeBranchName", securityHelpersRegion(shipSource)),
   sliceDeclaration("function bareBranchName(ref) {", "bareBranchName"),
   // One line, so it has no closing brace of its own.
   (() => {

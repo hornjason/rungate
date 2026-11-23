@@ -125,7 +125,11 @@ describe("#89: the guard can see all of ship.js", () => {
 
   test("the helpers #69 is about are visible", () => {
     const stripped = stripStringsAndComments(shipSource);
-    for (const fn of ["buildSafeGitAdd", "validateFilePaths", "safeSSHCommand"]) {
+    // ship.js's own shell builders. lib/workflow-security.ts's rules
+    // (validateFilePaths and the rest) are not ship.js's to keep: since #2684
+    // the launch file bundles the library's code, and #2685 keeps this list
+    // true on both sides of that move.
+    for (const fn of ["buildSafeGitAdd", "safeGitAddCommand", "safeSSHCommand"]) {
       expect(stripped, `${fn} is invisible to the guard that protects it`).toContain(fn);
     }
   });
