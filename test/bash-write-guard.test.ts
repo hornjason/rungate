@@ -4902,3 +4902,47 @@ describe("#2701: the write spellings the verb list missed", () => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 });
+
+/**
+ * #2704 security review: the exemption knows a write call by its last name
+ * only, so a body that defines its own `rm` and calls it on a scratch literal
+ * had that literal read as the write's target, while the real write went
+ * through an environment variable. Main refused the `rm` form (no `rm` in its
+ * list) and allowed the same shape under `copy`, which has always been there.
+ */
+describe("#2704: a body naming its own write callee gets no exemption", () => {
+  const witnesses: Array<[string, string]> = [
+    ["a Python def rm", `mkdir -p /tmp/rg2704c && python3 -I -c "import os
+def rm(p): os.remove(os.environ['RG'])
+rm('/tmp/rg2704c/${STATE}')"`],
+    ["a JavaScript function rm", `mkdir -p /tmp/rg2704c && node -e "function rm(p) { require('fs').rmSync(process.env.RG) }; rm('/tmp/rg2704c/${STATE}')"`],
+    ["a Python def copy (allowed on main)", `mkdir -p /tmp/rg2704c && python3 -I -c "import os, shutil
+def copy(a, b): shutil.copy(b, os.environ['RG'])
+copy('/tmp/rg2704c/x', '/tmp/rg2704c/${STATE}')"`],
+    ["a JavaScript const rm", `mkdir -p /tmp/rg2704c && node -e "const rm = p => require('fs').rmSync(process.env.RG); rm('/tmp/rg2704c/${STATE}')"`],
+    ["a Python rm = lambda", `mkdir -p /tmp/rg2704c && python3 -I -c "import os
+rm = lambda p: os.remove(os.environ['RG'])
+rm('/tmp/rg2704c/${STATE}')"`],
+    ["an import bound as rm", `mkdir -p /tmp/rg2704c && python3 -I -c "import os
+from os import remove as rm
+rm('/tmp/rg2704c/${STATE}'); os.remove(os.environ['RG'])"`],
+  ];
+  test.each(witnesses)("WITNESS: %s does not exempt the body", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("CONTROL: a name that only contains a callee's name is not a shadow", () => {
+    const cmd = `mkdir -p /tmp/rg2704a /tmp/rg2704b && python3 -I -c "import shutil
+def copy_all(a, b): pass
+shutil.copy('/tmp/rg2704a/${STATE}', '/tmp/rg2704b/${STATE}')"`;
+    const d = decideBashWrite(cmd);
+    expect(d.blocked, `refused: ${d.reason}`).toBe(false);
+  });
+
+  test("CONTROL: importing the library's own name is not a shadow", () => {
+    const cmd = `mkdir -p /tmp/rg2704a /tmp/rg2704b && python3 -I -c "from shutil import copy
+copy('/tmp/rg2704a/${STATE}', '/tmp/rg2704b/${STATE}')"`;
+    const d = decideBashWrite(cmd);
+    expect(d.blocked, `refused: ${d.reason}`).toBe(false);
+  });
+});

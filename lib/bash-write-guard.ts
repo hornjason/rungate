@@ -3580,6 +3580,27 @@ function standsAlone(body: string, start: number, end: number): boolean {
 }
 
 /**
+ * Whether the body defines or binds a name `inWritePosition` recognises a
+ * write call by (#2704 security review). The callee is known by its last name
+ * only, so `def rm(p): os.remove(os.environ['RG'])` and then
+ * `rm('/tmp/fix/workflow-state.json')` read the scratch literal as the
+ * write's target, and exempted a body whose real write went elsewhere. Main
+ * refused that `rm` form only because `rm` was not yet in the list; the same
+ * shape under `copy` was allowed there. A body that defines or binds its own
+ * `rm`, `copy` or `open` gets no exemption: its calls to that name are not
+ * the library's. Importing the library's own name (`from shutil import
+ * copy`, `const { rm } = require('fs')`) binds the real call and is not a
+ * shadow; a name that only contains one (`copy_all`) is not either.
+ */
+function shadowsWriteCallee(body: string): boolean {
+  const names = [...WRITE_CALLEES].join('|');
+  return new RegExp(
+    String.raw`\b(?:def|function|class)\s+(?:${names})\b|\b(?:const|let|var)\s+(?:${names})\b|\bas\s+(?:${names})\b|(?:^|[;{])\s*(?:${names})\s*=(?!=)`,
+    'm',
+  ).test(body);
+}
+
+/**
  * Can every write this body could make to a protected artifact be shown to
  * land in a scratch tree?
  *
@@ -3618,6 +3639,7 @@ function standsAlone(body: string, start: number, end: number): boolean {
  * `.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape.
  */
 function bodyTargetsAreScratch(body: string, exempt: Exemption): boolean {
+  if (shadowsWriteCallee(body)) return false;
   const { targets, fragments, protectedLiterals, unplaceable, unreadable } = bodyTargets(body);
   if (unreadable || fragments.length > 0) return false;
   if (protectedLiterals.length > 0 || unplaceable.length > 0) return false;
