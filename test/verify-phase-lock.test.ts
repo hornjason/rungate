@@ -322,13 +322,14 @@ describe("#2722: a command substitution inside double quotes is a command", () =
     ["backticks", 'echo "`gh issue create --label follow-up`"', ["gh", "issue", "create"]],
     ["the second of two in one string", `echo "a $(echo b) $(gh issue create)"`, ["gh", "issue", "create"]],
     ["after an apostrophe in the same string", `echo "it's $(gh issue create)"`, ["gh", "issue", "create"]],
-    ["with a quoted ) inside it", `echo "$(gh issue create --title ')')"`, ["gh", "issue", "create"]],
+    ["after a quoted ) inside it", `echo "$(echo ')'; gh issue create)"`, ["gh", "issue", "create"]],
   ])("WITNESS: %s", (_l, cmd, words) => {
     expect(has(cmd as string, words as string[]), cmd as string).toBe(true);
   });
 
   test.each([
     ["single quotes", "echo '$(gh issue create)'"],
+    ["double quotes inside single quotes", `echo '"$(gh issue create)"'`],
     ["an escaped $", 'echo "\\$(gh issue create)"'],
     ["text inside the substitution's own single quotes", `echo "$(echo 'gh issue create')"`],
   ])("CONTROL: %s stay text", (_l, cmd) => {
