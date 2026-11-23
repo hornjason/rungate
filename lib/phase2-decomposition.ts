@@ -124,8 +124,13 @@ export function decompositionRefusal(
     if (inPhase1) {
       out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
     }
-    if (labels.length > 1) {
-      out.push(`${id} is claimed by ${labels.join(" and ")} — two phases cannot both own one AC`);
+  }
+  // Two groups owning one AC, by any id it answers to: one group naming
+  // AC-7 and another its section both carry it (#2716 review).
+  for (const ac of acs) {
+    const owners = [...new Set(acIds(ac).flatMap(id => claimedBy.get(id) ?? []))];
+    if (owners.length > 1) {
+      out.push(`${ac.id} is claimed by ${owners.join(" and ")} — two phases cannot both own one AC`);
     }
   }
 

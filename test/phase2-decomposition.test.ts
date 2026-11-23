@@ -114,6 +114,16 @@ describe("SC-1484: the structured decomposition is refused when it loses or dupl
     expect(out.join(" | ")).toContain("AC-8 was neither kept nor deferred");
   });
 
+  // #2716 review round 2: one group names AC-7, the other its section. Both
+  // bodies carry AC-7 (acsForGroup matches either), so it is owned twice.
+  test("two groups claiming one AC by different spellings is flagged", () => {
+    const out = decompositionRefusal(ALL, ["AC-1", "AC-5"], [
+      { number: 75, acIds: ["AC-7"] },
+      { number: 76, acIds: ["SC-484", "AC-8"] },
+    ]);
+    expect(out.join(" | ")).toContain("AC-7 is claimed by #75 and #76");
+  });
+
   test("two groups claiming one AC is flagged", () => {
     const out = decompositionRefusal(ALL, ["AC-1", "AC-5"], [
       { number: 75, acIds: ["AC-7", "AC-8"] },
@@ -445,7 +455,7 @@ describe("SC-1487: the launch file's bundled copy and the library agree", () => 
 describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap", () => {
   const src = readFileSync(SHIP, "utf-8");
   const coverage = structuralCut(src, "// ──── AC-COVERAGE-START ────", { endAnchor: "// ──── AC-COVERAGE-END ────" });
-  const block = structuralCut(src, "if (decomposeResult?.phase1AcIds?.length > 0) {", { balanced: "{" });
+  const block = structuralCut(src, "    if (decomposeResult) {", { balanced: "{" });
   const caps = [...src.matchAll(/const MAX_ACS_PER_ISSUE = (\d+)/g)];
   const KEPT_ARG = "        discovery.acs,\n";
 
@@ -549,6 +559,15 @@ describe("#2710: the decomposition refusal reads what Phase 1 kept after the cap
     expect(r.proceeded).toBe(true);
     const spec = two.find(a => a.id === dropped)!.specElement;
     expect(r.acDeferrals.find(d => d.specElement === spec)?.subIssue).toBe(91);
+  });
+
+  // #2716 review round 2: the block ran only for a non-empty agent Phase 1,
+  // so an answer keeping nothing was never judged, and every AC shipped past
+  // the cap while a sub-issue carried them all.
+  test("an answer that keeps nothing in Phase 1 is refused, not skipped", () => {
+    const r = run(block, EIGHT, { phase1AcIds: [], subIssues: [{ number: 90, acIds: ids(1, 8) }] });
+    expect(r.proceeded).toBe(false);
+    expect(r.logs.join("\n")).toContain("no AC was kept for Phase 1");
   });
 
   test("an AC the cap drops that a sub-issue carries is deferred to it, not refused as a duplicate", () => {

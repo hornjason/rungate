@@ -893,8 +893,11 @@ function decompositionRefusal(allAcs, phase1AcIds, subIssues, keptAcs) {
         if (inPhase1) {
             out.push(`${id} is in Phase 1 AND deferred to ${labels.join(" and ")} — a deferral that duplicates shipped work`);
         }
-        if (labels.length > 1) {
-            out.push(`${id} is claimed by ${labels.join(" and ")} — two phases cannot both own one AC`);
+    }
+    for (const ac of acs) {
+        const owners = [...new Set(acIds(ac).flatMap(id => claimedBy.get(id) ?? []))];
+        if (owners.length > 1) {
+            out.push(`${ac.id} is claimed by ${owners.join(" and ")} — two phases cannot both own one AC`);
         }
     }
     for (const ac of acs) {
@@ -2507,8 +2510,8 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
       required: ['phase1AcIds']
     }})
 
-    if (decomposeResult?.phase1AcIds?.length > 0) {
-      const keepIds = new Set(decomposeResult.phase1AcIds)
+    if (decomposeResult) {
+      const keepIds = new Set(decomposeResult.phase1AcIds || [])
       const originalAcs = [...discovery.acs]
       const filtered = originalAcs.filter(ac => keepIds.has(ac.id) || keepIds.has(ac.specElement) || (ac.specElement && ac.specElement.split(',').some(s => keepIds.has(s.trim()))))
       if (filtered.length === 0) {

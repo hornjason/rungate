@@ -2854,8 +2854,10 @@ Return JSON: { "phase1AcIds": ["AC-1", ...], "subIssues": [{"number": N, "phase"
       required: ['phase1AcIds']
     }})
 
-    if (decomposeResult?.phase1AcIds?.length > 0) {
-      const keepIds = new Set(decomposeResult.phase1AcIds)
+    // #2716 review: every answer is judged. An answer keeping nothing in
+    // Phase 1 used to skip this block, so neither the cap nor the refusal ran.
+    if (decomposeResult) {
+      const keepIds = new Set(decomposeResult.phase1AcIds || [])
       const originalAcs = [...discovery.acs]
       // Match on ac.id (AC-N) OR ac.specElement (SC-N) — decompose agent may return either format
       const filtered = originalAcs.filter(ac => keepIds.has(ac.id) || keepIds.has(ac.specElement) || (ac.specElement && ac.specElement.split(',').some(s => keepIds.has(s.trim()))))
