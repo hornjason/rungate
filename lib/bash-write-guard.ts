@@ -2500,8 +2500,7 @@ function callWrites(program: string, protectedName: string): boolean {
       // the identifier the name's literal is assigned to counts as the name
       // wherever a write call takes it. Deeper data flow is the evasion
       // `WRITE_INTENT`'s docblock concedes.
-      const bound = boundIdentifier(program, at, protectedName, view);
-      if (bound !== null) {
+      for (const bound of boundIdentifiers(program, at, protectedName, view)) {
         // `\b…\b` around the escaped name: `self.p` is not `self.path`.
         for (const use of program.matchAll(new RegExp(`\\b${bound.replace(/\./g, '\\.')}\\b`, 'g'))) {
           const u = use.index ?? 0;
@@ -2588,47 +2587,55 @@ function carriesOut(program: string, view: CodeView, open: number): boolean {
 const BLOCK_KEYWORDS = new Set(['else', 'try', 'finally', 'except', 'do']);
 
 /**
- * The name an assignment operator starting at `op` assigns: the identifier
- * before it, or before `name: T` (an annotation). The name must start its
- * statement or follow `(`, `,` or `{`. A `:` after something other than a
- * statement's first word is a compound statement's (`if ok: d = …`), not an
- * annotation, and so is one after a block keyword (`else: d = …`).
+ * The name an assignment operator starting at `op` assigns (#2721 review).
+ * The target is read at the operator's own bracket level, back to the start of
+ * the statement, of the parameter (after `(` or `,`), or to an earlier `=` in
+ * a chain. A `:` there makes `name: T` an annotation of any shape (`T[…]`,
+ * `A | B`), and the name is the one before that `:`; a `:` after something
+ * other than the statement's first word is a compound statement's (`if ok:
+ * d = …`), and one after a block keyword (`else: d = …`) is too, and the
+ * target is then the word before the operator. The name may be an attribute
+ * path (`self.p`), and must start its statement or follow `(`, `,` or `{`.
  */
-function targetBefore(program: string, op: number): string | null {
-  let i = op;
-  const back = (re: RegExp): string => {
-    let j = i;
-    while (j > 0 && re.test(program[j - 1])) j--;
-    const s = program.slice(j, i);
-    i = j;
-    return s;
+function targetBefore(program: string, op: number, view: CodeView, depths: Int32Array): string | null {
+  const level = depths[op];
+  let colon = -1;
+  for (let j = op - 1; j >= 0; j--) {
+    if (view.mask[j] !== 0 || depths[j] > level) continue;
+    if (depths[j] < level) break; // the bracket this target sits in: `def f(`
+    const ch = program[j];
+    if (ch === ';' || ch === '{' || ch === '}' || ch === ',' || ch === '=' || (ch === '\n' && program[j - 1] !== '\\')) break;
+    if (ch === ':') {
+      colon = j;
+      break;
+    }
+  }
+  const wordBefore = (end: number): [string, number] => {
+    let e = end;
+    while (e > 0 && /\s/.test(program[e - 1])) e--;
+    let st = e;
+    while (st > 0 && /[\w.]/.test(program[st - 1])) st--;
+    return [program.slice(st, e), st];
   };
-  back(/\s/);
-  let name = back(/[\w.]/);
-  let nameAt = i;
-  back(/\s/);
-  if (program[i - 1] === ':') {
-    i--;
-    back(/\s/);
-    const annotated = back(/\w/);
-    const lineStart = Math.max(program.lastIndexOf('\n', i - 1), program.lastIndexOf(';', i - 1)) + 1;
-    // An annotation starts its statement (`d: str = …`) or is a parameter's
-    // (`def f(d: str = …)`, after `(` or `,`, #2721 review).
-    const before = program.slice(lineStart, i);
+  let [name, nameAt] = wordBefore(op);
+  if (colon >= 0) {
+    const [annotated, at] = wordBefore(colon);
+    const lineStart = Math.max(program.lastIndexOf('\n', at - 1), program.lastIndexOf(';', at - 1)) + 1;
+    const before = program.slice(lineStart, at);
     const opensStatement = before.trim() === '' || /[(,]\s*$/.test(before);
     if (annotated !== '' && opensStatement && !BLOCK_KEYWORDS.has(annotated)) {
       name = annotated;
-      nameAt = i;
+      nameAt = at;
     }
   }
-  // A name or an attribute path (`self.p = …`, #2721 review).
   if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(name)) return null;
   return nameAt === 0 || /[\s;(,{]/.test(program[nameAt - 1]) ? name : null;
 }
 
 /**
- * The name the literal starting at `start` is assigned to (#2720): the target
- * of the assignment whose right-hand side holds it, through any operator,
+ * The names the literal starting at `start` is assigned to (#2720): the
+ * target of the assignment whose right-hand side holds it, and every earlier
+ * target of a chain, through any operator,
  * grouping parentheses, list displays and path-building calls
  * (`carriesOut`). One rule rather than one link per form, which is what four
  * review rounds of #2718 asked for. It is read backward from the literal at
@@ -2646,7 +2653,7 @@ function targetBefore(program: string, op: number): string | null {
  * chain of links did (`d = '…' if ok else x`, `d = ['…']`), which costs a
  * refusal only when that name is then written to.
  */
-function assignmentTarget(program: string, start: number, view: CodeView): string | null {
+function assignmentTargets(program: string, start: number, view: CodeView): string[] {
   const depths = bracketDepths(program, view);
   let level = depths[start];
   let comma = false;
@@ -2654,13 +2661,13 @@ function assignmentTarget(program: string, start: number, view: CodeView): strin
     if (view.mask[j] !== 0) continue;
     const ch = program[j];
     if ((ch === '(' || ch === '[') && depths[j] < level) {
-      if (!carriesOut(program, view, j)) return null;
+      if (!carriesOut(program, view, j)) return [];
       level = depths[j];
       comma = false;
       continue;
     }
     if (depths[j] !== level) continue;
-    if (level === 0 && (ch === ';' || ch === '{' || ch === '}' || (ch === '\n' && program[j - 1] !== '\\'))) return null;
+    if (level === 0 && (ch === ';' || ch === '{' || ch === '}' || (ch === '\n' && program[j - 1] !== '\\'))) return [];
     if (ch === ',') {
       comma = true;
       continue;
@@ -2679,9 +2686,22 @@ function assignmentTarget(program: string, start: number, view: CodeView): strin
     }
     const augmented = op !== j && before !== ':';
     if (level > 0 && (comma || augmented)) continue;
-    return targetBefore(program, op);
+    const first = targetBefore(program, op, view, depths);
+    const targets = first === null ? [] : [first];
+    if (level > 0 || op !== j) return targets;
+    // A chain (`x = y = '…'`): every earlier plain `=` in the statement
+    // assigns the same value (#2721 review).
+    for (let k = op - 1; k >= 0; k--) {
+      if (view.mask[k] !== 0 || depths[k] !== 0) continue;
+      const c = program[k];
+      if (c === ';' || c === '{' || c === '}' || (c === '\n' && program[k - 1] !== '\\')) break;
+      if (c !== '=' || program[k + 1] === '=' || program[k + 1] === '>' || (k > 0 && '=!<>+-*/%&|^@:'.includes(program[k - 1]))) continue;
+      const t = targetBefore(program, k, view, depths);
+      if (t !== null) targets.push(t);
+    }
+    return targets;
   }
-  return null;
+  return [];
 }
 
 /**
@@ -2693,24 +2713,24 @@ function assignmentTarget(program: string, start: number, view: CodeView): strin
  * therefore not a binding. Literals separated only by spaces or a string
  * prefix are one (`'a/' 'b'`, `'a/' r'b'`), which is also how a
  * triple-quoted literal reads here: `''`, `'…'`, `''`. The literal may sit
- * anywhere in the assignment's right-hand side (#2720, `assignmentTarget`):
+ * anywhere in the assignment's right-hand side (#2720, `assignmentTargets`):
  * `d = os.path.join(ROOT, '…/workflow-state.json')` binds `d`. A directory
  * name may be followed by a file name or by `{…}` values, as an f-string
  * builds one: `f'…/witnesses/{f}'`.
  */
-function boundIdentifier(program: string, at: number, protectedName: string, view: CodeView): string | null {
+function boundIdentifiers(program: string, at: number, protectedName: string, view: CodeView): string[] {
   const k = view.literals.findIndex(([open, close]) => open < at && at < close);
-  if (k < 0) return null;
+  if (k < 0) return [];
   const [open, close] = view.literals[k];
   const tail = program.slice(at + protectedName.length, close);
-  if (tail !== '' && !(protectedName.endsWith('/') && /^(?:[\w.\-/]|\{[^{}\n]*\})+$/.test(tail))) return null;
+  if (tail !== '' && !(protectedName.endsWith('/') && /^(?:[\w.\-/]|\{[^{}\n]*\})+$/.test(tail))) return [];
   // A backslash-newline inside a literal is a line continuation, not a newline.
-  if (program.slice(open, close).replace(/\\\n/g, '').includes('\n')) return null;
+  if (program.slice(open, close).replace(/\\\n/g, '').includes('\n')) return [];
   let start = open;
   for (let j = k - 1; j >= 0 && /^[ \t]*(?:[rbfuRBFU]{1,2})?$/.test(program.slice(view.literals[j][1] + 1, start)); j--) {
     start = view.literals[j][0];
   }
-  return assignmentTarget(program, start, view);
+  return assignmentTargets(program, start, view);
 }
 
 /**

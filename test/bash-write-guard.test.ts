@@ -4950,6 +4950,20 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
+  // #2721 review round 2: the target is read at its own bracket level, so an
+  // annotation of any shape, an annotated attribute and every target of a
+  // chain bind.
+  test.each([
+    ["every target of a chained assignment", PY(`x = d = '${LIVE}/${STATE}'`, "shutil.copy('/tmp/src.json', x)")],
+    ["an annotation with a subscript", PY(`d: Optional[str] = '${LIVE}/${STATE}'`, COPY)],
+    ["an annotation with a union", PY(`d: str | None = '${LIVE}/${STATE}'`, COPY)],
+    ["an annotation with a subscript of two", PY(`d: dict[str, str] = '${LIVE}/${STATE}'`, COPY)],
+    ["an annotated attribute", PY(`class W:\n    def __init__(self):\n        self.p: str = '${LIVE}/${STATE}'\n    def save(self):\n        ${PYPAD2714}\n        shutil.copy('/tmp/src.json', self.p)`, "W().save()")],
+    ["an annotated parameter with a subscript", PY(`def f(d: Optional[str] = '${LIVE}/${STATE}'):\n    ${PYPAD2714}\n    ${COPY}`, "f()")],
+  ])("WITNESS (#2721 round 2): %s binds", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
   test("KEPT (#2720): a parameter default still binds its name", () => {
     const cmd = PY(`def f(d='${LIVE}/${STATE}'):\n    ${PYPAD2714}\n    ${COPY}`, "f()");
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
