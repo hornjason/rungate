@@ -1560,8 +1560,22 @@ const VERTEX_REGION = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
  * could carry a second input, so the charsets above admit nothing that needs
  * escaping and the absence of escaping is therefore not a gap.
  */
+/**
+ * The config's `ci` section, or `undefined` when it has none (#2725 review).
+ * A `ci` that is not an object (`"ci": "deep"`, an array) throws: a corrupt
+ * section is never one that declares nothing, so a reader below cannot report
+ * a key as absent when the section holding it could not be read.
+ */
+function ciSection(ci: unknown): Record<string, unknown> | undefined {
+  if (ci === undefined || ci === null) return undefined;
+  if (typeof ci !== 'object' || Array.isArray(ci)) {
+    throw new Error(`ci in .claude/rungate/config.json is ${JSON.stringify(ci)}; it must be an object`);
+  }
+  return ci as Record<string, unknown>;
+}
+
 export function vertexCiConfig(ci: unknown): VertexCiDecision {
-  const raw = (ci as { vertex?: unknown } | null | undefined)?.vertex;
+  const raw = ciSection(ci)?.vertex;
 
   if (raw === undefined || raw === null) {
     return {
@@ -3311,7 +3325,7 @@ export interface ReviewDepthDecision {
  * (`.claude/rules/config-access.md`).
  */
 export function reviewDepthConfig(ci: unknown): ReviewDepthDecision {
-  const raw = (ci as { reviewDepth?: unknown } | null | undefined)?.reviewDepth;
+  const raw = ciSection(ci)?.reviewDepth;
   if (raw === undefined) {
     return {
       depth: "standard",

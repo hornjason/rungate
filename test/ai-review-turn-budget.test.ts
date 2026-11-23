@@ -397,6 +397,13 @@ describe("CRC-B9: review depth is configurable per repo as Quick, Standard or De
     },
   );
 
+  // #2725 review: a ci section that is not an object is corrupt, not one that
+  // declares nothing, for this reader and for ci.vertex's beside it.
+  test.each([["deep"], [["deep"]], [5], [true]])("a ci section of %p is refused, not read as declaring nothing", ci => {
+    expect(() => reviewDepthConfig(ci)).toThrow(/\bci\b.*object/);
+    expect(() => vertexCiConfig(ci)).toThrow(/\bci\b.*object/);
+  });
+
   test("the three depths produce three different reviewer invocations, one per run", () => {
     const quick = turnsIn(generate({ ...FIXTURE_CI, reviewDepth: "quick" }));
     const standard = turnsIn(generate({ ...FIXTURE_CI, reviewDepth: "standard" }));
