@@ -16,7 +16,7 @@ import { signCensus, signStampedCensus, writeWitness } from "./witness";
 import { normalizeGitRefs } from "../lib/git-ref-normalizer";
 import { recordEvidenceRewrite } from "../lib/evidence-command-transport";
 import { GATE_SUITE_TIMEOUT_MS } from "../lib/gate-timeouts";
-import { checksRunFrom, readJunitCheckNames } from "../lib/junit-checks";
+import { checksRunFrom, readJunitCheckNames, readJunitOutcomes } from "../lib/junit-checks";
 import { safeParseProjectHarness, type ProjectHarness } from "../lib/rungate-schema";
 import { DEFAULT_TEST_TIMEOUT, resolveConfig, type ResolvedConfig } from "../lib/config-loader";
 import { censusOf, censusRegressions, TEST_CENSUS_READER } from "../lib/test-census";
@@ -3482,8 +3482,13 @@ export async function executeGate(input: GateExecutorInput): Promise<GateExecuto
     console.log(`checksRun: ${checksRun.length} check(s) ran, ${junit.skipped} filtered out or skipped`);
   }
 
+  // #2695 review: the report's failed testcases, by the names `checksRun`
+  // uses. The console parser cuts a failing title at " [", so its verdicts
+  // alone would leave a failing test passed under its full name.
+  const junitOutcomes = readJunitOutcomes(junitPath);
+
   // Write gate result
-  const { resultVal, attempt } = writeGateResult(sf, gate, passes, fails, warns, results, state.projectRoot, checksRun);
+  const { resultVal, attempt } = writeGateResult(sf, gate, passes, fails, warns, results, state.projectRoot, checksRun, junitOutcomes.failed);
   console.log(`Gate ${gate}: ${resultVal} (attempt ${attempt})`);
 
   // Persist B1/B2 agent results

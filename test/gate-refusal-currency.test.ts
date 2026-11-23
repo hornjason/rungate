@@ -25,16 +25,18 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 import {
+  checksPassedDigest as libDigest,
   failureCheckName as libFailureCheckName,
   resolvedCheckNames as libResolved,
   retireSupersededRefusals as libRetire,
 } from "../lib/gate-refusal-currency";
 import { BUNDLE_END, BUNDLE_START } from "../scripts/build-workflow-launch";
+import { writeGateResult } from "../gates/orchestrator";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const SHIP = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -60,25 +62,129 @@ const BLOCK: string = (() => {
 })();
 
 const shipCopy = new Function(
-  `${BLOCK}\nreturn { resolvedCheckNames, retireSupersededRefusals, failureCheckName }`,
+  `${BLOCK}\nreturn { resolvedCheckNames, retireSupersededRefusals, failureCheckName, checksPassedDigest }`,
 )() as {
+  checksPassedDigest: (names: unknown) => string;
   resolvedCheckNames: (r: unknown) => string[] | null;
   retireSupersededRefusals: (e: any[], r: unknown) => any[];
   failureCheckName: (line: unknown, failedChecks: unknown) => string | undefined;
 };
 
 /** One row run through both copies, so neither can be right alone. */
-const IMPLS = [
+const RAW_IMPLS = [
   [
     "lib",
     {
       resolvedCheckNames: libResolved as any,
       retireSupersededRefusals: libRetire as any,
       failureCheckName: libFailureCheckName as any,
+      checksPassedDigest: libDigest as any,
     },
   ],
   ["the launch bundle", shipCopy],
 ] as const;
+
+/**
+ * #2692. A report resolves a check only when `checksPassed`, the list the gate
+ * computes from its own verdicts, names it, and a report without that list
+ * retires nothing. Every fixture written before the field existed witnesses
+ * one of the older rules, and without the list each would come back null for
+ * the new reason instead of its own. So those fixtures run through
+ * `gateWrote`: the report as the gate writes it when the agent's lists agree
+ * with it, `checksPassed` being `checksRun` minus `failedChecks`, signed with
+ * the digest the gate writes beside it. A fixture that sets `checksPassed`
+ * itself passes through untouched, and #2692's own cases use `RAW_IMPLS`.
+ */
+function gateWrote(report: unknown): unknown {
+  if (!report || typeof report !== "object" || "checksPassed" in report) return report;
+  const r = report as { checksRun?: unknown; failedChecks?: unknown };
+  if (!Array.isArray(r.checksRun)) return report;
+  const failed: unknown[] = Array.isArray(r.failedChecks) ? r.failedChecks : [];
+  return signed({ ...report, checksPassed: r.checksRun.filter(c => !failed.includes(c)) });
+}
+
+/** A report carrying the digest the gate writes for its own `checksPassed` (#2695 review). */
+function signed<T extends { checksPassed?: unknown }>(report: T): T & { checksPassedDigest: string } {
+  return { ...report, checksPassedDigest: libDigest(report.checksPassed) };
+}
+
+const IMPLS = RAW_IMPLS.map(([name, impl]) => [
+  name,
+  {
+    resolvedCheckNames: (r: unknown) => impl.resolvedCheckNames(gateWrote(r) as any),
+    retireSupersededRefusals: (e: any[], r: unknown) => impl.retireSupersededRefusals(e, gateWrote(r) as any),
+    failureCheckName: impl.failureCheckName,
+  },
+] as const);
+
+// #2692. The gate's agent re-types `failedChecks` from `failures`, so a
+// failing check it leaves out of both lists looked like a pass. Retirement now
+// needs the check named in `checksPassed`, which the gate computes in code.
+describe("#2692: a refusal is retired only on a check the gate listed as passed", () => {
+  const A = "verify checks > tests-pass";
+  const B = "verify checks > tsc";
+  const C = "verify checks > lint";
+  const dropped = { result: "FAIL", checksRun: [A, B, C], failures: [`${C}: 1 error`], failedChecks: [C] };
+  for (const [name, impl] of RAW_IMPLS) {
+    test(`${name}: a failing check left out of both lists stays refused, because the gate did not list it as passed`, () => {
+      const report = signed({ ...dropped, checksPassed: [A] });
+      const ledger = [{ check: A }, { check: B }];
+      expect(impl.resolvedCheckNames(report)).toEqual([A]);
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([{ check: A }]);
+      expect(ledger, "tsc still fails and its refusal was retired").toEqual([{ check: B }]);
+    });
+
+    test(`${name}: CONTROL: the same report with tsc in checksPassed retires it`, () => {
+      const report = signed({ ...dropped, checksPassed: [A, B] });
+      const ledger = [{ check: A }, { check: B }];
+      expect(impl.retireSupersededRefusals(ledger, report)).toEqual([{ check: A }, { check: B }]);
+    });
+
+    test(`${name}: a report with no checksPassed, or not a list, retires nothing`, () => {
+      for (const report of [dropped, signed({ ...dropped, checksPassed: A })]) {
+        const ledger = [{ check: A }];
+        expect(impl.resolvedCheckNames(report), JSON.stringify(report)).toBeNull();
+        expect(impl.retireSupersededRefusals(ledger, report)).toEqual([]);
+        expect(ledger).toEqual([{ check: A }]);
+      }
+    });
+
+    test(`${name}: checksPassed resolves only names that ran and that the report does not list as failed`, () => {
+      const report = signed({ ...dropped, checksPassed: [A, C, "verify checks > never-ran"] });
+      expect(impl.resolvedCheckNames(report)).toEqual([A]);
+    });
+
+    // #2695 review round 1. The agent copies checksPassed too, so a copy
+    // error, such as checksRun copied in its place, would bring #2692's defect
+    // back. The gate writes a digest of its own list beside it, and a list
+    // that no longer matches it retires nothing.
+    test(`${name}: a checksPassed that does not match the gate's digest retires nothing`, () => {
+      const TSC = "verify checks > tsc-pass";
+      const TESTS = "verify checks > tests-pass";
+      const gateList: string[] = [];
+      const copiedWrong = {
+        result: "FAIL", checksRun: [TSC, TESTS], failures: [`${TESTS}: 3 failing`], failedChecks: [TESTS],
+        checksPassed: [TSC, TESTS], checksPassedDigest: impl.checksPassedDigest(gateList),
+      };
+      const ledger = [{ check: TSC }];
+      expect(impl.resolvedCheckNames(copiedWrong)).toBeNull();
+      expect(impl.retireSupersededRefusals(ledger, copiedWrong)).toEqual([]);
+      expect(ledger, "tsc-pass failed at the gate and its refusal was retired").toEqual([{ check: TSC }]);
+      const { checksPassedDigest: _, ...unsigned } = copiedWrong;
+      expect(impl.resolvedCheckNames(unsigned), "a report with no digest").toBeNull();
+      expect(impl.resolvedCheckNames({ ...copiedWrong, checksPassedDigest: 7 }), "a digest that is not a string").toBeNull();
+    });
+
+    test(`${name}: the digest is the list's own: order, content and length each change it`, () => {
+      const base = impl.checksPassedDigest(["a", "b"]);
+      expect(typeof base).toBe("string");
+      expect(impl.checksPassedDigest(["a", "b"])).toBe(base);
+      for (const other of [["b", "a"], ["a"], ["a", "b", "c"], ["a", "bb"], [], ["ab"]]) {
+        expect(impl.checksPassedDigest(other), JSON.stringify(other)).not.toBe(base);
+      }
+    });
+  }
+});
 
 // #2690. A gate's agent copies the failing check names into `failedChecks`
 // from its `failures` lines. A partial copy left a still-failing check out of
@@ -364,13 +470,14 @@ describe("#532: the inlined copy and the library agree", () => {
     for (const row of MATRIX) {
       const a = row.ledger();
       const b = row.ledger();
-      const da = libRetire(a, row.report as any);
-      const db = shipCopy.retireSupersededRefusals(b, row.report);
+      const report = gateWrote(row.report);
+      const da = libRetire(a, report as any);
+      const db = shipCopy.retireSupersededRefusals(b, report);
       const same =
         JSON.stringify(da) === JSON.stringify(db) &&
         JSON.stringify(a) === JSON.stringify(b) &&
-        JSON.stringify(libResolved(row.report as any)) ===
-          JSON.stringify(shipCopy.resolvedCheckNames(row.report));
+        JSON.stringify(libResolved(report as any)) ===
+          JSON.stringify(shipCopy.resolvedCheckNames(report));
       if (!same) {
         divergent.push(
           `${row.label}: lib dropped ${JSON.stringify(da)} leaving ${JSON.stringify(a)}; ` +
@@ -409,7 +516,7 @@ describe("#532: the inlined copy and the library agree", () => {
     const separating = MATRIX.filter(row => {
       const a = row.ledger();
       const b = row.ledger();
-      libRetire(a, row.report as any);
+      libRetire(a, gateWrote(row.report) as any);
       wrong(b, row.report);
       return JSON.stringify(a) !== JSON.stringify(b);
     }).map(r => r.label);
@@ -525,15 +632,93 @@ describe("#532: the gate runner records what it measured, not only what it faile
     // sharing a full name are one entry in the witness and two in the
     // ledger. The property is that no failing check comes back resolved and
     // every other measured one does — which is true either way.
-    const resolved = libResolved({ checksRun: gate.checksRun, failedChecks: failed });
-    expect(resolved).not.toBeNull();
+    //
+    // #2692: the consumer resolves what the gate listed as passed, so the
+    // real record's `checksPassed` is read rather than rebuilt here.
+    expect(Array.isArray(gate.checksPassed), "the gate recorded no checksPassed").toBe(true);
     const failedSet = new Set<string>(failed);
-    expect(
-      resolved!.filter((c: string) => failedSet.has(c)),
-      "a check this gate failed came back as resolved",
-    ).toEqual([]);
-    expect(resolved!.length + failedSet.size).toBe(gate.checksRun.length);
+    expect(gate.checksPassed.filter((c: string) => !gate.checksRun.includes(c)), "checksPassed names a check that did not run")
+      .toEqual([]);
+    expect(gate.checksPassed.filter((c: string) => failedSet.has(c)), "checksPassed names a check this gate failed")
+      .toEqual([]);
+    expect(gate.checksPassed.length).toBeGreaterThan(0);
+    expect(gate.checksPassedDigest, "the gate wrote no digest of its checksPassed").toBe(libDigest(gate.checksPassed));
+    const resolved = libResolved({
+      result: gate.result,
+      checksRun: gate.checksRun,
+      checksPassed: gate.checksPassed,
+      checksPassedDigest: gate.checksPassedDigest,
+      failedChecks: failed,
+    });
+    expect(resolved).toEqual(gate.checksPassed);
   }, 180000);
+
+  // #2695 review round 2. checksRun names come from the JUnit report, and the
+  // console parser cuts a failing title at " [", so its FAIL verdict carries a
+  // shorter name than the testcase. A testcase the JUnit report marks failed
+  // is never passed, whatever name the console gave it.
+  test("#2695: a testcase the JUnit report marks failed is not passed under its full name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "checks-passed-junit-"));
+    try {
+      const sf = join(dir, "workflow-state.json");
+      writeFileSync(sf, JSON.stringify({ acs: [], gates: {}, changelog: [] }));
+      const FULL = "verify checks > parses [x] input";
+      const CUT = "verify checks > parses";
+      writeGateResult(
+        sf, "verify", 1, 1, 0,
+        [{ check: CUT, result: "FAIL", detail: "1 failing" }],
+        dir, [FULL, "verify checks > other", CUT], [FULL],
+      );
+      const verify = JSON.parse(readFileSync(sf, "utf-8")).gates.verify;
+      expect(verify.checksPassed, "a failing testcase was listed as passed under its JUnit name").toEqual(["verify checks > other"]);
+      expect(verify.checksPassedDigest).toBe(libDigest(["verify checks > other"]));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // #2692. The list is computed from the gate's own verdicts: a check with a
+  // FAIL or WARN verdict is not passed, so a WARN never retires a refusal.
+  test("#2692: writeGateResult lists as passed the checks that ran with no FAIL or WARN verdict", () => {
+    const dir = mkdtempSync(join(tmpdir(), "checks-passed-"));
+    try {
+      const sf = join(dir, "workflow-state.json");
+      writeFileSync(sf, JSON.stringify({ acs: [], gates: {}, changelog: [] }));
+      writeGateResult(
+        sf, "verify", 1, 1, 1,
+        [{ check: "b", result: "FAIL", detail: "broke" }, { check: "c", result: "WARN", detail: "slow" }],
+        dir, ["a", "b", "c"],
+      );
+      const verify = JSON.parse(readFileSync(sf, "utf-8")).gates.verify;
+      expect(verify.checksRun).toEqual(["a", "b", "c"]);
+      expect(verify.checksPassed).toEqual(["a"]);
+      expect(verify.checksPassedDigest).toBe(libDigest(["a"]));
+
+      // #2695 review round 1, end to end from the written state: the report
+      // the gate's agent sends, copied right and copied wrong.
+      const agentReport = (checksPassed: unknown) => ({
+        result: verify.result,
+        checksRun: verify.checksRun,
+        failures: verify.failures.map((f: any) => `${f.check}: ${f.detail}`),
+        failedChecks: verify.failures.map((f: any) => f.check),
+        checksPassed,
+        checksPassedDigest: verify.checksPassedDigest,
+      });
+      expect(libResolved(agentReport(verify.checksPassed)), "copied verbatim").toEqual(["a"]);
+      expect(libResolved(agentReport(verify.checksRun)), "checksRun copied in its place").toBeNull();
+      expect(libResolved(agentReport(["a", "c"])), "a WARN check added").toBeNull();
+
+      // CONTROL: no reading of what ran, so no list of what passed. An empty
+      // list would say nothing passed, which is a claim.
+      writeGateResult(sf, "scope", 0, 1, 0, [{ check: "b", result: "FAIL", detail: "broke" }], dir, null);
+      const scope = JSON.parse(readFileSync(sf, "utf-8")).gates.scope;
+      expect(scope.checksRun).toBeUndefined();
+      expect(scope.checksPassed).toBeUndefined();
+      expect(scope.checksPassedDigest).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── the wiring ──────────────────────────────────────────────────────────────
@@ -565,5 +750,17 @@ describe("#532: the retirement runs where it has to", () => {
     expect(SHIP).toContain("checksRun: { type: 'array', items: { type: 'string' } }");
     expect(SHIP).toContain("failedChecks: { type: 'array', items: { type: 'string' } }");
     expect(SHIP).toContain("do NOT reconstruct it from anything");
+    // #2692: the gate's own list of what passed, copied, never rebuilt.
+    expect(SHIP).toContain("checksPassed: { type: 'array', items: { type: 'string' } }");
+    expect(SHIP).toContain("checksPassed: its \\`checksPassed\\` array exactly as it appears");
+    expect(SHIP).toContain("Do NOT build it from\n     checksRun and failedChecks");
+    // #2695 review: and the digest that lets a copy error be caught.
+    expect(SHIP).toContain("checksPassedDigest: { type: 'string' }");
+    // #2695 review round 2: the gate hands the JUnit report's failed testcases
+    // to the writer, so a name the console cut short is still not passed.
+    const executor = readFileSync(join(REPO_ROOT, "gates", "gate-executor.ts"), "utf-8");
+    expect(executor).toContain("readJunitOutcomes(junitPath)");
+    expect(executor).toMatch(/writeGateResult\([^)]*checksRun, junitOutcomes\.failed\)/);
+    expect(SHIP).toContain("checksPassedDigest: its \\`checksPassedDigest\\` string exactly as it\n     appears");
   });
 });

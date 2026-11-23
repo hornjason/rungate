@@ -10,6 +10,7 @@ import { computeACHash } from "../lib/workflow-security";
 import { verifiedPush, leftWorkLocal, type PushOutcome } from "../lib/verified-push";
 import { acProvenance, beginRun } from "./run-attribution";
 import { unionNames } from "../lib/junit-checks";
+import { checksPassedDigest } from "../lib/gate-refusal-currency";
 import { recordStateWrite } from "../lib/trajectory";
 
 /**
@@ -143,6 +144,7 @@ export function writeGateResult(
   results: GateResult[],
   projectRoot?: string,
   checksRun?: string[] | null,
+  failedTestcases?: string[] | null,
 ): { resultVal: "PASS" | "FAIL"; attempt: number } {
   const state = readState(sf);
   let resultVal: "PASS" | "FAIL" = fails === 0 ? "PASS" : "FAIL";
@@ -208,12 +210,28 @@ export function writeGateResult(
   // list says the gate ran nothing, which is a claim, and a wrong one.
   const measuredChecks = unionNames(checksRun ?? null, results.map(r => r.check));
 
+  // #2692. What passed, computed here from the verdicts rather than left for
+  // the gate's agent to infer from `failures`: a check it dropped from its
+  // failed list read as passed. A FAIL or WARN verdict is not a pass, and with
+  // no `checksRun` reading there is no list, as there is no `checksRun`.
+  //
+  // #2695 review: `checksRun`'s names come from the JUnit report, and the
+  // console parser cuts a failing title at " [", so its verdict can carry a
+  // shorter name than the testcase. The report's own failed testcases are
+  // subtracted too, so a failing test is never passed under its full name.
+  const notPassed = new Set([
+    ...results.filter(r => r.result !== "PASS").map(r => r.check),
+    ...(failedTestcases ?? []),
+  ]);
+  const passedChecks = measuredChecks === null ? null : measuredChecks.filter(c => !notPassed.has(c));
+
   state.gates = state.gates || {};
   state.gates[gate] = {
     result: resultVal,
     attempt,
     failures,
     ...(measuredChecks === null ? {} : { checksRun: measuredChecks }),
+    ...(passedChecks === null ? {} : { checksPassed: passedChecks, checksPassedDigest: checksPassedDigest(passedChecks) }),
     ts,
     commitSha: sha,
   };

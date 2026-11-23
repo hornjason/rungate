@@ -792,6 +792,10 @@ function buildSafeSSHCommand(host, command) {
 function resolvedCheckNames(report) {
     if (!report || !Array.isArray(report.checksRun) || !Array.isArray(report.failedChecks))
         return null;
+    if (!Array.isArray(report.checksPassed))
+        return null;
+    if (typeof report.checksPassedDigest !== "string" || report.checksPassedDigest !== checksPassedDigest(report.checksPassed))
+        return null;
     if (Array.isArray(report.failures)) {
         for (const line of report.failures) {
             if (typeof line === "string" && line !== "" && failureCheckName(line, report.failedChecks) === undefined)
@@ -811,7 +815,8 @@ function resolvedCheckNames(report) {
             }
         }
     }
-    return report.checksRun.filter((c) => typeof c === "string" && c !== "" && !failed.has(c));
+    const passed = new Set(report.checksPassed.filter((c) => typeof c === "string" && c !== ""));
+    return report.checksRun.filter((c) => typeof c === "string" && c !== "" && !failed.has(c) && passed.has(c));
 }
 function failureCheckName(line, failedChecks) {
     if (typeof line !== "string" || line === "")
@@ -822,6 +827,15 @@ function failureCheckName(line, failedChecks) {
 }
 function checkNameClaimsLine(name, line) {
     return line === name || line.startsWith(`${name}: `);
+}
+function checksPassedDigest(names) {
+    const text = JSON.stringify(Array.isArray(names) ? names : null);
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, "0")}`;
 }
 function retireSupersededRefusals(entries, report) {
     const resolved = resolvedCheckNames(report);
@@ -908,6 +922,8 @@ const GATE_RESULT_SCHEMA = {
     failures: { type: 'array', items: { type: 'string' } },
     checksRun: { type: 'array', items: { type: 'string' } },
     failedChecks: { type: 'array', items: { type: 'string' } },
+    checksPassed: { type: 'array', items: { type: 'string' } },
+    checksPassedDigest: { type: 'string' },
     category: { type: 'string', enum: ['STATE', 'CODE', 'DISCOVERY', 'ENVIRONMENT', 'NON_RETRYABLE'] },
     regressionTarget: { type: 'string', enum: ['BUILD', 'DISCOVERY'] },
     evidencePrevalidation: {
@@ -1955,6 +1971,13 @@ Run the ${gateName} gate and classify any failures:
      else — a list you assembled would retire refusals this gate never ran.
    - failedChecks: the \`check\` field of every entry in its \`failures\`
      array.
+   - checksPassed: its \`checksPassed\` array exactly as it appears (#2692).
+     If the key is absent, report an empty array. Do NOT build it from
+     checksRun and failedChecks: a name missing from failedChecks is not a
+     pass, and this list is the gate's own record of what passed.
+   - checksPassedDigest: its \`checksPassedDigest\` string exactly as it
+     appears. If the key is absent, report an empty string. It is checked
+     against checksPassed, so a changed list retires nothing.
 5. Also report evidencePrevalidation, copied from \`state.evidencePrevalidation\`
    in that same workflow-state.json: {verdict, brokenAcs}, where brokenAcs is
    the \`id\` of every entry in its \`acs\` array whose \`status\` is "broken".
