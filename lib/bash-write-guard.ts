@@ -2521,8 +2521,16 @@ function callWrites(program: string, protectedName: string): boolean {
  * assignment spelled inside another string (a docblock being edited) is
  * therefore not a binding. Literals separated only by spaces or a string
  * prefix are one (`'a/' 'b'`, `'a/' r'b'`), which is also how a
- * triple-quoted literal reads here: `''`, `'…'`, `''`.
+ * triple-quoted literal reads here: `''`, `'…'`, `''`. A `+` chain of names
+ * and literals may stand between the `=` and the literal (#2714):
+ * `d = ROOT + '/witnesses/' + f` binds `d`, as the parser binds it in a body
+ * that parses as JavaScript.
  */
+/** `name =` (with an optional type annotation), then any `operand +` chain, then a string prefix, at the end of the text before a literal. */
+const BOUND_BEFORE_LITERAL =
+  /(?:^|[\s;(,])([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[A-Za-z_][\w.]*\s*)?=\s*(?:(?:[A-Za-z_][\w.]*|'[^'\n]*'|"[^"\n]*")\s*\+\s*)*[rbfuRBFU]{0,2}$/;
+/** How far back the binding is looked for: room for a `+` chain of a few names and literals. */
+const BOUND_LOOKBACK = 240;
 function boundIdentifier(program: string, at: number, protectedName: string, view: CodeView): string | null {
   const k = view.literals.findIndex(([open, close]) => open < at && at < close);
   if (k < 0) return null;
@@ -2535,7 +2543,7 @@ function boundIdentifier(program: string, at: number, protectedName: string, vie
   for (let j = k - 1; j >= 0 && /^[ \t]*(?:[rbfuRBFU]{1,2})?$/.test(program.slice(view.literals[j][1] + 1, start)); j--) {
     start = view.literals[j][0];
   }
-  const m = /(?:^|[\s;(,])([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[A-Za-z_][\w.]*\s*)?=\s*[rbfuRBFU]{0,2}$/.exec(program.slice(Math.max(0, start - 80), start));
+  const m = BOUND_BEFORE_LITERAL.exec(program.slice(Math.max(0, start - BOUND_LOOKBACK), start));
   return m ? m[1] : null;
 }
 

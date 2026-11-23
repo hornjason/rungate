@@ -43,7 +43,10 @@ export interface JsCallReading {
    * The identifier a string literal holding `[at, end)` is assigned to, or
    * null. The literal must END at the name, or for a directory name (`…/`) at
    * a file name after it, and hold no newline: the variable then holds the
-   * path, not text that mentions it. Literals joined by `+` are one.
+   * path, not text that mentions it. A template literal's text between its
+   * values counts as a literal (#2714). The value flows to the variable
+   * through `+`, `||`, `??`, either branch of `?:`, and the arguments of a
+   * path-building call (`join`, `resolve`, `normalize`, bare or as a member).
    */
   boundIdentifier(at: number, end: number): string | null;
   /** The offsets of every use of `name`: not its declaration, not a property spelled the same. */
@@ -102,6 +105,37 @@ function isStringLiteral(n: AstNode): boolean {
   return n.type === 'TemplateLiteral' && (n.expressions as unknown[]).length === 0;
 }
 
+/** A call that builds a path from its arguments: `join`, `resolve` or `normalize`, bare or as a member (#2714). */
+const PATH_BUILDERS = new Set(['join', 'resolve', 'normalize']);
+function buildsPath(call: AstNode): boolean {
+  const callee = call.callee as AstNode;
+  if (callee.type === 'Identifier') return PATH_BUILDERS.has(callee.name as string);
+  if (callee.type !== 'MemberExpression' || callee.computed) return false;
+  const prop = callee.property as AstNode;
+  return prop.type === 'Identifier' && PATH_BUILDERS.has(prop.name as string);
+}
+
+/**
+ * Whether `parent`'s value can be `child`'s, so a name `child` holds is in
+ * what `parent` holds (#2714): either operand of `+`, the right side of `||`
+ * or `??` (the left one too, since a fallback can be either), either branch
+ * of `?:` but never its test, and any argument of a path-building call.
+ */
+function carriesValue(parent: AstNode, child: AstNode): boolean {
+  switch (parent.type) {
+    case 'BinaryExpression':
+      return parent.operator === '+';
+    case 'LogicalExpression':
+      return parent.operator === '||' || parent.operator === '??';
+    case 'ConditionalExpression':
+      return parent.consequent === child || parent.alternate === child;
+    case 'CallExpression':
+      return buildsPath(parent) && (parent.arguments as AstNode[]).includes(child);
+    default:
+      return false;
+  }
+}
+
 function literalValue(n: AstNode): string {
   if (n.type === 'Literal') return n.value as string;
   const quasis = n.quasis as Array<{ value: { cooked: string | null } }>;
@@ -135,20 +169,25 @@ export function readJsCalls(body: string): JsCallReading | null {
     },
 
     boundIdentifier(at: number, end: number): string | null {
-      const lit = nodes
+      // A string literal holding the name, or one stretch of a template
+      // literal's text, `${R}/witnesses/${f}` (#2714).
+      const piece = nodes
         .map(e => e.node)
-        .find(n => isStringLiteral(n) && n.start < at && end < n.end);
-      if (!lit) return null;
+        .find(n =>
+          (n.type === 'Literal' && typeof n.value === 'string' && n.start < at && end < n.end) ||
+          (n.type === 'TemplateElement' && n.start <= at && end <= n.end));
+      if (!piece) return null;
+      const textEnd = piece.type === 'Literal' ? piece.end - 1 : piece.end;
       const name = body.slice(at, end);
-      const tail = body.slice(end, lit.end - 1);
+      const tail = body.slice(end, textEnd);
       if (tail !== '' && !(name.endsWith('/') && /^[\w.\-/]+$/.test(tail))) return null;
-      if (literalValue(lit).includes('\n')) return null;
-      let top = lit;
+      const text = piece.type === 'Literal' ? (piece.value as string) : body.slice(piece.start, piece.end);
+      if (text.includes('\n')) return null;
+      let top = piece.type === 'Literal' ? piece : parentOf.get(piece);
+      if (!top) return null;
       for (;;) {
         const p = parentOf.get(top);
-        // Either operand: `ROOT + '/…/x.json'` and `'…/witnesses/' + f` both
-        // put the name in what the whole concatenation holds.
-        if (p && p.type === 'BinaryExpression' && p.operator === '+') top = p;
+        if (p && carriesValue(p, top)) top = p;
         else break;
       }
       const holder = parentOf.get(top);
