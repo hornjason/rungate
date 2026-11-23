@@ -45,7 +45,10 @@ if (name === "--version" || name === "-v") {
   process.exit(0);
 }
 
-const command = CLI_COMMANDS[name];
+// Own keys only (#2677 round 1). The registry is an object literal, so a bare
+// lookup also finds what every object inherits: `rungate constructor` read the
+// Object function, skipped the branch below and crashed with exit 1.
+const command = Object.hasOwn(CLI_COMMANDS, name) ? CLI_COMMANDS[name] : undefined;
 if (!command) {
   console.error(`rungate: unknown command "${name}"\n`);
   console.error(helpText());

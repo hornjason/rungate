@@ -96,7 +96,10 @@ export interface CliCommand {
  * a command's script or a dependency exits `INCOMPLETE_INSTALL_EXIT`, so a
  * generated workflow could tell "this package has no such command" from
  * either only by matching the sentence. 64 is `EX_USAGE` in `sysexits.h`:
- * the command was used incorrectly. Declared beside the registry it describes.
+ * the command was used incorrectly. Not 2, which commands exit for their OWN
+ * bad arguments: an older version that has a command but not a flag must not
+ * read the same as one with no such command. Declared beside the registry it
+ * describes.
  */
 export const UNKNOWN_COMMAND_EXIT = 64;
 
