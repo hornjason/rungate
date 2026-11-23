@@ -1251,17 +1251,135 @@ export const AI_REVIEW_ACTION_STEP_ID = "ai-review-action";
 export const AI_REVIEW_ACTION_STEP_NAME = "Run the AI review";
 
 /**
- * How many separate reviewer invocations one round is: one today. #2648
- * (CRC-B11, ADR-025 decision 2) makes it three and merges their findings.
+ * CRC-B11 (#2648, ADR-025 decision 2): one round is this many separate
+ * reviewer invocations, merged into their union by `ai-review-merge-drafts`.
+ * Two Sonnet runs at the same commits agreed on 2 of the 6 defects they found
+ * between them; three Haiku runs together found 9 of 11 (2026-11-22).
  *
  * Every check that counts something each run must carry — the model, the
  * turn budget, the credentials, the denial list, the setting sources, the
- * action pin and the changed-files binding — counts it against this instead
- * of a literal 1 (#2667). At one run a second occurrence is still a second
- * spelling, and those checks still fail on it. The generator does not read
- * this yet, so the workflow it writes is unchanged.
+ * action pin and the changed-files binding — counts it against this (#2667),
+ * so a second spelling inside one run still fails them.
  */
-export const AI_REVIEW_RUNS = 1;
+export const AI_REVIEW_RUNS = 3;
+
+/**
+ * One step id per run. Run 1 keeps the id every reader knew before #2648, so
+ * a step reading `steps.ai-review-action` from an older generator still
+ * names a step that exists.
+ */
+export const AI_REVIEW_ACTION_STEP_IDS: readonly string[] = Object.freeze(
+  Array.from({ length: AI_REVIEW_RUNS }, (_, i) => (i === 0 ? AI_REVIEW_ACTION_STEP_ID : `${AI_REVIEW_ACTION_STEP_ID}-${i + 1}`)),
+);
+
+/** The step after each run that keeps its execution file under the run's own name. */
+export const AI_REVIEW_KEEP_EXECUTION_STEP_IDS: readonly string[] = Object.freeze(
+  Array.from({ length: AI_REVIEW_RUNS }, (_, i) => `ai-review-keep-execution-${i + 1}`),
+);
+
+/** Where run `k` (1-based) writes its draft, under the prepare step's directory. */
+export function aiReviewDraftBasename(k: number): string {
+  return `ai-review-draft-${k}.json`;
+}
+
+/** Where run `k`'s execution file is kept, under the prepare step's directory. */
+export function aiReviewExecutionCopyBasename(k: number): string {
+  return `ai-review-execution-${k}.json`;
+}
+
+/**
+ * Where each run's draft and execution file are kept once the run is over: a
+ * sibling of the findings directory, never inside it. Every run is given the
+ * findings directory with `--add-dir`, so anything left there is something
+ * the next run can see, overwrite or plant; the sibling is out of a run's
+ * working directories, and the digest each keep step outputs catches a write
+ * that reaches it anyway.
+ */
+export const AI_REVIEW_KEPT_DIR_SUFFIX = ".kept";
+
+/** The merge step's env names for the digests run `k`'s keep step output. */
+export function aiReviewRunDigestVar(k: number, what: "DRAFT" | "EXECUTION"): string {
+  return `AI_REVIEW_RUN_${k}_${what}_SHA`;
+}
+
+export const AI_REVIEW_MERGE_STEP_ID = "ai-review-merge";
+
+export const AI_REVIEW_MERGE_STEP_NAME = "Merge the review runs' drafts into this round's payload";
+
+/** The command the merge step runs, published in 0.8.43 and given its run outputs in 0.8.44 (#2661). */
+export const AI_REVIEW_MERGE_COMMAND = "ai-review-merge-drafts";
+
+/**
+ * The report step's env name for the round's list of transcripts, one per
+ * line: the kept execution file of every run whose draft the merge read, or an
+ * empty line for such a run whose transcript it cannot vouch for (#2674). The
+ * checks on how a draft was produced (REVIEW.md read, intent read) read every
+ * line, because the payload holds every listed run's findings.
+ */
+export const AI_REVIEW_EXECUTION_LIST_VAR = "AI_REVIEW_EXECUTION_LIST";
+
+/** Where the merge writes that list, in the kept directory no reviewer is handed. */
+export const AI_REVIEW_EXECUTION_LIST_BASENAME = "ai-review-round-executions.txt";
+
+/**
+ * The shell that reads the round's transcripts into the bash array `arr`
+ * (#2674): every line of the merge step's list, or, with no list named (a
+ * one-run workflow), the one transcript the round reports. A list that is
+ * named and missing or empty becomes one empty entry, a run nothing can vouch
+ * for, so every reader treats it as unread. One builder for every step that
+ * reads the list, so the report's checks and the ledger cannot read it two
+ * ways. The array always has an entry, so `"${arr[@]}"` is safe under
+ * `set -u` on the bash 3.2 a laptop runs the tests with.
+ */
+function roundTranscriptsShell(arr: string, indent: string): string {
+  return [
+    `${arr}=("\${${AI_REVIEW_EXECUTION_FILE_VAR}:-}")`,
+    `if [ -n "\${${AI_REVIEW_EXECUTION_LIST_VAR}:-}" ]; then`,
+    `  ${arr}=("")`,
+    `  if [ -f "\${${AI_REVIEW_EXECUTION_LIST_VAR}}" ]; then`,
+    `    ${arr}_listed=()`,
+    `    while IFS= read -r ${arr}_line || [ -n "\${${arr}_line}" ]; do ${arr}_listed+=("\${${arr}_line}"); done < "\${${AI_REVIEW_EXECUTION_LIST_VAR}}"`,
+    `    if [ "\${#${arr}_listed[@]}" -gt 0 ]; then ${arr}=("\${${arr}_listed[@]}"); fi`,
+    `  fi`,
+    `fi`,
+  ]
+    .map(l => indent + l)
+    .join("\n");
+}
+
+/**
+ * The step that seals the round's inputs before run 1 (#2674). Every run holds
+ * Write on the findings directory, and the same directory holds what the next
+ * run and the adjudicator read. See `buildSealInputsScript`.
+ */
+export const AI_REVIEW_SEAL_INPUTS_STEP_ID = "ai-review-seal-inputs";
+
+export const AI_REVIEW_SEAL_INPUTS_STEP_NAME = "Seal what every review run reads, before the first run";
+
+/** The sealed list of inputs, in the kept directory no reviewer is handed. */
+export const AI_REVIEW_INPUTS_MANIFEST_BASENAME = "ai-review-inputs.sha256";
+
+/** The keep steps' env name for the seal's digest, a step output fixed when the seal step ended. */
+export const AI_REVIEW_INPUTS_SHA_VAR = "AI_REVIEW_INPUTS_SHA";
+
+/**
+ * The drift check after run `k`, for every run but the last (#2674). It is the
+ * drift step with another id and name. The step after the merge, which keeps
+ * `AI_REVIEW_DRIFT_STEP_ID`, checks the last run. Checked only before run 1
+ * and after the last run, an edit one run made and a later run reverted was
+ * never seen, and the first run's draft described a tree nobody reviewed.
+ *
+ * Not spelled with the drift step's id as a prefix: checks that find a step by
+ * `id: <its id>` in the workflow text would then find this one first.
+ */
+export function aiReviewRunDriftStepId(k: number): string {
+  return `ai-review-tree-check-after-run-${k}`;
+}
+
+/** The merge step's env name for run `k`'s outcome (1-based). */
+export function aiReviewRunOutcomeVar(k: number): string {
+  return `AI_REVIEW_RUN_${k}_OUTCOME`;
+}
 
 /**
  * The two action references the generated job pins, supplied by the caller.
@@ -3436,6 +3554,249 @@ export function buildThreadsScript(version: string): string {
     `fi`,
     ``,
     `exit "$threads_code"`,
+  ].join("\n");
+}
+
+/**
+ * Before run 1: seal every file in the findings directory, so a run that
+ * changes what a later run or the adjudicator reads is caught (#2674, from
+ * the commit-time security review).
+ *
+ * Every run is handed the findings directory with `--add-dir` and holds
+ * `Write`, because that is how it writes its draft. The same directory holds
+ * the intent, the changed-file list, the line counts and the thread list. A
+ * run steered by the branch could rewrite one of them and so steer every run
+ * after it, which is exactly the independence three runs exist to buy. The
+ * adjudicator reads them too.
+ *
+ * The manifest is a `sha256sum` listing of every file there except the
+ * payload, in the kept directory, which no run is handed. Its own digest is
+ * this step's output. A step's outputs are fixed when it ends, so the keep
+ * steps can tell a sealed manifest from one changed later. A file a run ADDS
+ * is refused as well. The consumers read fixed names whether or not the file
+ * was there at the seal, so an input absent then, such as a thread list the
+ * carry step could not fetch, would be read as real if a run created it.
+ *
+ * It never fails the job itself. A seal it cannot take is an empty digest,
+ * and every keep step then refuses the round as unmeasured, which is the
+ * direction this is allowed to be wrong in.
+ */
+export function buildSealInputsScript(): string {
+  return [
+    `set -uo pipefail`,
+    `payload="\${${AI_REVIEW_FINDINGS_PATH_VAR}}"`,
+    `dir="\${payload%/*}"`,
+    `kept="\${dir}${AI_REVIEW_KEPT_DIR_SUFFIX}"`,
+    `manifest="$kept/${AI_REVIEW_INPUTS_MANIFEST_BASENAME}"`,
+    `inputs_sha=""`,
+    `if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then`,
+    `  if (cd "$dir" && find . -type f ! -path "./\${payload##*/}" -exec sha256sum {} + | LC_ALL=C sort -k2) > "$manifest" 2>/dev/null; then`,
+    `    inputs_sha="$(sha256sum "$manifest" | cut -d' ' -f1)" || inputs_sha=""`,
+    `  else`,
+    `    rm -f "$manifest"`,
+    `  fi`,
+    `fi`,
+    `if [ -z "$inputs_sha" ]; then`,
+    `  echo "::warning title=AI review inputs::could not seal this round's inputs, so every run will be refused as unmeasured"`,
+    `else`,
+    `  echo "sealed $(wc -l < "$manifest" | tr -d ' ') input file(s) before run 1"`,
+    `fi`,
+    `printf 'inputs_sha=%s\\n' "$inputs_sha" >> "\${GITHUB_OUTPUT}"`,
+    `exit 0`,
+  ].join("\n");
+}
+
+/**
+ * After run `k`: keep its draft and execution file where the next run cannot
+ * reach them, and record what they were (#2648).
+ *
+ * Three things this is for, each a failure the shared directory allows:
+ *
+ * - The action writes its execution file to ONE fixed path, so the next run
+ *   overwrites it. It is copied out, and the fixed path is CLEARED, because a
+ *   run that crashes before writing can still report that path as its output.
+ * - Every run writes the round's payload path, because the runs are one
+ *   reviewer. What run k wrote there is its draft: it is copied out, where a
+ *   later run, by mistake or by design, cannot overwrite it, and the path is
+ *   cleared, so run k+1 starts with nothing there and cannot be read as
+ *   having written what run k did.
+ *
+ * The digest of each kept file is this step's output. A step's outputs are
+ * fixed when it ends, so the merge can tell a kept file from one changed
+ * after its run, wherever that change came from. A digest that could not be
+ * taken is empty, and the merge reads a kept file with no digest as not
+ * written — the direction this is allowed to be wrong in.
+ *
+ * What it cannot keep is a warning, and the run then reads as having written
+ * nothing, a route the merge and the report already name. It fails the job in
+ * one case only (#2674): run `k` changed an input sealed before run 1, or the
+ * seal itself is missing or changed. Then nothing can say what the next run or
+ * the adjudicator would read, and the round is void, as a run that edited the
+ * checkout is.
+ */
+export function buildKeepExecutionScript(k: number): string {
+  return [
+    `set -uo pipefail`,
+    `payload="\${${AI_REVIEW_FINDINGS_PATH_VAR}}"`,
+    `dir="\${payload%/*}"`,
+    `kept="\${dir}${AI_REVIEW_KEPT_DIR_SUFFIX}"`,
+    `kept_draft="$kept/${aiReviewDraftBasename(k)}"`,
+    `kept_exec="$kept/${aiReviewExecutionCopyBasename(k)}"`,
+    `src="\${${AI_REVIEW_EXECUTION_FILE_VAR}:-}"`,
+    `draft_sha=""`,
+    `execution_sha=""`,
+    `# What the next run and the adjudicator read must be what was sealed before run 1 (#2674).`,
+    `manifest="$kept/${AI_REVIEW_INPUTS_MANIFEST_BASENAME}"`,
+    `sealed="\${${AI_REVIEW_INPUTS_SHA_VAR}:-}"`,
+    `if [ -z "$sealed" ] || [ ! -f "$manifest" ]; then`,
+    `  echo "::error title=AI review inputs::UNMEASURED - this round's inputs were not sealed before run 1, so whether run ${k} changed what the next run and the adjudicator read is not known. Refusing the round."`,
+    `  exit ${AI_REVIEW_REQUIRED_EXIT}`,
+    `fi`,
+    `manifest_sha="$(sha256sum "$manifest" | cut -d' ' -f1)" || manifest_sha=""`,
+    `if [ "$manifest_sha" != "$sealed" ]; then`,
+    `  echo "::error title=AI review inputs::the seal on this round's inputs changed after it was taken, so nothing can say what run ${k} left for the next run to read. Refusing the round."`,
+    `  exit ${AI_REVIEW_REQUIRED_EXIT}`,
+    `fi`,
+    `if [ -s "$manifest" ]; then`,
+    `  inputs_code=0`,
+    `  changed_inputs="$(cd "$dir" && sha256sum -c --quiet "$manifest" 2>&1)" || inputs_code=$?`,
+    `  if [ "$inputs_code" -ne 0 ]; then`,
+    `    echo "::error title=AI review inputs::run ${k} changed this round's inputs, which the next run and the adjudicator read, so the round is void. Refusing."`,
+    `    printf '%s\\n' "$changed_inputs"`,
+    `    exit ${AI_REVIEW_REQUIRED_EXIT}`,
+    `  fi`,
+    `fi`,
+    `# And nothing new but the payload: a consumer reads a fixed name whether or not it was sealed.`,
+    `listing_code=0`,
+    `current="$(cd "$dir" && find . -type f ! -path "./\${payload##*/}" | LC_ALL=C sort)" || listing_code=$?`,
+    `if [ "$listing_code" -ne 0 ]; then`,
+    `  echo "::error title=AI review inputs::UNMEASURED - the findings directory could not be listed after run ${k}, so whether it added an input the next run or the adjudicator reads is not known. Refusing the round."`,
+    `  exit ${AI_REVIEW_REQUIRED_EXIT}`,
+    `fi`,
+    `sealed_names="$(cut -d' ' -f3- "$manifest")" || sealed_names=""`,
+    `added=""`,
+    `while IFS= read -r f; do`,
+    `  if [ -n "$f" ] && ! grep -qxF -- "$f" <<< "$sealed_names"; then added="\${added}\${f} "; fi`,
+    `done <<< "$current"`,
+    `if [ -n "$added" ]; then`,
+    `  echo "::error title=AI review inputs::run ${k} added \${added}to the findings directory after the seal, and the next run or the adjudicator may read it as an input, so the round is void. Refusing."`,
+    `  exit ${AI_REVIEW_REQUIRED_EXIT}`,
+    `fi`,
+    `if mkdir -p "$kept" 2>/dev/null && [ -d "$kept" ]; then`,
+    `  rm -f "$kept_draft" "$kept_exec"`,
+    `  if [ -f "$payload" ] && cp "$payload" "$kept_draft"; then`,
+    `    draft_sha="$(sha256sum "$kept_draft" | cut -d' ' -f1)" || draft_sha=""`,
+    `    echo "kept run ${k}'s draft as $kept_draft"`,
+    `  else`,
+    `    echo "run ${k} wrote no draft"`,
+    `  fi`,
+    `  if [ -n "$src" ] && [ -f "$src" ]; then`,
+    `    if cp "$src" "$kept_exec"; then`,
+    `      execution_sha="$(sha256sum "$kept_exec" | cut -d' ' -f1)" || execution_sha=""`,
+    `      echo "kept run ${k}'s execution file as $kept_exec"`,
+    `    else`,
+    `      rm -f "$kept_exec"`,
+    `      echo "::warning title=AI review execution file::could not keep run ${k}'s execution file, so run ${k} reads as having written none"`,
+    `    fi`,
+    `  else`,
+    `    echo "run ${k} wrote no execution file"`,
+    `  fi`,
+    `else`,
+    `  echo "::warning title=AI review drafts::could not make $kept, so run ${k}'s draft and execution file are not kept and run ${k} reads as having written neither"`,
+    `fi`,
+    `if [ -n "$src" ]; then rm -f "$src"; fi`,
+    `rm -f "$payload"`,
+    `printf 'draft_sha=%s\\nexecution_sha=%s\\n' "$draft_sha" "$execution_sha" >> "\${GITHUB_OUTPUT}"`,
+    `exit 0`,
+  ].join("\n");
+}
+
+/**
+ * Merge the round's drafts into its one payload, and say which run the round
+ * reports (#2648, #2661). Every decision is `ai-review-merge-drafts`'s: the
+ * union, whether a partial round may write a payload at all, and which run's
+ * outcome and execution file the later steps read. This passes it every run's
+ * outcome, kept file and draft, in run order, and nothing else.
+ *
+ * It runs from a fresh empty directory (`AI_REVIEW_FRESH_CWD`, #2664), never
+ * the checkout and never the findings directory: `bunx` resolves its config
+ * from its working directory upward, and every run can write the findings
+ * directory.
+ *
+ * It reads only what the keep steps kept, and only if each file's digest is
+ * the one its keep step output: a kept draft or transcript changed after its
+ * run is passed as not written, and named. So tampering can withhold a round
+ * or leave a block, never produce a pass. The round's payload path is cleared
+ * first — only the merge writes it.
+ *
+ * A run with no outcome is passed as `failure`. The only route this script
+ * decides itself is a merge that refused or could not run: then no payload
+ * stands, the round reports run 1 as failed, and the annotation says the
+ * round is UNMEASURED — the report step's existing no-payload route.
+ */
+export function buildMergeDraftsScript(version: string): string {
+  const merger = `bunx ${AI_REVIEW_ADJUDICATOR_PACKAGE}@${version} ${AI_REVIEW_MERGE_COMMAND}`;
+  const runs = Array.from({ length: AI_REVIEW_RUNS }, (_, i) => i + 1);
+  return [
+    `set -uo pipefail`,
+    `payload="\${${AI_REVIEW_FINDINGS_PATH_VAR}}"`,
+    `dir="\${payload%/*}"`,
+    `kept="\${dir}${AI_REVIEW_KEPT_DIR_SUFFIX}"`,
+    `# Only the merge writes the round's payload; anything already there is not it.`,
+    `rm -f "$payload"`,
+    `# A kept file is read only if it is exactly what its run's keep step recorded.`,
+    `# Sets REPLY to the path, or to "" — naming any file that changed after its run.`,
+    `check() {`,
+    `  REPLY=""`,
+    `  if [ -f "$1" ]; then`,
+    `    if [ -n "$2" ] && [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ]; then`,
+    `      REPLY="$1"`,
+    `    else`,
+    `      echo "::error title=AI review drafts::$3 changed after its run finished, so it is read as not written"`,
+    `    fi`,
+    `  fi`,
+    `}`,
+    `# The transcripts of the runs whose drafts are in the round, for the report (#2674).`,
+    `list="$kept/${AI_REVIEW_EXECUTION_LIST_BASENAME}"`,
+    `list_ok=1`,
+    `: > "$list" 2>/dev/null || list_ok=0`,
+    `args=(--out "$payload" --github-output "\${GITHUB_OUTPUT}")`,
+    `drafts=()`,
+    ...runs.flatMap(k => [
+      `check "$kept/${aiReviewExecutionCopyBasename(k)}" "\${${aiReviewRunDigestVar(k, "EXECUTION")}:-}" "run ${k}'s execution file"`,
+      `e="$REPLY"`,
+      `args+=(--outcome "\${${aiReviewRunOutcomeVar(k)}:-failure}" --execution "$e")`,
+      `check "$kept/${aiReviewDraftBasename(k)}" "\${${aiReviewRunDigestVar(k, "DRAFT")}:-}" "run ${k}'s draft"`,
+      // An absent draft is passed by its own name, which the merge reports as
+      // not written. A draft that changed after its run is passed under a name
+      // that does not exist and says why, so the merge cannot read it and its
+      // line about that path points at the cause; check() has already named it
+      // in an annotation. Nothing is renamed on disk (#2674).
+      `d="$kept/${aiReviewDraftBasename(k)}"; if [ -z "$REPLY" ] && [ -f "$d" ]; then d="$d.changed-after-its-run"; fi`,
+      `drafts+=("$d")`,
+      // #2674: a run whose draft is read is in the round, so the report must
+      // see how that draft was produced: its transcript, or an empty line when
+      // there is none this step can vouch for.
+      `if [ -n "$REPLY" ]; then printf '%s\\n' "$e" >> "$list" 2>/dev/null || list_ok=0; fi`,
+    ]),
+    // A list it could not write is removed rather than left partial, and the
+    // report reads a named list that is not there as a run nothing can vouch
+    // for, and refuses. So a failed write can withhold a round, never pass one.
+    `if [ "$list_ok" != 1 ]; then`,
+    `  rm -f "$list"`,
+    `  echo "::warning title=AI review drafts::could not write the round's list of transcripts, so the report cannot tell how this round's drafts were produced and will refuse"`,
+    `fi`,
+    `printf 'execution_list=%s\\n' "$list" >> "\${GITHUB_OUTPUT}"`,
+    `merge_code=0`,
+    `merge_out="$(${AI_REVIEW_FRESH_CWD} && ${merger} "\${args[@]}" "\${drafts[@]}" 2>&1)" || merge_code=$?`,
+    `printf '%s\\n' "$merge_out"`,
+    `if [ "$merge_code" -ne 0 ]; then`,
+    `  rm -f "$payload"`,
+    `  check "$kept/${aiReviewExecutionCopyBasename(1)}" "\${${aiReviewRunDigestVar(1, "EXECUTION")}:-}" "run 1's execution file"`,
+    `  echo "::error title=AI review drafts::UNMEASURED - the review runs' drafts could not be merged (exit $merge_code), so this round has no findings payload and reports run 1 as failed. This is not a review that found nothing."`,
+    `  printf 'outcome=failure\\nexecution_file=%s\\n' "$REPLY" >> "\${GITHUB_OUTPUT}"`,
+    `fi`,
+    `exit 0`,
   ].join("\n");
 }
 
@@ -7115,6 +7476,14 @@ if [ "\${AI_REVIEW_ACTION_OUTCOME:-}" = success ]; then
   # is the honest direction: the prepare step did not run, so nobody can say a
   # review happened.
   if [ -s "\${${AI_REVIEW_FINDINGS_PATH_VAR}:-}" ]; then
+    # #2674. The transcripts the two read-checks below look at: every run whose
+    # draft is in this round, from the merge step's list, because the payload
+    # is their union and a finding is only as conventioned as the run that
+    # wrote it. With no list named, which is a one-run workflow, it is the
+    # run the round reports. A list that is named and unreadable, or empty,
+    # is one run nothing can vouch for, so both checks treat it as unread.
+${roundTranscriptsShell("round_execs", "    ")}
+
     # #1167, and BEFORE the adjudication, deliberately. The adjudicator reads
     # the findings; this reads whether the findings were produced under the
     # conventions at all, and a verdict adjudicated out of a review that
@@ -7180,12 +7549,22 @@ if [ "\${AI_REVIEW_ACTION_OUTCOME:-}" = success ]; then
         # and refuse every review. \`tr\` is already a dependency of the
         # restore step. A \`tr\` that is missing takes the pipeline non-zero,
         # which lands on the refusal below — the correct direction.
-        if tr -d '\\n' < "\${${AI_REVIEW_EXECUTION_FILE_VAR}}" | grep -qE "\${conv_a}|\${conv_b}"; then
-          echo "::notice title=${AI_REVIEW_CONVENTIONS_TITLE}::${conventionsRead}"
-        else
-          echo "::error title=${AI_REVIEW_UNMEASURED_TITLE}::${conventionsUnread}" >&2
-          exit ${AI_REVIEW_REQUIRED_EXIT}
-        fi
+        # Every run whose draft is in the round (#2674), not only the one
+        # the round reports: run 2 skipping the conventions puts its
+        # findings in the payload whatever run 1 read.
+        for conv_f in "\${round_execs[@]}"; do
+          if [ ! -s "\${conv_f}" ]; then
+            echo "a run whose draft is in this round has no transcript this step can vouch for, so how its findings were produced is not known"
+            echo "::error title=${AI_REVIEW_UNMEASURED_TITLE}::${conventionsUnmeasured}" >&2
+            exit ${AI_REVIEW_REQUIRED_EXIT}
+          fi
+          if ! tr -d '\\n' < "\${conv_f}" | grep -qE "\${conv_a}|\${conv_b}"; then
+            echo "the run whose transcript is \${conv_f} has findings in this round and did not read ${AI_REVIEW_CONVENTIONS_FILE}"
+            echo "::error title=${AI_REVIEW_UNMEASURED_TITLE}::${conventionsUnread}" >&2
+            exit ${AI_REVIEW_REQUIRED_EXIT}
+          fi
+        done
+        echo "::notice title=${AI_REVIEW_CONVENTIONS_TITLE}::${conventionsRead}"
       else
         echo "::error title=${AI_REVIEW_UNMEASURED_TITLE}::${conventionsUnmeasured}" >&2
         exit ${AI_REVIEW_REQUIRED_EXIT}
@@ -7228,7 +7607,12 @@ if [ "\${AI_REVIEW_ACTION_OUTCOME:-}" = success ]; then
         else
           intent_a='"name"[[:space:]]*:[[:space:]]*"Read"[^{}]*\\{[^{}]*"file_path"[[:space:]]*:[[:space:]]*"'"\${intent_p}"'"'
           intent_b='"file_path"[[:space:]]*:[[:space:]]*"'"\${intent_p}"'"[^{}]*\\}[^{}]*"name"[[:space:]]*:[[:space:]]*"Read"'
-          if tr -d '\\n' < "\${${AI_REVIEW_EXECUTION_FILE_VAR}}" | grep -qE "\${intent_a}|\${intent_b}"; then
+          # Every run whose draft is in the round (#2674), as above.
+          intent_all=1
+          for intent_f in "\${round_execs[@]}"; do
+            if [ ! -s "\${intent_f}" ] || ! tr -d '\\n' < "\${intent_f}" | grep -qE "\${intent_a}|\${intent_b}"; then intent_all=0; fi
+          done
+          if [ "\${intent_all}" = 1 ]; then
             echo "::notice title=${AI_REVIEW_INTENT_TITLE}::${intentRead}"
           else
             echo "::warning title=${AI_REVIEW_INTENT_UNREAD_TITLE}::${intentUnread}"
@@ -10950,22 +11334,41 @@ fi
 # that could NEVER be read looked exactly like a field being carefully
 # cautious. The selection is \`AI_REVIEW_EXECUTION_RESULT_JQ\`, one binding,
 # so there is exactly one thing a mutation can point back at the root.
+#
+# #2674: a round is several runs, so the count recorded is the MOST any run
+# whose draft is in the round took, read from each transcript in the merge
+# step's list. The question it answers is whether a run reached its budget
+# (#1380), and one run's count is not the round's. Any listed transcript that
+# cannot be read leaves the round null, never a number from the others.
+${roundTranscriptsShell("turn_files", "")}
 turns="null"
-if [ -n "\${${AI_REVIEW_EXECUTION_FILE_VAR}:-}" ] && [ -s "\${${AI_REVIEW_EXECUTION_FILE_VAR}}" ]; then
-  if parsed_turns=\$(jq -c '${AI_REVIEW_EXECUTION_RESULT_JQ}
-       | if type == "object"
-         and (.${AI_REVIEW_EXECUTION_TURNS_KEY} | type) == "number"
-         and (.${AI_REVIEW_EXECUTION_TURNS_KEY} | floor) == .${AI_REVIEW_EXECUTION_TURNS_KEY}
-         and .${AI_REVIEW_EXECUTION_TURNS_KEY} >= 0
-       then .${AI_REVIEW_EXECUTION_TURNS_KEY}
-       else error("no ${AI_REVIEW_EXECUTION_RESULT_TYPE} message states a non-negative integer ${AI_REVIEW_EXECUTION_TURNS_KEY}") end' \\
-      "\${${AI_REVIEW_EXECUTION_FILE_VAR}}" 2>/dev/null); then
-    turns="\${parsed_turns}"
+turns_max=-1
+turns_unreadable=0
+turns_absent=0
+for turn_f in "\${turn_files[@]}"; do
+  if [ -n "\${turn_f}" ] && [ -s "\${turn_f}" ]; then
+    if parsed_turns=\$(jq -c '${AI_REVIEW_EXECUTION_RESULT_JQ}
+         | if type == "object"
+           and (.${AI_REVIEW_EXECUTION_TURNS_KEY} | type) == "number"
+           and (.${AI_REVIEW_EXECUTION_TURNS_KEY} | floor) == .${AI_REVIEW_EXECUTION_TURNS_KEY}
+           and .${AI_REVIEW_EXECUTION_TURNS_KEY} >= 0
+         then .${AI_REVIEW_EXECUTION_TURNS_KEY}
+         else error("no ${AI_REVIEW_EXECUTION_RESULT_TYPE} message states a non-negative integer ${AI_REVIEW_EXECUTION_TURNS_KEY}") end' \\
+        "\${turn_f}" 2>/dev/null); then
+      if [ "\${parsed_turns}" -gt "\${turns_max}" ]; then turns_max="\${parsed_turns}"; fi
+    else
+      turns_unreadable=1
+    fi
   else
-    ledger_note "the action's execution file exists and states no readable '${AI_REVIEW_EXECUTION_TURNS_KEY}', so this round's turn count is recorded as UNMEASURED rather than as a number. A review's turn count is the one candidate mechanism for a re-run flipping a verdict on an unchanged tree (#1380), and a guessed zero would be worse than no reading."
+    turns_absent=1
   fi
-else
+done
+if [ "\${turns_unreadable}" = 1 ]; then
+  ledger_note "the action's execution file exists and states no readable '${AI_REVIEW_EXECUTION_TURNS_KEY}', so this round's turn count is recorded as UNMEASURED rather than as a number. A review's turn count is the one candidate mechanism for a re-run flipping a verdict on an unchanged tree (#1380), and a guessed zero would be worse than no reading."
+elif [ "\${turns_absent}" = 1 ]; then
   ledger_note "the action's execution file is absent or empty, so this round's turn count is recorded as UNMEASURED. The round itself is still recorded (#1380)."
+elif [ "\${turns_max}" -ge 0 ]; then
+  turns="\${turns_max}"
 fi
 
 if ! entry=\$(jq -nc \\
@@ -11625,6 +12028,53 @@ export function buildReviewRunStep(
     ...buildCarryScript().trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
   ];
 
+  // CRC-B11 (#2648): the same reviewer three times. The runs are IDENTICAL
+  // apart from their id and name — one action, one prompt, one model, one
+  // credential, and one findings path: the round's own. The keep step after
+  // each run moves what it wrote out of that path before the next run, and
+  // only the merge writes it for the round. Identical steps mean nothing about
+  // the reviewer can differ between the runs of one round.
+  const reviewRun = (k: number) =>
+    review
+      .map(l => (l === `- name: ${AI_REVIEW_ACTION_STEP_NAME}` && k > 1 ? `- name: ${AI_REVIEW_ACTION_STEP_NAME} (run ${k} of ${AI_REVIEW_RUNS})` : l))
+      .map(l => (l === `  id: ${AI_REVIEW_ACTION_STEP_ID}` ? `  id: ${AI_REVIEW_ACTION_STEP_IDS[k - 1]}` : l));
+
+  const keepExecution = (k: number) => [
+    `- name: Keep run ${k}'s draft and execution file out of the next run's reach`,
+    `  id: ${AI_REVIEW_KEEP_EXECUTION_STEP_IDS[k - 1]}`,
+    `  env:`,
+    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_ACTION_STEP_IDS[k - 1]}.outputs.execution_file }}`,
+    `    ${AI_REVIEW_FINDINGS_PATH_VAR}: ${AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_FINDINGS_PATH_VAR]}`,
+    `    ${AI_REVIEW_INPUTS_SHA_VAR}: \${{ steps.${AI_REVIEW_SEAL_INPUTS_STEP_ID}.outputs.inputs_sha }}`,
+    `  run: |`,
+    ...buildKeepExecutionScript(k).trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
+  ];
+
+  // #2674: seal what every run reads, after the last step that writes it and
+  // before run 1.
+  const sealInputs = [
+    `- name: ${AI_REVIEW_SEAL_INPUTS_STEP_NAME}`,
+    `  id: ${AI_REVIEW_SEAL_INPUTS_STEP_ID}`,
+    `  env:`,
+    `    ${AI_REVIEW_FINDINGS_PATH_VAR}: ${AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_FINDINGS_PATH_VAR]}`,
+    `  run: |`,
+    ...buildSealInputsScript().trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
+  ];
+
+  const merge = [
+    `- name: ${AI_REVIEW_MERGE_STEP_NAME}`,
+    `  id: ${AI_REVIEW_MERGE_STEP_ID}`,
+    `  env:`,
+    `    ${AI_REVIEW_FINDINGS_PATH_VAR}: ${AI_REVIEW_PROMPT_PATH_EXPRESSIONS[AI_REVIEW_FINDINGS_PATH_VAR]}`,
+    ...AI_REVIEW_ACTION_STEP_IDS.flatMap((id, i) => [
+      `    ${aiReviewRunOutcomeVar(i + 1)}: \${{ steps.${id}.outcome }}`,
+      `    ${aiReviewRunDigestVar(i + 1, "DRAFT")}: \${{ steps.${AI_REVIEW_KEEP_EXECUTION_STEP_IDS[i]}.outputs.draft_sha }}`,
+      `    ${aiReviewRunDigestVar(i + 1, "EXECUTION")}: \${{ steps.${AI_REVIEW_KEEP_EXECUTION_STEP_IDS[i]}.outputs.execution_sha }}`,
+    ]),
+    `  run: |`,
+    ...buildMergeDraftsScript(version).trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
+  ];
+
   const review = [
     `- name: ${AI_REVIEW_ACTION_STEP_NAME}`,
     `  id: ${AI_REVIEW_ACTION_STEP_ID}`,
@@ -11764,12 +12214,22 @@ export function buildReviewRunStep(
     ...buildDriftScript().trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
   ];
 
+  // #2674: the same step after each run but the last, so an edit one run made
+  // is refused before a later run can revert it. The step above, after the
+  // merge, checks the last run and keeps the id every reader knows.
+  const driftAfterRun = (k: number) =>
+    drift
+      .map(l => (l === `- name: ${AI_REVIEW_DRIFT_STEP_NAME}` ? `- name: ${AI_REVIEW_DRIFT_STEP_NAME} (after run ${k} of ${AI_REVIEW_RUNS})` : l))
+      .map(l => (l === `  id: ${AI_REVIEW_DRIFT_STEP_ID}` ? `  id: ${aiReviewRunDriftStepId(k)}` : l));
+
   const report = [
     `- name: ${AI_REVIEW_RUN_STEP_NAME}`,
     `  id: ${AI_REVIEW_RUN_STEP_ID}`,
     `  env:`,
     `    AI_REVIEW_MODE: \${{ steps.${AI_REVIEW_AUTH_STEP_ID}.outputs.mode }}`,
-    `    AI_REVIEW_ACTION_OUTCOME: \${{ steps.${AI_REVIEW_ACTION_STEP_ID}.outcome }}`,
+    // #2648: the round's outcome, from the merge — the run the round reports,
+    // which is not always run 1 (`roundRepresentative`, #2661).
+    `    AI_REVIEW_ACTION_OUTCOME: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.outcome }}`,
     // #826. The script has branched on the payload since #816 and this step
     // was never handed its path — a step's `env:` does not carry to a later
     // step, so `[ -s "" ]` was false on every run that has ever executed and
@@ -11806,7 +12266,9 @@ export function buildReviewRunStep(
     // same prepare output the carry step wrote it to — and an absent file is
     // a NAMED refusal in the adjudicator, not an empty prior set.
     `    ${AI_REVIEW_THREADS_PATH_VAR}: \${{ steps.${AI_REVIEW_PREPARE_STEP_ID}.outputs.${AI_REVIEW_FINDINGS_DIR_OUTPUT} }}/${AI_REVIEW_THREADS_BASENAME}`,
-    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_ACTION_STEP_ID}.outputs.execution_file }}`,
+    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_file }}`,
+    // #2674. Every contributing run's transcript, for the two read-checks.
+    `    ${AI_REVIEW_EXECUTION_LIST_VAR}: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_list }}`,
     // CRC-B1. The PATH, so the read-check can look for that exact string in
     // the transcript. #826 is why this is restated rather than inherited: a
     // step's `env:` does not carry to a later step, and the findings path
@@ -11849,7 +12311,7 @@ export function buildReviewRunStep(
     `  id: ${AI_REVIEW_EXECUTION_STAGE_STEP_ID}`,
     `  env:`,
     `    ${AI_REVIEW_FINDINGS_PATH_VAR}: \${{ steps.${AI_REVIEW_PREPARE_STEP_ID}.outputs.path }}`,
-    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_ACTION_STEP_ID}.outputs.execution_file }}`,
+    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_file }}`,
     // THE OPT-IN. `vars` is empty on a tree that never set it, and the
     // script compares against the literal `true` — so the default is off and
     // nothing is published by a consumer who never asked. The staging path
@@ -11925,7 +12387,9 @@ export function buildReviewRunStep(
     // missing from the report step for every run that ever executed because
     // of exactly that. The commit the reviewer READ needs no binding — it is
     // `GITHUB_SHA`, which the runner sets on every step.
-    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_ACTION_STEP_ID}.outputs.execution_file }}`,
+    `    ${AI_REVIEW_EXECUTION_FILE_VAR}: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_file }}`,
+    // #2674. Every contributing run's transcript, for the round's turn count.
+    `    ${AI_REVIEW_EXECUTION_LIST_VAR}: \${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_list }}`,
     `    ${AI_REVIEW_LEDGER_REPO_VAR}: \${{ github.repository }}`,
     `    ${AI_REVIEW_LEDGER_API_VAR}: \${{ github.api_url }}`,
     `    ${AI_REVIEW_LEDGER_TOKEN_VAR}: \${{ secrets.GITHUB_TOKEN }}`,
@@ -12031,7 +12495,19 @@ export function buildReviewRunStep(
     indented(changedFiles, indent) +
     indented(carry, indent) +
     indented(baseline, indent) +
-    indented(review, indent) +
+    indented(sealInputs, indent) +
+    // CRC-B11 (#2648): run, keep its execution file, three times; then the
+    // merge writes the round's payload. Every run but the last is followed by
+    // a drift check of its own (#2674), and the drift step after the merge
+    // checks the last, so an edit one run made is refused before a later run
+    // can revert it, whichever run made it.
+    AI_REVIEW_ACTION_STEP_IDS.map(
+      (_, i) =>
+        indented(reviewRun(i + 1), indent) +
+        indented(keepExecution(i + 1), indent) +
+        (i + 1 < AI_REVIEW_RUNS ? indented(driftAfterRun(i + 1), indent) : ""),
+    ).join("") +
+    indented(merge, indent) +
     // #1395. BEFORE the ledger, and that is the whole of this ordering. The
     // ledger quotes a line out of a reviewer-cited file, and #1383 made that
     // read come from the INDEX rather than the working tree — correct, and a

@@ -214,6 +214,7 @@ import {
   AI_REVIEW_CONVENTIONS_FILE_PATTERN,
   AI_REVIEW_CONVENTIONS_TITLE,
   AI_REVIEW_EXECUTION_FILE_VAR,
+  AI_REVIEW_EXECUTION_LIST_VAR,
   AI_REVIEW_FINDINGS_PATH_VAR,
   AI_REVIEW_OUTCOME_LINE,
   AI_REVIEW_REQUIRED_EXIT,
@@ -338,6 +339,11 @@ function runReport(opts: {
   script?: string;
   /** Put the workspace in a directory whose name contains a regex metacharacter. */
   dotted?: boolean;
+  /**
+   * #2674: the round's list of contributing runs' transcripts, one per line.
+   * `""` is a contributing run the merge could not vouch for.
+   */
+  executionList?: Array<((workspace: string) => string) | "">;
 }): Run {
   // RESOLVED, and the fixture is wrong without it. On macOS `tmpdir()` is
   // `/var/folders/…`, a symlink to `/private/var/folders/…`, and a shell
@@ -396,6 +402,18 @@ function runReport(opts: {
     env[AI_REVIEW_EXECUTION_FILE_VAR] = p;
   }
 
+  if (opts.executionList !== undefined) {
+    const lines = opts.executionList.map((t, i) => {
+      if (t === "") return "";
+      const p = join(dir, `run-${i + 1}-execution.json`);
+      writeFileSync(p, t(dir));
+      return p;
+    });
+    const list = join(dir, "round-executions.txt");
+    writeFileSync(list, lines.map(l => `${l}\n`).join(""));
+    env[AI_REVIEW_EXECUTION_LIST_VAR] = list;
+  }
+
   const r = Bun.spawnSync(["bash", "-e", sh], { cwd: dir, env });
   return {
     code: r.exitCode,
@@ -418,6 +436,41 @@ const conventionsIn = (workspace: string) => join(workspace, AI_REVIEW_CONVENTIO
 
 /** Any other file in the same checkout, for the cases that need a non-match. */
 const otherFileIn = (workspace: string) => join(workspace, "lib", "scanner.ts");
+
+// #2674 round 1. A round is several runs and its payload is their union, so a
+// finding from a run that never read the conventions is in the round whether
+// or not the run the round reports did. The check reads every run the merge
+// listed.
+describe("#2674: every run whose draft is in the round read the conventions", () => {
+  test("a contributing run that did not read them refuses the round, though the reported run did", () => {
+    const run = runReport({
+      transcript: (ws: string) => transcript([conventionsIn(ws)]),
+      executionList: [(ws: string) => transcript([conventionsIn(ws)]), (ws: string) => transcript([otherFileIn(ws)])],
+    });
+    expect(run.code, `a round with an unconventioned run passed:\n${run.out}\n${run.err}`).toBe(AI_REVIEW_REQUIRED_EXIT);
+    expect(run.err).toContain(AI_REVIEW_UNMEASURED_TITLE);
+    expect(run.out + run.err, "the refusal does not say which run's transcript").toContain("run-2-execution.json");
+    expect(run.out, "the adjudicator ran anyway").not.toContain(AI_REVIEW_OUTCOME_LINE);
+  });
+
+  test("CONTROL: every contributing run read them, and the round goes on to the adjudicator", () => {
+    const run = runReport({
+      transcript: (ws: string) => transcript([conventionsIn(ws)]),
+      executionList: [(ws: string) => transcript([conventionsIn(ws)]), (ws: string) => transcript([conventionsIn(ws)])],
+    });
+    expect(run.code, `${run.out}\n${run.err}`).toBe(0);
+    expect(run.out).toContain(AI_REVIEW_OUTCOME_LINE);
+  });
+
+  test("a contributing run with no transcript the merge could vouch for refuses the round as unmeasured", () => {
+    const run = runReport({
+      transcript: (ws: string) => transcript([conventionsIn(ws)]),
+      executionList: [(ws: string) => transcript([conventionsIn(ws)]), ""],
+    });
+    expect(run.code).toBe(AI_REVIEW_REQUIRED_EXIT);
+    expect(run.err).toContain(AI_REVIEW_UNMEASURED_TITLE);
+  });
+});
 
 describe("AC-C: the reviewer's load of the conventions is read, not assumed (#1167)", () => {
   test("AC-C1: a review whose transcript never read the conventions is refused", () => {
@@ -767,9 +820,11 @@ describe("AC-C: the reviewer's load of the conventions is read, not assumed (#11
     // is to exit non-zero". Both refusals are observed STOPPING, which is the
     // removal of the non-zero exit performed rather than argued about.
     const real = buildReviewRunScript(FIXTURE_VERSION);
+    // The refusal inside the per-run loop (#2674): the last exit before the
+    // loop's `done`, which is the "did not read" one.
     const mutant = real.replace(
-      new RegExp(`exit ${AI_REVIEW_REQUIRED_EXIT}\\n(\\s*)fi\\n(\\s*)else`),
-      "exit 0\n$1fi\n$2else",
+      new RegExp(`exit ${AI_REVIEW_REQUIRED_EXIT}\\n(\\s*)fi\\n(\\s*)done`),
+      "exit 0\n$1fi\n$2done",
     );
     expect(mutant, "the mutation did not apply").not.toBe(real);
 
@@ -798,9 +853,10 @@ describe("AC-C: the reviewer's load of the conventions is read, not assumed (#11
     // three it cannot tell apart: a mention, a Write, and a subdirectory
     // file.
     const real = buildReviewRunScript(FIXTURE_VERSION);
+    // Restored inside the per-run loop (#2674), where the matcher now sits.
     const shipped = real.replace(
-      /\n *if tr -d '\\n' <[^\n]*\n/,
-      `\n        if grep -qE '"file_path"[[:space:]]*:[[:space:]]*"([^"]*/)?${AI_REVIEW_CONVENTIONS_FILE_PATTERN}"' "\${${AI_REVIEW_EXECUTION_FILE_VAR}}"; then\n`,
+      /\n *if ! tr -d '\\n' < "\$\{conv_f\}"[^\n]*\n/,
+      `\n          if ! grep -qE '"file_path"[[:space:]]*:[[:space:]]*"([^"]*/)?${AI_REVIEW_CONVENTIONS_FILE_PATTERN}"' "\${conv_f}"; then\n`,
     );
     expect(shipped, "the mutation did not apply").not.toBe(real);
 

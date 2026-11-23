@@ -65,6 +65,8 @@ import {
   vertexCiConfig,
   type VertexCiDecision,
   AI_REVIEW_RUNS,
+  AI_REVIEW_ACTION_STEP_IDS,
+  AI_REVIEW_MERGE_STEP_ID,
 } from "../lib/scaffold/ai-review-step";
 import { CLAUDE_CODE_ACTION, CLAUDE_CODE_ACTION_SHA } from "../lib/claude-code-action";
 import { GOOGLE_AUTH_ACTION, GOOGLE_AUTH_ACTION_SHA } from "../lib/google-auth-action";
@@ -343,13 +345,20 @@ describe("AC-8: no conditional survives — the job can never conclude skipped",
     // `continue-on-error` is what replaces the `if:` this job may not have.
     // With no credential the action fails; the reporting step turns that into
     // UNMEASURED, and only `RUNGATE_REQUIRE_AI_REVIEW=true` makes it fatal.
-    for (const id of [AI_REVIEW_VERTEX_AUTH_STEP_ID, AI_REVIEW_ACTION_STEP_ID]) {
+    // Every run (#2648), not only the first: run 2 failing to authenticate
+    // must not red the job any more than run 1 may.
+    expect(AI_REVIEW_ACTION_STEP_IDS).toHaveLength(AI_REVIEW_RUNS);
+    for (const id of [AI_REVIEW_VERTEX_AUTH_STEP_ID, ...AI_REVIEW_ACTION_STEP_IDS]) {
       expect(step(id)["continue-on-error"], `${id} fails the job unconditionally`).toBe(true);
     }
     const report = step(AI_REVIEW_RUN_STEP_ID);
     expect(report["continue-on-error"], "the reporting step cannot refuse").not.toBe(true);
+    // The outcome the report reads is the round's, which the merge step
+    // names: the first run that wrote a draft, or when none did, the first
+    // run's own outcome (`roundRepresentative`, #2661). It is no longer any
+    // single run's step outcome.
     expect(report.env?.AI_REVIEW_ACTION_OUTCOME).toBe(
-      `\${{ steps.${AI_REVIEW_ACTION_STEP_ID}.outcome }}`,
+      `\${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.outcome }}`,
     );
   });
 });

@@ -63,6 +63,7 @@ import {
   AI_REVIEW_PERSIST_STEP_ID,
   AI_REVIEW_ROUND_PATH_VAR,
   buildPersistScript,
+  AI_REVIEW_EXECUTION_LIST_VAR,
 } from "../lib/scaffold/ai-review-step";
 // The reader, imported here on purpose. The recorder's whole job is to hand
 // `carryForward` something it can tell apart, and asserting the shape without
@@ -274,6 +275,12 @@ interface Rig {
   dirty?: Record<string, string>;
   /** Overrides for the step's environment. */
   env?: Record<string, string>;
+  /**
+   * #2674: the round's list of contributing runs' transcripts, as the merge
+   * step writes it. Each entry is written as its own file; `""` is a run the
+   * merge could not vouch for.
+   */
+  executionList?: unknown[];
   /** Make the write (POST/PATCH) fail. */
   writeFails?: boolean;
   /** The script under test — defaulted, so a mutant runs the identical rig. */
@@ -414,6 +421,19 @@ function runPersist(rig: Rig = {}) {
       writeFileSync(abs, contents);
     }
 
+    const listEnv: Record<string, string> = {};
+    if (rig.executionList !== undefined) {
+      const lines = rig.executionList.map((t, i) => {
+        if (t === "") return "";
+        const p = join(dir, `run-${i + 1}-execution.json`);
+        writeFileSync(p, typeof t === "string" ? t : JSON.stringify(t));
+        return p;
+      });
+      const listFile = join(dir, "round-executions.txt");
+      writeFileSync(listFile, lines.map(l => `${l}\n`).join(""));
+      listEnv[AI_REVIEW_EXECUTION_LIST_VAR] = listFile;
+    }
+
     const script = join(dir, "persist.sh");
     writeFileSync(script, rig.script ?? buildPersistScript());
 
@@ -441,6 +461,7 @@ function runPersist(rig: Rig = {}) {
         [AI_REVIEW_LEDGER_REPO_VAR]: "o/r",
         [AI_REVIEW_LEDGER_API_VAR]: "https://api.github.test",
         [AI_REVIEW_LEDGER_TOKEN_VAR]: "t",
+        ...listEnv,
         ...rig.env,
       },
       encoding: "utf8",
@@ -2661,6 +2682,45 @@ describe("AC-L13 (#1379): a cited path is not an option, and must be tracked", (
  *
  * NO VERDICT FIELD, and that is a refusal rather than an omission — AC-T8.
  */
+// #2674 round 2. A round is several runs, and its payload is every listed
+// run's findings, so one run's turn count is not the round's. The ledger
+// records the most turns any contributing run took, because the question it
+// answers is whether a run reached its budget (#1380). If any listed run's
+// count cannot be read, it records null, not a number from the others.
+describe("#2674: the round's turn count is the most any contributing run took", () => {
+  test("two contributing runs, 51 and 80 turns: the round records 80", () => {
+    const r = runPersist({
+      list: [],
+      payload: { findings: [] },
+      execution: executionMessages(resultWith("num_turns", 51)),
+      executionList: [executionMessages(resultWith("num_turns", 51)), executionMessages(resultWith("num_turns", 80))],
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.rounds![0][AI_REVIEW_LEDGER_TURNS_FIELD], "the round recorded the reported run's count, not the round's").toBe(80);
+  });
+
+  test("a contributing run with no transcript leaves the round's count unmeasured", () => {
+    const r = runPersist({
+      list: [],
+      payload: { findings: [] },
+      execution: executionMessages(resultWith("num_turns", 51)),
+      executionList: [executionMessages(resultWith("num_turns", 51)), ""],
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.rounds![0][AI_REVIEW_LEDGER_TURNS_FIELD]).toBeNull();
+  });
+
+  test("CONTROL: one contributing run records its own count", () => {
+    const r = runPersist({
+      list: [],
+      payload: { findings: [] },
+      execution: executionMessages(resultWith("num_turns", 51)),
+      executionList: [executionMessages(resultWith("num_turns", 51))],
+    });
+    expect(r.rounds![0][AI_REVIEW_LEDGER_TURNS_FIELD]).toBe(51);
+  });
+});
+
 describe("AC-T1 (#1380, #1498): a readable num_turns is recorded, and the reader reads it back", () => {
   // #1498. THE decisive case. The fixture is a real `SDKMessage[]` — the
   // shape `writeExecutionFile` produces — and before the fix the filter read
