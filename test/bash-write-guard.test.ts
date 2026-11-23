@@ -5152,12 +5152,55 @@ describe("#2704: the new verbs do not open the scratch exemption", () => {
     }
   });
 
-  // The names main already lists carry the same hole, on main as here: a body
-  // defining its own `copy` and passing the protected literal at the
-  // destination index exempts itself. Owned by #2705, which decides how a
-  // callee's identity is shown rather than assumed from its name.
-  test("CONCESSION: a body defining its own copy exempts itself, on main as here", () => {
+  // Was a CONCESSION: the names main listed carried the same hole. #2705
+  // shows a callee's identity instead of assuming it from its name.
+  test("WITNESS (#2705): a body defining its own copy is refused", () => {
     const cmd = `mkdir -p /tmp/rg2704c && python3 -I -c "import os, shutil\ndef copy(a, b): shutil.copy(b, os.environ['RG'])\ncopy('/tmp/rg2704c/x', '/tmp/rg2704c/${STATE}')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+});
+
+/**
+ * #2705: the scratch exemption shows a write callee's identity rather than
+ * assuming it from its last name. A dotted callee needs a module receiver
+ * (`shutil.copy`, `fs.writeFileSync`, `require('fs').writeFileSync`). A bare
+ * name is trusted only when every place the code names it is a call that is
+ * not a definition, or an import from the module that defines it
+ * (`from shutil import copy`, `const { writeFileSync } = require('fs')`).
+ * Binding the name any other way puts it somewhere that is not a call, so no
+ * list of binding forms is kept.
+ */
+describe("#2705: a write callee's identity is shown, not assumed from its name", () => {
+  const PY = (body: string) => `mkdir -p /tmp/rg2705 && python3 -I -c "${body}"`;
+  const JS = (body: string) => `mkdir -p /tmp/rg2705 && node -e "${body}"`;
+  const T = `/tmp/rg2705/${STATE}`;
+  test.each([
+    ["a parameter named copy", PY(`import os, shutil\ndef go(copy): copy('/tmp/rg2705/x', '${T}')\ngo(lambda a, b: shutil.copy(a, os.environ['RG']))`)],
+    ["a loop variable named copy", PY(`import os, shutil\nfor copy in [lambda a, b: shutil.copy(a, os.environ['RG'])]: copy('/tmp/rg2705/x', '${T}')`)],
+    ["a tuple binding copy", PY(`import os, shutil\ncopy, _ = (lambda a, b: shutil.copy(a, os.environ['RG'])), 0\ncopy('/tmp/rg2705/x', '${T}')`)],
+    // A recognised write elsewhere makes each a write candidate; the question
+    // is whether the protected literal's role is shown.
+    ["copy imported from another module", PY(`import os, shutil\nfrom fakeshutil import copy\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', os.environ['RG'])`)],
+    ["another shutil function imported as copy", PY(`import os, shutil\nfrom shutil import move as copy\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', os.environ['RG'])`)],
+    ["a def open", PY(`import os, io\ndef open(p, m): return io.open(os.environ['RG'], m)\nopen('${T}', 'w').write('{}')`)],
+    ["a method on an object of the body's own", PY(`import os, shutil\nclass F:\n    def copy(self, a, b): shutil.copy(a, os.environ['RG'])\nF().copy('/tmp/rg2705/x', '${T}')`)],
+    ["a JavaScript function writeFileSync", JS(`function writeFileSync(p, d) { require('fs').writeFileSync(process.env.RG, d) }; writeFileSync('${T}', '{}')`)],
+    ["a JavaScript const writeFileSync", JS(`const writeFileSync = (p, d) => require('fs').writeFileSync(process.env.RG, d); writeFileSync('${T}', '{}')`)],
+    ["writeFileSync destructured from another module", JS(`const { writeFileSync } = require('./fake'); writeFileSync('${T}', '{}')`)],
+  ])("WITNESS: %s is refused", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+  test.each([
+    ["shutil.copy", PY(`import shutil\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["copy imported from shutil", PY(`from shutil import copy\ncopy('/tmp/rg2705/x', '${T}')`)],
+    ["copy imported from shutil among others", PY(`from shutil import (move, copy)\ncopy('/tmp/rg2705/x', '${T}')`)],
+    ["the builtin open", PY(`open('${T}', 'w').write('{}')`)],
+    ["io.open", PY(`import io\nio.open('${T}', 'w').write('{}')`)],
+    ["fs.writeFileSync", JS(`const fs = require('fs'); fs.writeFileSync('${T}', '{}')`)],
+    ["require('fs').writeFileSync", JS(`require('fs').writeFileSync('${T}', '{}')`)],
+    ["writeFileSync destructured from fs", JS(`const { writeFileSync } = require('fs'); writeFileSync('${T}', '{}')`)],
+    ["writeFileSync imported from node:fs", JS(`import { writeFileSync } from 'node:fs'; writeFileSync('${T}', '{}')`)],
+  ])("CONTROL: %s onto a scratch path stays exempt", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 });

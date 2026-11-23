@@ -3779,6 +3779,9 @@ function inWritePosition(body: string, start: number, spans: [number, number][])
       if (depth === 0) {
         const callee = calleeBefore(body, i);
         if (!isWriteCallee(callee)) return UNPROVEN;
+        // #2705: and the callee is the module's, not a function of the body's
+        // own under the same name.
+        if (!calleeShown(body, i, callee, spans)) return UNPROVEN;
         return index === destIndexOf(callee) ? IS_DESTINATION : 'argument';
       }
       depth--;
@@ -3803,6 +3806,84 @@ function inWritePosition(body: string, start: number, spans: [number, number][])
     i--;
   }
   return UNPROVEN;
+}
+
+/**
+ * The modules a dotted write callee may name as its receiver (#2705):
+ * `shutil.copy`, `os.replace`, `json.dump`, `fs.writeFileSync`, `io.open`.
+ */
+const WRITE_MODULES = new Set(['os', 'shutil', 'json', 'fs', 'io', 'builtins']);
+
+/** The module that defines each bare write name, for the import that brings it in (#2705). */
+const DEFINING_MODULE = new Map<string, string>([
+  ...['copy', 'copyfile', 'copytree', 'move', 'rmtree'].map((n): [string, string] => [n, 'shutil']),
+  ['dump', 'json'],
+  ...['writeFileSync', 'appendFileSync', 'createWriteStream', 'copyFileSync', 'renameSync', 'unlinkSync', 'rmSync', 'truncateSync']
+    .map((n): [string, string] => [n, 'fs']),
+]);
+
+/** `require('fs')` or `require("node:fs")` ending exactly at `end`. */
+const REQUIRE_FS = /require\(\s*(['"])(?:node:)?fs\1\s*\)\s*$/;
+
+/**
+ * Whether the write callee named in front of the `(` at `openIndex` is shown
+ * to be the module's function, not one the body defines under its name
+ * (#2705). Trusting the last segment let `def copy(a, b): …` and then
+ * `copy('/tmp/fix/x', '/tmp/fix/workflow-state.json')` exempt a body whose
+ * real write went elsewhere.
+ *
+ * - A dotted callee needs a module receiver: `shutil.copy`, `fs.writeFileSync`,
+ *   `require('fs').writeFileSync`. `foo.copy` is a method of something the
+ *   body made.
+ * - A bare name is shown when every place the code names it, outside string
+ *   literals and attribute access, is a call that is not a definition, or an
+ *   import from the module that defines it (`from shutil import copy`,
+ *   `const { writeFileSync } = require('fs')`, `import { … } from 'fs'`).
+ *   `open` is a builtin and needs no import.
+ *
+ * This is a positive rule, not a list of binding forms: a parameter, a loop
+ * variable, a tuple, an assignment or an alias all name the function somewhere
+ * that is not a call, and each of those was a walk-around of matching the
+ * forms (#2704). What it does not see is rebinding through a string
+ * (`setattr(builtins, 'open', …)`), a decision to get around it.
+ */
+function calleeShown(body: string, openIndex: number, callee: string, spans: [number, number][]): boolean {
+  const dot = callee.lastIndexOf('.');
+  if (dot >= 0) {
+    const receiver = callee.slice(0, dot);
+    if (receiver !== '') return WRITE_MODULES.has(receiver);
+    // `require('fs').writeFileSync(`: the receiver is the call in front.
+    const before = body.slice(0, openIndex).replace(/\s+$/, '');
+    return REQUIRE_FS.test(before.slice(0, before.length - callee.length));
+  }
+  const module = DEFINING_MODULE.get(callee);
+  if (module === undefined && callee !== 'open') return false;
+  const imports: Array<[number, number]> = [];
+  if (module !== undefined) {
+    const forms = [
+      new RegExp(`from\\s+${module}\\s+import\\s+\\(?([^\\n;)]*)`, 'g'),
+      new RegExp(`(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*require\\(\\s*(['"])(?:node:)?${module}\\2\\s*\\)`, 'g'),
+      new RegExp(`import\\s*\\{([^}]*)\\}\\s*from\\s*(['"])(?:node:)?${module}\\2`, 'g'),
+    ];
+    for (const form of forms) {
+      for (const m of body.matchAll(form)) {
+        // Listed plainly, not renamed: `copy as c` and `{ writeFileSync: w }`
+        // bind another name, which is not a call to this one.
+        const names = m[1].split(',').map(x => x.trim());
+        if (names.includes(callee)) imports.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+      }
+    }
+  }
+  const word = new RegExp(`(?<![\\w$.])${callee}(?![\\w$])`, 'g');
+  for (const m of body.matchAll(word)) {
+    const at = m.index ?? 0;
+    if (spans.some(([s, e]) => at > s && at < e)) continue;
+    if (imports.some(([s, e]) => at >= s && at < e)) continue;
+    const call = /^\s*\(/.test(body.slice(at + callee.length));
+    const definition = /(?:\bdef|\bfunction\s*\*?|\bclass)\s+$/.test(body.slice(Math.max(0, at - 16), at));
+    if (!call || definition) return false;
+  }
+  return true;
 }
 
 /** The dotted name immediately in front of an opening parenthesis. */
