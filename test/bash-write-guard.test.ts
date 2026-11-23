@@ -4620,6 +4620,26 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
+  // Seventh security review.
+  test("WITNESS: an unmatched ( inside the path string of an open-for-write", () => {
+    // `.close()`, not `.write(`: a chained write would refuse this on its own,
+    // and the case must hang on the open pattern alone.
+    const cmd = `python3 -c "open('${LONG}(/${STATE}', 'w').close()"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a Python comment with no space after # still hides its apostrophe", () => {
+    const cmd = `python3 - <<'PY'\nimport shutil\nx = 1 #don't\nshutil.copy(\n    '${LONG}/${STATE}',\n    '${LIVE}/${STATE}')\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("CONTROL: a binding inside a string being edited is not a binding", () => {
+    // Padded so the write sits outside the window, where main allows it too:
+    // only the binding could refuse this.
+    const cmd = `python3 - <<'PY'\np = 'notes.md'\ns = open(p).read()\nnew = """example: p = '${LIVE}/${STATE}'"""\nnote = '${"z".repeat(90)}'\nopen(p, 'w').write(s + new)\nPY`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
   test("CONTROL: a name bound to a variable that only a read takes", () => {
     const cmd = `python3 - <<'PY'\nimport json\np = '${LIVE}/${STATE}'\nnote = '${LONG}'\nd = json.load(open(p))\nprint(d)\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);

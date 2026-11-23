@@ -2438,7 +2438,7 @@ function callWrites(program: string, protectedName: string): boolean {
     // the identifier the name's literal is assigned to counts as the name
     // wherever a write call takes it. Deeper data flow is the evasion
     // `WRITE_INTENT`'s docblock concedes.
-    const bound = boundIdentifier(program, at);
+    const bound = boundIdentifier(program, at, at + protectedName.length);
     if (bound !== null) {
       for (const use of program.matchAll(new RegExp(`\\b${bound}\\b`, 'g'))) {
         const u = use.index ?? 0;
@@ -2450,12 +2450,29 @@ function callWrites(program: string, protectedName: string): boolean {
   return false;
 }
 
-/** The identifier a literal holding offset `at` is assigned to (`x = '…'`), or null. */
-function boundIdentifier(program: string, at: number): string | null {
-  const quoteAt = Math.max(program.lastIndexOf("'", at - 1), program.lastIndexOf('"', at - 1));
-  if (quoteAt < 0) return null;
-  const m = /(?:^|[\s;(,])([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[A-Za-z_][\w.]*\s*)?=\s*$/.exec(program.slice(Math.max(0, quoteAt - 80), quoteAt));
+/**
+ * The identifier a literal holding offset `at` is assigned to (`x = '…'`),
+ * or null. The literal is the code-level one holding `at`, found through
+ * `codeMask`, and it must END at the name: the variable then holds the path,
+ * not text that mentions it. An assignment spelled inside another string (a
+ * docblock being edited) is therefore not read as a binding.
+ */
+function boundIdentifier(program: string, at: number, end: number): string | null {
+  const { mask } = codeMask(program);
+  if (mask[at] !== 1) return null;
+  let quoteAt = at;
+  while (quoteAt > 0 && mask[quoteAt - 1] === 1) quoteAt--;
+  const q = program[quoteAt];
+  if (program[end] !== q || mask[end + 1] === 1) return null;
+  const m = /(?:^|[\s;(,])([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*[A-Za-z_][\w.]*\s*)?=\s*[rbfuRBFU]{0,2}$/.exec(program.slice(Math.max(0, quoteAt - 80), quoteAt));
   return m ? m[1] : null;
+}
+
+/** Whether the `#` at `i` begins a JavaScript private name rather than a comment. */
+function opensPrivateName(body: string, i: number): boolean {
+  if (!/[A-Za-z_$]/.test(body[i + 1] ?? '')) return false;
+  const before = body.slice(Math.max(0, i - 40), i).replace(/\s+$/, '');
+  return /[{;(,]$/.test(before) || /\b(?:static|get|set|async|in)$/.test(before);
 }
 
 /** Per offset: 0 code, 1 inside a quote, 2 inside a `#` comment; and whether every quote closed. */
@@ -2473,12 +2490,13 @@ function codeMask(body: string): { mask: Uint8Array; balanced: boolean } {
     if (ch === "'" || ch === '"' || ch === '`') {
       quote = ch;
       mask[i] = 1;
-    } else if (ch === '#' && (i === 0 || /\s/.test(body[i - 1])) && (i + 1 >= body.length || /\s/.test(body[i + 1]))) {
+    } else if (ch === '#' && (i === 0 || /\s/.test(body[i - 1])) && !opensPrivateName(body, i)) {
       // A comment runs to the end of the line. An apostrophe in one ("don't")
       // would otherwise open a quote that swallows the brackets after it. Only
-      // a `#` that starts a word AND is followed by whitespace: a JavaScript
-      // private name (`this.#x`, `{ #x = 1 }`, `static #x`) and `$#` in
-      // shell are code (#2699 review).
+      // a `#` that starts a word, so `this.#x` and `$#` stay code, and not
+      // one that opens a JavaScript private name after `{`, `;`, `(`, `,`
+      // or a class keyword (`{ #x = 1 }`, `static #x`). Python's `#comment`
+      // with no space is still a comment (#2699 review, security review).
       while (i < body.length && body[i] !== '\n') mask[i++] = 2;
     }
   }
@@ -2713,7 +2731,7 @@ function shellBody(segment: string): string {
  * reach for the obvious fix gets a red suite naming what it costs.
  */
 const WRITE_INTENT =
-  /\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*['"][wax]\+?['"]/;
+  /\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\([^)]*['"][wax]\+?['"]|\bopen\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*['"][wax]\+?['"]/;
 
 /**
  * #1176 measured the suggested widening of WRITE_INTENT to shell idioms —
