@@ -36,12 +36,13 @@ describe("#2702: readJsCalls", () => {
     expect(readJsCalls(body)!.enclosingCalls(at(body, "state.json"))).toEqual([]);
   });
 
-  test("comments, regex literals and template literals are the parser's to read, not a mask's", () => {
+  test("comments, regex literals, template literals and private names are the parser's to read, not a mask's", () => {
     for (const body of [
       "// don't\nif (x) /[/*]/.test(s); require('fs').copyFileSync('/a/x', '/b/state.json') /* end */",
       "const r = () => { return /'/.test(s) }; require('fs').copyFileSync('/a/x', '/b/state.json')",
       "const r = o .in / 2; require('fs').copyFileSync('/a/x', '/b/state.json')",
       "const t = `it's ${\"q\"}`; require('fs').copyFileSync('/a/x', '/b/state.json')",
+      "class A { #x = 1; m() { return this.#x } }; require('fs').copyFileSync('/a/x', '/b/state.json')",
     ]) {
       const calls = readJsCalls(body)!.enclosingCalls(at(body, "state.json"));
       expect(calls[0], body).toBe("require('fs').copyFileSync('/a/x', '/b/state.json')");
