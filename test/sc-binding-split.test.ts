@@ -510,7 +510,12 @@ const UNCLAIMED_RATCHET = 150;
 // needed, a reading of the generated workflow that no registered pattern
 // expresses; the `CRC-B12` describe in test/ai-review-credentialed-job.test.ts
 // names it (2026-11-22).
-const CLAIMED_UNBINDABLE = 207;
+// 208: CRC-B11 (#2648) ticked by `sync-sc-status --only CRC-B11` — each review
+// round is three reviewer runs merged into their union, a reading of the
+// generated workflow and its keep and merge scripts that no registered pattern
+// expresses; the `CRC-B11` describe in test/ai-review-three-runs.test.ts names
+// it (2026-11-22).
+const CLAIMED_UNBINDABLE = 208;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

@@ -63,6 +63,8 @@ import {
   AI_REVIEW_PERSIST_STEP_ID,
   AI_REVIEW_ROUND_PATH_VAR,
   buildPersistScript,
+  AI_REVIEW_EXECUTION_LIST_VAR,
+  AI_REVIEW_EVERY_RUN_LIST_VAR,
 } from "../lib/scaffold/ai-review-step";
 // The reader, imported here on purpose. The recorder's whole job is to hand
 // `carryForward` something it can tell apart, and asserting the shape without
@@ -274,6 +276,17 @@ interface Rig {
   dirty?: Record<string, string>;
   /** Overrides for the step's environment. */
   env?: Record<string, string>;
+  /**
+   * #2674: the round's list of contributing runs' transcripts, as the merge
+   * step writes it. Each entry is written as its own file; `""` is a run the
+   * merge could not vouch for.
+   */
+  executionList?: unknown[];
+  /**
+   * #2674 round 3: the merge step's list of EVERY run's transcript, drafted
+   * or not, which is the one the ledger reads. Same encoding as above.
+   */
+  everyRunList?: unknown[];
   /** Make the write (POST/PATCH) fail. */
   writeFails?: boolean;
   /** The script under test — defaulted, so a mutant runs the identical rig. */
@@ -414,6 +427,21 @@ function runPersist(rig: Rig = {}) {
       writeFileSync(abs, contents);
     }
 
+    const listEnv: Record<string, string> = {};
+    const writeList = (entries: unknown[], name: string, envVar: string) => {
+      const lines = entries.map((t, i) => {
+        if (t === "") return "";
+        const p = join(dir, `${name}-run-${i + 1}-execution.json`);
+        writeFileSync(p, typeof t === "string" ? t : JSON.stringify(t));
+        return p;
+      });
+      const listFile = join(dir, `${name}.txt`);
+      writeFileSync(listFile, lines.map(l => `${l}\n`).join(""));
+      listEnv[envVar] = listFile;
+    };
+    if (rig.executionList !== undefined) writeList(rig.executionList, "round-executions", AI_REVIEW_EXECUTION_LIST_VAR);
+    if (rig.everyRunList !== undefined) writeList(rig.everyRunList, "every-run-executions", AI_REVIEW_EVERY_RUN_LIST_VAR);
+
     const script = join(dir, "persist.sh");
     writeFileSync(script, rig.script ?? buildPersistScript());
 
@@ -441,6 +469,7 @@ function runPersist(rig: Rig = {}) {
         [AI_REVIEW_LEDGER_REPO_VAR]: "o/r",
         [AI_REVIEW_LEDGER_API_VAR]: "https://api.github.test",
         [AI_REVIEW_LEDGER_TOKEN_VAR]: "t",
+        ...listEnv,
         ...rig.env,
       },
       encoding: "utf8",
@@ -2661,6 +2690,61 @@ describe("AC-L13 (#1379): a cited path is not an option, and must be tracked", (
  *
  * NO VERDICT FIELD, and that is a refusal rather than an omission — AC-T8.
  */
+// #2674 round 2. A round is several runs, so one run's turn count is not the
+// round's. The ledger records the most turns any run took, because the
+// question it answers is whether a run reached its budget (#1380). If any
+// run's count cannot be read, it records null, not a number from the others.
+// Round 3: it reads EVERY run's transcript, not only the runs whose drafts
+// are in the round, because a run that spent its budget and wrote no draft is
+// that question's case exactly.
+describe("#2674: the round's turn count is the most any contributing run took", () => {
+  test("two contributing runs, 51 and 80 turns: the round records 80", () => {
+    const r = runPersist({
+      list: [],
+      payload: { findings: [] },
+      execution: executionMessages(resultWith("num_turns", 51)),
+      everyRunList: [executionMessages(resultWith("num_turns", 51)), executionMessages(resultWith("num_turns", 80))],
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.rounds![0][AI_REVIEW_LEDGER_TURNS_FIELD], "the round recorded the reported run's count, not the round's").toBe(80);
+  });
+
+  test("a contributing run with no transcript leaves the round's count unmeasured", () => {
+    const r = runPersist({
+      list: [],
+      payload: { findings: [] },
+      execution: executionMessages(resultWith("num_turns", 51)),
+      everyRunList: [executionMessages(resultWith("num_turns", 51)), ""],
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.rounds![0][AI_REVIEW_LEDGER_TURNS_FIELD]).toBeNull();
+  });
+
+  test("CONTROL: one contributing run records its own count", () => {
+    const r = runPersist({
+      list: [],
+      payload: { findings: [] },
+      execution: executionMessages(resultWith("num_turns", 51)),
+      everyRunList: [executionMessages(resultWith("num_turns", 51))],
+    });
+    expect(r.rounds![0][AI_REVIEW_LEDGER_TURNS_FIELD]).toBe(51);
+  });
+
+  test("#2674 round 3: a run that reached its budget and wrote no draft still counts: 20 and 80 records 80", () => {
+    // Run 1 drafted after 20 turns; run 2 ran out of turns at 80 and wrote
+    // nothing, so only run 1 is in the list of contributing runs.
+    const r = runPersist({
+      list: [],
+      payload: { findings: [] },
+      execution: executionMessages(resultWith("num_turns", 20)),
+      executionList: [executionMessages(resultWith("num_turns", 20))],
+      everyRunList: [executionMessages(resultWith("num_turns", 20)), executionMessages(resultWith("num_turns", 80))],
+    });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.rounds![0][AI_REVIEW_LEDGER_TURNS_FIELD], "the round counted only the runs whose drafts it read").toBe(80);
+  });
+});
+
 describe("AC-T1 (#1380, #1498): a readable num_turns is recorded, and the reader reads it back", () => {
   // #1498. THE decisive case. The fixture is a real `SDKMessage[]` — the
   // shape `writeExecutionFile` produces — and before the fix the filter read

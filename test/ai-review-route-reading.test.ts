@@ -134,6 +134,7 @@ import type { VertexCiDecision } from "../lib/scaffold/ai-review-step";
 import {
   AI_REVIEW_ACTION_STEP_ID,
   AI_REVIEW_EXECUTION_FILE_VAR,
+  AI_REVIEW_MERGE_STEP_ID,
   AI_REVIEW_FINDINGS_PATH_VAR,
   AI_REVIEW_JOB,
   AI_REVIEW_PREPARE_STEP_ID,
@@ -496,12 +497,17 @@ describe("AC-B (#826): the annotation names the route it measured", () => {
   });
 
   test("AC-B6: the COMMITTED workflow hands the report step the action's execution file", () => {
+    // Since #2648 a round is several runs, and the execution file is the one
+    // the merge step names for the round: the run whose draft it read first,
+    // kept beside its digest (`roundRepresentative`, #2661). Still one
+    // action run's file, so the route the report names is a route that run
+    // took.
     const env = committedStep(AI_REVIEW_RUN_STEP_ID).env ?? {};
     expect(env[AI_REVIEW_EXECUTION_FILE_VAR]).toBe(
-      `\${{ steps.${AI_REVIEW_ACTION_STEP_ID}.outputs.execution_file }}`,
+      `\${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_file }}`,
     );
     expect(generatedStep(AI_REVIEW_RUN_STEP_ID).env?.[AI_REVIEW_EXECUTION_FILE_VAR]).toBe(
-      `\${{ steps.${AI_REVIEW_ACTION_STEP_ID}.outputs.execution_file }}`,
+      `\${{ steps.${AI_REVIEW_MERGE_STEP_ID}.outputs.execution_file }}`,
     );
   });
 
