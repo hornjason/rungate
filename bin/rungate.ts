@@ -13,7 +13,7 @@
 import { existsSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
-import { CLI_COMMANDS, helpText, runCommandScript } from "../lib/cli-commands";
+import { CLI_COMMANDS, UNKNOWN_COMMAND_EXIT, helpText, runCommandScript } from "../lib/cli-commands";
 import { harnessVersionLine } from "../lib/harness-identity";
 import { INCOMPLETE_INSTALL_EXIT, incompleteInstallMessage, missingDependencies } from "../lib/install-integrity";
 
@@ -49,7 +49,9 @@ const command = CLI_COMMANDS[name];
 if (!command) {
   console.error(`rungate: unknown command "${name}"\n`);
   console.error(helpText());
-  process.exit(1);
+  // Its own status (#2676), so a workflow can tell a missing command from a
+  // refusal (1) or a broken install without reading the sentence above.
+  process.exit(UNKNOWN_COMMAND_EXIT);
 }
 
 // #2479: a half-written install crashes inside the script on a missing

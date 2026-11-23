@@ -29,7 +29,9 @@ import {
   helpText,
   publishedCommands,
   runCommandScript,
+  UNKNOWN_COMMAND_EXIT,
 } from "../lib/cli-commands";
+import { INCOMPLETE_INSTALL_EXIT } from "../lib/install-integrity";
 import { generateAgentsMd } from "../lib/generators/agents-md";
 import { stripJsComments } from "../lib/strip-js-comments";
 
@@ -107,8 +109,17 @@ describe("#363 SC-810: every documented bunx command actually runs", () => {
 
   test("an unknown command fails loudly rather than doing nothing", () => {
     const r = runCli(["no-such-command"]);
-    expect(r.status).toBe(1);
-    expect(r.stderr).toContain("unknown command");
+    // #2676: with a status of its own, so a workflow can tell a command the
+    // pinned package lacks from a refusal or a broken install without reading
+    // the sentence. The sentence is unchanged; the threads step still matches it.
+    expect(r.status).toBe(UNKNOWN_COMMAND_EXIT);
+    expect(r.stderr).toContain(`rungate: unknown command "no-such-command"`);
+  });
+
+  test("#2676: an unknown command's status is its own, not a refusal's or a broken install's", () => {
+    expect(UNKNOWN_COMMAND_EXIT).not.toBe(0);
+    expect(UNKNOWN_COMMAND_EXIT, "1 is what every refusal exits").not.toBe(1);
+    expect(UNKNOWN_COMMAND_EXIT, "a broken install exits this").not.toBe(INCOMPLETE_INSTALL_EXIT);
   });
 
   test("a registered command dispatches — the script RUNS, not merely resolves", () => {
