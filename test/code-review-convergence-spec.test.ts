@@ -309,7 +309,11 @@ function unretakeableBullets(section: string): string[] {
     const prose = bullet
       .replace(/#\d+/g, "")
       .replace(/\b(?:CRC|SC|AC|TC|TR|JG|FG|AR|M|N|B|E|F|H)-[A-Z]*\d+[a-z]?/g, "")
-      .replace(/\bv\d+(?:\.\d+)*/g, "");
+      .replace(/\bv\d+(?:\.\d+)*/g, "")
+      // The fingerprint `sync-sc-status` writes under a ticked box is a hash.
+      // One that happens to be all decimal digits (CRC-B13's `24845144`) is
+      // still an identifier, and read as a number it demanded provenance.
+      .replace(/^\s*fingerprint: [0-9a-f]+$/gm, "");
     // A measurement is a number of two or more digits, or a percentage.
     if (!/\b\d{2,}\b|\d+%/.test(prose)) continue;
 
@@ -386,6 +390,11 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: every measurement can be taken 
         "a tighter regex without reddening correct prose, and is recorded at " +
         "`unretakeableBullets` and in the spec rather than implied away.",
     ).toEqual([]);
+  });
+
+  test("CONTROL: a tick's fingerprint is not a measurement, and a number beside it still is", () => {
+    expect(unretakeableBullets("- [x] CRC-B13: a guide\n      fingerprint: 24845144\n")).toEqual([]);
+    expect(unretakeableBullets("- [x] CRC-B13: a guide costing 13 cents\n      fingerprint: 24845144\n")).toHaveLength(1);
   });
 
   test("the *Not done* remainder is held to the same rule", () => {
