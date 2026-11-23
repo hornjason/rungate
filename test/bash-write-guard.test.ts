@@ -4830,3 +4830,67 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 });
+
+/**
+ * #2701: write spellings `WRITE_INTENT` did not list. `shutil\.copy\b` does
+ * not match `copy2`, a digit being a word character, and the Node verbs were
+ * listed only in their `Sync` forms. Each is a write onto a protected
+ * artifact, short enough that the window reaches it: the verb list is the
+ * question here, not distance (#1407 was distance).
+ */
+describe("#2701: the write spellings the verb list missed", () => {
+  const witnesses: Array<[string, string]> = [
+    ["shutil.copy2", `python3 -c "import shutil; shutil.copy2('/tmp/a.json', '${LIVE}/${STATE}')"`],
+    ["shutil.copyfile", `python3 -c "import shutil; shutil.copyfile('/tmp/a.json', '${LIVE}/${STATE}')"`],
+    ["shutil.copytree", `python3 -c "import shutil; shutil.copytree('/tmp/w', '${LIVE}/witnesses/')"`],
+    ["Path.write_bytes", `python3 -c "import pathlib; pathlib.Path('${LIVE}/${STATE}').write_bytes(b'{}')"`],
+    ["Path.rename", `python3 -c "import pathlib; pathlib.Path('/tmp/a.json').rename('${LIVE}/${STATE}')"`],
+    ["fs.writeFile", `node -e "require('fs').writeFile('${LIVE}/${STATE}', '{}', () => {})"`],
+    ["fs.appendFile", `node -e "require('fs').appendFile('${LIVE}/${STATE}', '{}', () => {})"`],
+    ["fs.copyFile", `node -e "require('fs').copyFile('/tmp/a.json', '${LIVE}/${STATE}', () => {})"`],
+    ["fs.rename", `node -e "require('fs').rename('/tmp/a.json', '${LIVE}/${STATE}', () => {})"`],
+    ["fs.promises.writeFile", `node -e "require('fs').promises.writeFile('${LIVE}/${STATE}', '{}')"`],
+    ["fs.openSync with a write flag", `node -e "require('fs').openSync('${LIVE}/${STATE}', 'w')"`],
+  ];
+  test.each(witnesses)("WITNESS: %s onto a protected artifact is refused", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // The same calls between two scratch trees the command makes: a fixture.
+  // Without these the change could be "refuse every interpreter".
+  const controls: Array<[string, string]> = [
+    ["shutil.copy2", `mkdir -p /tmp/rg2701a /tmp/rg2701b && python3 -I -c "import shutil; shutil.copy2('/tmp/rg2701a/${STATE}', '/tmp/rg2701b/${STATE}')"`],
+    ["fs.writeFile", `mkdir -p /tmp/rg2701b && node -e "require('fs').writeFile('/tmp/rg2701b/${STATE}', '{}', () => {})"`],
+    ["fs.openSync with a write flag", `mkdir -p /tmp/rg2701b && node -e "require('fs').openSync('/tmp/rg2701b/${STATE}', 'w')"`],
+  ];
+  test.each(controls)("CONTROL: %s between scratch trees stays a fixture", (_l, cmd) => {
+    const d = decideBashWrite(cmd);
+    expect(d.blocked, `refused: ${d.reason}`).toBe(false);
+  });
+
+  // #1411's shape for the two new copies: a scratch SOURCE and a destination
+  // the guard cannot read. Only knowing which argument is the destination
+  // keeps the scratch source from exempting the copy.
+  test.each([
+    ["shutil.copy2", `mkdir -p /tmp/rg2701a && python3 -I -c "import shutil, os; shutil.copy2('/tmp/rg2701a/${STATE}', os.environ['RG'])"`],
+    ["fs.copyFile", `mkdir -p /tmp/rg2701a && node -e "require('fs').copyFile('/tmp/rg2701a/${STATE}', process.env.RG, () => {})"`],
+  ])("WITNESS: %s from a scratch source to an unread destination is refused", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // A receiver write (`Path(p).write_text(…)`) puts the path where the
+  // exemption cannot place it, so a scratch one was refused before #2701 and
+  // still is. `write_bytes` is the same shape and must answer the same way.
+  test("PARITY: write_bytes answers as write_text does, on a scratch tree and a live one", () => {
+    for (const path of [`/tmp/rg2701b/${STATE}`, `${LIVE}/${STATE}`]) {
+      const text = decideBashWrite(`mkdir -p /tmp/rg2701b && python3 -I -c "import pathlib; pathlib.Path('${path}').write_text('{}')"`).blocked;
+      const bytes = decideBashWrite(`mkdir -p /tmp/rg2701b && python3 -I -c "import pathlib; pathlib.Path('${path}').write_bytes(b'{}')"`).blocked;
+      expect(bytes, path).toBe(text);
+    }
+  });
+
+  test("CONTROL: fs.openSync for reading is not a write", () => {
+    const cmd = `node -e "const fd = require('fs').openSync('${LIVE}/${STATE}', 'r'); console.log(fd)"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+});

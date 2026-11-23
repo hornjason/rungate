@@ -2424,7 +2424,7 @@ function writesNear(body: string, protectedName: string): boolean {
  * tracked, at any depth; the mode is a whole argument, positional or `mode=`.
  */
 function opensForWrite(call: string): boolean {
-  const head = /^(?:[A-Za-z_$][\w$]*\s*\.\s*)*open\s*\(/.exec(call);
+  const head = /^(?:[A-Za-z_$][\w$]*\s*\.\s*)*open(?:Sync)?\s*\(/.exec(call);
   if (!head) return false;
   return READINGS.some(reading => {
     const { mask } = codeMask(call, reading);
@@ -2870,12 +2870,17 @@ const WRITE_MODE = new RegExp(WRITE_MODE_SOURCE);
  * reach for the obvious fix gets a red suite naming what it costs.
  */
 const WRITE_INTENT = new RegExp(
-  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\([^)]*` +
+  // #2701: the callback forms beside the `Sync` ones (`writeFile`, `appendFile`,
+  // `copyFile`, which also covers `fs.promises.*`), `write_bytes` beside
+  // `write_text`, `shutil`'s other copies (`copy\b` cannot reach `copy2`: a
+  // digit is a word character), any `.rename(` (`fs.rename`, `Path.rename`),
+  // and `openSync` beside `open`.
+  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|writeFile|appendFile|copyFile|write_text|write_bytes|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy2?|copyfile|copytree|move|rmtree))\b|\.rename\s*\(|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen(?:Sync)?\s*\([^)]*` +
     WRITE_MODE_SOURCE +
     // #2699 review: the mode after nested calls in the path, two levels deep.
     // `opensForWrite` reads any depth, but only in a body that parses; this is
     // what the window still reads in one whose quotes never close.
-    String.raw`|\bopen\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*` +
+    String.raw`|\bopen(?:Sync)?\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*` +
     WRITE_MODE_SOURCE,
 );
 
@@ -3321,10 +3326,15 @@ const WHITESPACE = new Set([' ', '\t', '\n', '\r']);
  * the first place — so a verb missing here is a verb that never brought a
  * command to this question.
  *
- * `remove`, `rename`, `replace`, `unlink` and `write` are qualified rather
- * than matched bare: `str.replace` and `stdout.write` are not writes to a
- * file, and a bare match would read a transform as a write position, which
- * is the denylist's failure wearing a whitelist's clothes.
+ * `remove`, `replace`, `unlink` and `write` are qualified rather than
+ * matched bare: `str.replace` and `stdout.write` are not writes to a file,
+ * and a bare match would read a transform as a write position, which is the
+ * denylist's failure wearing a whitelist's clothes. `rename` is bare since
+ * #2701: no string or array type has one, and `require('fs').rename(` is
+ * read here as `.rename`, which the qualified `os.rename` never matched. Its
+ * destination is argument 1 in the function forms; in `Path(src).rename(dst)`
+ * it is argument 0, so a scratch `Path.rename` reads its literal as an
+ * argument and is refused — the conservative direction.
  */
 const WRITE_CALLEES = new Set([
   'writeFileSync',
@@ -3335,10 +3345,17 @@ const WRITE_CALLEES = new Set([
   'unlinkSync',
   'rmSync',
   'truncateSync',
+  'writeFile',
+  'appendFile',
+  'copyFile',
+  'rename',
   'write_text',
+  'write_bytes',
   'open',
+  'openSync',
   'dump',
   'copy',
+  'copy2',
   'copyfile',
   'copytree',
   'move',
@@ -3378,15 +3395,18 @@ const QUALIFIED_WRITE_CALLEES = new Set([
  */
 const DEST_INDEX = new Map<string, number>([
   ['copy', 1],
+  ['copy2', 1],
   ['copyfile', 1],
   ['copytree', 1],
   ['copyFileSync', 1],
+  ['copyFile', 1],
   ['move', 1],
   ['rename', 1],
   ['renameSync', 1],
   ['replace', 1],
   ['dump', -1],
   ['write_text', -1],
+  ['write_bytes', -1],
 ]);
 
 function destIndexOf(name: string): number {
