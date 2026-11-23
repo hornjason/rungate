@@ -37,9 +37,15 @@ The first row that applies wins.
 | `none` | nothing | nobody: no review runs and nothing is spent |
 
 - `ci.vertex` is read when the workflow is generated. When it is set, the job
-  reviews on Vertex and does not look at either secret.
-- When both secrets are set, the subscription token is used and the API key
-  is never handed to the action.
+  reviews on Vertex and hands the action neither secret. Both are still passed
+  to the step that picks the mode, which does not read them once Vertex is
+  chosen.
+- A `ci.vertex` the scaffold cannot use, such as one whose project is not a
+  valid Google Cloud project id, is refused as a whole. The generated workflow
+  then has no Vertex branch, says why in a comment in the step that picks the
+  mode, and picks from the secrets as if `ci.vertex` were not set. Read that
+  comment after setting `ci.vertex`.
+- When both secrets are set, `CLAUDE_CODE_OAUTH_TOKEN` wins, and `ANTHROPIC_API_KEY` is never handed to the action.
 - A subscription token belongs to the one person who made it. Every review on
   the repository spends that person's limits, whoever opened the pull request.
 - No Claude GitHub App is needed. The job gives the action its own
@@ -49,7 +55,9 @@ The first row that applies wins.
 
 The default model is `claude-haiku-5-5`, and each round is several reviewer
 runs whose findings are merged into one set, duplicates removed. A round runs
-when a pull request opens and again on every push to it.
+on every pull request event the job subscribes to: `opened`, `synchronize` (a
+push), `reopened`, `labeled` and `unlabeled`. Adding or removing a label runs
+a full round.
 
 | Measure | Figure | Source |
 |---|---|---|
@@ -59,12 +67,15 @@ when a pull request opens and again on every push to it.
 | Rounds per pull request | 2.7 | this repository's mean, 2026-11-14 to 2026-11-22, audit section 2 |
 | Per pull request | $0.13 | the three above |
 
-- The per-run figure is the action's own cost report, at Anthropic's list
-  price. Vertex bills the same tokens at Google Cloud's rate for the model.
+- The per-run figure is the cost Claude Code reported for each run in the
+  audit's replay, which ran the CI prompt locally against a Vertex project
+  (audit section 3). Vertex bills the tokens at Google Cloud's rate for the
+  model.
 - On a subscription there is no per-token bill. The runs count against the
   token owner's usage limits instead.
-- Rounds per pull request is this repository's figure. A team that pushes more
-  often to each pull request runs more rounds.
+- Rounds per pull request is this repository's figure, and it counts every
+  round the job ran on a pull request event, label events included. A team
+  that pushes or relabels more often runs more rounds.
 - A Vertex consumer can name another model in `ci.vertex.model`, as an exact
   model id, and pays that model's price. The same audit measured Sonnet 5 at
   about $0.70 a run.
