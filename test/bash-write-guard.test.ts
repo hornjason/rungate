@@ -4668,6 +4668,48 @@ describe("#1407: write intent is read per call, not only by character distance",
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
+  // #2699 review round 2.
+  test("WITNESS: open-for-write whose path nests three calls before the mode", () => {
+    for (const mode of ["'w'", "mode='w'"]) {
+      const cmd = `python3 -c "import os; open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '${STATE}'), ${mode}).close()"`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    }
+  });
+
+  test("WITNESS: binary and read-write open modes are writes", () => {
+    for (const mode of ["wb", "r+", "w+b", "ab", "rb+"]) {
+      const cmd = `python3 - <<'PY'\nimport pickle\nwith open('${LIVE}/${STATE}', '${mode}') as f:\n    pickle.dump({}, f)\nPY`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    }
+  });
+
+  test("CONTROL: read-only open modes are not writes", () => {
+    for (const mode of ["r", "rb", "rt"]) {
+      const cmd = `python3 - <<'PY'\nwith open('${LIVE}/${STATE}', '${mode}') as f:\n    print(len(f.read()))\nPY`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+    }
+  });
+
+  test("CONTROL: a word spelled in mode letters is not a mode", () => {
+    for (const word of ["raw", "bat"]) {
+      const cmd = `python3 -c "print(open('${LIVE}/${STATE}' if 0 else '${word}').read())"`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+    }
+  });
+
+  test("WITNESS: a bracket inside a JavaScript regex literal does not close the call", () => {
+    const cmd = `node -e "require('fs').copyFileSync('${LONG}'.replace(/\\)/g, ''), '${LIVE}/${STATE}')"`;
+    expect(cmd).toContain("/\\)/g");
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  test("WITNESS: a division is not a regex literal", () => {
+    // Against the wrong fix: reading every slash as a regex masks from it to
+    // the next slash, inside the path, and the body no longer balances.
+    const cmd = `python3 -c "import shutil; n = 4; shutil.copy('${LONG}' if n / 2 else '', '${LIVE}/${STATE}')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
   test("CONTROL: a file name merely starting with a protected one is not bound", () => {
     const cmd = `python3 - <<'PY'\nimport shutil\ndst = '${LIVE}/${STATE}.bak'\nsrc = '${LONG}/x'\nshutil.copy(src, dst)\nPY`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);

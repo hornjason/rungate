@@ -2417,6 +2417,43 @@ function writesNear(body: string, protectedName: string): boolean {
 }
 
 /**
+ * Whether a call's text is `open(…)` with a write mode among its arguments
+ * (#2699 review). A regular expression counts nested calls only to a fixed
+ * depth, and `open(os.path.join(os.path.dirname(os.path.abspath(f)), n), 'w')`
+ * is three deep, so the argument list is read here with brackets and quotes
+ * tracked, at any depth; the mode is a whole argument, positional or `mode=`.
+ */
+function opensForWrite(call: string): boolean {
+  const head = /^(?:[A-Za-z_$][\w$]*\s*\.\s*)*open\s*\(/.exec(call);
+  if (!head) return false;
+  return HASH_READINGS.some(reading => {
+    const { mask } = codeMask(call, reading);
+    const args: string[] = [];
+    let depth = 0;
+    let from = head[0].length;
+    for (let i = from; i < call.length; i++) {
+      if (mask[i] !== 0) continue;
+      const ch = call[i];
+      if (ch === '(' || ch === '[' || ch === '{') depth++;
+      else if (ch === ')' || ch === ']' || ch === '}') {
+        if (depth-- > 0) continue;
+        args.push(call.slice(from, i));
+        break;
+      } else if (ch === ',' && depth === 0) {
+        args.push(call.slice(from, i));
+        from = i + 1;
+      }
+    }
+    return args.some(arg => OPEN_MODE_ARGUMENT.test(arg.trim()));
+  });
+}
+
+/** A call that writes: by `WRITE_INTENT`, or an `open` with a write mode at any depth. */
+function callIsWrite(call: string): boolean {
+  return WRITE_INTENT.test(call) || opensForWrite(call);
+}
+
+/**
  * Whether any call holding `protectedName` as an argument, at any depth, is
  * a write (#1407). `writesNear`'s window misses a verb separated from the
  * name by a long argument: in `shutil.copy(SRC, DST)` the verb comes before
@@ -2435,7 +2472,7 @@ function callWrites(program: string, protectedName: string): boolean {
     const view = codeMask(program, reading);
     for (const m of program.matchAll(pattern)) {
       const at = m.index ?? 0;
-      if (enclosingCalls(program, at, view).some(call => WRITE_INTENT.test(call))) return true;
+      if (enclosingCalls(program, at, view).some(callIsWrite)) return true;
       // #2699 review: `dst = '<…>/workflow-state.json'` and then
       // `shutil.copy(src, dst)` lines later. One level of binding is followed:
       // the identifier the name's literal is assigned to counts as the name
@@ -2446,7 +2483,7 @@ function callWrites(program: string, protectedName: string): boolean {
         for (const use of program.matchAll(new RegExp(`\\b${bound}\\b`, 'g'))) {
           const u = use.index ?? 0;
           if (u === at) continue;
-          if (enclosingCalls(program, u, view).some(call => WRITE_INTENT.test(call))) return true;
+          if (enclosingCalls(program, u, view).some(callIsWrite)) return true;
         }
       }
     }
@@ -2494,11 +2531,33 @@ function boundIdentifier(program: string, at: number, protectedName: string, vie
 type HashReading = 'word' | 'spaced';
 const HASH_READINGS: readonly HashReading[] = ['word', 'spaced'];
 
-/** A body read as code: per offset 0 code, 1 quoted, 2 a `#` comment; each literal's quote offsets; whether every quote closed. */
+/** A body read as code: per offset 0 code, 1 quoted or a regex literal, 2 a `#` comment; each literal's quote offsets; whether every quote closed. */
 interface CodeView {
   mask: Uint8Array;
   literals: Array<[number, number]>;
   balanced: boolean;
+}
+
+/** Whether the `/` at `i` can open a regex literal: after an operator or opener, never `//` or `/*`. */
+function opensRegexLiteral(body: string, i: number): boolean {
+  if (body[i + 1] === '/' || body[i + 1] === '*') return false;
+  let j = i - 1;
+  while (j >= 0 && /\s/.test(body[j])) j--;
+  return j < 0 || '(,=:[!&|?{};~+-*%<>^'.includes(body[j]);
+}
+
+/** The offset of the `/` closing the regex literal opened at `i`, on the same line, or -1. */
+function regexLiteralEnd(body: string, i: number): number {
+  let inClass = false;
+  for (let j = i + 1; j < body.length; j++) {
+    const ch = body[j];
+    if (ch === '\n') return -1;
+    if (ch === '\\') j++;
+    else if (ch === '[') inClass = true;
+    else if (ch === ']') inClass = false;
+    else if (ch === '/' && !inClass) return j;
+  }
+  return -1;
 }
 
 function codeMask(body: string, reading: HashReading): CodeView {
@@ -2526,6 +2585,15 @@ function codeMask(body: string, reading: HashReading): CodeView {
       // would otherwise open a quote that swallows the brackets after it. Only
       // a `#` that starts a word, so `this.#x` and `$#` stay code.
       while (i < body.length && body[i] !== '\n') mask[i++] = 2;
+    } else if (ch === '/' && opensRegexLiteral(body, i)) {
+      // A regex literal (`/\)/g`): its brackets are not code. Only after a
+      // character a division cannot follow, so `n / 2` stays code (#2699
+      // review). Python has no regex literal and no valid `/` there.
+      const end = regexLiteralEnd(body, i);
+      if (end > i) {
+        for (let j = i; j <= end; j++) mask[j] = 1;
+        i = end;
+      }
     }
   }
   return { mask, literals, balanced: quote === null };
@@ -2677,6 +2745,16 @@ function shellBody(segment: string): string {
 }
 
 /**
+ * A quoted `open` mode that writes (#2699 review): up to three of r w a x b t
+ * +, at most one of r w a x and one of b t, with w, a, x or + among them. So 'w', 'wb', 'a+', 'r+'
+ * and 'w+b' write; 'r', 'rb' and 'rt' do not, nor a word like 'raw' or 'bat'. The mode used to be
+ * `[wax]\+?`, so `open(p, 'wb')` was not a write, on main too. `WRITE_INTENT`
+ * and `opensForWrite` both read it from here: one decider for one question.
+ */
+const WRITE_MODE_SOURCE = String.raw`(?<q>['"])(?=[rwaxbt+]{1,3}\k<q>)(?![^'"]*[rwax][^'"]*[rwax])(?![^'"]*[bt][^'"]*[bt])(?=[^'"]*[wax+])[rwaxbt+]{1,3}\k<q>`;
+const OPEN_MODE_ARGUMENT = new RegExp(String.raw`^(?:mode\s*=\s*)?` + WRITE_MODE_SOURCE + '$');
+
+/**
  * Declared write intent inside an interpreter body.
  *
  * The honest version of this arm would refuse any interpreter naming a
@@ -2758,8 +2836,9 @@ function shellBody(segment: string): string {
  * as prose: the sanctioned commands must stay ALLOWED, so the next person to
  * reach for the obvious fix gets a red suite naming what it costs.
  */
-const WRITE_INTENT =
-  /\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\([^)]*['"][wax]\+?['"]|\bopen\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*['"][wax]\+?['"]/;
+const WRITE_INTENT = new RegExp(
+  String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|write_text|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy|move|rmtree))\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen\s*\([^)]*` + WRITE_MODE_SOURCE,
+);
 
 /**
  * #1176 measured the suggested widening of WRITE_INTENT to shell idioms —
