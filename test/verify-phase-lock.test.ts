@@ -390,8 +390,10 @@ describe("#2723 review round 2", () => {
     }
   });
 
-  test("CONTROL: a word that only contains case is not one", () => {
-    expect(clauses(`echo "$(echo showcase) x"; echo done`).some(createsIssue)).toBe(false);
+  test("a word that only ends in case opens no case statement", () => {
+    // Read as one, its `)` would not close the substitution, and the filing
+    // after it would be swallowed into the quoted word.
+    expect(clauses(`echo "$(echo showcase x)"; gh issue create --title t`).some(createsIssue)).toBe(true);
   });
 
   test("the comment rule, in both scans, on its edge inputs", () => {
