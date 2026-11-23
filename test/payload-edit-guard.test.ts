@@ -169,6 +169,37 @@ describe("#2719 review round 2: the command is read by the shell tokenizer the f
   });
 });
 
+describe("#2719 review round 3", () => {
+  test("a quoted or escaped spelling of gh issue edit is read as the shell runs it", async () => {
+    expect(await decide('gh "issue" edit 2655 --body x')).toContain("#2655");
+    expect(await decide('"gh" issue edit 2655 --body new')).toContain("#2655");
+    expect(await decide("gh iss\\ue edit 2655 --body new")).toContain("#2655");
+  });
+
+  test("an attached value that starts with a dash, or with =, is the flag's value", async () => {
+    expect(await decide('gh issue edit 2655 -b"---"')).toContain("#2655");
+    expect(await decide("gh issue edit 2655 -b=x")).toContain("#2655");
+    expect(await decide(`gh issue edit 2714 -m="${PAYLOAD}"`)).toContain("#2714");
+  });
+
+  test(">&file is a redirection wherever it sits", async () => {
+    expect(await decide("gh issue edit 2655 >&/tmp/out --body x")).toContain("#2655");
+    expect(await decide("gh issue edit 2714 >&/tmp/out --body x")).toBeNull();
+  });
+
+  test("a payload declaration is read across the frontmatter, and one it cannot read is broken, not absent", () => {
+    const tree = (engine: string) => {
+      const root = mkdtempSync(join(tmpdir(), "peg-decl-"));
+      mkdirSync(join(root, "specs"));
+      writeFileSync(join(root, "specs", "ENGINE.md"), engine);
+      writeFileSync(join(root, "specs", "PAY.md"), "---\nboard:\n  prefix: Convergence\n---\n");
+      return root;
+    };
+    expect(payloadPrefix(tree("---\ngoverns: >-\n  THE ENGINE.\n  Payload: PAY.md\n---\n"))).toBe("Convergence");
+    expect(() => payloadPrefix(tree("---\ngoverns: THE ENGINE. Payload: the review spec\n---\n"))).toThrow(/Payload/);
+  });
+});
+
 describe("#2713: the hook runs the guard", () => {
   // A GitHub API that answers the milestone lookup, so the hook is driven end
   // to end through lib/github.ts with no network: issue 2655 is in the

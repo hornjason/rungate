@@ -70,7 +70,6 @@ export const BOARD_WRITE_FLAGS: readonly string[] = [
 
 /** The `gh issue edit` flags that take no value, so the next word is not theirs. */
 const VALUELESS_FLAGS = new Set(["--remove-milestone", "--remove-parent", "--remove-type", "--help", "-h"]);
-const EDIT_INVOCATION = /\bgh\s+issue\s+edit\b/;
 const ISSUE_URL = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)\/?$/;
 
 /**
@@ -82,8 +81,13 @@ export function payloadPrefix(root: string): string | null {
   const dir = join(root, "specs");
   if (!existsSync(dir)) return null;
   for (const file of readdirSync(dir).filter(f => f.endsWith(".md")).sort()) {
-    const payload = readFileSync(join(dir, file), "utf-8").match(/^governs:.*Payload: (\S+\.md)/m)?.[1];
-    if (payload === undefined) continue;
+    // Read across the frontmatter, so a wrapped `governs:` line still names
+    // its payload; a `Payload:` it cannot read is a broken declaration, not
+    // an absent one (#2719 review round 3).
+    const declaring = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(readFileSync(join(dir, file), "utf-8"))?.[1];
+    if (declaring === undefined || !/\bPayload:/.test(declaring)) continue;
+    const payload = /\bPayload:\s*(\S+\.md)\b/.exec(declaring)?.[1];
+    if (payload === undefined) throw new Error(`specs/${file} declares a payload ("Payload:") and names no spec file this can read`);
     const path = join(dir, payload);
     if (!existsSync(path)) throw new Error(`specs/${file} names Payload: ${payload}, and specs/${payload} does not exist`);
     // Read as YAML, so a quoted prefix is the prefix and not its quotes (#2719
@@ -121,7 +125,7 @@ interface BoardEdit {
  * as `-b TEXT`, as `lib/issue-create-override.ts` reads `gh issue create`'s.
  */
 const VALUE_SHORT_FLAGS = new Set(["b", "F", "t", "m", "R"]);
-const ATTACHED_SHORT = /^-([A-Za-z])([^-=][\s\S]*)$/;
+const ATTACHED_SHORT = /^-([A-Za-z])([\s\S]+)$/;
 /** A redirection, with its target attached (`>/dev/null`) or not (`2>`). */
 const REDIRECT = /^\d*(?:>>?|<)/;
 const BARE_REDIRECT = /^\d*(?:>>?|<)$/;
@@ -129,8 +133,9 @@ const BARE_REDIRECT = /^\d*(?:>>?|<)$/;
 /** Every `gh issue edit` in the command that carries a board-write flag. */
 function boardEdits(command: string): BoardEdit[] {
   const edits: BoardEdit[] = [];
-  // `2>&1` and `&>` are redirections, not the `&` the tokenizer splits on.
-  const text = command.replace(/(\d*[<>])&(\d+|-)/g, "$1$2").replace(/&>/g, ">");
+  // `2>&1`, `>&file`, `<&3` and `&>` are redirections, not the `&` the
+  // tokenizer splits on (#2719 review round 3).
+  const text = command.replace(/([<>])&(?=[^\s&;|])/g, "$1").replace(/&>/g, ">");
   for (const w of clauses(text)) {
     const at = w.findIndex((x, i) => x === "edit" && w[i - 1] === "issue" && basename(w[i - 2] ?? "") === "gh");
     if (at < 0) continue;
@@ -151,8 +156,10 @@ function boardEdits(command: string): BoardEdit[] {
       let name: string;
       let value: string | null;
       if (attached !== null && VALUE_SHORT_FLAGS.has(attached[1])) {
+        // Any text after the letter is the value, `-b---` included; pflag
+        // drops a leading `=` (#2719 review round 3).
         name = `-${attached[1]}`;
-        value = attached[2];
+        value = attached[2].replace(/^=/, "");
       } else if (eq >= 0) {
         name = word.slice(0, eq);
         value = word.slice(eq + 1);
@@ -200,7 +207,11 @@ export interface PayloadEditOptions {
 
 /** The reason to refuse the command, or null to let it run. */
 export async function payloadEditRefusal(command: string, opts: PayloadEditOptions = {}): Promise<string | null> {
-  if (!EDIT_INVOCATION.test(command.replace(/\\\n/g, " "))) return null;
+  // A cheap pre-check, over the text with its quotes and backslashes taken
+  // out: `gh "issue" edit` and `gh iss\\ue edit` are the same command to the
+  // shell, and the tokenizer below reads them so (#2719 review round 3).
+  const plain = command.replace(/["'\\]/g, "");
+  if (!/\bgh\b/.test(plain) || !/\bedit\b/.test(plain)) return null;
   const edits = boardEdits(command);
   if (edits.length === 0) return null;
   const why = "(#2713: a speed bump; scripts/hand-edits.ts reads the outcome)";
