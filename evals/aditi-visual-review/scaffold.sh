@@ -3,23 +3,27 @@
 # Called by case.yaml context.scaffold_script.
 set -euo pipefail
 
-# Refuse to scaffold into an existing checkout. The identity writes below are
-# repo-scoped, so running this from a real repo rewrites that repo's author (#84).
-# The eval harness runs the case in a directory inside a repository it has just
-# created with no commits (measured 2026-11-24, claude 2.1.331: the repository
-# is rooted one level above the case's directory). An empty repository is used
-# as it is. A repository with any commit is somebody's checkout, and is refused.
-if git rev-parse --git-dir >/dev/null 2>&1; then
-  if git rev-parse --verify -q HEAD >/dev/null; then
-    echo "scaffold.sh: refusing to run inside a git repo that has commits: $(git rev-parse --show-toplevel)" >&2
-    exit 1
-  fi
-else
-  git init
+# Refuse anything but an empty directory. The fixture below writes files, and a
+# directory that holds anything, a .git included, is somebody's work. The eval
+# harness hands the case an empty directory (measured 2026-11-24, claude
+# 2.1.331), so this refuses nothing the harness runs.
+if [ -n "$(ls -A . 2>/dev/null)" ]; then
+  echo "scaffold.sh: refusing to write into a directory that is not empty: $PWD" >&2
+  exit 1
 fi
-WORKSPACE="$PWD"
-git -C "$WORKSPACE" config user.email "eval@test.com"
-git -C "$WORKSPACE" config user.name "Eval"
+
+# Claude Code needs a git repository. The harness's directory is already inside
+# one it created with no commits, rooted one level up, and that is used as it
+# is. Outside any repository, one is made here. Any other answer from git, such
+# as a repository it will not open, is refused rather than read as "none".
+# Nothing here writes git config or commits, so no repository's identity is
+# touched (#84).
+if ! out="$(git rev-parse --git-dir 2>&1)"; then
+  case "$out" in
+    *"not a git repository"*) git init -q ;;
+    *) echo "scaffold.sh: git could not read this directory: $out" >&2; exit 1 ;;
+  esac
+fi
 
 mkdir -p components .claude/rungate
 
