@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-24
 updated: 2026-11-24
 ---
@@ -9,11 +9,12 @@ updated: 2026-11-24
 
 ## Status
 
-**Proposed, 2026-11-24 (#2488).** Jason chose the direction on 2026-11-24:
-each criterion line names its own phase, and the phase table is generated
-from those lines. One part changes in this draft, because a measurement
-contradicted it: the generated table cannot be stored in the spec. Decision 2
-says why. The four criteria below are drafted for Jason's review and his merge.
+**Accepted by Jason, 2026-11-24 (#2755, #2488).** He chose the direction
+that morning: each criterion line names its own phase, and the phase table is
+generated from those lines. One part changed in the draft, because a
+measurement contradicted it: the generated table cannot be stored in the
+spec, so it is printed instead. Decision 2 says why, and he accepted the
+record with that change. The four criteria below are his to merge with it.
 
 ## Context
 
