@@ -3777,7 +3777,7 @@ function inWritePosition(body: string, start: number, spans: [number, number][])
       depth++;
     } else if (c === '(') {
       if (depth === 0) {
-        const callee = calleeBefore(body, i);
+        const callee = calleeBefore(body, i, spans);
         if (!isWriteCallee(callee)) return UNPROVEN;
         // #2705: and the callee is the module's, not a function of the body's
         // own under the same name.
@@ -3844,7 +3844,8 @@ const REQUIRE_FS = /(?<![\w$.])require\(\s*(['"])(?:node:)?fs\1\s*\)\s*$/;
  *   `shutil.copy`), which is bound as surely as a bare name (#2726 review).
  *   `open` is a builtin and needs no import.
  * - The body assigns no attribute (`assignsAttribute`): `shutil.copyfile = f`
- *   replaces a function `shutil.copy` itself calls.
+ *   replaces a function `shutil.copy` itself calls. And it binds no name it
+ *   does not spell (`bindsUnspelled`): a JavaScript `with`.
  *
  * This is a positive rule, not a list of binding forms: a parameter, a loop
  * variable, a tuple, an assignment or an alias all name the function somewhere
@@ -3856,7 +3857,7 @@ const REQUIRE_FS = /(?<![\w$.])require\(\s*(['"])(?:node:)?fs\1\s*\)\s*$/;
  * get around it.
  */
 function calleeShown(body: string, openIndex: number, callee: string, spans: [number, number][]): boolean {
-  if (assignsAttribute(body, spans)) return false;
+  if (assignsAttribute(body, spans) || bindsUnspelled(body, spans)) return false;
   const dot = callee.lastIndexOf('.');
   const name = callee.slice(dot + 1);
   if (dot >= 0) {
@@ -3867,7 +3868,8 @@ function calleeShown(body: string, openIndex: number, callee: string, spans: [nu
       // `require('fs').writeFileSync(`: the receiver is the call in front, and
       // `require` is the runtime's only when nothing else names it (#2726 review).
       const before = body.slice(0, openIndex).replace(/\s+$/, '');
-      if (!REQUIRE_FS.test(before.slice(0, before.length - callee.length)) || !onlyCalled(body, 'require', spans, [])) return false;
+      const head = before.slice(0, before.length - name.length).replace(/\s*\.\s*$/, '');
+      if (!REQUIRE_FS.test(head) || !onlyCalled(body, 'require', spans, [])) return false;
     }
   } else if (!DEFINING_MODULE.has(name) && name !== 'open') {
     return false;
@@ -3922,8 +3924,28 @@ function onlyCalled(body: string, name: string, spans: [number, number][], impor
  * = f`) counts. `==`, `<=`, `>=`, `!=` and `=>` assign nothing.
  */
 function assignsAttribute(body: string, spans: [number, number][]): boolean {
-  const assignment = /\.\s*[A-Za-z_$][\w$]*\s*(?:>>>=|\*\*=|\/\/=|>>=|<<=|&&=|\|\|=|\?\?=|[-+*/%&|^@]=|=(?![=>]))/g;
+  // An annotation may stand before the `=` (`shutil.copyfile: T = f`, #2726 review).
+  const assignment = /\.\s*[A-Za-z_$][\w$]*\s*(?:>>>=|\*\*=|\/\/=|>>=|<<=|&&=|\|\|=|\?\?=|[-+*/%&|^@]=|(?::[^=\n;]*)?=(?![=>]))/g;
   for (const m of body.matchAll(assignment)) if (!inLiteral(m.index ?? 0, spans)) return true;
+  return false;
+}
+
+/**
+ * Whether the body binds names it never spells (#2726 review): a JavaScript
+ * `with (…)`, under which a bare name resolves to the object's property. The
+ * identity rule reads names where the code writes them, so it cannot read
+ * these, and the body is not shown.
+ *
+ * A Python star import (`from mylib import *`) binds the same way and is not
+ * read here, because nothing would observe it: beside a recognised write the
+ * command is refused with or without this check, and with none there is
+ * nothing to exempt (measured on #2726). A check no input can tell apart
+ * from its absence is a second decider.
+ */
+function bindsUnspelled(body: string, spans: [number, number][]): boolean {
+  for (const m of body.matchAll(/\bwith\s*\(/g)) {
+    if (!inLiteral(m.index ?? 0, spans)) return true;
+  }
   return false;
 }
 
@@ -3983,13 +4005,68 @@ function receiverShown(body: string, name: string, spans: [number, number][]): b
   return true;
 }
 
-/** The dotted name immediately in front of an opening parenthesis. */
-function calleeBefore(body: string, openIndex: number): string {
+/**
+ * The dotted name immediately in front of an opening parenthesis. A dot may
+ * stand apart from the names it joins (#2726 review): `shutil . copy(`, a
+ * chain broken across lines, a line continuation, or a comment between the
+ * dot and the name (`codeBefore`). Each still makes a dotted callee, so the
+ * receiver is read rather than dropped. A segment that is not a name, as in
+ * `F().copy(`, reads as empty, and an empty receiver is no module's.
+ */
+function calleeBefore(body: string, openIndex: number, spans: [number, number][] = []): string {
   let i = openIndex - 1;
   while (i >= 0 && WHITESPACE.has(body[i])) i--;
-  let end = i + 1;
-  while (i >= 0 && /[A-Za-z0-9_$.]/.test(body[i])) i--;
-  return body.slice(i + 1, end);
+  const parts: string[] = [];
+  for (;;) {
+    const end = i + 1;
+    while (i >= 0 && /[A-Za-z0-9_$]/.test(body[i])) i--;
+    parts.unshift(body.slice(i + 1, end));
+    const dot = codeBefore(body, i, spans);
+    if (dot < 0 || body[dot] !== '.') break;
+    i = codeBefore(body, dot - 1, spans);
+  }
+  return parts.join('.');
+}
+
+/**
+ * The index of the last character at or before `i` that is code (#2726
+ * review): back past whitespace, a backslash line continuation, a block
+ * comment, and, at a line break, a `#` or `//` comment ending the line
+ * before, outside string literals. A line that ends in a dot ends in code,
+ * so a comment that ends in one reads as a dot: the direction that refuses.
+ */
+function codeBefore(body: string, i: number, spans: [number, number][]): number {
+  while (i >= 0) {
+    const c = body[i];
+    if (c === '\n' || c === '\r') {
+      const lineStart = body.lastIndexOf('\n', i - 1) + 1;
+      let k = i - 1;
+      while (k >= lineStart && (c === '\n' && body[k] === '\r' || body[k] === ' ' || body[k] === '\t')) k--;
+      if (k >= lineStart && body[k] === '.') return k;
+      const comment = [...body.slice(lineStart, i).matchAll(/#|\/\//g)]
+        .map(m => lineStart + (m.index ?? 0))
+        .find(at => !inLiteral(at, spans));
+      i = (comment ?? i) - 1;
+      continue;
+    }
+    if (c === ' ' || c === '\t') {
+      i--;
+      continue;
+    }
+    if (c === '\\' && /[\r\n]/.test(body[i + 1] ?? '')) {
+      i--;
+      continue;
+    }
+    if (c === '/' && body[i - 1] === '*' && !inLiteral(i, spans)) {
+      const open = body.lastIndexOf('/*', i - 2);
+      if (open >= 0) {
+        i = open - 1;
+        continue;
+      }
+    }
+    return i;
+  }
+  return i;
 }
 
 /**

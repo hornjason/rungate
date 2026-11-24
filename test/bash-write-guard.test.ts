@@ -5174,6 +5174,7 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
   const PY = (body: string) => `mkdir -p /tmp/rg2705 && python3 -I -c "${body}"`;
   const JS = (body: string) => `mkdir -p /tmp/rg2705 && node -e "${body}"`;
   const BUN = (body: string) => `mkdir -p /tmp/rg2705 && bun -e "${body}"`;
+  const PYS = (body: string) => `mkdir -p /tmp/rg2705 && python3 -I -c '${body}'`;
   const T = `/tmp/rg2705/${STATE}`;
   test.each([
     ["a parameter named copy", PY(`import os, shutil\ndef go(copy): copy('/tmp/rg2705/x', '${T}')\ngo(lambda a, b: shutil.copy(a, os.environ['RG']))`)],
@@ -5214,6 +5215,24 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["a typed method shorthand put on globalThis", BUN(`Object.assign(globalThis, { copy(a: string, b: string): void { require('fs').writeFileSync(process.env.RG, b) } }); copy('/tmp/rg2705/x', '${T}')`)],
     ["a require of the body's own", JS(`const require = (m) => globalThis.fake; require('fs').writeFileSync('${T}', '{}')`)],
     ["a require put on globalThis", JS(`globalThis.require = (m) => globalThis.fake; require('fs').writeFileSync('${T}', '{}')`)],
+    // #2726 review round 3: the receiver is read across whatever stands
+    // between it, the dot and the name.
+    ["a space after the dot", PY(`import os, shutil\nshutil = type('F', (), {})()\nsetattr(shutil, 'copy', lambda a, b: open(os.environ['RG'], 'w').write('x'))\nshutil. copy('/tmp/rg2705/x', '${T}')`)],
+    ["spaces around the dot on a proxy", BUN(`const fs = require('fs'); new Proxy(fs, {get: () => (p, d) => fs.appendFileSync(process.env.RG, d)}) . writeFileSync('${T}', '{}')`)],
+    // Single-quoted, so the shell hands Python the backslash-newline.
+    ["a chain broken before the dot", PYS(`import os\nW = type("W", (), {"copy": staticmethod(lambda a, b: os.replace(a, os.environ["RG"]))})\nW\\\n    .copy("/tmp/rg2705/x", "${T}")`)],
+    ["a line continuation after the dot", PYS(`import os\nshutil = type("F", (), {"copy": staticmethod(lambda a, b: os.replace(a, os.environ["RG"]))})\nshutil.\\\ncopy("/tmp/rg2705/x", "${T}")`)],
+    ["a block comment between the dot and the name", JS(`const w = {}; w['writeFileSync'] = (p, d) => require('fs').appendFileSync(process.env.RG, d); w./* c */writeFileSync('${T}', 'x')`)],
+    // Each comment row also makes a recognised write beside the literal, so
+    // it reaches the exemption question rather than passing as no write.
+    ["a comment between the dot and the name inside brackets", PY(`import os, shutil\nW = type('W', (), {'copy': staticmethod(lambda a, b: os.replace(a, os.environ['RG']))})\nprint(W.  # c\n    copy('/tmp/rg2705/x', '${T}')); shutil.copy('/tmp/rg2705/x', os.environ['RG'])`)],
+    ["a line comment between the dot and the name", JS(`const w = {}; w['writeFileSync'] = (p, d) => require('fs').appendFileSync(process.env.RG, d); w. // c\n  writeFileSync('${T}', 'x')`)],
+    // A line that ends in a dot ends in code, though a // stands before it:
+    // Python's floor division, not a comment.
+    ["a dot ending a line after a floor division", PY(`import os, shutil\nW = type('W', (), {'copy': staticmethod(lambda a, b: os.replace(a, os.environ['RG']))})\nprint(2 // W.\n    copy('/tmp/rg2705/x', '${T}')); shutil.copy('/tmp/rg2705/x', os.environ['RG'])`)],
+    ["an annotated attribute assignment", PY(`import os, shutil\nshutil.copyfile: object = lambda a, b, **k: open(os.environ['RG'], 'w').close()\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    // A construct that binds names the code never spells.
+    ["a JavaScript with", JS(`with (require('/tmp/rg2705/fake.js')) { writeFileSync('${T}', 'x') }`)],
   ])("WITNESS: %s is refused", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
@@ -5243,6 +5262,14 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["an attribute compared beside shutil.copy", PY(`import shutil, sys\nif sys.platform == 'linux': shutil.copy('/tmp/rg2705/x', '${T}')`)],
     // A colon after the call is a ternary's, not a return type: no body follows.
     ["a write in a ternary's first branch", JS(`const fs = require('fs'); const ok = true; ok ? fs.writeFileSync('${T}', 'x') : 0`)],
+    // Round 3: a module receiver still shows across what stands around the
+    // dot, and a bare call after a line, a comment or a with-block is bare.
+    ["shutil.copy with spaces around the dot", PY(`import shutil\nshutil . copy('/tmp/rg2705/x', '${T}')`)],
+    ["fs.writeFileSync chained onto the next line", JS(`const fs = require('fs'); fs\n  .writeFileSync('${T}', 'x')`)],
+    ["open on the line after an import", PY(`import os\nopen('${T}', 'w').write('{}')`)],
+    ["open on the line after a comment", PY(`# write the state\nopen('${T}', 'w').write('{}')`)],
+    ["open inside a with statement", PY(`with open('${T}', 'w') as f: f.write('{}')`)],
+    ["an annotated name beside shutil.copy", PY(`import shutil\nn: int = 1\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
   ])("CONTROL: %s onto a scratch path stays exempt", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
