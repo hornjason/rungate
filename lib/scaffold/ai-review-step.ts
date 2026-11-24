@@ -1562,13 +1562,14 @@ const VERTEX_REGION = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
  */
 /**
  * The config's `ci` section, or `undefined` when it has none (#2725 review).
- * A `ci` that is not an object (`"ci": "deep"`, an array) throws: a corrupt
- * section is never one that declares nothing, so a reader below cannot report
- * a key as absent when the section holding it could not be read.
+ * A `ci` that is not an object (`"ci": "deep"`, an array, `null`) throws: a
+ * corrupt section is never one that declares nothing, so a reader below cannot
+ * report a key as absent when the section holding it could not be read. JSON
+ * has no `undefined`, so only a config with no `ci` key reaches the first line.
  */
 function ciSection(ci: unknown): Record<string, unknown> | undefined {
-  if (ci === undefined || ci === null) return undefined;
-  if (typeof ci !== 'object' || Array.isArray(ci)) {
+  if (ci === undefined) return undefined;
+  if (ci === null || typeof ci !== 'object' || Array.isArray(ci)) {
     throw new Error(`ci in .claude/rungate/config.json is ${JSON.stringify(ci)}; it must be an object`);
   }
   return ci as Record<string, unknown>;
@@ -3290,15 +3291,19 @@ export type AiReviewDepth = (typeof AI_REVIEW_DEPTHS)[number];
 /**
  * Each depth's turn budget (#1655). Standard is `AI_REVIEW_MAX_TURNS`, so a
  * repository that sets it, or sets nothing, keeps the workflow it has. Quick
- * halves it: cheaper, and it runs out sooner on a large change, which reports
- * UNMEASURED, never a pass. Deep doubles it. Derived from the one constant,
- * not written out, so the budget is still one number.
+ * is three quarters of it, 60: above the p95 of the readings above (59), so it
+ * caps what the largest reviews cost and runs out only on them, which report
+ * UNMEASURED, never a pass. Half would sit at the p50 (39) and run out on about
+ * half of ordinary reviews (#2725 review). Deep doubles it. Derived from the
+ * one constant, not written out, so the budget is still one number.
  *
- * Depth moves the turn budget and nothing else. The runs per round and the
- * model are ADR-025's decisions, not a depth's.
+ * The budget is a cap: under it the reviewer works the same, so Quick and
+ * Standard differ only on a review that would run past 60 turns. Depth moves
+ * the cap and nothing else. The runs per round and the model are ADR-025's
+ * decisions, not a depth's.
  */
 export const AI_REVIEW_DEPTH_TURNS: Readonly<Record<AiReviewDepth, number>> = {
-  quick: AI_REVIEW_MAX_TURNS / 2,
+  quick: (AI_REVIEW_MAX_TURNS * 3) / 4,
   standard: AI_REVIEW_MAX_TURNS,
   deep: AI_REVIEW_MAX_TURNS * 2,
 };

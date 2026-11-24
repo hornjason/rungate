@@ -357,8 +357,8 @@ describe("AC-4: a review that exhausted its budget is UNMEASURED, not a pass", (
 
 /**
  * #1655: review depth is a per-repo setting, `ci.reviewDepth`, and each value
- * changes what the reviewer is handed. Quick halves the turn budget and Deep
- * doubles it; Standard is `AI_REVIEW_MAX_TURNS`, so a repository that sets it,
+ * changes what the reviewer is handed. Quick is three quarters of the turn
+ * budget and Deep doubles it; Standard is `AI_REVIEW_MAX_TURNS`, so a repository that sets it,
  * or sets nothing, keeps the workflow it has. An absent key reviews at
  * Standard and the generated workflow says so; any other value is refused,
  * since a corrupt setting is never a missing one (.claude/rules/config-access.md).
@@ -381,7 +381,7 @@ describe("CRC-B9: review depth is configurable per repo as Quick, Standard or De
       .map(Number);
 
   test("the reading: three depths, each with its budget, and an absent key at Standard with a reason", () => {
-    expect(reviewDepthConfig({ reviewDepth: "quick" })).toMatchObject({ depth: "quick", maxTurns: AI_REVIEW_MAX_TURNS / 2 });
+    expect(reviewDepthConfig({ reviewDepth: "quick" })).toMatchObject({ depth: "quick", maxTurns: (AI_REVIEW_MAX_TURNS * 3) / 4 });
     expect(reviewDepthConfig({ reviewDepth: "standard" })).toMatchObject({ depth: "standard", maxTurns: AI_REVIEW_MAX_TURNS });
     expect(reviewDepthConfig({ reviewDepth: "deep" })).toMatchObject({ depth: "deep", maxTurns: AI_REVIEW_MAX_TURNS * 2 });
     const absent = reviewDepthConfig({ runner: "ubuntu-latest" });
@@ -399,7 +399,7 @@ describe("CRC-B9: review depth is configurable per repo as Quick, Standard or De
 
   // #2725 review: a ci section that is not an object is corrupt, not one that
   // declares nothing, for this reader and for ci.vertex's beside it.
-  test.each([["deep"], [["deep"]], [5], [true]])("a ci section of %p is refused, not read as declaring nothing", ci => {
+  test.each([["deep"], [["deep"]], [5], [true], [null]])("a ci section of %p is refused, not read as declaring nothing", ci => {
     expect(() => reviewDepthConfig(ci)).toThrow(/\bci\b.*object/);
     expect(() => vertexCiConfig(ci)).toThrow(/\bci\b.*object/);
   });
@@ -408,7 +408,7 @@ describe("CRC-B9: review depth is configurable per repo as Quick, Standard or De
     const quick = turnsIn(generate({ ...FIXTURE_CI, reviewDepth: "quick" }));
     const standard = turnsIn(generate({ ...FIXTURE_CI, reviewDepth: "standard" }));
     const deep = turnsIn(generate({ ...FIXTURE_CI, reviewDepth: "deep" }));
-    expect(quick).toEqual(Array(AI_REVIEW_RUNS).fill(AI_REVIEW_MAX_TURNS / 2));
+    expect(quick).toEqual(Array(AI_REVIEW_RUNS).fill((AI_REVIEW_MAX_TURNS * 3) / 4));
     expect(standard).toEqual(Array(AI_REVIEW_RUNS).fill(AI_REVIEW_MAX_TURNS));
     expect(deep).toEqual(Array(AI_REVIEW_RUNS).fill(AI_REVIEW_MAX_TURNS * 2));
   });
