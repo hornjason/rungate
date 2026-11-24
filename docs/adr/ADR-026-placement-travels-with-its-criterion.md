@@ -55,7 +55,8 @@ not change it.
 `placementReading` and `placementCoverage`. Its callers are `plan-spec`,
 `plan-issues`, `board-mirror`, `board-snapshot`, `board-scope`,
 `board-conformance`, `status-view`, `criterion-successor`,
-`finding-promotion` and `lib/scaffold/spec-scope.ts`. Each already accepts
+`finding-promotion`, `lib/scaffold/spec-scope.ts`, and `lib/issue-repair.ts`,
+which takes the values `milestonePlan` and `placementsById` produce. Each already accepts
 several rows per phase. The one writer is `withPhase` in
 `lib/finding-promotion.ts`, which appends an id to the phase's existing line.
 
@@ -94,8 +95,11 @@ converted by a tool, not by hand.
    view keeps showing each phase's progress as it does today.
 3. **One parser reads both forms, and a spec may not mix them — the DA
    recommends.** `parsePlacementRows` builds its rows from the placement
-   lines when a spec has them, and from the table when it does not. So no
-   reader changes, and a consumer whose spec still has a table keeps working.
+   lines when a spec has them, and from the table when it does not. The
+   change is inside `lib/spec-placement.ts`: `placementReading` today reads a
+   spec with no `### Phase placement` heading as UNMEASURED, and it must
+   accept a spec whose criteria all carry placement lines instead. No caller
+   changes, and a consumer whose spec still has a table keeps working.
    A spec that has both, meaning a `### Phase placement` table that lists any
    criterion id and at least one placement line, is UNMEASURED and names
    itself, since two sources for one fact will disagree eventually.
