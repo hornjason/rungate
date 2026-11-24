@@ -3361,6 +3361,17 @@ export function reviewDepthConfig(ci: unknown): ReviewDepthDecision {
 export const AI_REVIEW_UNSET_DEPTH: ReviewDepthDecision = reviewDepthConfig(undefined);
 
 /**
+ * What a review that ran out of turns can change (#2728): the depth it ran at,
+ * and the deeper one. `AI_REVIEW_MAX_TURNS` is a constant inside rungate that
+ * a consumer cannot set; `ci.reviewDepth` is theirs. Deep has nothing above
+ * it, and says so rather than naming a lever that is not there.
+ */
+export function turnBudgetLever(depth: ReviewDepthDecision): string {
+  if (depth.depth === "deep") return `${depth.reason}, the largest budget ci.reviewDepth allows`;
+  return `${depth.reason}; a deeper ci.reviewDepth (deep is ${AI_REVIEW_DEPTH_TURNS.deep} turns) is the lever`;
+}
+
+/**
  * The `claude_args` line, with the model the consumer's config resolved.
  *
  * A function rather than a constant because the model is now a `ci.vertex`
@@ -6769,7 +6780,8 @@ export const AI_REVIEW_APP_INSTALL_CAUSE =
 export const AI_REVIEW_FRESH_CWD =
   'rungate_bunx_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && cd "$rungate_bunx_dir"';
 
-export function buildReviewRunScript(version: string, maxTurns: number = AI_REVIEW_MAX_TURNS): string {
+export function buildReviewRunScript(version: string, depth: ReviewDepthDecision = AI_REVIEW_UNSET_DEPTH): string {
+  const lever = turnBudgetLever(depth);
   // The exact command the success branch runs. Built here so the comments
   // below and the bash are one string, and so a test can name it.
   const adjudicator =
@@ -6832,9 +6844,8 @@ export function buildReviewRunScript(version: string, maxTurns: number = AI_REVI
     `and the ACTION rejected the run afterwards — at the pinned SHA the one ` +
     `thing that does this is the action's own turn accounting, which throws ` +
     `when the completed run's turn count exceeds --max-turns. Read the ` +
-    `execution file's num_turns against the configured maximum, which this ` +
-    `job sets to ${maxTurns}; raising it is the lever if they ` +
-    `are close. The Claude ` +
+    `execution file's num_turns against this job's maximum of ${depth.maxTurns}. ` +
+    `If they are close: ${lever}. The Claude ` +
     `Code GitHub App is NOT the cause here — the reviewer could not have run ` +
     `at all without it. This check is UNMEASURED, not a passing review.`;
 
@@ -7360,7 +7371,7 @@ export function buildReviewRunScript(version: string, maxTurns: number = AI_REVI
     `The review action exited successfully WITHOUT writing a findings ` +
     `payload, and its execution file reports the turn budget was exhausted ` +
     `(error_max_turns), so the reviewer ran out of turns before it wrote ` +
-    `anything. Raising ${"AI_REVIEW_MAX_TURNS"} is the lever; making the prompt ` +
+    `anything. The budget: ${lever}; making the prompt ` +
     `write a payload early is NOT, because a partial review that leaves a ` +
     `file behind reports as a pass. This check is UNMEASURED, not a passing ` +
     `review.`;
@@ -12409,7 +12420,7 @@ export function buildReviewRunStep(
     // `AI_REVIEW_OVERRIDE_LABEL` for why this is a label and not a variable.
     `    ${AI_REVIEW_OVERRIDE_VAR}: \${{ contains(github.event.pull_request.labels.*.name, '${AI_REVIEW_OVERRIDE_LABEL}') }}`,
     `  run: |`,
-    ...buildReviewRunScript(version, depth.maxTurns).trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
+    ...buildReviewRunScript(version, depth).trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
   ];
 
   // #1307. BEFORE the report step, and the position is the whole design.
