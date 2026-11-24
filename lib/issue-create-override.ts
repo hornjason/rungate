@@ -323,6 +323,14 @@ export const UNREADABLE_COMMAND = "Cannot read this command";
  * taken out, so `g\⏎h`, `g$""h` and `g"h"` all read as `gh` (#2746 review). Any
  * ANSI-C `$'…'` counts as well, since its escapes can spell anything. This
  * decides only which unreadable commands are refused, so it errs toward yes.
+ *
+ * A name built by expansion (`g${x}h`, `$(echo g)h`) is out of its reach, as
+ * it is out of every reader's here: `commandWords` keeps an expansion as
+ * written, so a well-formed `g${x}h issue create` is not read as a filing on
+ * main either. Refusing every malformed command that holds an expansion
+ * instead would refuse 72 of the 97 malformed commands in 139,574 real ones,
+ * against the 26 that name gh: the misread that makes most of them malformed
+ * is itself a `$( )`.
  */
 function namesGh(text: string): boolean {
   if (text.includes("$'")) return true;
@@ -543,14 +551,22 @@ function cdTarget(args: string[], dir: string): string {
   return resolve(dir, target);
 }
 
-/** Arguments of this clause that are themselves commands. */
+/**
+ * Arguments of this clause that are themselves commands. A shell's `-c` runs
+ * the one word after it. `eval` runs ALL its arguments, joined with spaces into
+ * one command line, so a filing split across them (`eval 'gh issue' create`)
+ * or after an earlier argument is read as the shell reads it (#2746 review
+ * round 2).
+ */
 function commandArguments(tokens: string[]): string[] {
   const out: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
-    if (COMMAND_FLAG.test(t) || basename(t) === "eval") {
-      if (i + 1 < tokens.length) out.push(tokens[i + 1]);
+    if (basename(t) === "eval") {
+      if (i + 1 < tokens.length) out.push(tokens.slice(i + 1).join(" "));
+      break;
     }
+    if (COMMAND_FLAG.test(t) && i + 1 < tokens.length) out.push(tokens[i + 1]);
   }
   return out;
 }

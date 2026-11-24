@@ -65,6 +65,10 @@ describe("#2727: a board write the shell runs is read, whatever the quoting arou
     expect(await decide(cmd)).toContain(UNREADABLE_COMMAND);
   });
 
+  test("WITNESS: a board edit split across eval's arguments is refused (#2746 review round 2)", async () => {
+    expect(await decide(`eval 'gh issue' edit 2655 --add-label x`)).not.toBeNull();
+  });
+
   test("CONTROL: a malformed command that names no gh runs", async () => {
     expect(await decide(`echo "$(printf case x)"; ls`)).toBeNull();
   });

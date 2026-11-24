@@ -417,6 +417,20 @@ describe("#2746 review: eval runs all its arguments as one command line", () => 
   test("CONTROL: the quoted form is read too", () => {
     expect(clauses(`eval 'gh issue create --label bug'`).some(createsIssue)).toBe(true);
   });
+
+  // #2746 review round 2: the filing split across eval's arguments, which only
+  // the joined command line shows.
+  test.each([
+    [`eval echo 'x; gh issue create --label bug'`],
+    [`eval 'gh issue' create --label bug`],
+  ])("WITNESS: %s is read as a filing and refused", cmd => {
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    expect(verifyPhaseRefusal(cmd), cmd).not.toBeNull();
+  });
+
+  test("CONTROL: an override label in a later eval argument applies to the filing", () => {
+    expect(verifyPhaseRefusal(`eval 'gh issue create' --label follow-up`)).toBeNull();
+  });
 });
 
 describe("#2727: a filing the shell runs is read, whatever the quoting around it", () => {
