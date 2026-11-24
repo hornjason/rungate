@@ -338,24 +338,43 @@ function namesGh(text: string): boolean {
   return /\bgh\b/.test(joined);
 }
 
+/** Shells, whose `-c` argument is a command line the shell runs. */
+const SHELL_NAMES = new Set(["bash", "sh", "zsh", "dash", "ksh", "ash", "mksh", "yash", "fish", "tcsh", "csh", "busybox"]);
+
 /**
- * Python, whose `-c` argument is Python, not a command line. Every other
- * program's `-c` argument is read as one, as `clauses()` reads it: a shell
- * named, unlisted (`fish`, `mksh`) or held in a variable (`$SHELL -c`) runs it
- * as a command line, and a list of shell names here would refuse less than
- * `clauses()` reads (#2746 review round 3).
+ * The command lines a clause hands a shell, for `unreadableFiling`: `eval`'s
+ * arguments joined, and the word after a `-c` flag whose program is a shell or
+ * is held in a variable (`$SHELL -c`, `"$BASH" -c`). The program is the word
+ * before the flag, past any other flags (`bash -l -c`). Narrower than
+ * `commandArguments`, which reads every `-c`: here `grep -c` and `tail -c` are
+ * a count and a limit, and reading their argument as a command line would
+ * refuse a grep for being malformed bash (#2746 review round 3).
  */
-const PYTHON = /^(python|pypy)[\d.]*$/;
+function shellCommandLines(c: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < c.length; i++) {
+    if (basename(c[i]) === "eval") {
+      if (i + 1 < c.length) out.push(c.slice(i + 1).join(" "));
+      break;
+    }
+    if (!COMMAND_FLAG.test(c[i]) || i + 1 >= c.length) continue;
+    let p = i - 1;
+    while (p >= 0 && c[p].startsWith("-")) p--;
+    const program = p >= 0 ? c[p] : "";
+    if (SHELL_NAMES.has(basename(program)) || program.startsWith("$")) out.push(c[i + 1]);
+  }
+  return out;
+}
 
 /**
  * Why no guard can read this command, or null when it can (#2743).
  *
  * A command line the shell runs is unreadable when the grammar reports it
  * malformed (`malformed()`) and it names `gh`. That covers the command itself,
- * a heredoc handed to a shell, and any `-c` or `eval` argument, to the depth of
- * 4 `clauses()` uses. A Python `-c` argument, or a heredoc's body handed to a
- * non-shell interpreter, is not bash, so its failing to parse as bash says
- * nothing. A heredoc whose delimiter never arrives is different: that fault is
+ * a heredoc handed to a shell, and the command lines `shellCommandLines`
+ * finds, to the depth of 4 `clauses()` uses. A non-shell program's text (a
+ * `python3 -c` argument, a heredoc handed to `node`) is not bash, so its
+ * failing to parse as bash says nothing. A heredoc whose delimiter never arrives is different: that fault is
  * in the command line itself, whatever the heredoc feeds, and bash would take
  * the rest of the command as its body (#2746 review round 3).
  * Whether it names `gh` is `namesGh`'s reading.
@@ -379,8 +398,7 @@ export function unreadableFiling(cmd: string, depth = 0): string | null {
     }
     if (depth >= 4) continue;
     for (const c of read.commands) {
-      if (c.some(w => PYTHON.test(basename(w)))) continue;
-      for (const inner of commandArguments(c)) {
+      for (const inner of shellCommandLines(c)) {
         const why = unreadableFiling(inner, depth + 1);
         if (why !== null) return why;
       }

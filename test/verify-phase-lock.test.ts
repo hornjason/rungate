@@ -492,6 +492,7 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     // is Python, whether the shell is named, unlisted or a variable.
     [`$SHELL -c 'echo "$(printf case x)"; gh issue create --title t'`],
     [`fish -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    [`sudo -u ci bash -l -c 'echo "$(printf case x)"; gh issue create --title t'`],
     // An unclosed heredoc is the command's own shell-level fault, whatever the
     // heredoc feeds: bash would take the rest of the command as its body.
     [`python3 - <<'PY'\nprint("gh")\n`],
@@ -508,6 +509,9 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     [`python3 - <<'PY'\nimport subprocess\nsubprocess.run(["gh", "issue", "view", "1"])\nPY`],
     [`python3 -c 'import os; os.system("gh issue view 1")'`],
     [`/usr/bin/python3.12 -c 'import os; os.system("gh issue view 1")'`],
+    // Another program's -c is a flag, not a command line: a count, a byte limit.
+    [`grep -c 'gh pr (' notes.md`],
+    [`tail -c 'gh (' notes.md`],
     // Names gh, and the grammar reads it.
     [`gh issue create --title t --label follow-up`],
     [`echo "$(printf x)"; gh issue view 12`],
