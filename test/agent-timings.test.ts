@@ -37,6 +37,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { parse } from "acorn";
 import { structuralCut } from "../lib/source-slice";
+import { shellQuoteSource } from "./helpers/ship-block";
 
 import {
   TIMING_USAGE_EXIT,
@@ -364,8 +365,8 @@ describe("AC-1: the bracket the wrapper actually emits", () => {
     const from = shipSource.indexOf(TIMING_START);
     const to = shipSource.indexOf(TIMING_END);
     if (from < 0 || to < 0) throw new Error("AGENT-TIMING markers missing from workflows/ship.js");
-    const quote = shipSource.match(/function shellQuote\(word\)[\s\S]*?\n}/);
-    if (!quote) throw new Error("ship.js no longer defines shellQuote(word)");
+    // The shellQuote the launch file runs, through the one helper (#2736).
+    const quote = shellQuoteSource();
 
     const calls: Array<{ prompt: string; opts: Record<string, unknown> }> = [];
     const logs: string[] = [];
@@ -378,7 +379,7 @@ describe("AC-1: the bracket the wrapper actually emits", () => {
       "agent",
       "log",
       "noteWorktrees",
-      `${quote[0]}\n${shipSource.slice(from, to)}\nreturn { timedAgent, timingInstruction, TIMING_ARTIFACT, TIMING_SCRIPT }`,
+      `${quote}\n${shipSource.slice(from, to)}\nreturn { timedAgent, timingInstruction, TIMING_ARTIFACT, TIMING_SCRIPT }`,
     );
     const api = factory(
       workDir,

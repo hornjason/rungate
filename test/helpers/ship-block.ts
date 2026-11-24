@@ -15,6 +15,7 @@
  */
 import { readFileSync } from "fs";
 import { join } from "path";
+import { structuralCut } from "../../lib/source-slice";
 import { bundleLibCores, LAUNCH_BUNDLE } from "../../scripts/build-workflow-launch";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -125,4 +126,21 @@ function markedRegion(source: string, name: "WORKTREE-IDENTITY" | "SECURITY-HELP
 /** ship.js's own `worktreeIdentity`, built from the region rather than stubbed. */
 export function shipWorktreeIdentity(source?: string): (...args: unknown[]) => any {
   return new Function(`${worktreeIdentityRegion(source)}\nreturn worktreeIdentity;`)() as (...args: unknown[]) => any;
+}
+
+/**
+ * The source that defines `shellQuote` as the launch file runs it (#2736,
+ * SC-2775 wave 7, plan on #2290). Nine suites cut `function shellQuote(word)`
+ * out of ship.js by hand. They read it here instead, so #2734's move into the
+ * launch bundle changes this one function and no reader. Today ship.js's own
+ * SHELL-QUOTE block defines it. Refused, by name, if the source defines it
+ * nowhere or twice.
+ */
+export function shellQuoteSource(source: string = readFileSync(SHIP_PATH, "utf-8")): string {
+  return structuralCut(source, "function shellQuote(word)", { balanced: "{" });
+}
+
+/** That source, evaluated: the `shellQuote` the launch file runs. */
+export function shipShellQuote(source?: string): (word: unknown) => string {
+  return new Function(`${shellQuoteSource(source)}\nreturn shellQuote;`)() as (word: unknown) => string;
 }
