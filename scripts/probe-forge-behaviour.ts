@@ -144,7 +144,13 @@ export const SLEEP_MS = 1000;
 
 export interface Observations {
   "bun-spawn-timeout-window"?: { honoured: Ran; window: Ran };
-  "ls-remote-absent-ref-exits-zero"?: { control: Ran; absent: Ran };
+  /**
+   * HEAD, the absent ref, the absent ref again, then HEAD again. A non-zero
+   * exit for the absent ref means a changed behaviour only when it repeats,
+   * with the same code, between two HEAD reads that both succeeded. Once is a
+   * read that failed (#2750 review).
+   */
+  "ls-remote-absent-ref-exits-zero"?: { control: Ran; absent: Ran; absentAgain: Ran; controlAfter: Ran };
   "ls-remote-unreadable-exits-nonzero"?: { unreadable: Ran };
   "head-ref-oid-frozen-at-merge"?: { url: Ran; view: Ran; branch: Ran };
 }
@@ -173,6 +179,12 @@ export interface RowReading {
 
 const ranFully = (r: Ran) => r.started && !r.killed && r.exit === 0 && r.ms >= SLEEP_MS * 0.9;
 const cutShort = (r: Ran) => r.started && r.killed && r.ms < SLEEP_MS / 2;
+/**
+ * A sleep that bun neither killed nor let run its length — it exited non-zero,
+ * or returned early on its own — says nothing about bun's timeout (#2750
+ * review): the `sleep` on PATH is not doing what the probe needs.
+ */
+const sleepMisbehaved = (r: Ran) => r.started && !r.killed && !ranFully(r);
 const describeRan = (r: Ran) =>
   !r.started ? "did not start" : r.killed ? `was killed after ${Math.round(r.ms)}ms` : `exited ${r.exit} after ${Math.round(r.ms)}ms`;
 
@@ -190,6 +202,9 @@ export function forgeBehaviourReading(id: string, obs: Observations): RowReading
         return say("UNMEASURED", "`sleep` could not be started, so no timeout was observed.");
       }
       const at = `a ${SLEEP_MS}ms sleep with timeout 2**31 - 1 ${describeRan(o.honoured)}; with 2**31 it ${describeRan(o.window)}`;
+      if (sleepMisbehaved(o.honoured) || sleepMisbehaved(o.window)) {
+        return say("UNMEASURED", `${at}. A sleep that exits on its own before its time is not bun's timeout, so nothing was read.`);
+      }
       if (!ranFully(o.honoured)) {
         return say("CHANGED", `${at}. 2**31 - 1 is no longer honoured, so \`MAX_TIMEOUT_MS\` admits a bound that misbehaves.`);
       }
@@ -212,7 +227,16 @@ export function forgeBehaviourReading(id: string, obs: Observations): RowReading
         return say("UNMEASURED", `the absent-ref read ${describeRan(o.absent)}, so it measured nothing.`);
       }
       if (o.absent.exit !== 0) {
-        return say("CHANGED", `an absent ref exited ${o.absent.exit}, so a branch that is gone now reads as a remote that was not read.`);
+        const repeated =
+          finished(o.absentAgain) && o.absentAgain.exit === o.absent.exit &&
+          finished(o.controlAfter) && o.controlAfter.exit === 0 && o.controlAfter.out !== "";
+        if (!repeated) {
+          return say(
+            "UNMEASURED",
+            `an absent ref exited ${o.absent.exit} once, and the repeat (absent ref ${describeRan(o.absentAgain)}, HEAD ${describeRan(o.controlAfter)}) did not confirm it, so this reads as a failed read.`,
+          );
+        }
+        return say("CHANGED", `an absent ref exited ${o.absent.exit} twice between two good HEAD reads, so a branch that is gone now reads as a remote that was not read.`);
       }
       if (o.absent.out !== "") {
         return say("CHANGED", `an absent ref exited 0 and printed \`${o.absent.out.split("\n")[0]}\`, so the empty answer no longer means gone.`);
@@ -342,6 +366,8 @@ function observe(id: string, remote: string): Observations {
         [id]: {
           control: run(["git", "ls-remote", remote, "HEAD"]),
           absent: run(["git", "ls-remote", remote, `refs/heads/rungate-forge-probe-absent-${crypto.randomUUID()}`]),
+          absentAgain: run(["git", "ls-remote", remote, `refs/heads/rungate-forge-probe-absent-${crypto.randomUUID()}`]),
+          controlAfter: run(["git", "ls-remote", remote, "HEAD"]),
         },
       };
     case "ls-remote-unreadable-exits-nonzero": {

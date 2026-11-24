@@ -53,6 +53,8 @@ function confirmedObservations(): Observations {
     "ls-remote-absent-ref-exits-zero": {
       control: ran({ out: `${BRANCH_HEAD}\tHEAD` }),
       absent: ran(),
+      absentAgain: ran(),
+      controlAfter: ran({ out: `${BRANCH_HEAD}\tHEAD` }),
     },
     "ls-remote-unreadable-exits-nonzero": { unreadable: ran({ exit: 128 }) },
     "head-ref-oid-frozen-at-merge": {
@@ -66,7 +68,7 @@ function confirmedObservations(): Observations {
 /** One way each probed row can come back different, and only that row. */
 const BREAKS: Record<string, (o: Observations) => void> = {
   "bun-spawn-timeout-window": (o) => { o["bun-spawn-timeout-window"]!.window = ran({ ms: SLEEP_MS + 10 }); },
-  "ls-remote-absent-ref-exits-zero": (o) => { o["ls-remote-absent-ref-exits-zero"]!.absent = ran({ exit: 2 }); },
+  "ls-remote-absent-ref-exits-zero": (o) => { o["ls-remote-absent-ref-exits-zero"]!.absent = ran({ out: `${BRANCH_HEAD}\trefs/heads/x` }); },
   "ls-remote-unreadable-exits-nonzero": (o) => { o["ls-remote-unreadable-exits-nonzero"]!.unreadable = ran({ exit: 0 }); },
   "head-ref-oid-frozen-at-merge": (o) => {
     o["head-ref-oid-frozen-at-merge"]!.view = ran({ out: JSON.stringify({ state: "MERGED", headRefOid: BRANCH_HEAD }) });
@@ -142,7 +144,12 @@ describe("#1910: forgeBehaviourReading", () => {
       expect(r.detail).toContain("moved or closed");
     });
     test("a run that returned early without being killed is not an honoured timeout", () => {
-      expect(at(ran({ ms: 3 }), ran({ exit: null, killed: true, ms: 2 })).reading).toBe("CHANGED");
+      expect(at(ran({ ms: 3 }), ran({ exit: null, killed: true, ms: 2 })).reading).not.toBe("CONFIRMED");
+    });
+    // #2750 review: a sleep that exits on its own, early or non-zero, is not bun.
+    test("a sleep that exits non-zero, or returns early unkilled, is UNMEASURED, not CHANGED", () => {
+      expect(at(ran({ exit: 1, ms: 2 }), ran({ exit: null, killed: true, ms: 2 })).reading).toBe("UNMEASURED");
+      expect(at(ran({ ms: SLEEP_MS + 5 }), ran({ exit: 1, ms: 2 })).reading).toBe("UNMEASURED");
     });
     test("a sleep that could not start is UNMEASURED", () => {
       expect(at(ran({ started: false, exit: null }), ran({ started: false, exit: null })).reading).toBe("UNMEASURED");
@@ -151,8 +158,9 @@ describe("#1910: forgeBehaviourReading", () => {
 
   describe("ls-remote-absent-ref-exits-zero", () => {
     const id = "ls-remote-absent-ref-exits-zero";
-    const at = (control: Ran, absent: Ran) => forgeBehaviourReading(id, { [id]: { control, absent } });
     const reachable = ran({ out: `${BRANCH_HEAD}\tHEAD` });
+    const at = (control: Ran, absent: Ran, absentAgain: Ran = absent, controlAfter: Ran = reachable) =>
+      forgeBehaviourReading(id, { [id]: { control, absent, absentAgain, controlAfter } });
 
     // The control is the point: without it a remote that was not read and an
     // absent ref are the same empty answer.
@@ -163,8 +171,14 @@ describe("#1910: forgeBehaviourReading", () => {
     test("output for an absent ref is CHANGED", () => {
       expect(at(reachable, ran({ out: `${BRANCH_HEAD}\trefs/heads/x` })).reading).toBe("CHANGED");
     });
-    test("a non-zero exit for an absent ref is CHANGED", () => {
+    test("a non-zero exit for an absent ref, twice between two good HEAD reads, is CHANGED", () => {
       expect(at(reachable, ran({ exit: 2 })).reading).toBe("CHANGED");
+    });
+    // #2750 review: one failure after a good control is a failed read.
+    test("a non-zero exit once, not repeated, is UNMEASURED", () => {
+      expect(at(reachable, ran({ exit: 128 }), ran()).reading).toBe("UNMEASURED");
+      expect(at(reachable, ran({ exit: 128 }), ran({ exit: 2 })).reading).toBe("UNMEASURED");
+      expect(at(reachable, ran({ exit: 128 }), ran({ exit: 128 }), ran({ exit: 128 })).reading).toBe("UNMEASURED");
     });
     // #2750 review: a killed child has no exit code, and null is not a code.
     test("an absent-ref read that was killed is UNMEASURED, not CHANGED", () => {
@@ -249,8 +263,9 @@ describe("#1910: forgeBehaviourReading", () => {
 /**
  * Every file git tracks, plus new ones it would track, whatever the directory
  * or extension (#2750 review: a list of roots left specs/ and test/ unread).
- * A binary file is skipped by its NUL bytes, never by its name. This file's own
- * planted markers are built by `mark`, so its source carries none.
+ * Nothing is skipped by size or content: a binary file is read as text too, so
+ * a marker in it is seen. This file's own planted markers are built by `mark`,
+ * so its source carries none.
  */
 function readTree(): Record<string, string> {
   const r = Bun.spawnSync(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
@@ -264,9 +279,7 @@ function readTree(): Record<string, string> {
     } catch {
       continue; // listed by the index and deleted in this worktree: nothing to read
     }
-    if (!st.isFile() || st.size > 4_000_000) continue;
-    const text = readFileSync(full, "utf-8");
-    if (!text.includes("\0")) files[path] = text;
+    if (st.isFile()) files[path] = readFileSync(full, "utf-8");
   }
   return files;
 }
@@ -280,6 +293,10 @@ describe("#1910: citationViolations — the tree and the inventory agree", () =>
   test("the scan read the tree, and found one marker per named file", () => {
     expect(Object.keys(tree).length).toBeGreaterThan(1500);
     expect(Object.keys(tree)).toContain("test/probe-forge-behaviour.test.ts");
+    // Every listed file that is on disk was read, so nothing is skipped silently.
+    const listed = Bun.spawnSync(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: ROOT, stdout: "pipe" });
+    const onDisk = new TextDecoder().decode(listed.stdout).split("\0").filter((p) => p && statSync(join(ROOT, p), { throwIfNoEntry: false })?.isFile());
+    expect(Object.keys(tree).length).toBe(onDisk.length);
     expect(Object.keys(tree).some((p) => p.startsWith("specs/"))).toBe(true);
     const markers = Object.values(tree).flatMap((t) => [...t.matchAll(/forge-behaviour: ([a-z0-9][a-z0-9-]*)/g)]);
     expect(markers.length).toBe(FORGE_BEHAVIOURS.reduce((n, b) => n + b.citedBy.length, 0));
