@@ -151,7 +151,8 @@ export function acPayloadReadExpression(): string {
  * `next` null removes the command, and `reason` says why (#2733). Discovery's
  * screen used to delete a command it refused with nothing recorded, so the
  * persisted AC read as an ordinary manual check rather than an automated one
- * that was refused.
+ * that was refused. A removal with no reason is that silent deletion again,
+ * so it throws, and `EvidenceRewriteSchema` refuses one too (#2740 review).
  */
 export function recordEvidenceRewrite(
   evidenceMethod: { command?: string; authoredCommand?: string; rewrites?: EvidenceRewrite[] } | undefined | null,
@@ -159,6 +160,7 @@ export function recordEvidenceRewrite(
   next: string | null,
   reason?: string,
 ): boolean {
+  if (next === null && !reason) throw new Error(`recordEvidenceRewrite: ${by} removes a command without a reason`);
   if (!evidenceMethod || typeof evidenceMethod.command !== "string") return false;
   const from = evidenceMethod.command;
   if (from === next) return false;

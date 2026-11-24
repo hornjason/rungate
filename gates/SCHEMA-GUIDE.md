@@ -41,8 +41,9 @@ Valid `type` values (case-sensitive): `GREP_CHECK`, `FILE_EXISTS`, `CURL_CHECK`,
 
 ### Rewrite provenance — `authoredCommand` and `rewrites` (#614)
 
-`command` is what will RUN. Three places legitimately change it before it
-does, and each one records what it changed.
+`command` is what will RUN. Four places change it before it does, and each
+one records what it changed: three rewrite it, and discovery's screen removes
+a command it refuses (#2733).
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -62,7 +63,8 @@ not "unknown".
 Discovery's screen downgrades an AC whose command `validateEvidenceCommand`
 rejects to `MANUAL` and removes the command. The removal is the last
 `rewrites` entry, with `to: null` and the reason, so a `MANUAL` AC that was
-refused reads differently from one that was always manual.
+refused reads differently from one that was always manual. A removal with no
+reason is refused at write time.
 
 ```json
 { "evidenceMethod": {

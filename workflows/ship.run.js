@@ -965,6 +965,8 @@ function acPayloadReadExpression() {
     return `JSON.parse(process.argv[${AC_PAYLOAD_ARGV_INDEX}])`;
 }
 function recordEvidenceRewrite(evidenceMethod, by, next, reason) {
+    if (next === null && !reason)
+        throw new Error(`recordEvidenceRewrite: ${by} removes a command without a reason`);
     if (!evidenceMethod || typeof evidenceMethod.command !== "string")
         return false;
     const from = evidenceMethod.command;

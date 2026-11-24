@@ -586,4 +586,17 @@ describe("#2733: a rejected evidence command is recorded on the AC, not deleted 
     expect(recordEvidenceRewrite(em, "screen", null, "refused")).toBe(false);
     expect(em.rewrites).toHaveLength(2);
   });
+
+  // #2740 review: a removal with no reason is the silent deletion again, so
+  // neither the recorder nor the schema accepts one.
+  test("#2733: a removal with no reason is refused, by the recorder and by the schema", () => {
+    const em: Record<string, any> = { type: "COMMAND", command: "a" };
+    expect(() => recordEvidenceRewrite(em, "screen", null)).toThrow(/reason/);
+    expect(() => recordEvidenceRewrite(em, "screen", null, "")).toThrow(/reason/);
+    expect(em).toEqual({ type: "COMMAND", command: "a" });
+    expect(() => EvidenceMethodSchema.parse({
+      type: "MANUAL", authoredCommand: "a",
+      rewrites: [{ by: "screen", from: "a", to: null }],
+    })).toThrow(/reason/);
+  });
 });

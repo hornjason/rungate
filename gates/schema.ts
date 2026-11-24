@@ -46,8 +46,11 @@ export const EvidenceRewriteSchema = z.object({
   from: z.string(),
   /** null when the change removed the command: discovery's screen refused it (#2733). */
   to: z.string().nullable(),
-  /** Why the command was removed. */
+  /** Why the command was removed. Required on a removal (#2740 review). */
   reason: z.string().optional(),
+}).refine(r => r.to !== null || (typeof r.reason === "string" && r.reason.length > 0), {
+  message: "a rewrite that removes the command must record the reason it was removed",
+  path: ["reason"],
 });
 
 export const EvidenceMethodSchema = z.object({
@@ -60,7 +63,8 @@ export const EvidenceMethodSchema = z.object({
    * Three sites legitimately rewrite an evidence command — discovery's path
    * normaliser, its evidence-type-ratio upgrade, and the git-ref
    * qualification at the execution boundary (#118) — and each used to
-   * overwrite `command` in place. A reader of a broken command then had no
+   * overwrite `command` in place. A fourth, discovery's screen, removes a
+   * command it refuses and records why (#2733). A reader of a broken command then had no
    * way to tell a repair from a corruption, which is the question run
    * `wf_c92dd0a7-fe6` cost a post-mortem to answer.
    *
