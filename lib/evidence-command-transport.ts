@@ -30,15 +30,16 @@
  * `evidenceMethod.command` in place, so a reader of a broken command could not
  * tell a repair from a corruption — which is exactly the question #614 took a
  * run and a post-mortem to answer. `recordEvidenceRewrite` is the single site
- * that changes a command, and it keeps the FIRST authored form.
+ * that changes a command, and it keeps the FIRST authored form. Discovery's
+ * screen removes a command `validateEvidenceCommand` rejects, and records the
+ * removal through the same function, with the reason (#2733).
  *
  * It belongs here because it is the same claim from the other side: the first
  * half says nothing may change the command by accident, the second says
  * everything that changes it on purpose must say so.
  *
- * `workflows/ship.js` cannot import (#69). It carries an inlined copy inside
- * the `AC-PAYLOAD-TRANSPORT` markers, and `test/evidence-command-roundtrip.test.ts`
- * runs both over one matrix so drift is red.
+ * `workflows/ship.js` cannot import (#69). The launch bundle carries this
+ * module's code into `workflows/ship.run.js` (#2730), so ship.js holds no copy.
  */
 import { shellSingleQuote } from "./phase2-decomposition";
 
@@ -55,8 +56,10 @@ export interface EvidenceRewrite {
   by: string;
   /** The command as it stood before this change. */
   from: string;
-  /** The command as it stands after it. */
-  to: string;
+  /** The command as it stands after it, or null when the change removed it (#2733). */
+  to: string | null;
+  /** Why the command was removed. Present on a removal. */
+  reason?: string;
 }
 
 /** The AC fields the setup step persists into workflow-state.json. */
@@ -144,17 +147,27 @@ export function acPayloadReadExpression(): string {
  * `authoredCommand` is written once and never overwritten. A field holding
  * "whatever it was one rewrite ago" cannot answer the question #614 asks,
  * which is what the agent wrote.
+ *
+ * `next` null removes the command, and `reason` says why (#2733). Discovery's
+ * screen used to delete a command it refused with nothing recorded, so the
+ * persisted AC read as an ordinary manual check rather than an automated one
+ * that was refused. A removal with no reason is that silent deletion again,
+ * so it throws, and `EvidenceRewriteSchema` refuses one too (#2740 review).
  */
 export function recordEvidenceRewrite(
   evidenceMethod: { command?: string; authoredCommand?: string; rewrites?: EvidenceRewrite[] } | undefined | null,
   by: string,
-  next: string,
+  next: string | null,
+  reason?: string,
 ): boolean {
+  if (next === null && !reason) throw new Error(`recordEvidenceRewrite: ${by} removes a command without a reason`);
   if (!evidenceMethod || typeof evidenceMethod.command !== "string") return false;
   const from = evidenceMethod.command;
   if (from === next) return false;
   if (evidenceMethod.authoredCommand === undefined) evidenceMethod.authoredCommand = from;
-  evidenceMethod.command = next;
-  evidenceMethod.rewrites = [...(evidenceMethod.rewrites || []), { by, from, to: next }];
+  if (next === null) delete evidenceMethod.command;
+  else evidenceMethod.command = next;
+  const entry: EvidenceRewrite = reason === undefined ? { by, from, to: next } : { by, from, to: next, reason };
+  evidenceMethod.rewrites = [...(evidenceMethod.rewrites || []), entry];
   return true;
 }

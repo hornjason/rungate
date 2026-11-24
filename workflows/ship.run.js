@@ -964,7 +964,9 @@ function acPayloadShellArgument(acs) {
 function acPayloadReadExpression() {
     return `JSON.parse(process.argv[${AC_PAYLOAD_ARGV_INDEX}])`;
 }
-function recordEvidenceRewrite(evidenceMethod, by, next) {
+function recordEvidenceRewrite(evidenceMethod, by, next, reason) {
+    if (next === null && !reason)
+        throw new Error(`recordEvidenceRewrite: ${by} removes a command without a reason`);
     if (!evidenceMethod || typeof evidenceMethod.command !== "string")
         return false;
     const from = evidenceMethod.command;
@@ -972,8 +974,12 @@ function recordEvidenceRewrite(evidenceMethod, by, next) {
         return false;
     if (evidenceMethod.authoredCommand === undefined)
         evidenceMethod.authoredCommand = from;
-    evidenceMethod.command = next;
-    evidenceMethod.rewrites = [...(evidenceMethod.rewrites || []), { by, from, to: next }];
+    if (next === null)
+        delete evidenceMethod.command;
+    else
+        evidenceMethod.command = next;
+    const entry = reason === undefined ? { by, from, to: next } : { by, from, to: next, reason };
+    evidenceMethod.rewrites = [...(evidenceMethod.rewrites || []), entry];
     return true;
 }
 // ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----
@@ -2363,7 +2369,8 @@ Project root: ${PROJECT_ROOT}
       if (!verdict.safe) {
         log(`REJECTED evidence command for ${ac.id}: ${verdict.reason} — downgraded to MANUAL`)
         ac.evidenceMethod.type = 'MANUAL'
-        delete ac.evidenceMethod.command
+        recordEvidenceRewrite(ac.evidenceMethod, 'discovery-path-normalize', cmd)
+        recordEvidenceRewrite(ac.evidenceMethod, 'discovery-evidence-screen', null, verdict.reason)
       } else if (recordEvidenceRewrite(ac.evidenceMethod, 'discovery-path-normalize', cmd)) {
         log(`Normalized evidence path for ${ac.id}: stripped absolute paths — authored "${ac.evidenceMethod.authoredCommand}", now "${cmd}"`)
       }

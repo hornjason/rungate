@@ -41,13 +41,14 @@ Valid `type` values (case-sensitive): `GREP_CHECK`, `FILE_EXISTS`, `CURL_CHECK`,
 
 ### Rewrite provenance — `authoredCommand` and `rewrites` (#614)
 
-`command` is what will RUN. Three places legitimately change it before it
-does, and each one records what it changed.
+`command` is what will RUN. Four places change it before it does, and each
+one records what it changed: three rewrite it, and discovery's screen removes
+a command it refuses (#2733).
 
 | Field | Type | Meaning |
 |---|---|---|
 | `authoredCommand` | string | The command as the discovery agent wrote it. Written once by the FIRST rewrite and never overwritten |
-| `rewrites` | `{by, from, to}[]` | Every change to `command`, oldest first. `by` names the site: `discovery-path-normalize`, `evidence-type-ratio`, `normalize-git-refs` |
+| `rewrites` | `{by, from, to, reason?}[]` | Every change to `command`, oldest first. `by` names the site: `discovery-path-normalize`, `evidence-type-ratio`, `normalize-git-refs`, `discovery-evidence-screen`. `to` is null when the change removed the command, and `reason` says why |
 
 **A `rewrites` list with no `authoredCommand` beside it is rejected at write
 time.** It is the same pairing as `evidencePrevalidation`'s
@@ -57,6 +58,13 @@ command is then indistinguishable from one that was always written that way.
 
 Both are absent on an AC nothing has rewritten. Absence means "as authored",
 not "unknown".
+
+**A refused command is recorded, not deleted without a trace (#2733).**
+Discovery's screen downgrades an AC whose command `validateEvidenceCommand`
+rejects to `MANUAL` and removes the command. The removal is the last
+`rewrites` entry, with `to: null` and the reason, so a `MANUAL` AC that was
+refused reads differently from one that was always manual. A removal with no
+reason is refused at write time.
 
 ```json
 { "evidenceMethod": {
