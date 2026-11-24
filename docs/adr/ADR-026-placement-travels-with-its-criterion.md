@@ -80,9 +80,12 @@ converted by a tool, not by hand.
    direction on 2026-11-24; the annotation form is the DA's.** The key is `placement`, and the values are the ones the
    table's first column takes today: `Phase N`, or one of
    `NON_PHASE_PLACEMENTS` (`Done`, `Blocked`, `Not adopted — deliberate`, `Not
-   observable here`). One line per criterion, so placing a criterion twice
-   cannot be written. Adding one does not touch the criterion's wording or
-   its fingerprint.
+   observable here`). One line per criterion: a criterion with a second
+   `placement:` line is UNMEASURED and named, as a criterion placed in two
+   table rows is today (`doubled` in `placementReading`). The annotation
+   reader keeps only the last value of a repeated key, so the placement
+   reader counts the lines itself rather than trusting that map. Adding a
+   placement line does not touch the criterion's wording or its fingerprint.
 2. **The generated view is printed, not stored — Jason decides.** This
    changes what he agreed to on 2026-11-24, which was a generated table in
    the spec. A stored table conflicts whether a person or a tool writes it
@@ -93,8 +96,9 @@ converted by a tool, not by hand.
    recommends.** `parsePlacementRows` builds its rows from the placement
    lines when a spec has them, and from the table when it does not. So no
    reader changes, and a consumer whose spec still has a table keeps working.
-   A spec that has both is UNMEASURED and names itself, since two sources
-   for one fact will disagree eventually.
+   A spec that has both, meaning a `### Phase placement` table that lists any
+   criterion id and at least one placement line, is UNMEASURED and names
+   itself, since two sources for one fact will disagree eventually.
 4. **The writer writes the form the spec already uses — the DA recommends.**
    `finding-promotion --phase N` writes `placement: Phase N` beneath the
    criterion it adds. In a spec that still has a table, it appends to the
@@ -107,9 +111,10 @@ converted by a tool, not by hand.
    converted with it, so a consumer runs the same command we did.
 6. **Each placement value's meaning stays in the spec — the DA recommends.**
    `CODE-REVIEW-CONVERGENCE-SPEC.md`'s table has a third column, *What the
-   value means*. It stays as a table of placement values with no criteria
-   column. Adding a phase still edits that table; adding a criterion never
-   does.
+   value means*. It moves to a table of placement values under its own
+   heading, `### What each placement means`, with no criteria column, so no
+   placement reader reads it and it cannot make the spec read as mixed.
+   Adding a phase still edits that table; adding a criterion never does.
 
 ## Not decided here
 
@@ -129,8 +134,14 @@ conflict is a hand-run step, and Claim 7 in `SUCCESS.md` is that the plan is
 on the tracker and no person or agent placed it there. Ids SC-2806 to SC-2809 are reserved in
 `specs/sc-reservations.json` for this branch.
 
-- SC-2806: the parser reads `placement:` lines, reads the table identically,
-  and refuses a spec that mixes the two.
+This branch places them the old way, by adding them to Phase 7's line in the
+stored table, because the table is the only form any reader understands
+today. That line is the conflict this ADR removes. It stays until row 4
+converts the spec.
+
+- SC-2806: the parser reads `placement:` lines and reads the table
+  identically. A spec that mixes the two, and a criterion with two placement
+  lines, are each UNMEASURED.
 - SC-2807: `finding-promotion` writes a placement line.
 - SC-2808: `plan-spec --placement` prints the view, and
   `--convert-placement --write` converts without changing any reading.
