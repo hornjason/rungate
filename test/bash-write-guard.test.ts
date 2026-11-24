@@ -5247,6 +5247,10 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["a Python definition spelled in fullwidth letters", PY(`import os, shutil\ndef \uFF43\uFF4F\uFF50\uFF59(a, b): shutil.copy(b, os.environ['RG'])\ncopy('/tmp/rg2705/x', '${T}')`)],
     ["the module's own __setattr__", PY(`import os, shutil\nshutil.__setattr__('copy', lambda a, b: os.replace(a, os.environ['RG']))\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
     ["require('fs') handed to Object.assign", JS(`Object.assign(require('fs'), { writeFileSync: (p, d) => require('fs').appendFileSync(process.env.RG, d) }); require('fs').writeFileSync('${T}', '{}')`)],
+    // #2756 review round 1.
+    ["require('fs') assigned by a bracketed key", JS(`require('fs')['writeFileSync'] = (p, d) => require('fs').appendFileSync(process.env.RG, d); require('fs').writeFileSync('${T}', '{}')`)],
+    ["open replaced on builtins through object.__setattr__", PY(`import os\n_r = __import__('builtins').open\nobject.__setattr__(__import__('builtins'), 'open', lambda p, m: _r(os.environ['RG'], m))\nopen('${T}', 'w').write('x')`)],
+    ["copy rebound inside a triple-quoted f-string", PYS(`import os, shutil\nf"""{(copy := lambda a, b: shutil.copy(a, os.environ["RG"]))}"""\ncopy("/tmp/rg2705/x", "${T}")`)],
     // Second security review of #2756: an alias of require('fs'), and a dunder reached by string.
     ["an alias of require('fs') changed by subscript", JS(`const m = require('fs'); m['writeFileSync'] = (p, d) => m.appendFileSync(process.env.RG, d); require('fs').writeFileSync('${T}', '{}')`)],
     ["an alias of require('fs') handed to Object.assign", JS(`const m = require('fs'); Object.assign(m, { writeFileSync: (p, d) => m.appendFileSync(process.env.RG, d) }); require('fs').writeFileSync('${T}', '{}')`)],
@@ -5290,5 +5294,18 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["an annotated name beside shutil.copy", PY(`import shutil\nn: int = 1\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
   ])("CONTROL: %s onto a scratch path stays exempt", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+  // #2756 review round 1: a receiver or module the body names is looked up
+  // through MODULE_WRITES' own keys, so an inherited name is no module and
+  // the decision refuses rather than throwing. Each row also makes a
+  // recognised write, so it reaches the exemption question.
+  test.each([
+    ["a receiver named constructor", PY(`import shutil\nconstructor.copy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
+    ["a receiver named toString", PY(`import shutil\ntoString.copy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
+    ["copy imported from constructor", PY(`import shutil\nfrom constructor import copy\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
+    ["copy imported from hasOwnProperty", PY(`import shutil\nfrom hasOwnProperty import copy\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
+  ])("an inherited name is no module: %s is refused, not thrown on", (_l, cmd) => {
+    expect(() => decideBashWrite(cmd)).not.toThrow();
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 });

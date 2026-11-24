@@ -3827,8 +3827,10 @@ function calleeBefore(body: string, openIndex: number): string {
  * form nobody listed included — leaves it unproven.
  *
  * - **The body must be readable.** A quote left open, a backtick, an escaped
- *   quote, or an f-string with a `{` puts code where the literal reader
- *   sees a string, so any of them ends it.
+ *   quote, a triple quote, or an f-string with a `{` puts code where the
+ *   literal reader sees a string, so any of them ends it. The reader pairs
+ *   `"""` as `""` then `"…`, so an f-prefix three quotes back is not seen
+ *   (review of #2756); a triple quote is refused outright.
  * - **Every name is spelled the way it is searched for.** Code outside
  *   literals and comments holds no backslash but a line continuation, and no
  *   character that Unicode normalization turns into a letter, digit, `_` or
@@ -3859,17 +3861,26 @@ function calleeBefore(body: string, openIndex: number): string {
  * directory. Both are what the body loads, not what it says.
  */
 function calleeShown(body: string, openIndex: number): boolean {
-  if (/[`]|\\['"]/.test(body)) return false;
+  if (/[`]|\\['"]|'''|"""/.test(body)) return false;
   return READINGS.every(reading => calleeShownIn(body, openIndex, codeMask(body, reading)));
 }
 
-/** Python modules, and the write functions each defines that a body may call. */
+/**
+ * Python modules, and the write functions each defines that a body may call.
+ * Read only through `moduleWrites`: a receiver comes from the body, and an
+ * inherited key such as `constructor` is no module (review of #2756).
+ */
 const MODULE_WRITES: Readonly<Record<string, readonly string[]>> = {
   shutil: ['copy', 'copyfile', 'copytree', 'move', 'rmtree'],
   os: ['remove', 'rename', 'replace', 'unlink', 'rmdir'],
   io: ['open'],
   json: ['dump'],
 };
+
+/** The write functions a Python module defines, or `null` when the name is not one of `MODULE_WRITES`' own keys. */
+function moduleWrites(mod: string): readonly string[] | null {
+  return Object.hasOwn(MODULE_WRITES, mod) ? MODULE_WRITES[mod] : null;
+}
 /** The JavaScript module, reached by `import` or `require` under either specifier. */
 const FS_WRITES: readonly string[] = ['writeFileSync', 'appendFileSync', 'createWriteStream', 'copyFileSync', 'renameSync', 'unlinkSync', 'rmSync', 'truncateSync'];
 const FS_SPECIFIERS = new Set(['fs', 'node:fs']);
@@ -3948,7 +3959,7 @@ function calleeShownIn(body: string, openIndex: number, view: CodeView): boolean
 
   if (receiver === 'require') return FS_WRITES.includes(name) && requireTrusted(code);
   if (receiver !== 'none') {
-    const writes = receiver === 'fs' ? FS_WRITES : MODULE_WRITES[receiver];
+    const writes = receiver === 'fs' ? FS_WRITES : moduleWrites(receiver);
     if (!writes || !writes.includes(name)) return false;
     if (!occurrences(code, receiver).some(at => importsModule(code, at, receiver, requireFs, literalAt))) return false;
     return receiver !== 'fs' || requireTrusted(code);
@@ -4096,7 +4107,7 @@ function importedFrom(code: string, at: number, name: string, requireFs: Require
   for (const m of code.matchAll(/\bfrom\s+([A-Za-z_][\w.]*)\s+import\s+(\([^)]*\)|[^\n;]*)/g)) {
     const listStart = (m.index ?? 0) + m[0].length - m[2].length;
     if (at < listStart || at >= listStart + m[2].length) continue;
-    return MODULE_WRITES[m[1]]?.includes(name) && entryIs(m[2]) ? m[1] : null;
+    return moduleWrites(m[1])?.includes(name) && entryIs(m[2]) ? m[1] : null;
   }
   for (const m of code.matchAll(/\bimport\s*\{([^}]*)\}\s*from\b/g)) {
     const listStart = (m.index ?? 0) + m[0].indexOf('{') + 1;
