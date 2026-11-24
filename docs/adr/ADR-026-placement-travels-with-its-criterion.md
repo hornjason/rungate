@@ -69,8 +69,9 @@ no criterion's `fingerprint`.
 ## Decision
 
 A criterion's placement is a `placement:` line indented beneath it, alongside
-`needs:` and `proved-by:`. No list of criteria by phase is stored anywhere in
-the spec. `plan-spec --placement` prints that list on demand from the
+`needs:` and `proved-by:`. Once row 4 has converted a spec, no list of
+criteria by phase is stored anywhere in it. Until then the table stays the
+live form, and this branch writes its own four ids there (see *Criteria*). `plan-spec --placement` prints that list on demand from the
 placement lines. Every reader gets placement through the one parser, which
 reads both forms during the change. Both of rungate's own placed specs are
 converted by a tool, not by hand.
@@ -82,8 +83,10 @@ converted by a tool, not by hand.
    table's first column takes today: `Phase N`, or one of
    `NON_PHASE_PLACEMENTS` (`Done`, `Blocked`, `Not adopted — deliberate`, `Not
    observable here`). One line per criterion: a criterion with a second
-   `placement:` line is UNMEASURED and named, as a criterion placed in two
-   table rows is today (`doubled` in `placementReading`). The annotation
+   `placement:` line is UNMEASURED and named. That is stricter than the
+   table today: a criterion in two table rows is recorded in `doubled`, and
+   `plan-issues` refuses the plan over it, but `placementReading` still reads
+   MEASURED. This ADR does not change the table's behaviour. The annotation
    reader keeps only the last value of a repeated key, so the placement
    reader counts the lines itself rather than trusting that map. Adding a
    placement line does not touch the criterion's wording or its fingerprint.
