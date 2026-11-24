@@ -13,7 +13,7 @@
  * |---|---|---|---|
  * | `command-parity` | `.claude/rungate/config.json` | `AGENTS.md`, `ci.yml`, the scaffold | #621 |
  * | `toolchain-parity` | `.bun-version` / `ci.bunVersion` | every workflow's `setup-bun`, the running runtime | #622, #622b, #622c |
- * | `transport-parity` | the evidence-command transport | `workflows/ship.js`'s inlined copy and its call sites | #614, #600 |
+ * | `transport-parity` | the evidence-command transport | `workflows/ship.run.js`'s bundled copy and `workflows/ship.js`'s call sites | #614, #600 |
  * | `probe-honesty` | an external tool's absence | a check reading one boolean | #597 |
  * | `field-reachability` | whatever writes the shared state | every gate that reads it | #530, #611 |
  * | `write-accountability` | code that writes a tracked file | git, and the managed-file table | #624 |
@@ -87,7 +87,7 @@ import {
 import { CLAUDE_CODE_ACTION } from "../lib/claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../lib/google-auth-action";
 import { acPayloadReadExpression, acPayloadShellArgument } from "../lib/evidence-command-transport";
-import { launchBundle } from "./build-workflow-launch";
+import { BUNDLE_END, BUNDLE_START } from "./build-workflow-launch";
 import { testCommandDecision } from "../lib/test-command";
 import {
   AGENTS_MD,
@@ -534,7 +534,7 @@ export function toolchainParity(root: string, running: string = Bun.version): Ca
 //
 // ENFORCED LIMIT, because this is the one category in this file that EXECUTES
 // rather than reads: proving two transports agree means RUNNING both, so it
-// evaluates the marked block of the inspected tree's `workflows/ship.js`
+// evaluates the bundled lib region of the inspected tree's `workflows/ship.run.js`
 // through `new Function` and spawns one `bun -e`. `--root` chooses that tree,
 // so on a foreign root this category would compile code the caller named.
 //
@@ -649,17 +649,23 @@ export function transportParity(root: string): CategoryReport {
   }
 
   // 2. The transport the launch file runs, driven over the same payload: the
-  //    library as the launch bundle carries it into workflows/ship.run.js
-  //    (#2730). ship.js held a hand copy until SC-2775 wave 6b; a bundling that
-  //    changed what the code does is the same defect as a second copy.
+  //    bundled lib region of the committed workflows/ship.run.js, read from
+  //    the file rather than rebuilt from lib/, so an edit to the launch file
+  //    is what this measures (#2730 review). ship.js held a hand copy until
+  //    SC-2775 wave 6b.
   const shipPath = join(root, "workflows", "ship.js");
+  const launchPath = join(root, "workflows", "ship.run.js");
   if (!existsSync(shipPath)) {
     unmeasured.push(unmeasurable("absent-file", "workflows/ship.js", `workflows/ship.js does not exist under ${root}`));
   } else {
     const shipSource = readFileSync(shipPath, "utf-8");
     try {
+      const launchSource = readFileSync(launchPath, "utf-8");
+      const start = launchSource.indexOf(BUNDLE_START);
+      const end = launchSource.indexOf(BUNDLE_END);
+      if (start === -1 || end < start) throw new Error("workflows/ship.run.js carries no bundled lib region");
       const launched = new Function(
-        `${launchBundle().text}\nreturn { acPayloadShellArgument, acPayloadReadExpression }`,
+        `${launchSource.slice(start + BUNDLE_START.length, end)}\nreturn { acPayloadShellArgument, acPayloadReadExpression }`,
       )() as {
         acPayloadShellArgument: (acs: unknown) => string;
         acPayloadReadExpression: () => string;

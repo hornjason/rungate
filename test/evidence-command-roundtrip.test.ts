@@ -410,6 +410,17 @@ describe("#614 SC-2054: the payload builder, driven with a $1-bearing command", 
     const b = { ...a };
     expect(launched.recordEvidenceRewrite(a, "t", "echo 1")).toBe(recordEvidenceRewrite(b, "t", "echo 1"));
     expect(a).toEqual(b);
+
+    // Repeated rewrites, so the first-form rule runs on the bundled copy too:
+    // one call on a fresh object agrees under any rule (#2730 review).
+    const c: Record<string, unknown> = { type: "COMMAND", command: "awk '{s+=$1}' a" };
+    const d: Record<string, unknown> = { ...c };
+    for (const [by, next] of [["first", "awk '{s+=$1}' b"], ["second", "awk '{s+=$1}' c"]]) {
+      launched.recordEvidenceRewrite(c as never, by, next);
+      recordEvidenceRewrite(d as never, by, next);
+    }
+    expect(c).toEqual(d);
+    expect(c.authoredCommand, "the bundled copy did not keep the first authored form").toBe("awk '{s+=$1}' a");
   });
 });
 
