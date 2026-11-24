@@ -172,6 +172,9 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // `claude-review` leaves with the trial reviewer (#2626, #2627).
     // `forge-probe` joined with #1910, which reads on the pinned bun whether
     // the forge behaviours this repository's tools rest on still hold.
+    // The running counts above stopped being kept; the list below holds
+    // twenty-three files, and the list, not a count in this comment, is what
+    // the case asserts (#2750 review).
     //
     // The floor and the list are two different claims, deliberately:
     // the floor says the scan read SOMETHING, so no case below is satisfied
