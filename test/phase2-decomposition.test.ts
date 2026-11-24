@@ -361,8 +361,8 @@ describe("SC-1486: the reference copy of the ACs does not pass through the model
 const SHIP = join(ROOT, "workflows", "ship.js");
 
 /**
- * The launch file's bundled lib region, the code a run executes (#2693,
- * SC-2775 wave 6a). Until then ship.js carried a hand copy of this module in a
+ * The launch file's bundled lib region, the code a run executes (#2693, wave
+ * 6a of the plan for SC-2775). Until then ship.js carried a hand copy of this module in a
  * PHASE2-DECOMPOSITION block, and this matrix held the two together; now the
  * build bundles the library itself, and the matrix holds the launch file to
  * it. Refused, naming the file, if the region or any of the five is missing.

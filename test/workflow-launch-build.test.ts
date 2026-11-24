@@ -152,8 +152,8 @@ describe("#2287 / SC-2772: what the build must not get wrong", () => {
 
 /**
  * #2289 / SC-2774: the lib modules ship.js copies by hand each export a core
- * that imports nothing, so the generator can bundle it (SC-2775) in place of
- * the copy.
+ * that imports nothing, so the generator can bundle it in place of the copy,
+ * which is what SC-2775 asks for.
  *
  * A core is a set of exported names. Its closure is those names and every
  * top-level declaration they reach in the same module. The closure may not
@@ -233,9 +233,9 @@ describe("#2289 / SC-2774: each copied module exports a core that imports nothin
 });
 
 /**
- * #2398 / SC-2775 wave 1: the reader resolves names through TypeScript's
- * checker, and the bundler emits each module's core as one block of
- * JavaScript. No copy in ship.js is replaced yet.
+ * #2398, the first wave of the plan for SC-2775: the reader resolves names
+ * through TypeScript's checker, and the bundler emits each module's core as
+ * one block of JavaScript. No copy in ship.js is replaced yet.
  */
 describe("#2398: cores are read by the checker and bundled", () => {
   const ROOT = join(import.meta.dir, "..");
@@ -503,5 +503,38 @@ describe("#2404: an import is accepted only when the same bundle defines it", ()
 
   test("an import from a module outside the bundle is still refused", () => {
     expect(() => bundleLibCores({ "lib/a.ts": ["norm"], "lib/e.ts": ["use4"] }, read)).toThrow("x (from ./outside, via use4)");
+  });
+});
+
+/**
+ * Covers SC-2775: workflows/ship.js carries no hand copy of lib/ (#2738, the
+ * last step of #2290's plan). Waves 1 to 7 bundled every copied module into
+ * workflows/ship.run.js, and this refuses a copy coming back by the markers
+ * every copy carried: an INLINED note, a Mirror-of block, or an inline-copy
+ * heading. Matched case-sensitively, so prose narrating a copy deleted long
+ * ago ("an inline copy of", lowercase) is history, not a marker, and needs no
+ * exemption list.
+ */
+describe("SC-2775: ship.js carries no hand copy of lib/", () => {
+  const MARKERS = [/INLINED/, /Mirror of/, /Inline copy of/, /An inlined copy of/];
+  const handCopies = (text: string): string[] =>
+    text.split("\n").flatMap((line, i) =>
+      MARKERS.some(m => m.test(line)) ? [`workflows/ship.js:${i + 1}: ${line.trim()}`] : [],
+    );
+
+  test("SC-2775: no INLINED, Mirror-of or inline-copy block remains in workflows/ship.js", () => {
+    expect(handCopies(source), "a hand copy of lib/ is back in ship.js; bundle the module through LAUNCH_BUNDLE").toEqual([]);
+  });
+
+  test("#2738: each marker is refused by its line, and the lowercase history phrases are not markers", () => {
+    for (const line of [
+      "// INLINED, not imported: the sandbox has no require",
+      "// Mirror of lib/x.ts",
+      "// Inline copy of lib/x.ts (#79)",
+      "// An inlined copy of lib/y.ts",
+    ]) {
+      expect(handCopies(`const a = 1;\n${line}\nconst b = 2;`), line).toEqual([`workflows/ship.js:2: ${line}`]);
+    }
+    expect(handCopies("// through an inline copy of `lib/commit-subject.ts`\n// The inline copy that used to live here")).toEqual([]);
   });
 });

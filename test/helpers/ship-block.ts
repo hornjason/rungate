@@ -1,6 +1,6 @@
 /**
- * The one way a test reaches ship.js's WORKTREE-IDENTITY region (#2421,
- * SC-2775 wave 3c-A1, plan on #2290).
+ * The one way a test reaches ship.js's WORKTREE-IDENTITY region (#2421, wave
+ * 3c-A1 of the plan for SC-2775, on #2290).
  *
  * Fourteen suites sliced that region by hand, and eleven execute it. Since
  * wave 3c-B the region keeps only `worktreeRecords`: the rest is
@@ -128,8 +128,8 @@ export function shipWorktreeIdentity(source?: string): (...args: unknown[]) => a
 }
 
 /**
- * The source that defines `shellQuote` as the launch file runs it (#2736,
- * SC-2775 wave 7, plan on #2290). Nine suites cut `function shellQuote(word)`
+ * The source that defines `shellQuote` as the launch file runs it (#2736, wave
+ * 7 of the plan for SC-2775, on #2290). Nine suites cut `function shellQuote(word)`
  * out of ship.js by hand, and read it here instead (#2736, #2737). Since
  * #2734 ship.js holds no copy: the launch bundle carries
  * lib/workflow-security.ts's own, and this returns that function as the
