@@ -265,11 +265,11 @@ export interface PayloadEditOptions {
 
 /** The reason to refuse the command, or null to let it run. */
 export async function payloadEditRefusal(command: string, opts: PayloadEditOptions = {}): Promise<string | null> {
-  // A cheap pre-check, over the text with its quotes and backslashes taken
-  // out: `gh "issue" edit` and `gh iss\\ue edit` are the same command to the
-  // shell, and `clauses()` below reads them so (#2719 review round 3).
-  const plain = command.replace(/["'\\]/g, "");
-  if (!/\bgh\b/.test(plain) || !/\bedit\b/.test(plain)) return null;
+  // No text pre-check before the grammar reads the command. The one here took
+  // quotes and backslashes out of the text and looked for `gh` and `edit`, and
+  // so missed `g$'h'`, `e$"dit"`, `$'\x65dit'` and a backslash-newline inside
+  // either word, all of which the grammar decodes (#2735 review). Reading
+  // every command costs about 0.1 ms a parse.
   const edits = boardEdits(command);
   if (edits.length === 0) return null;
   const why = "(#2713: a speed bump; scripts/hand-edits.ts reads the outcome)";

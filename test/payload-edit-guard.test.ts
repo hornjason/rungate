@@ -40,6 +40,15 @@ describe("#2727: a board write the shell runs is read, whatever the quoting arou
     [`gh issue comment 2714 --body "$(echo "$(echo ")")"; gh issue edit 2655 --add-label x)"`],
     [`gh issue comment 2714 --body-file - <<EOF\n$(gh issue edit 2655 --add-label x)\nEOF`],
     [`gh $'issue' edit 2655 --add-label x`],
+    // #2735 review: spellings a text pre-check took out before the grammar read
+    // them. ANSI-C escapes, locale quoting and a backslash-newline all reach gh
+    // as the plain words.
+    [`$'\\x67h' issue edit 2655 --body-file notes.md`],
+    [`g$'h' issue edit 2655 --body-file x.md`],
+    [`gh issue e$'dit' 2655 --add-label x`],
+    [`gh issue $'\\x65dit' 2655 --title x`],
+    [`gh issue e$"dit" 2655 --title x`],
+    [`g\\\nh issue edit 2655 --title x`],
   ])("WITNESS: %s is refused", async cmd => {
     expect(await decide(cmd), cmd).not.toBeNull();
   });

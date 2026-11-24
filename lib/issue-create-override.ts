@@ -134,6 +134,8 @@ export function tokenize(cmd: string): string[] {
 
 /** A command substitution inside a double-quoted string. */
 interface QuotedSubstitution {
+  /** The index, in `tokens`, of the word the substitution is part of. */
+  token: number;
   /** The command it runs. */
   text: string;
 }
@@ -181,7 +183,7 @@ function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[]
     }
     if (quote === '"' && c === "$" && cmd[i + 1] === "(") {
       const end = substitutionEnd(cmd, i + 2);
-      subs.push({ text: cmd.slice(i + 2, end) });
+      subs.push({ token: out.length, text: cmd.slice(i + 2, end) });
       cur += cmd.slice(i, end + 1);
       i = end;
       continue;
@@ -189,7 +191,7 @@ function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[]
     if (quote === '"' && c === "`") {
       let j = i + 1;
       while (j < cmd.length && cmd[j] !== "`") j += cmd[j] === "\\" ? 2 : 1;
-      subs.push({ text: cmd.slice(i + 1, Math.min(j, cmd.length)) });
+      subs.push({ token: out.length, text: cmd.slice(i + 1, Math.min(j, cmd.length)) });
       cur += cmd.slice(i, j + 1);
       i = j;
       continue;
@@ -296,26 +298,36 @@ function commandWords(node: SyntaxNode): string[] {
   return words;
 }
 
-/**
- * Every command `text` runs, in source order, each as its words, and whether
- * the grammar reported the text malformed. A heredoc whose delimiter never
- * arrives counts as malformed too: bash only warns, but a filing behind an
- * unclosed delimiter must not become invisible (FG-43, kept from #1302).
- */
+/** Every command `text` runs, in source order, each as its words, and whether the grammar's reading of it is `malformed`. */
 function parsedCommands(text: string): { commands: string[][]; malformed: boolean } {
   const commands: string[][] = [];
-  let unclosed = false;
   const walk = (node: SyntaxNode): void => {
     if (node.type === "Command") {
       const words = commandWords(node);
       if (words.length > 0) commands.push(words);
     }
+    forEachChild(node as never, walk as never);
+  };
+  const script = parse(text) as unknown as SyntaxNode;
+  walk(script);
+  return { commands, malformed: malformed(script) };
+}
+
+/**
+ * Whether the grammar's reading of a text cannot be trusted alone: it reported
+ * errors, or a heredoc's delimiter never arrived. Bash only warns about the
+ * second, but a filing behind an unclosed delimiter must not become invisible
+ * (FG-43, kept from #1302). `clauses()` and `filingDirectory()` both ask this,
+ * so they agree about which commands get the second reading (#2735 review).
+ */
+function malformed(script: SyntaxNode): boolean {
+  let unclosed = false;
+  const walk = (node: SyntaxNode): void => {
     if (node.type === "HereDoc" && node.closing === undefined) unclosed = true;
     forEachChild(node as never, walk as never);
   };
-  const script = parse(text);
-  walk(script as unknown as SyntaxNode);
-  return { commands, malformed: unclosed || (script.errors?.length ?? 0) > 0 };
+  walk(script);
+  return unclosed || ((script.errors as unknown[] | undefined)?.length ?? 0) > 0;
 }
 
 /**
@@ -392,12 +404,8 @@ function substitutionEnd(cmd: string, from: number): number {
  * the value that was already wrong.
  *
  * **Subshell-aware, because the shell is.** A `cd` inside `( … )` or a
- * backtick pair is undone when that scope closes, so
+ * command substitution is undone when that scope closes, so
  * `(cd /a && echo) && gh issue create` files from `from` and not from `/a`.
- * `entered` is that stack. A backtick is a TOGGLE and not an opener —
- * backticks do not nest, so the second one pops the scope the first pushed.
- * Pushing on both was the first spelling of this, and it leaked a
- * command-substitution's `cd` into everything after the closing backtick.
  *
  * **It descends into `-c` and `eval` arguments, exactly where `clauses()`
  * does and for the same reason.** `bash -c "cd /wt/a && gh issue create …"`
@@ -407,10 +415,11 @@ function substitutionEnd(cmd: string, from: number): number {
  * The inner scope's directory is discarded and only a filing found inside it
  * is kept, because a wrapper's `cd` does not outlive the wrapper.
  *
- * An unquoted `$(…)` needs nothing: `tokenize` already emits `$` and `(`
- * separately, so it pushes and pops through the same stack. One inside double
- * quotes is a single word to `tokenize`, so `scanTokens` records it and the
- * scan below reads it, in the directory its word is read in (#2723 review).
+ * **A command the grammar reports malformed is read twice here too**, as
+ * `clauses()` reads it (#2735 review). There the second reading can find a
+ * filing the grammar folded into a word, so it must also say where that
+ * filing runs: on a malformed parse, the token reading's directory is taken
+ * when it finds a filing, and the grammar's otherwise.
  *
  * ## Two documented limits, both asserted rather than assumed
  *
@@ -483,7 +492,8 @@ function scanForFiling(
     if (words[0] === "cd") scope.dir = cdTarget(words.slice(1), scope.dir);
   };
 
-  run(parse(cmd) as unknown as SyntaxNode, top);
+  const script = parse(cmd) as unknown as SyntaxNode;
+  run(script, top);
   if (depth < 4) {
     for (const p of interpreterPrograms(cmd)) {
       if (found !== null) break;
@@ -491,7 +501,103 @@ function scanForFiling(
       if (nested.found !== null) found = nested.found;
     }
   }
+  if (malformed(script)) {
+    const read = tokenScan(cmd, from, depth);
+    if (read.found !== null) return read;
+  }
   return { found, dir: top.dir };
+}
+
+/**
+ * `scanForFiling`'s second reading, for a command the grammar reports
+ * malformed: the hand-written token scan `filingDirectory` used before the
+ * grammar, over the same tokens `tokenClauses` reads.
+ *
+ * `entered` is the scope stack. A backtick is a TOGGLE and not an opener:
+ * backticks do not nest, so the second one pops the scope the first pushed.
+ * Pushing on both was the first spelling of this, and it leaked a command
+ * substitution's `cd` into everything after the closing backtick. An unquoted
+ * `$(…)` needs nothing: `tokenize` emits `$` and `(` separately, so it pushes
+ * and pops through the same stack. One inside double quotes is a single word
+ * to `tokenize`, so `scanTokens` records it, and it is read in the directory
+ * its word is read in (#2723 review).
+ */
+function tokenScan(cmd: string, from: string, depth: number): { found: string | null; dir: string } {
+  let dir = from;
+  const entered: string[] = [];
+  let inBacktick = false;
+  let clause: string[] = [];
+  let found: string | null = null;
+
+  const settle = (): void => {
+    if (found !== null || clause.length === 0) return;
+    if (createsIssue(clause)) {
+      found = dir;
+      return;
+    }
+    // Before the `cd`, not after: a wrapper's argument runs in the directory
+    // the wrapper was invoked from, and the clause cannot be both.
+    if (depth < 4) {
+      for (const inner of commandArguments(clause)) {
+        const nested = scanForFiling(inner, dir, depth + 1);
+        if (nested.found !== null) {
+          found = nested.found;
+          return;
+        }
+      }
+    }
+    if (clause[0] === "cd") dir = cdTarget(clause.slice(1), dir);
+  };
+
+  const close = (): void => {
+    settle();
+    clause = [];
+    // An unbalanced closer is a malformed command, not a reason to pop an
+    // empty stack and lose the directory the filing actually ran in.
+    if (entered.length > 0) dir = entered.pop()!;
+  };
+
+  const { tokens, subs } = scanTokens(cmd);
+  for (const [k, t] of tokens.entries()) {
+    if (t === "`") {
+      if (inBacktick) close();
+      else {
+        settle();
+        clause = [];
+        entered.push(dir);
+      }
+      inBacktick = !inBacktick;
+      continue;
+    }
+    if (t === "(") {
+      settle();
+      clause = [];
+      entered.push(dir);
+      continue;
+    }
+    if (t === ")") {
+      close();
+      continue;
+    }
+    if (SEPARATORS.has(t)) {
+      settle();
+      clause = [];
+      continue;
+    }
+    clause.push(t);
+    if (found === null && depth < 4) {
+      for (const sub of subs) {
+        if (sub.token !== k) continue;
+        const nested = tokenScan(sub.text, dir, depth + 1);
+        if (nested.found !== null) {
+          found = nested.found;
+          break;
+        }
+      }
+    }
+  }
+  settle();
+  return { found, dir };
 }
 
 /** Where a `cd` with these arguments lands, or `dir` when it cannot be read. */

@@ -35,6 +35,7 @@ import {
   tokenize,
   verifyPhaseRefusal,
 } from "../lib/issue-create-override";
+import { parse } from "unbash";
 
 const ROOT = join(import.meta.dir, "..");
 const HOOK = join(ROOT, "hooks", "VerifyPhaseLock.hook.ts");
@@ -437,6 +438,24 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     [`echo "gh issue create --title t"`],
   ])("CONTROL: %s files nothing", cmd => {
     expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
+  });
+
+  // #2735 review: on a command the grammar reports malformed, the second
+  // reading finds the filing, so it must also say where the filing runs.
+  test.each([
+    [`cd /tmp/wt && echo "$(printf case x)"; gh issue create --title T --body-file body.md`, "/repo", "/tmp/wt"],
+    [`echo "$(printf case x)"; cd /wt/a && gh issue create --title t`, "/main", "/wt/a"],
+  ])("WITNESS: on a malformed parse, %s files from the directory it runs in", (cmd, from, dir) => {
+    expect(parse(cmd).errors?.length ?? 0, "the grammar reads this right now; the row no longer reaches the second reading")
+      .toBeGreaterThan(0);
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    expect(filingDirectory(cmd, from), cmd).toBe(dir);
+  });
+
+  test("CONTROL: on a malformed parse, a subshell's cd still does not outlive it", () => {
+    const cmd = `(cd /a && echo "$(printf case x)"); gh issue create --title t`;
+    expect(parse(cmd).errors?.length ?? 0).toBeGreaterThan(0);
+    expect(filingDirectory(cmd, "/main")).toBe("/main");
   });
 });
 
