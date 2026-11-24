@@ -40,10 +40,13 @@
  *
  * A row with no probe says why in `unprobedBecause`, reads `UNMEASURED` every
  * run, and is listed by the suite; today no row lacks one. Two rows open
- * throwaway pull requests to read (#2749): each closes them and deletes their
- * branches when it is done, a fixture it could not remove is named and is not a
- * pass, and the arm-time fixture's head carries a failing test so it can never
- * merge. In `forge-probe.yml` the job's token is read-only, so there those two
+ * throwaway pull requests to read (#2749). Each records a branch before asking
+ * GitHub for it, and when done closes every pull request from its branches and
+ * deletes them, so a create whose reply was lost is removed too; a fixture it
+ * could not remove is named and is not a pass. The arm-time fixture is opened
+ * against main only when main requires the `test` check, and its head carries
+ * a failing test, so it can never merge. The conflicted-pull-request fixtures
+ * are opened against a throwaway base, and nothing arms them. In `forge-probe.yml` the job's token is read-only, so there those two
  * rows read UNMEASURED by name; run them where `gh` may open pull requests.
  *
  * ## Properties the test asserts
@@ -132,8 +135,10 @@ export const FORGE_BEHAVIOURS: readonly ForgeBehaviour[] = [
   {
     id: "match-head-commit-checked-at-arm-time",
     assumes:
-      "`gh pr merge --auto --match-head-commit` compares the pin when auto-merge is armed, not when the merge " +
-      "fires, so it does not refuse a push that arrives after arming.",
+      "`gh pr merge --auto --match-head-commit` compares the pin when auto-merge is armed, so a stale pin is " +
+      "refused then, and a push after arming leaves auto-merge armed. Whether the merge compares the pin again " +
+      "when it fires is not observed: the fixture cannot merge, and seeing it would need one that can, into a " +
+      "protected base that is not main.",
     citedBy: [{ path: "scripts/verify-merge-ref.ts", beside: "push arriving after firing has no merge left to refuse." }],
   },
   {
@@ -185,12 +190,16 @@ export interface Fixture {
 }
 
 /**
- * Auto-merge armed with the head pinned, then one more commit pushed. `armed`
- * is whether arming succeeded; `headAfter` and `armedAfter` are read once the
- * pull request's head is the second commit, or when the wait runs out.
+ * Auto-merge armed first with a stale head pinned, then with the pull
+ * request's own head, then one more commit pushed. `staleRefused` is whether
+ * the stale pin was refused with nothing armed, and `armed` whether arming
+ * with the right head then succeeded. `headAfter` is read once the head is the
+ * second commit, and `armedAfter` after a further `SETTLE_MS`, or as soon as
+ * auto-merge reads off.
  */
 export interface ArmTimeObservation {
   fixture: Fixture;
+  staleRefused: boolean | null;
   armed: boolean | null;
   secondHead: string;
   headAfter: string;
@@ -199,9 +208,10 @@ export interface ArmTimeObservation {
 
 /**
  * Two pull requests into a throwaway base: one that conflicts with it and a
- * clean control. The runs are `pull_request` workflow runs on each head, read
- * once the control has some, so "none on the conflicted one" is told apart
- * from "no workflow runs on pull requests into this base at all".
+ * clean control. The runs are `pull_request` workflow runs on each head. The
+ * control's are waited for, so "none on the conflicted one" is told apart from
+ * "no workflow runs on pull requests into this base at all"; the conflicted
+ * head's are then waited for as long again, or until its first (#2768 review).
  */
 export interface DirtyObservation {
   fixture: Fixture;
@@ -358,15 +368,27 @@ export function forgeBehaviourReading(id: string, obs: Observations): RowReading
       if (!o) return say("UNMEASURED", "the throwaway pull request was not observed.");
       const left = fixtureNotPassing(o.fixture);
       if (left) return say("UNMEASURED", left);
-      if (o.armed !== true) return say("UNMEASURED", "auto-merge could not be armed with the head pinned, so nothing about the pin was read.");
+      // A stale pin that arms is what checking only when the merge fires
+      // looks like, so this is the half that tells the two apart (#2768 review).
+      if (o.staleRefused === false) {
+        return say("CHANGED", "auto-merge armed with a stale head pinned, so the pin is no longer compared when auto-merge is armed.");
+      }
+      if (o.staleRefused !== true) return say("UNMEASURED", "whether a stale pin is refused when arming could not be read.");
+      if (o.armed !== true) {
+        return say("UNMEASURED", "auto-merge could not be armed with the pull request's own head pinned, so the stale pin's refusal may not have been about the pin.");
+      }
       if (o.secondHead === "" || o.headAfter !== o.secondHead) {
         return say("UNMEASURED", "the second commit did not become the pull request's head in time, so the push was not observed.");
       }
       if (o.armedAfter === true) {
-        return say("CONFIRMED", `auto-merge armed with the head pinned stayed armed after a push moved the head to ${o.headAfter.slice(0, 8)}.`);
+        return say(
+          "CONFIRMED",
+          `a stale pin was refused when arming, and auto-merge armed with the head pinned stayed armed after a push moved the head to ${o.headAfter.slice(0, 8)}. ` +
+            "Whether the merge compares the pin again when it fires is not observed: the fixture cannot merge.",
+        );
       }
       if (o.armedAfter === false) {
-        return say("CHANGED", "a push after arming turned auto-merge off, so the pin is no longer checked only when auto-merge is armed.");
+        return say("CHANGED", "a push after arming turned auto-merge off, so a push that arrives after arming no longer rides the merge.");
       }
       return say("UNMEASURED", "auto-merge's state after the push could not be read.");
     }
@@ -531,6 +553,12 @@ const NEVER_MERGES =
   'import { test } from "bun:test";\n' +
   'test("forge probe fixture never merges", () => {\n  throw new Error("forge probe fixture: never merge");\n});\n';
 
+/**
+ * The check main must require before the arm-time fixture is opened: it runs
+ * `NEVER_MERGES`, so a required red holds the pull request open (#2768 review).
+ */
+const REQUIRED_CHECK = "test";
+
 /** Why a fixture's row cannot read CONFIRMED or CHANGED, or "" when it can. */
 function fixtureNotPassing(f: Fixture): string {
   if (f.leftovers.length > 0) {
@@ -580,9 +608,27 @@ class Throwaway {
   }
 
   branch(name: string, sha: string): boolean {
+    // Recorded before GitHub is asked: a create whose reply is lost may still
+    // have made the branch, so cleanup removes it or names it (#2768 review).
+    this.branches.push(name);
     const made = field(ghJson(["api", "-X", "POST", `repos/${FIXTURE_REPO}/git/refs`, "-f", `ref=refs/heads/${name}`, "-f", `sha=${sha}`]), "ref");
     if (made === "") return this.fail(`branch ${name} could not be created`);
-    this.branches.push(name);
+    return true;
+  }
+
+  /**
+   * Does main require `check`? Read before anything is made, because the
+   * fixture's failing test holds it open only through a required check: on a
+   * main that requires none, `--auto` merges a mergeable pull request at once
+   * (#2768 review).
+   */
+  requires(check: string): boolean {
+    let v: unknown = ghJson(["api", `repos/${FIXTURE_REPO}/branches/main`]);
+    for (const k of ["protection", "required_status_checks", "contexts"]) {
+      v = v !== null && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
+    }
+    if (!Array.isArray(v)) return this.fail("main's required checks could not be read, so the fixture was not opened");
+    if (!v.includes(check)) return this.fail(`main does not require the \`${check}\` check, so nothing would hold the fixture open; it was not opened`);
     return true;
   }
 
@@ -615,12 +661,29 @@ class Throwaway {
     return n;
   }
 
-  /** Close every pull request and delete every branch; what could not be removed, by name. */
+  /**
+   * Close every pull request and delete every branch; what could not be
+   * removed, by name. A pull request is found by its head as well as by the
+   * number `open` was given, so one whose reply was lost is closed too.
+   */
   cleanup(): string[] {
     const left: string[] = [];
-    for (const n of this.pulls) {
+    const pulls = new Set(this.pulls);
+    for (const b of this.branches) {
+      const listed = ghJson(["pr", "list", "--repo", FIXTURE_REPO, "--head", b, "--state", "all", "--json", "number"]);
+      if (!Array.isArray(listed)) {
+        left.push(`any pull request from branch ${b} (they could not be listed)`);
+        continue;
+      }
+      for (const p of listed) {
+        const n = field(p, "number");
+        if (n !== "") pulls.add(n);
+      }
+    }
+    for (const n of pulls) {
       run(["gh", "pr", "close", n, "--repo", FIXTURE_REPO]);
-      if (field(ghJson(["pr", "view", n, "--repo", FIXTURE_REPO, "--json", "state"]), "state") !== "CLOSED") left.push(`pull request #${n}`);
+      const state = field(ghJson(["pr", "view", n, "--repo", FIXTURE_REPO, "--json", "state"]), "state");
+      if (state !== "CLOSED") left.push(`pull request #${n}${state === "MERGED" ? " (merged)" : ""}`);
     }
     for (const b of this.branches) {
       run(["gh", "api", "-X", "DELETE", `repos/${FIXTURE_REPO}/git/refs/heads/${b}`]);
@@ -645,25 +708,51 @@ function settle<T>(read: () => T, done: (v: T) => boolean, ms = SETTLE_MS): T {
 
 function observeArmTime(): ArmTimeObservation {
   const t = new Throwaway();
-  const o: ArmTimeObservation = { fixture: { built: false, failure: "", leftovers: [] }, armed: null, secondHead: "", headAfter: "", armedAfter: null };
+  const o: ArmTimeObservation = {
+    fixture: { built: false, failure: "", leftovers: [] },
+    staleRefused: null,
+    armed: null,
+    secondHead: "",
+    headAfter: "",
+    armedAfter: null,
+  };
   try {
     const base = t.mainHead();
     const head = `${t.tag}-arm`;
-    if (base === "" || !t.branch(head, base)) return o;
+    if (base === "" || !t.requires(REQUIRED_CHECK) || !t.branch(head, base)) return o;
     const first = t.commit(head, `test/${t.tag}.test.ts`, NEVER_MERGES);
     const pr = first === "" ? "" : t.open(head, "main");
     if (pr === "") return o;
+    // Built: what fails from here is the observation's, and the row says
+    // which step it was rather than "not built" (#2768 review).
+    o.fixture.built = true;
     const view = () => ghJson(["pr", "view", pr, "--repo", FIXTURE_REPO, "--json", "headRefOid,autoMergeRequest"]);
-    const arm = run(["gh", "pr", "merge", pr, "--repo", FIXTURE_REPO, "--squash", "--auto", "--match-head-commit", first]);
-    const armedView = settle(view, (v) => field(v, "autoMergeRequest", "enabledAt") !== "", 30_000);
-    o.armed = arm.exit === 0 && field(armedView, "autoMergeRequest", "enabledAt") !== "";
+    const armedIn = (v: unknown) => field(v, "autoMergeRequest", "enabledAt") !== "";
+    const merge = (pin: string) => run(["gh", "pr", "merge", pr, "--repo", FIXTURE_REPO, "--squash", "--auto", "--match-head-commit", pin]);
+    // A stale pin first: main's head, which is not the pull request's. Refused
+    // here is the pin compared when arming; armed is it compared only later.
+    if (merge(base).exit === 0) {
+      o.staleRefused = armedIn(settle(view, armedIn, 30_000)) ? false : null;
+      return o;
+    }
+    const afterStale = view();
+    if (afterStale === null) return o;
+    o.staleRefused = !armedIn(afterStale);
+    if (!o.staleRefused) return o;
+    if (merge(first).exit !== 0) {
+      o.armed = false;
+      return o;
+    }
+    o.armed = armedIn(settle(view, armedIn, 30_000));
     if (!o.armed) return o;
     o.secondHead = t.commit(head, `test/${t.tag}-second.txt`, "the commit pushed after arming\n");
     if (o.secondHead === "") return o;
-    const after = settle(view, (v) => field(v, "headRefOid") === o.secondHead, 60_000);
-    o.headAfter = field(after, "headRefOid");
-    o.armedAfter = after === null ? null : field(after, "autoMergeRequest", "enabledAt") !== "";
-    o.fixture.built = true;
+    o.headAfter = field(settle(view, (v) => field(v, "headRefOid") === o.secondHead, 60_000), "headRefOid");
+    if (o.headAfter !== o.secondHead) return o;
+    // "Still armed" is a negative, so it is read after the whole wait, or as
+    // soon as auto-merge reads off (#2768 review).
+    const later = settle(view, (v) => v !== null && !armedIn(v));
+    o.armedAfter = later === null ? null : armedIn(later);
     return o;
   } finally {
     o.fixture.failure = t.failure;
@@ -696,7 +785,9 @@ function observeDirty(): DirtyObservation {
     const mergeable = () => field(ghJson(["pr", "view", dirtyPr, "--repo", FIXTURE_REPO, "--json", "mergeable"]), "mergeable");
     o.cleanRuns = settle(() => runsOn(cleanHead), (n) => n !== null && n > 0);
     o.dirtyMergeable = settle(mergeable, (m) => m !== "" && m !== "UNKNOWN", 60_000);
-    o.dirtyRuns = runsOn(dirtyHead);
+    // None is a negative: the conflicted head gets as long as the control
+    // did, or stops at its first run (#2768 review).
+    o.dirtyRuns = settle(() => runsOn(dirtyHead), (n) => n !== null && n > 0);
     o.fixture.built = true;
     return o;
   } finally {
