@@ -84,6 +84,7 @@ import {
 } from "../lib/shell-path-interpolation";
 import { CD_GUARD_MODE_VAR, topLevelCdRefusal } from "../lib/top-level-cd";
 import { shellQuote } from "../lib/workflow-security";
+import { workflowSecurityBundle } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const WORKFLOW_DIR = join(REPO_ROOT, "workflows");
@@ -590,10 +591,15 @@ describe("#1086: the failure is real, against a real shell and a real git", () =
 describe("#1086: every inline shellQuote is the one in lib/workflow-security.ts", () => {
   // `workflows/*.js` cannot import (#69), so each file that builds a shell
   // command carries its own copy. Four unanchored copies is how two of them
-  // end up disagreeing about a backslash a year from now.
+  // end up disagreeing about a backslash a year from now. Since #2734,
+  // ship.js's is the library's own, carried into workflows/ship.run.js by the
+  // launch bundle, and the other three keep their inline blocks.
 
-  test("the population is the files that build shell commands", () => {
-    expect(QUOTING_WORKFLOWS.length, "no workflow carries an inline quoter").toBeGreaterThan(3);
+  test("the population is the files that build shell commands, ship.js's through the launch bundle", () => {
+    expect(QUOTING_WORKFLOWS.length, "no workflow carries an inline quoter").toBeGreaterThanOrEqual(3);
+    expect(QUOTING_WORKFLOWS, "ship.js carries an inline quoter again").not.toContain("ship.js");
+    expect(loadCopy(workflowSecurityBundle())("it's"), "the launch bundle carries no shellQuote").toBe(shellQuote("it's"));
+    expect(QUOTING_WORKFLOWS.length + 1, "fewer than four copies are measured").toBeGreaterThan(3);
   });
 
   test("the marked blocks are byte-identical", () => {
@@ -631,13 +637,17 @@ describe("#1086: every inline shellQuote is the one in lib/workflow-security.ts"
       42,
       null,
     ];
-    for (const file of QUOTING_WORKFLOWS) {
-      const copy = loadCopy(
-        shellQuoteBlock(readFileSync(join(WORKFLOW_DIR, file), "utf-8"), `workflows/${file}`),
-      );
+    const copies: Array<[string, (word: unknown) => string]> = [
+      ...QUOTING_WORKFLOWS.map((file): [string, (word: unknown) => string] => [
+        `workflows/${file}`,
+        loadCopy(shellQuoteBlock(readFileSync(join(WORKFLOW_DIR, file), "utf-8"), `workflows/${file}`)),
+      ]),
+      // ship.js's, as the launch bundle carries it into workflows/ship.run.js (#2734).
+      ["workflows/ship.run.js's bundled copy", loadCopy(workflowSecurityBundle())],
+    ];
+    for (const [where, copy] of copies) {
       for (const input of inputs) {
-        expect(copy(input), `workflows/${file} diverged on ${JSON.stringify(input)}`)
-          .toBe(shellQuote(input));
+        expect(copy(input), `${where} diverged on ${JSON.stringify(input)}`).toBe(shellQuote(input));
       }
     }
   });

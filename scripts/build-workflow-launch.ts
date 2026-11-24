@@ -641,11 +641,11 @@ export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
     "repoSlug", "redactRemote", "looksLikeFilesystemPath", "worktreeIdentity", "worktreeIdentityViolations",
   ],
   // #2684, wave 4-B: ship.js's SECURITY-HELPERS region copied these nine.
-  // shellQuote is not here: ship.js keeps it in the SHELL-QUOTE block that
-  // every workflow building a shell command carries, byte-identical.
+  // #2734, wave 7: and its SHELL-QUOTE block copied shellQuote. The three
+  // workflows with no launch bundle keep their inline blocks.
   "lib/workflow-security.ts": [
     "pathRefusal", "validateFilePaths", "buildSafeGitAdd", "isSafeBranchName", "repoSlugRefusal",
-    "rootPathRefusal", "resolveEvidencePath", "validateEvidenceCommand", "buildSafeSSHCommand",
+    "rootPathRefusal", "resolveEvidencePath", "validateEvidenceCommand", "buildSafeSSHCommand", "shellQuote",
   ],
   // #2688, SC-2775 wave 5: ship.js's REFUSAL-CURRENCY copy.
   "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals", "failureCheckName"],

@@ -586,7 +586,6 @@ describe("#2680: the one helper that reaches ship.js's security-helpers region",
 });
 
 describe("#2736: the one helper that reaches the shellQuote the launch file runs", () => {
-  const ONE = "function shellQuote(word) {\n  return `<${String(word)}>`\n}";
 
   test("#2736 AC-1: the live source yields a shellQuote that agrees with lib/workflow-security.ts", () => {
     const quote = shipShellQuote();
@@ -595,14 +594,14 @@ describe("#2736: the one helper that reaches the shellQuote the launch file runs
     }
   });
 
-  test("#2736 AC-1: it returns the definition, and the function built from it", () => {
-    expect(shellQuoteSource(`before\n${ONE}\nafter`)).toBe(ONE);
-    expect(shipShellQuote(`before\n${ONE}\nafter`)("x")).toBe("<x>");
+  test("#2734 AC-3: since the move, it returns the launch bundle's own shellQuote, and ship.js has none", () => {
+    expect(shellQuoteSource()).toContain("function shellQuote(");
+    expect(readFileSync(join(import.meta.dir, "..", "workflows", "ship.js"), "utf-8")).not.toContain("function shellQuote(");
   });
 
-  test("#2736 AC-1: a source with no shellQuote, or with two, is refused by name", () => {
-    expect(() => shellQuoteSource("function other(word) {}")).toThrow(/function shellQuote\(word\)/);
-    expect(() => shellQuoteSource(`${ONE}\n${ONE}`)).toThrow(/function shellQuote\(word\)/);
+  test("#2734 AC-3: a bundle that no longer carries shellQuote is refused by name", () => {
+    expect(() => shellQuoteSource({ "lib/workflow-security.ts": ["pathRefusal"] })).toThrow(/no longer carries shellQuote/);
+    expect(() => shellQuoteSource({})).toThrow(/no longer carries shellQuote/);
   });
 
   /**

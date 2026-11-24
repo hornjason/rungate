@@ -15,7 +15,6 @@
  */
 import { readFileSync } from "fs";
 import { join } from "path";
-import { structuralCut } from "../../lib/source-slice";
 import { bundleLibCores, LAUNCH_BUNDLE } from "../../scripts/build-workflow-launch";
 
 const ROOT = join(import.meta.dir, "..", "..");
@@ -131,16 +130,22 @@ export function shipWorktreeIdentity(source?: string): (...args: unknown[]) => a
 /**
  * The source that defines `shellQuote` as the launch file runs it (#2736,
  * SC-2775 wave 7, plan on #2290). Nine suites cut `function shellQuote(word)`
- * out of ship.js by hand. They read it here instead, so #2734's move into the
- * launch bundle changes this one function and no reader. Today ship.js's own
- * SHELL-QUOTE block defines it. Refused, by name, if the source defines it
- * nowhere or twice.
+ * out of ship.js by hand, and read it here instead (#2736, #2737). Since
+ * #2734 ship.js holds no copy: the launch bundle carries
+ * lib/workflow-security.ts's own, and this returns that function as the
+ * bundle builds it. Only that one function, never the whole module: a reader
+ * that also loads the SECURITY-HELPERS region would otherwise declare the
+ * module's other names twice. Refused, naming it, if the bundle no longer
+ * carries `shellQuote`.
  */
-export function shellQuoteSource(source: string = readFileSync(SHIP_PATH, "utf-8")): string {
-  return structuralCut(source, "function shellQuote(word)", { balanced: "{" });
+export function shellQuoteSource(plan: Readonly<Record<string, readonly string[]>> = LAUNCH_BUNDLE): string {
+  if (!(plan[WORKFLOW_SECURITY_MODULE] ?? []).includes("shellQuote")) {
+    throw new Error(`LAUNCH_BUNDLE no longer carries shellQuote from ${WORKFLOW_SECURITY_MODULE}, so no test can run the launch file's quoter`);
+  }
+  return bundleLibCores({ [WORKFLOW_SECURITY_MODULE]: ["shellQuote"] }, path => readFileSync(join(ROOT, path), "utf-8")).text;
 }
 
 /** That source, evaluated: the `shellQuote` the launch file runs. */
-export function shipShellQuote(source?: string): (word: unknown) => string {
-  return new Function(`${shellQuoteSource(source)}\nreturn shellQuote;`)() as (word: unknown) => string;
+export function shipShellQuote(plan?: Readonly<Record<string, readonly string[]>>): (word: unknown) => string {
+  return new Function(`${shellQuoteSource(plan)}\nreturn shellQuote;`)() as (word: unknown) => string;
 }
