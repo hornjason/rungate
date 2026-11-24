@@ -1,4 +1,4 @@
-# generated-sha: 4ab56cb1444bff44
+# generated-sha: 572f937f179bb587
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -7140,7 +7140,7 @@ jobs:
               # guaranteed `jq`, and the consequence of a false match here is a
               # different explanatory sentence rather than a different verdict.
               if grep -qE '"subtype"[[:space:]]*:[[:space:]]*"error_max_turns"' "${AI_REVIEW_EXECUTION_FILE}"; then
-                route="The review action exited successfully WITHOUT writing a findings payload, and its execution file reports the turn budget was exhausted (error_max_turns), so the reviewer ran out of turns before it wrote anything. Raising AI_REVIEW_MAX_TURNS is the lever; making the prompt write a payload early is NOT, because a partial review that leaves a file behind reports as a pass. This check is UNMEASURED, not a passing review."
+                route="The review action exited successfully WITHOUT writing a findings payload, and its execution file reports the turn budget was exhausted (error_max_turns), so the reviewer ran out of turns before it wrote anything. The budget: ci.reviewDepth is standard (80 turns); a deeper ci.reviewDepth (deep is 160 turns) is the lever; making the prompt write a payload early is NOT, because a partial review that leaves a file behind reports as a pass. This check is UNMEASURED, not a passing review."
               elif ! grep -qE '"permission_denials"[[:space:]]*:' "${AI_REVIEW_EXECUTION_FILE}"; then
                 # Asked FIRST, because the two readings below are both about a number
                 # that may not be there, and "absent" answered last is "absent" reported
@@ -7222,7 +7222,7 @@ jobs:
             # rejecting a review the CLI completed, which at the pinned SHA is the turn
             # accounting in base-action/src/run-claude-sdk.ts:244-250.
             if grep -qE '"subtype"[[:space:]]*:[[:space:]]*"success"' "${AI_REVIEW_EXECUTION_FILE}"; then
-              route="The review action (#631) did not complete, and its execution file reports the reviewer reported a SUCCESSFUL result. So the CLI finished and the ACTION rejected the run afterwards — at the pinned SHA the one thing that does this is the action's own turn accounting, which throws when the completed run's turn count exceeds --max-turns. Read the execution file's num_turns against the configured maximum, which this job sets to 80; raising it is the lever if they are close. The Claude Code GitHub App is NOT the cause here — the reviewer could not have run at all without it. This check is UNMEASURED, not a passing review."
+              route="The review action (#631) did not complete, and its execution file reports the reviewer reported a SUCCESSFUL result. So the CLI finished and the ACTION rejected the run afterwards — at the pinned SHA the one thing that does this is the action's own turn accounting, which throws when the completed run's turn count exceeds --max-turns. Read the execution file's num_turns against this job's maximum of 80. If they are close: ci.reviewDepth is standard (80 turns); a deeper ci.reviewDepth (deep is 160 turns) is the lever. The Claude Code GitHub App is NOT the cause here — the reviewer could not have run at all without it. This check is UNMEASURED, not a passing review."
             else
               route="The review action (#631) did not complete, and it DID write an execution file, so the reviewer executed and this is not the case where the action declined before running. The Claude Code GitHub App is installed — the agent could not have started otherwise — so that is not worth checking. Read the execution file for the result subtype, the turn count and the permission denials, and the action's own log for the error it exited on. This check is UNMEASURED, not a passing review."
             fi
