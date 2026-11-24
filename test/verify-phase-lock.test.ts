@@ -30,6 +30,7 @@ import {
   OVERRIDE_LABELS,
   clauses,
   createsIssue,
+  filingDirectory,
   labelValues,
   tokenize,
   verifyPhaseRefusal,
@@ -308,6 +309,125 @@ describe("#365 SC-826: the parts the decision is built from", () => {
     const refusal = verifyPhaseRefusal("gh issue create --label bug")!;
     for (const name of Object.keys(OVERRIDE_LABELS)) expect(refusal).toContain(`--label ${name}`);
     expect(Object.keys(OVERRIDE_LABELS)).toContain("external-audit");
+  });
+});
+
+describe("#2722: a command substitution inside double quotes is a command", () => {
+  // The shell keeps a double-quoted string as one word and still runs what it
+  // substitutes. Each WITNESS yielded no inner clause on main.
+  const has = (cmd: string, words: string[]) =>
+    clauses(cmd).some(c => words.every((w, i) => c[i] === w));
+
+  test.each([
+    ["$(…) in a --body", `gh issue comment 2714 --body "$(gh issue edit 2655 --body x)"`, ["gh", "issue", "edit", "2655"]],
+    ["backticks", 'echo "`gh issue create --label follow-up`"', ["gh", "issue", "create"]],
+    ["the second of two in one string", `echo "a $(echo b) $(gh issue create)"`, ["gh", "issue", "create"]],
+    ["after an apostrophe in the same string", `echo "it's $(gh issue create)"`, ["gh", "issue", "create"]],
+    ["after a quoted ) inside it", `echo "$(echo ')'; gh issue create)"`, ["gh", "issue", "create"]],
+  ])("WITNESS: %s", (_l, cmd, words) => {
+    expect(has(cmd as string, words as string[]), cmd as string).toBe(true);
+  });
+
+  test.each([
+    ["single quotes", "echo '$(gh issue create)'"],
+    ["double quotes inside single quotes", `echo '"$(gh issue create)"'`],
+    ["an escaped $", 'echo "\\$(gh issue create)"'],
+    ["text inside the substitution's own single quotes", `echo "$(echo 'gh issue create')"`],
+  ])("CONTROL: %s stay text", (_l, cmd) => {
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
+  });
+
+  // Read on main as well, where the tokenizer's misreading of the nested
+  // quotes happened to expose the inner command; kept.
+  test("KEPT: a nested quoted substitution is read", () => {
+    expect(has(`echo "$(echo "$(gh issue create)")"`, ["gh", "issue", "create"])).toBe(true);
+  });
+
+  test("the lock refuses a filing inside a quoted substitution, as it refuses one outside", () => {
+    expect(verifyPhaseRefusal('echo "$(gh issue create --label bug)"')).not.toBeNull();
+    expect(verifyPhaseRefusal("echo $(gh issue create --label bug)")).not.toBeNull();
+  });
+});
+
+describe("#2723 review round 1: one scanner, and the directory reader reads what it reads", () => {
+  test("an apostrophe in a # comment does not hide a later quoted substitution", () => {
+    const cmd = `echo ok # it's done\necho "$(gh issue create --title t)"`;
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    expect(verifyPhaseRefusal(cmd)).not.toBeNull();
+  });
+
+  test("CONTROL: a quoted substitution inside a # comment is not a command", () => {
+    expect(clauses(`echo hi # "$(gh issue create)"`).some(createsIssue)).toBe(false);
+  });
+
+  test("an apostrophe in a comment inside the substitution does not end it early", () => {
+    const cmd = `echo "$(echo hi # it's\ngh issue create)"`;
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+  });
+
+  test("an apostrophe in a comment inside the substitution does not swallow what follows it", () => {
+    const cmd = `echo "$(echo hi # it's\n)"; gh issue create --title t`;
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+  });
+
+  test("filingDirectory reads a filing inside a quoted substitution where it runs", () => {
+    expect(filingDirectory(`(cd /wt/a && gh issue comment 1 --body "$(gh issue create --title t)")`, "/home/u/main")).toBe("/wt/a");
+    expect(filingDirectory(`echo "$(cd /wt/a && gh issue create --title t)"`, "/main")).toBe("/wt/a");
+  });
+
+  test("CONTROL: a cd inside a quoted substitution does not move what follows", () => {
+    expect(filingDirectory(`echo "$(cd /wt/a)"; gh issue create --title t`, "/main")).toBe("/main");
+  });
+});
+
+describe("#2723 review round 2", () => {
+  test("the comment rule, in both scans, on its edge inputs", () => {
+    for (const cmd of [
+      `echo a;# it's\necho "$(gh issue create)"`,
+      `echo ok # it's\r\necho "$(gh issue create)"`,
+      `echo "$(echo a;# it's\n)"; gh issue create`,
+    ]) {
+      expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    }
+    for (const cmd of [`echo a#b "x"`, `echo "# it's" '$(gh issue create)'`]) {
+      expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
+    }
+  });
+});
+
+/**
+ * #2723 review rounds 2 to 5 read `case` statements inside a quoted
+ * substitution, and each round found the next miss in that reading: a word
+ * `case` as an argument, `esac` positions, a branch printing a quote, a cost
+ * that grew with the fourth power of the count, `case` straight after a `)`,
+ * and a substitution only a second reading reached. Rule 5: the reading was
+ * taken out. A pattern's `)` closes the substitution as any `)` does, and how
+ * this file reads a command at all is the follow-up issue's.
+ */
+describe("#2723 rule 5: case statements in a quoted substitution are not read", () => {
+  test("a word case as an argument does not hide a filing after the substitution", () => {
+    // Round 2's case reading counted these, never closed the substitution, and
+    // swallowed the filing (round 3's high findings).
+    for (const cmd of [
+      `echo "$(printf case x)" ; gh issue create --title t`,
+      `echo "$(echo case )" ; gh issue create --label bug`,
+      `gh issue comment 2714 --body "$(grep case )" && gh issue create --label bug`,
+      `gh issue comment 2714 --body "$(git log --grep=x case )" && gh issue create --label bug`,
+    ]) {
+      expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    }
+  });
+
+  test("CONCESSION: a filing a case statement hides is not read, as on main", () => {
+    // The shapes rounds 2 to 5 found, pinned so the redesign turns them red.
+    for (const cmd of [
+      `echo "$(case x in x) gh issue create --title t;; esac)"`,
+      `echo "$(case x in x) echo '"';; esac)"; gh issue create --title t`,
+      `echo "$(case a in a)case b in b) true;; esac;; c) gh issue create --title t;; esac)"`,
+      `echo "$(case x in x) echo '"' ;; esac)" "$(gh issue create --label bug)"`,
+    ]) {
+      expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
+    }
   });
 });
 

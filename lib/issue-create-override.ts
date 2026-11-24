@@ -49,7 +49,7 @@ import { interpreterPrograms, stripHeredocs } from "./bash-write-guard";
  *
  * So the parser is held to ordinary shapes: operators with or without
  * surrounding whitespace, newlines, subshells, command substitution
- * including backticks, a path-qualified binary, quoted arguments, trailing
+ * including backticks, quoted or not (#2722), a path-qualified binary, quoted arguments, trailing
  * `#` comments, backslash line continuations, and `-c` / `-lc` / `eval`
  * wrappers. **Every one of those was a measured bypass of an earlier version
  * of this file**, and each has a row in `test/verify-phase-lock.test.ts`.
@@ -128,7 +128,28 @@ const OPERATORS = ["&&", "||", ";;", ";", "|", "&", "(", ")", "`", "\n"];
  * flags nobody wrote.
  */
 export function tokenize(cmd: string): string[] {
+  return scanTokens(cmd).tokens;
+}
+
+/** A command substitution inside a double-quoted string, and the token it sits in. */
+interface QuotedSubstitution {
+  /** The index, in `tokens`, of the word the substitution is part of. */
+  token: number;
+  /** The command it runs. */
+  text: string;
+}
+
+/**
+ * `tokenize`'s scan, which also records every `$(…)` and backtick
+ * substitution inside a double-quoted string (#2722). The shell keeps such a
+ * string as one word and still runs what it substitutes. They are recorded
+ * here, by the one scanner that follows the shell's comment rule, and not by
+ * a second walk over the quoting: a second walk read an apostrophe in a `#`
+ * comment as a quote and lost every later substitution (#2723 review).
+ */
+function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[] } {
   const out: string[] = [];
+  const subs: QuotedSubstitution[] = [];
   let cur = "";
   let quote: '"' | "'" | null = null;
   let started = false;
@@ -161,6 +182,21 @@ export function tokenize(cmd: string): string[] {
       i--;
       continue;
     }
+    if (quote === '"' && c === "$" && cmd[i + 1] === "(") {
+      const end = substitutionEnd(cmd, i + 2);
+      subs.push({ token: out.length, text: cmd.slice(i + 2, end) });
+      cur += cmd.slice(i, end + 1);
+      i = end;
+      continue;
+    }
+    if (quote === '"' && c === "`") {
+      let j = i + 1;
+      while (j < cmd.length && cmd[j] !== "`") j += cmd[j] === "\\" ? 2 : 1;
+      subs.push({ token: out.length, text: cmd.slice(i + 1, Math.min(j, cmd.length)) });
+      cur += cmd.slice(i, j + 1);
+      i = j;
+      continue;
+    }
     if (quote) {
       if (c === quote) quote = null;
       else cur += c;
@@ -186,7 +222,7 @@ export function tokenize(cmd: string): string[] {
     started = true;
   }
   flush();
-  return out;
+  return { tokens: out, subs };
 }
 
 const SEPARATORS = new Set(OPERATORS);
@@ -215,7 +251,8 @@ const SEPARATORS = new Set(OPERATORS);
  */
 export function clauses(cmd: string, depth = 0): string[][] {
   const flat: string[][] = [[]];
-  for (const t of tokenize(heredocView(cmd))) {
+  const { tokens, subs } = scanTokens(heredocView(cmd));
+  for (const t of tokens) {
     if (SEPARATORS.has(t)) flat.push([]);
     else flat[flat.length - 1].push(t);
   }
@@ -227,7 +264,48 @@ export function clauses(cmd: string, depth = 0): string[][] {
     if (depth >= 4) continue; // a wrapper chain this deep is not an accident
     for (const inner of commandArguments(c)) out.push(...clauses(inner, depth + 1));
   }
+  if (depth < 4) {
+    for (const sub of subs) out.push(...clauses(sub.text, depth + 1));
+  }
   return out;
+}
+
+/**
+ * The offset of the `)` closing a `$(` whose text starts at `from`, or the end
+ * of `cmd`. Inside it the quoting starts afresh, and a `#` starting a word is a
+ * comment to the end of the line, as `tokenize` reads one (#2723 review).
+ *
+ * It does not read `case`: a pattern's `)` closes the substitution as any `)`
+ * does, so a filing in a later branch is text in the outer word, as on main.
+ * Rounds 2 to 5 of #2723 read case statements, and each round found the next
+ * miss in that reading, so it was taken out (rule 5). How this file reads a
+ * command at all is the follow-up issue's.
+ */
+function substitutionEnd(cmd: string, from: number): number {
+  let depth = 0;
+  let quote: '"' | "'" | null = null;
+  for (let j = from; j < cmd.length; j++) {
+    const c = cmd[j];
+    if (c === "\\" && quote !== "'") {
+      j++;
+      continue;
+    }
+    if (quote !== null) {
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "#" && (j === from || /[\s;&|(]/.test(cmd[j - 1]))) {
+      while (j < cmd.length && cmd[j] !== "\n") j++;
+      continue;
+    }
+    if (c === "'" || c === '"') quote = c;
+    else if (c === "(") depth++;
+    else if (c === ")") {
+      if (depth === 0) return j;
+      depth--;
+    }
+  }
+  return cmd.length;
 }
 
 /**
@@ -308,8 +386,10 @@ function heredocView(cmd: string): string {
  * The inner scope's directory is discarded and only a filing found inside it
  * is kept, because a wrapper's `cd` does not outlive the wrapper.
  *
- * `$(…)` needs nothing: `tokenize` already emits `$` and `(` separately, so
- * a command substitution pushes and pops through the same stack.
+ * An unquoted `$(…)` needs nothing: `tokenize` already emits `$` and `(`
+ * separately, so it pushes and pops through the same stack. One inside double
+ * quotes is a single word to `tokenize`, so `scanTokens` records it and the
+ * scan below reads it, in the directory its word is read in (#2723 review).
  *
  * ## Two documented limits, both asserted rather than assumed
  *
@@ -375,7 +455,8 @@ function scanForFiling(
     if (entered.length > 0) dir = entered.pop()!;
   };
 
-  for (const t of tokenize(heredocView(cmd))) {
+  const { tokens, subs } = scanTokens(heredocView(cmd));
+  for (const [k, t] of tokens.entries()) {
     if (t === "`") {
       if (inBacktick) close();
       else {
@@ -402,6 +483,19 @@ function scanForFiling(
       continue;
     }
     clause.push(t);
+    // A quoted substitution runs in the directory its word is read in, before
+    // the clause's own command, and its `cd` does not outlive it (#2723
+    // review): the same reading `clauses()` takes of it.
+    if (found === null && depth < 4) {
+      for (const sub of subs) {
+        if (sub.token !== k) continue;
+        const nested = scanForFiling(sub.text, dir, depth + 1);
+        if (nested.found !== null) {
+          found = nested.found;
+          break;
+        }
+      }
+    }
   }
   settle();
   return { found, dir };
