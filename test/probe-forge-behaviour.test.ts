@@ -19,9 +19,9 @@
  * are pure and the dispatch is not.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { dirname, join, relative } from "path";
+import { dirname, join } from "path";
 import {
   citationViolations,
   FORGE_BEHAVIOURS,
@@ -30,6 +30,7 @@ import {
   type Observations,
   type Ran,
   REFUSE_EXIT,
+  remoteNamesRepo,
   SLEEP_MS,
 } from "../scripts/probe-forge-behaviour";
 
@@ -55,6 +56,7 @@ function confirmedObservations(): Observations {
     },
     "ls-remote-unreadable-exits-nonzero": { unreadable: ran({ exit: 128 }) },
     "head-ref-oid-frozen-at-merge": {
+      url: ran({ out: `https://github.com/${MERGED_FIXTURE.repo}.git` }),
       view: ran({ out: JSON.stringify({ state: "MERGED", headRefOid: MERGED_FIXTURE.mergeTimeHead }) }),
       branch: ran({ out: `${BRANCH_HEAD}\trefs/heads/${MERGED_FIXTURE.branch}` }),
     },
@@ -164,6 +166,10 @@ describe("#1910: forgeBehaviourReading", () => {
     test("a non-zero exit for an absent ref is CHANGED", () => {
       expect(at(reachable, ran({ exit: 2 })).reading).toBe("CHANGED");
     });
+    // #2750 review: a killed child has no exit code, and null is not a code.
+    test("an absent-ref read that was killed is UNMEASURED, not CHANGED", () => {
+      expect(at(reachable, ran({ exit: null, killed: true, ms: 30_000 })).reading).toBe("UNMEASURED");
+    });
   });
 
   describe("ls-remote-unreadable-exits-nonzero", () => {
@@ -176,13 +182,19 @@ describe("#1910: forgeBehaviourReading", () => {
     test("git that could not start is UNMEASURED", () => {
       expect(forgeBehaviourReading(id, { [id]: { unreadable: ran({ started: false, exit: null }) } }).reading).toBe("UNMEASURED");
     });
+    test("a read that was killed is UNMEASURED, not CONFIRMED", () => {
+      const r = forgeBehaviourReading(id, { [id]: { unreadable: ran({ exit: null, killed: true, ms: 30_000 }) } });
+      expect(r.reading).toBe("UNMEASURED");
+      expect(r.detail).toContain("killed");
+    });
   });
 
   describe("head-ref-oid-frozen-at-merge", () => {
     const id = "head-ref-oid-frozen-at-merge";
     const view = (o: object) => ran({ out: JSON.stringify(o) });
     const branch = (sha: string) => ran({ out: sha ? `${sha}\trefs/heads/${MERGED_FIXTURE.branch}` : "" });
-    const at = (v: Ran, b: Ran) => forgeBehaviourReading(id, { [id]: { view: v, branch: b } });
+    const fixtureUrl = ran({ out: `git@github.com:${MERGED_FIXTURE.repo}.git` });
+    const at = (v: Ran, b: Ran, url: Ran = fixtureUrl) => forgeBehaviourReading(id, { [id]: { url, view: v, branch: b } });
     const merged = view({ state: "MERGED", headRefOid: MERGED_FIXTURE.mergeTimeHead });
 
     test("gh that did not answer is UNMEASURED, not CONFIRMED", () => {
@@ -200,34 +212,75 @@ describe("#1910: forgeBehaviourReading", () => {
     test("a headRefOid that is neither head is CHANGED", () => {
       expect(at(view({ state: "MERGED", headRefOid: "f".repeat(40) }), branch(BRANCH_HEAD)).reading).toBe("CHANGED");
     });
+    // #2750 review: an incomplete reply is not a changed behaviour.
+    test("a merged reply with no headRefOid is UNMEASURED, not CHANGED", () => {
+      expect(at(view({ state: "MERGED" }), branch(BRANCH_HEAD)).reading).toBe("UNMEASURED");
+    });
+    // #2750 review: the pull request is read from GitHub and the branch from
+    // the remote, so the remote must be that repository.
+    test("a remote that is another repository is UNMEASURED, whatever its branch holds", () => {
+      const r = at(merged, branch(BRANCH_HEAD), ran({ out: "https://github.com/alice/rungate.git" }));
+      expect(r.reading).toBe("UNMEASURED");
+      expect(r.detail).toContain("alice/rungate");
+      expect(at(merged, branch(BRANCH_HEAD), ran({ exit: 2 })).reading).toBe("UNMEASURED");
+    });
+  });
+
+  describe("remoteNamesRepo", () => {
+    const repo = "hornjason/rungate";
+    test.each([
+      ["https://github.com/hornjason/rungate.git", true],
+      ["https://github.com/hornjason/rungate", true],
+      ["git@github.com:hornjason/rungate.git", true],
+      ["/tmp/x/hornjason/rungate", true],
+      ["https://github.com/HornJason/RunGate/", true],
+      ["https://github.com/alice/rungate.git", false],
+      ["https://github.com/hornjason/rungate-fork.git", false],
+      ["rungate", false],
+      ["", false],
+    ])("%s names the repository: %p", (url, want) => {
+      expect(remoteNamesRepo(url, repo)).toBe(want);
+    });
   });
 });
 
 // ── the tree held to the inventory ──────────────────────────
 
-const SCANNED_ROOTS = ["scripts", "lib", "gates", "hooks", "bin", "workflows", ".claude", ".github", "reference", "docs"];
-
+/**
+ * Every file git tracks, plus new ones it would track, whatever the directory
+ * or extension (#2750 review: a list of roots left specs/ and test/ unread).
+ * A binary file is skipped by its NUL bytes, never by its name. This file's own
+ * planted markers are built by `mark`, so its source carries none.
+ */
 function readTree(): Record<string, string> {
+  const r = Bun.spawnSync(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], { cwd: ROOT, stdout: "pipe", stderr: "pipe" });
+  if (r.exitCode !== 0) throw new Error(`git ls-files failed: ${new TextDecoder().decode(r.stderr)}`);
   const files: Record<string, string> = {};
-  const walk = (dir: string) => {
-    for (const name of readdirSync(dir)) {
-      if (name === "node_modules" || name === ".git") continue;
-      const path = join(dir, name);
-      const st = statSync(path);
-      if (st.isDirectory()) walk(path);
-      else if (st.isFile() && /\.(ts|js|md|ya?ml|json|sh)$/.test(name)) files[relative(ROOT, path)] = readFileSync(path, "utf-8");
+  for (const path of new TextDecoder().decode(r.stdout).split("\0").filter(Boolean)) {
+    const full = join(ROOT, path);
+    let st;
+    try {
+      st = statSync(full);
+    } catch {
+      continue; // listed by the index and deleted in this worktree: nothing to read
     }
-  };
-  // A root this checkout does not have holds no marker; the file count below says what was read.
-  for (const r of SCANNED_ROOTS) if (existsSync(join(ROOT, r))) walk(join(ROOT, r));
+    if (!st.isFile() || st.size > 4_000_000) continue;
+    const text = readFileSync(full, "utf-8");
+    if (!text.includes("\0")) files[path] = text;
+  }
   return files;
 }
+
+/** A marker, assembled so that this file's own source carries no marker. */
+const mark = (id: string) => "// forge" + "-behaviour: " + id;
 
 describe("#1910: citationViolations — the tree and the inventory agree", () => {
   const tree = readTree();
 
   test("the scan read the tree, and found one marker per named file", () => {
-    expect(Object.keys(tree).length).toBeGreaterThan(500);
+    expect(Object.keys(tree).length).toBeGreaterThan(1500);
+    expect(Object.keys(tree)).toContain("test/probe-forge-behaviour.test.ts");
+    expect(Object.keys(tree).some((p) => p.startsWith("specs/"))).toBe(true);
     const markers = Object.values(tree).flatMap((t) => [...t.matchAll(/forge-behaviour: ([a-z0-9][a-z0-9-]*)/g)]);
     expect(markers.length).toBe(FORGE_BEHAVIOURS.reduce((n, b) => n + b.citedBy.length, 0));
   });
@@ -239,7 +292,7 @@ describe("#1910: citationViolations — the tree and the inventory agree", () =>
   const row = { id: "a-behaviour", assumes: "x", citedBy: ["scripts/a.ts"] };
 
   test("a file citing an id the inventory does not list is named", () => {
-    const v = citationViolations([row], { "scripts/a.ts": "// forge-behaviour: a-behaviour", "lib/b.ts": "// forge-behaviour: another-one" });
+    const v = citationViolations([row], { "scripts/a.ts": mark("a-behaviour"), "lib/b.ts": mark("another-one") });
     expect(v).toEqual(["lib/b.ts: cites `another-one`, which the inventory does not list"]);
   });
 
@@ -252,7 +305,7 @@ describe("#1910: citationViolations — the tree and the inventory agree", () =>
   });
 
   test("a marker in a file its row does not name is named", () => {
-    const v = citationViolations([row], { "scripts/a.ts": "// forge-behaviour: a-behaviour", "lib/c.ts": "// forge-behaviour: a-behaviour" });
+    const v = citationViolations([row], { "scripts/a.ts": mark("a-behaviour"), "lib/c.ts": mark("a-behaviour") });
     expect(v).toEqual(["lib/c.ts: cites `a-behaviour`, whose row does not name this file"]);
   });
 });
@@ -299,7 +352,8 @@ function bothHalves(args: string[], plant: Plant = {}) {
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "rg-forge-probe-test-"));
   bin = join(dir, "bin");
-  remote = join(dir, "remote");
+  // Named like the fixture's repository, as a real remote's URL is.
+  remote = join(dir, ...MERGED_FIXTURE.repo.split("/"));
   mkdirSync(bin, { recursive: true });
   mkdirSync(remote, { recursive: true });
 

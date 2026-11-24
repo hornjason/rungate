@@ -35,4 +35,4 @@ jobs:
           # `gh pr view` reads the merged fixture. Without a token that row
           # reads UNMEASURED, which is correct and is not the question asked.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bun scripts/probe-forge-behaviour.ts --repo "$GITHUB_REPOSITORY"
+        run: bun scripts/probe-forge-behaviour.ts

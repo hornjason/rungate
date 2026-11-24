@@ -2,7 +2,7 @@
 /**
  * Probe each forge behaviour this repository's tools rest on (#1910).
  *
- *   bun scripts/probe-forge-behaviour.ts [--only <id>] [--remote <name>] [--repo owner/name]
+ *   bun scripts/probe-forge-behaviour.ts [--only <id>] [--remote <name|path>]
  *
  * Several tools here are correct only while GitHub, git or bun behaves a
  * particular way. Their tests plant a fixture that ASSUMES the behaviour, so if
@@ -27,11 +27,15 @@
  *
  * `FORGE_BEHAVIOURS` names every behaviour and the files that rely on it. Each
  * of those files carries a marker, the words `forge-behaviour:` and the row's
- * id, beside the line that relies on it. `citationViolations` compares the two
- * in both directions, and `test/probe-forge-behaviour.test.ts` runs it over the
- * tree: a file citing an id the inventory lacks is red, and so is a row whose
- * named file does not carry its marker. A new dependency is added by writing
- * the marker and the row together.
+ * id, written beside the line that relies on it. `citationViolations` compares
+ * the two in both directions, and `test/probe-forge-behaviour.test.ts` runs it
+ * over every file git tracks: a file citing an id the inventory lacks is red, and
+ * so is a row whose named file does not carry its marker. A new dependency is
+ * added by writing the marker and the row together.
+ *
+ * What it checks is that the file carries the marker, not where. A marker left
+ * behind after the line it stood beside is deleted is not caught here; the
+ * change that deletes the line is where the marker goes too.
  *
  * A row with no probe says why in `unprobedBecause`, reads `UNMEASURED` every
  * run, and is listed by the suite. Two rows need a throwaway pull request to
@@ -142,8 +146,24 @@ export interface Observations {
   "bun-spawn-timeout-window"?: { honoured: Ran; window: Ran };
   "ls-remote-absent-ref-exits-zero"?: { control: Ran; absent: Ran };
   "ls-remote-unreadable-exits-nonzero"?: { unreadable: Ran };
-  "head-ref-oid-frozen-at-merge"?: { view: Ran; branch: Ran };
+  "head-ref-oid-frozen-at-merge"?: { url: Ran; view: Ran; branch: Ran };
 }
+
+/**
+ * Does a remote's URL name `owner/name`? Its last two path segments, with any
+ * `.git` dropped, so `https://github.com/o/n.git`, `git@github.com:o/n.git`
+ * and a local `/path/to/o/n` all name `o/n`. The frozen-head row reads its
+ * pull request from GitHub and its branch from the remote, and a remote that is
+ * another repository's would compare one repository's head with another's
+ * branch (#2750 review). The host is not compared: a probe, not a gate.
+ */
+export function remoteNamesRepo(url: string, repo: string): boolean {
+  const parts = url.trim().replace(/\.git$/, "").replace(/\/+$/, "").split(/[/:]/).filter(Boolean);
+  return parts.length >= 2 && `${parts[parts.length - 2]}/${parts[parts.length - 1]}`.toLowerCase() === repo.toLowerCase();
+}
+
+/** A child that was killed, or exited with no code, measured nothing. */
+const finished = (r: Ran) => r.started && !r.killed && r.exit !== null;
 
 export interface RowReading {
   id: string;
@@ -188,7 +208,9 @@ export function forgeBehaviourReading(id: string, obs: Observations): RowReading
             "so an absent ref could not be told apart from a failed read.",
         );
       }
-      if (!o.absent.started) return say("UNMEASURED", "`git` could not be started for the absent ref.");
+      if (!finished(o.absent)) {
+        return say("UNMEASURED", `the absent-ref read ${describeRan(o.absent)}, so it measured nothing.`);
+      }
       if (o.absent.exit !== 0) {
         return say("CHANGED", `an absent ref exited ${o.absent.exit}, so a branch that is gone now reads as a remote that was not read.`);
       }
@@ -199,7 +221,9 @@ export function forgeBehaviourReading(id: string, obs: Observations): RowReading
     }
     case "ls-remote-unreadable-exits-nonzero": {
       const o = obs[id];
-      if (!o || !o.unreadable.started) return say("UNMEASURED", "`git` could not be started.");
+      if (!o || !finished(o.unreadable)) {
+        return say("UNMEASURED", `the read of a remote that does not exist ${o ? describeRan(o.unreadable) : "did not run"}, so it measured nothing.`);
+      }
       if (o.unreadable.exit === 0) {
         return say("CHANGED", "a remote that does not exist exited 0, so a failed read now arrives as an empty answer.");
       }
@@ -208,7 +232,14 @@ export function forgeBehaviourReading(id: string, obs: Observations): RowReading
     case "head-ref-oid-frozen-at-merge": {
       const o = obs[id];
       const f = MERGED_FIXTURE;
-      if (!o || !o.view.started) return say("UNMEASURED", "`gh` could not be started.");
+      if (!o || !o.url.started) return say("UNMEASURED", "`git` could not be started.");
+      if (!finished(o.url) || o.url.exit !== 0 || !remoteNamesRepo(o.url.out, f.repo)) {
+        return say(
+          "UNMEASURED",
+          `the remote is ${o.url.out === "" ? "unreadable" : `\`${o.url.out}\``}, not ${f.repo}, so its branch says nothing about ${f.repo}'s pull request.`,
+        );
+      }
+      if (!o.view.started) return say("UNMEASURED", "`gh` could not be started.");
       if (o.view.exit !== 0 || o.view.out === "") {
         return say("UNMEASURED", `\`gh pr view ${f.pr}\` did not answer: not authenticated, or offline.`);
       }
@@ -220,6 +251,7 @@ export function forgeBehaviourReading(id: string, obs: Observations): RowReading
       }
       if (pj.state !== "MERGED") return say("UNMEASURED", `the fixture, pull request ${f.pr}, reads ${String(pj.state)}, not MERGED.`);
       const head = typeof pj.headRefOid === "string" ? pj.headRefOid : "";
+      if (head === "") return say("UNMEASURED", `\`gh pr view ${f.pr}\` answered with no \`headRefOid\`.`);
       if (!o.branch.started || o.branch.exit !== 0) {
         return say("UNMEASURED", `\`git ls-remote\` did not read the fixture branch \`${f.branch}\`.`);
       }
@@ -296,7 +328,7 @@ function arg(name: string, argv: string[]): string | undefined {
   return i >= 0 ? argv[i + 1] : undefined;
 }
 
-function observe(id: string, remote: string, repo: string): Observations {
+function observe(id: string, remote: string): Observations {
   switch (id) {
     case "bun-spawn-timeout-window":
       return {
@@ -323,7 +355,8 @@ function observe(id: string, remote: string, repo: string): Observations {
     case "head-ref-oid-frozen-at-merge":
       return {
         [id]: {
-          view: run(["gh", "pr", "view", MERGED_FIXTURE.pr, "--repo", repo, "--json", "state,headRefOid"]),
+          url: run(["git", "ls-remote", "--get-url", remote]),
+          view: run(["gh", "pr", "view", MERGED_FIXTURE.pr, "--repo", MERGED_FIXTURE.repo, "--json", "state,headRefOid"]),
           branch: run(["git", "ls-remote", remote, `refs/heads/${MERGED_FIXTURE.branch}`]),
         },
       };
@@ -334,7 +367,6 @@ function observe(id: string, remote: string, repo: string): Observations {
 export function main(argv: string[]): number {
   const only = arg("only", argv);
   const remote = arg("remote", argv) ?? "origin";
-  const repo = arg("repo", argv) ?? MERGED_FIXTURE.repo;
   const rows = only === undefined ? FORGE_BEHAVIOURS : FORGE_BEHAVIOURS.filter((b) => b.id === only);
   if (rows.length === 0) {
     console.error(`UNMEASURED: no behaviour named \`${only}\`. Known: ${FORGE_BEHAVIOURS.map((b) => b.id).join(", ")}.`);
@@ -342,7 +374,7 @@ export function main(argv: string[]): number {
   }
   let allConfirmed = true;
   for (const row of rows) {
-    const r = forgeBehaviourReading(row.id, row.unprobedBecause ? {} : observe(row.id, remote, repo));
+    const r = forgeBehaviourReading(row.id, row.unprobedBecause ? {} : observe(row.id, remote));
     console.log(`${r.reading} ${r.id}: ${r.detail}`);
     if (r.reading !== "CONFIRMED") {
       allConfirmed = false;
