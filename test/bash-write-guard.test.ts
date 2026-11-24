@@ -5247,6 +5247,10 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["a Python definition spelled in fullwidth letters", PY(`import os, shutil\ndef \uFF43\uFF4F\uFF50\uFF59(a, b): shutil.copy(b, os.environ['RG'])\ncopy('/tmp/rg2705/x', '${T}')`)],
     ["the module's own __setattr__", PY(`import os, shutil\nshutil.__setattr__('copy', lambda a, b: os.replace(a, os.environ['RG']))\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
     ["require('fs') handed to Object.assign", JS(`Object.assign(require('fs'), { writeFileSync: (p, d) => require('fs').appendFileSync(process.env.RG, d) }); require('fs').writeFileSync('${T}', '{}')`)],
+    // Second security review of #2756: an alias of require('fs'), and a dunder reached by string.
+    ["an alias of require('fs') changed by subscript", JS(`const m = require('fs'); m['writeFileSync'] = (p, d) => m.appendFileSync(process.env.RG, d); require('fs').writeFileSync('${T}', '{}')`)],
+    ["an alias of require('fs') handed to Object.assign", JS(`const m = require('fs'); Object.assign(m, { writeFileSync: (p, d) => m.appendFileSync(process.env.RG, d) }); require('fs').writeFileSync('${T}', '{}')`)],
+    ["a dunder reached through getattr and __import__", PY(`import os, shutil\ngetattr(__import__('shutil'), '__setattr__')('copy', lambda a, b: os.replace(a, os.environ['RG']))\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
   ])("WITNESS: %s is refused", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });

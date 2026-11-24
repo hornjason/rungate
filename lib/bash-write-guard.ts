@@ -3830,15 +3830,17 @@ function calleeBefore(body: string, openIndex: number): string {
  *   quote, or an f-string with a `{` puts code where the literal reader
  *   sees a string, so any of them ends it.
  * - **Every name is spelled the way it is searched for.** Code outside
- *   literals and comments must be printable ASCII with no backslash but a
- *   line continuation: JavaScript reads `\u0077riteFileSync` as
- *   `writeFileSync`, and Python folds fullwidth `ｃｏｐｙ` to `copy`, so
- *   either would hide a definition from a search for the name (security
- *   review of #2756).
+ *   literals and comments holds no backslash but a line continuation, and no
+ *   character that Unicode normalization turns into a letter, digit, `_` or
+ *   `$`: JavaScript reads `\u0077riteFileSync` as `writeFileSync`, and
+ *   Python folds fullwidth `ｃｏｐｙ` to `copy`, so either would hide a
+ *   definition from a search for the name (security review of #2756). Any
+ *   other character, an em-dash in prose included, is not part of a name.
  * - **Nothing binds by string or scope.** `globals`, `vars`, `setattr`,
  *   `exec`, `builtins`, `globalThis`, a JavaScript `with`, a star import,
- *   `sys.modules`, any dunder attribute (`shutil.__setattr__`) and their
- *   kind bind names the code never spells (`DYNAMIC_BINDING`).
+ *   `sys.modules`, `getattr`, `Object.assign`, any dunder name in code or
+ *   in a literal (`shutil.__setattr__`, `__import__`) and their kind bind
+ *   names the code never spells (`DYNAMIC_BINDING`).
  * - **No attribute is assigned.** `shutil.copy = f`, and as surely
  *   `os.rename = f`, which `shutil.move` calls inside the module.
  * - **The name is shown.** A dotted callee needs a module receiver that names
@@ -3874,7 +3876,7 @@ const FS_SPECIFIERS = new Set(['fs', 'node:fs']);
 
 /** Names that bind, or reach a binding, without the code spelling the name bound. */
 const DYNAMIC_BINDING =
-  /\b(?:globals|vars|locals|setattr|delattr|exec|eval|__dict__|__builtins__|builtins|importlib|globalThis|global|Reflect|defineProperty|setPrototypeOf|__proto__|prototype|Function)\b|\.\s*__\w+__|\bwith\s*\(|\bimport\s*\*(?!\s*as\b)|\bsys\s*\.\s*(?:modules|path|meta_path|path_hooks)\b/;
+  /\b(?:globals|vars|locals|setattr|delattr|getattr|exec|eval|builtins|importlib|globalThis|global|Reflect|defineProperty|defineProperties|setPrototypeOf|prototype|Function)\b|\b__\w+__\b|\bObject\s*\.\s*assign\b|\bwith\s*\(|\bimport\s*\*(?!\s*as\b)|\bsys\s*\.\s*(?:modules|path|meta_path|path_hooks)\b/;
 
 /** Keywords a call may follow and still be a call rather than a definition. */
 const CALL_KEYWORDS = new Set(['return', 'await', 'yield', 'not', 'and', 'or', 'in', 'is', 'if', 'elif', 'else', 'while', 'assert', 'with', 'throw', 'typeof', 'void', 'case', 'do', 'print']);
@@ -3889,7 +3891,12 @@ function calleeShownIn(body: string, openIndex: number, view: CodeView): boolean
   }
   let code = '';
   for (let k = 0; k < body.length; k++) code += view.mask[k] === 0 || body[k] === '\n' ? body[k] : ' ';
-  if (/[^\t\n\r\x20-\x7e]|\\(?!\n)/.test(code)) return false;
+  if (/\\(?!\n)/.test(code)) return false;
+  for (const ch of code) {
+    if (ch > '\x7e' && ch.normalize('NFKC') !== ch && /[A-Za-z0-9_$]/.test(ch.normalize('NFKC'))) return false;
+  }
+  // A dunder named by string reaches what a dunder named in code does.
+  if (view.literals.some(([open, close]) => /__\w+__/.test(body.slice(open + 1, close)))) return false;
   if (DYNAMIC_BINDING.test(code)) return false;
   if (assignsAttribute(code)) return false;
 
@@ -4041,7 +4048,13 @@ function requireTrusted(code: string): boolean {
     }
     let next = k + 1;
     while (next < code.length && (code[next] === ' ' || code[next] === '\t' || code[next] === '\r')) next++;
-    return next >= code.length || '.;\n'.includes(code[next]);
+    if (code[next] === '.') return true;
+    if (next < code.length && !';\n'.includes(code[next])) return false;
+    // Bound, it must be bound to `fs`, which is checked as a module name
+    // everywhere, or destructured into functions. Any other name is a second
+    // spelling of the module nothing follows (second security review of #2756).
+    const before = code.slice(0, at);
+    return /\b(?:const|let|var)\s+fs\s*=\s*$/.test(before) || /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*$/.test(before) || /(?:^|[;\n])\s*$/.test(before);
   });
 }
 
