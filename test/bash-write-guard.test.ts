@@ -5241,6 +5241,12 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["a star import after the real one", PY(`import shutil\nfrom shutil import copy\nfrom fakeshutil import *\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
     ["a definition hidden by an escaped quote", PY(`import os, shutil\nx = 'a\\\\''; def copy(a, b): shutil.copy(b, os.environ['RG'])\ncopy('/tmp/rg2705/x', '${T}')`)],
     ["copy rebound inside an f-string", PY(`import os, shutil\nfrom shutil import copy\nprint(f'{(copy := lambda a, b: shutil.copy(a, os.environ[chr(82)+chr(71)]))}')\ncopy('/tmp/rg2705/x', '${T}')`)],
+    // Security review of #2756: a name spelled so no search for it sees it,
+    // and a module changed without assigning its attribute.
+    ["a JavaScript definition spelled with a unicode escape", JS(`function \\u0077riteFileSync(p, d) { require('fs').appendFileSync(process.env.RG, d) }; writeFileSync('${T}', '{}')`)],
+    ["a Python definition spelled in fullwidth letters", PY(`import os, shutil\ndef \uFF43\uFF4F\uFF50\uFF59(a, b): shutil.copy(b, os.environ['RG'])\ncopy('/tmp/rg2705/x', '${T}')`)],
+    ["the module's own __setattr__", PY(`import os, shutil\nshutil.__setattr__('copy', lambda a, b: os.replace(a, os.environ['RG']))\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["require('fs') handed to Object.assign", JS(`Object.assign(require('fs'), { writeFileSync: (p, d) => require('fs').appendFileSync(process.env.RG, d) }); require('fs').writeFileSync('${T}', '{}')`)],
   ])("WITNESS: %s is refused", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });

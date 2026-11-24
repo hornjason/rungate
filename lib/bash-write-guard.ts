@@ -3829,10 +3829,16 @@ function calleeBefore(body: string, openIndex: number): string {
  * - **The body must be readable.** A quote left open, a backtick, an escaped
  *   quote, or an f-string with a `{` puts code where the literal reader
  *   sees a string, so any of them ends it.
+ * - **Every name is spelled the way it is searched for.** Code outside
+ *   literals and comments must be printable ASCII with no backslash but a
+ *   line continuation: JavaScript reads `\u0077riteFileSync` as
+ *   `writeFileSync`, and Python folds fullwidth `ｃｏｐｙ` to `copy`, so
+ *   either would hide a definition from a search for the name (security
+ *   review of #2756).
  * - **Nothing binds by string or scope.** `globals`, `vars`, `setattr`,
  *   `exec`, `builtins`, `globalThis`, a JavaScript `with`, a star import,
- *   `sys.modules` and their kind bind names the code never spells
- *   (`DYNAMIC_BINDING`).
+ *   `sys.modules`, any dunder attribute (`shutil.__setattr__`) and their
+ *   kind bind names the code never spells (`DYNAMIC_BINDING`).
  * - **No attribute is assigned.** `shutil.copy = f`, and as surely
  *   `os.rename = f`, which `shutil.move` calls inside the module.
  * - **The name is shown.** A dotted callee needs a module receiver that names
@@ -3868,7 +3874,7 @@ const FS_SPECIFIERS = new Set(['fs', 'node:fs']);
 
 /** Names that bind, or reach a binding, without the code spelling the name bound. */
 const DYNAMIC_BINDING =
-  /\b(?:globals|vars|locals|setattr|delattr|exec|eval|__dict__|__builtins__|builtins|importlib|globalThis|global|Reflect|defineProperty|Function)\b|\bwith\s*\(|\bimport\s*\*(?!\s*as\b)|\bsys\s*\.\s*(?:modules|path|meta_path|path_hooks)\b/;
+  /\b(?:globals|vars|locals|setattr|delattr|exec|eval|__dict__|__builtins__|builtins|importlib|globalThis|global|Reflect|defineProperty|setPrototypeOf|__proto__|prototype|Function)\b|\.\s*__\w+__|\bwith\s*\(|\bimport\s*\*(?!\s*as\b)|\bsys\s*\.\s*(?:modules|path|meta_path|path_hooks)\b/;
 
 /** Keywords a call may follow and still be a call rather than a definition. */
 const CALL_KEYWORDS = new Set(['return', 'await', 'yield', 'not', 'and', 'or', 'in', 'is', 'if', 'elif', 'else', 'while', 'assert', 'with', 'throw', 'typeof', 'void', 'case', 'do', 'print']);
@@ -3883,6 +3889,7 @@ function calleeShownIn(body: string, openIndex: number, view: CodeView): boolean
   }
   let code = '';
   for (let k = 0; k < body.length; k++) code += view.mask[k] === 0 || body[k] === '\n' ? body[k] : ' ';
+  if (/[^\t\n\r\x20-\x7e]|\\(?!\n)/.test(code)) return false;
   if (DYNAMIC_BINDING.test(code)) return false;
   if (assignsAttribute(code)) return false;
 
@@ -4017,9 +4024,25 @@ function assignsAttribute(code: string): boolean {
 type RequireFs = (at: number) => number;
 type LiteralAt = (at: number) => { value: string; close: number } | null;
 
-/** Does every `require` the code spells call it? A `require` of the body's own is no module loader. */
+/**
+ * Does every `require` the code spells call it, and use what it returns only
+ * as a receiver or a binding's value? A `require` of the body's own is no
+ * module loader, and `Object.assign(require('fs'), …)` changes the module
+ * every later `require('fs')` returns (security review of #2756).
+ */
 function requireTrusted(code: string): boolean {
-  return occurrences(code, 'require').every(at => code[prevCode(code, at - 1)] !== '.' && isCall(code, at, 'require'.length));
+  return occurrences(code, 'require').every(at => {
+    if (code[prevCode(code, at - 1)] === '.' || !isCall(code, at, 'require'.length)) return false;
+    let depth = 0;
+    let k = nextCode(code, at + 'require'.length);
+    for (; k < code.length; k++) {
+      if (code[k] === '(') depth++;
+      else if (code[k] === ')' && --depth === 0) break;
+    }
+    let next = k + 1;
+    while (next < code.length && (code[next] === ' ' || code[next] === '\t' || code[next] === '\r')) next++;
+    return next >= code.length || '.;\n'.includes(code[next]);
+  });
 }
 
 /** Is this spelling of a module name, or of `require`, one that leaves it the module? */
