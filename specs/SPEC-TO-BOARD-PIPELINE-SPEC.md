@@ -341,6 +341,18 @@ run time. ADR-009 draws the boundary.
       needs: test
       proved-by: test/board-status-sweep.test.ts, the `#1719 / SC-2621` describe — 3 pass, 0 fail — and test/work-status.test.ts, its `#1719 / SC-2621` case, 1 pass, 0 fail; 2026-11-14, on the PR for #1719. No board identifier is spelled in `lib/`, `scripts/`, `bin/`, `hooks/` or `gates/` code; both scripts that had one read `board.id` through `readBoardProjectId`, and run where no board is configured each refuses UNMEASURED naming `board.id`, before the credential. Scope, per ADR-014 decision 3: the scripts' own reads. `board-intake.yml`'s literal is #2047's.
       fingerprint: e091575d
+- [ ] SC-2806: a criterion's placement is read from a `placement:` line indented beneath it, holding `Phase N` or one of `NON_PHASE_PLACEMENTS`; every reader gets it through `parsePlacementRows` in `lib/spec-placement.ts`, a spec with no placement lines is read from its Phase placement table exactly as before, a spec with both is UNMEASURED naming itself, and adding a placement line leaves the criterion's fingerprint unchanged (ADR-026, #2488)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2807: `finding-promotion --phase N` places the criterion it adds, in a spec that uses placement lines, by writing `placement: Phase N` beneath it and changing no other line of the spec; in a spec that still has a Phase placement table it appends to the table as before (ADR-026, #2488)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2808: `plan-spec <spec> --placement` prints each placement value with its criteria, read from the placement lines, in phase order, and writes nothing; `plan-spec <spec> --convert-placement --write` writes every table id beneath its criterion and removes the table's criteria column, and refuses without writing if `placementReading` would read any criterion's placement differently afterwards (ADR-026, #2488)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
+- [ ] SC-2809: neither `specs/SPEC-TO-BOARD-PIPELINE-SPEC.md` nor `specs/CODE-REVIEW-CONVERGENCE-SPEC.md` lists criteria in a placement table, and a test applies two branches that each add one criterion placed in the same phase, in different sections of one spec, with `git merge-file` and finds no conflict, where the same two additions in the one-line table form conflict (ADR-026, #2488)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      needs: test
 
 ### The chain traces back to a goal
 
@@ -404,7 +416,7 @@ is built from this document.
 | **Phase 4** | SC-2611 |
 | **Phase 5** | SC-2612, SC-2613, SC-2614, SC-2750 |
 | **Phase 6** | SC-2615, SC-2616, SC-2617, SC-2734, SC-2735, SC-2736, SC-2737, SC-2738, SC-2739, SC-2740, SC-2741, SC-2752, SC-2753, SC-2762, SC-2763, SC-2764, SC-2786 |
-| **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749, SC-2751, SC-2787, SC-2788, SC-2789, SC-2790, SC-2791, SC-2792, SC-2793, SC-2794 |
+| **Phase 7** | SC-2618, SC-2619, SC-2620, SC-2621, SC-2742, SC-2743, SC-2744, SC-2745, SC-2746, SC-2747, SC-2748, SC-2749, SC-2751, SC-2787, SC-2788, SC-2789, SC-2790, SC-2791, SC-2792, SC-2793, SC-2794, SC-2806, SC-2807, SC-2808, SC-2809 |
 | **Phase 8** | SC-2622, SC-2623, SC-2624 |
 | **Phase 9** | SC-2776, SC-2777, SC-2778, SC-2779, SC-2780, SC-2782, SC-2783, SC-2784, SC-2785, SC-2795 |
 | **Phase 10** | SC-2625 |
