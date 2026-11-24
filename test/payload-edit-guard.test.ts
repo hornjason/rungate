@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
+import { UNREADABLE_COMMAND } from "../lib/issue-create-override";
 import { BOARD_WRITE_FLAGS, payloadEditRefusal, payloadPrefix } from "../lib/payload-edit-guard";
 
 const ROOT = join(import.meta.dir, "..");
@@ -55,6 +56,21 @@ describe("#2727: a board write the shell runs is read, whatever the quoting arou
 
   test("CONTROL: a quoted heredoc expands nothing, so nothing is written", async () => {
     expect(await decide(`cat <<'EOF'\n$(gh issue edit 2655 --add-label x)\nEOF`)).toBeNull();
+  });
+
+  // #2743: a command the grammar cannot read, that names gh, is refused as
+  // unreadable rather than read a second way.
+  test("WITNESS: a malformed gh issue edit is refused as unreadable", async () => {
+    const cmd = `echo "$(printf case x)"; gh issue edit 2655 --add-label x`;
+    expect(await decide(cmd)).toContain(UNREADABLE_COMMAND);
+  });
+
+  test("WITNESS: a board edit split across eval's arguments is refused (#2746 review round 2)", async () => {
+    expect(await decide(`eval 'gh issue' edit 2655 --add-label x`)).not.toBeNull();
+  });
+
+  test("CONTROL: a malformed command that names no gh runs", async () => {
+    expect(await decide(`echo "$(printf case x)"; ls`)).toBeNull();
   });
 });
 

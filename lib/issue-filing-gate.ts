@@ -139,6 +139,7 @@ import {
   graphqlDocument,
   graphqlVariables,
   labelValues,
+  unreadableFiling,
 } from "./issue-create-override";
 import { headingFor, missingSections, requiredSections } from "./issue-shape";
 import { parseSuccessDoc, readSuccessDoc, UNREADABLE as SUCCESS_UNREADABLE, unfilled } from "./success-doc";
@@ -3493,6 +3494,10 @@ export async function filingGate(
     readGrowth?: (projectRoot: string, nowMs: number) => Promise<NetGrowthReading>;
   },
 ): Promise<FilingGateReading> {
+  // One reader per command (#2743): a command the grammar cannot read, that
+  // names gh, is refused here rather than read a second way.
+  const unreadable = unreadableFiling(cmd);
+  if (unreadable !== null) return { refusal: `[FindingArbiter] ${unreadable}`, note: null, rows: [] };
   const attempts = filingAttempts(cmd);
   if (attempts.length === 0) return NO_FILING;
 
