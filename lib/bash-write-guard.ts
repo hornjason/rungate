@@ -3843,8 +3843,10 @@ function calleeBefore(body: string, openIndex: number): string {
  *   `sys.modules`, `getattr`, `Object.assign`, any dunder name in code or
  *   in a literal (`shutil.__setattr__`, `__import__`) and their kind bind
  *   names the code never spells (`DYNAMIC_BINDING`).
- * - **No attribute is assigned.** `shutil.copy = f`, and as surely
- *   `os.rename = f`, which `shutil.move` calls inside the module.
+ * - **No attribute is assigned**, by `=`, an augmented or logical operator
+ *   (`&&=`, `??=`), an annotation, a loop target, `as`, or a destructuring
+ *   pattern: `shutil.copy = f`, and as surely `os.rename = f`, which
+ *   `shutil.move` calls inside the module.
  * - **The name is shown.** A dotted callee needs a module receiver that names
  *   the function (`MODULE_WRITES`), imported as itself and named nowhere
  *   else but as a receiver. A bare one may be imported only from the module
@@ -4029,12 +4031,27 @@ function assignsAttribute(code: string): boolean {
     if (code[k - 1] === ':' ) continue; // a walrus binds a name, never an attribute
     let start = k - 1;
     while (start >= 0 && !'\n;{}'.includes(code[start])) start--;
-    // An augmented operator sits between the target and `=`.
-    const target = code.slice(start + 1, k).replace(/(?:\*\*|\/\/|<<|>>|[-+*/%&|^@])$/, '');
+    // An augmented or logical operator sits between the target and `=`.
+    const target = code.slice(start + 1, k).replace(/(?:\*\*|\/\/|<<|>>>|>>|&&|\|\||\?\?|[-+*/%&|^@])$/, '');
     if (TARGET_ATTR.test(target.trimEnd() + '\n'.slice(1))) return true;
     if (/\.\s*[A-Za-z_$][\w$]*\s*$/.test(target)) return true;
   }
   if (/\.\s*[A-Za-z_$][\w$]*\s*:(?![:=])/.test(code)) return true; // an annotated attribute
+  // A destructuring pattern: `({ w: fs.writeFileSync } = …)`, `[a.b] = …`.
+  // The statement walk above stops at its `}`, so the pattern is read here.
+  for (let k = 0; k < code.length; k++) {
+    if (code[k] !== '}' && code[k] !== ']') continue;
+    const eq = nextCode(code, k + 1);
+    if (code[eq] !== '=' || code[eq + 1] === '=' || code[eq + 1] === '>') continue;
+    const open = code[k] === '}' ? '{' : '[';
+    let depth = 0;
+    let j = k;
+    for (; j >= 0; j--) {
+      if (code[j] === code[k]) depth++;
+      else if (code[j] === open && --depth === 0) break;
+    }
+    if (/\.\s*[A-Za-z_$]/.test(code.slice(j + 1, k))) return true;
+  }
   for (const m of code.matchAll(/\bfor\s*\(?([^\n]*?)\b(?:in|of)\b/g)) if (/\.\s*[A-Za-z_$]/.test(m[1])) return true;
   return /\bas\s+[A-Za-z_$][\w$]*\s*\./.test(code);
 }
@@ -4103,22 +4120,33 @@ function importsModule(code: string, at: number, mod: string, requireFs: Require
 
 /** The module a bare name at `at` is imported from, when the import names exactly it from the module defining it. */
 function importedFrom(code: string, at: number, name: string, requireFs: RequireFs, literalAt: LiteralAt): string | null {
-  const entryIs = (list: string): boolean => list.replace(/[()]/g, '').split(',').some(e => e.trim() === name);
+  // The entry holding THIS spelling must be the name itself: `renameSync:
+  // writeFileSync` and `rmtree as copy` bind the name to another function
+  // (review round 2 of #2756), whatever the list's other entries say.
+  const entryIs = (list: string, listStart: number): boolean => {
+    let from = 0;
+    for (const entry of list.split(',')) {
+      const end = from + entry.length;
+      if (at >= listStart + from && at < listStart + end) return entry.replace(/[()]/g, '').trim() === name;
+      from = end + 1;
+    }
+    return false;
+  };
   for (const m of code.matchAll(/\bfrom\s+([A-Za-z_][\w.]*)\s+import\s+(\([^)]*\)|[^\n;]*)/g)) {
     const listStart = (m.index ?? 0) + m[0].length - m[2].length;
     if (at < listStart || at >= listStart + m[2].length) continue;
-    return moduleWrites(m[1])?.includes(name) && entryIs(m[2]) ? m[1] : null;
+    return moduleWrites(m[1])?.includes(name) && entryIs(m[2], listStart) ? m[1] : null;
   }
   for (const m of code.matchAll(/\bimport\s*\{([^}]*)\}\s*from\b/g)) {
     const listStart = (m.index ?? 0) + m[0].indexOf('{') + 1;
     if (at < listStart || at >= listStart + m[1].length) continue;
     const lit = literalAt((m.index ?? 0) + m[0].length);
-    return lit !== null && FS_SPECIFIERS.has(lit.value) && FS_WRITES.includes(name) && entryIs(m[1]) ? 'fs' : null;
+    return lit !== null && FS_SPECIFIERS.has(lit.value) && FS_WRITES.includes(name) && entryIs(m[1], listStart) ? 'fs' : null;
   }
   for (const m of code.matchAll(/\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*/g)) {
     const listStart = (m.index ?? 0) + m[0].indexOf('{') + 1;
     if (at < listStart || at >= listStart + m[1].length) continue;
-    return requireFs((m.index ?? 0) + m[0].length) !== -1 && FS_WRITES.includes(name) && entryIs(m[1]) ? 'fs' : null;
+    return requireFs((m.index ?? 0) + m[0].length) !== -1 && FS_WRITES.includes(name) && entryIs(m[1], listStart) ? 'fs' : null;
   }
   return null;
 }

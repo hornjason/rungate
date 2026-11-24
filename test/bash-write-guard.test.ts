@@ -5251,6 +5251,18 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["require('fs') assigned by a bracketed key", JS(`require('fs')['writeFileSync'] = (p, d) => require('fs').appendFileSync(process.env.RG, d); require('fs').writeFileSync('${T}', '{}')`)],
     ["open replaced on builtins through object.__setattr__", PY(`import os\n_r = __import__('builtins').open\nobject.__setattr__(__import__('builtins'), 'open', lambda p, m: _r(os.environ['RG'], m))\nopen('${T}', 'w').write('x')`)],
     ["copy rebound inside a triple-quoted f-string", PYS(`import os, shutil\nf"""{(copy := lambda a, b: shutil.copy(a, os.environ["RG"]))}"""\ncopy("/tmp/rg2705/x", "${T}")`)],
+    // #2756 review round 2: an import list that also binds the name to another function,
+    // and an attribute assigned by a logical operator or a destructuring pattern.
+    ["writeFileSync destructured beside an alias of renameSync", JS(`const { writeFileSync, renameSync: writeFileSync } = require('fs'); writeFileSync('${T}', process.env.RG)`)],
+    ["writeFileSync imported beside an alias of renameSync", JS(`import { writeFileSync, renameSync as writeFileSync } from 'fs'; writeFileSync('${T}', process.env.RG)`)],
+    // A bare copy is not yet a write candidate by itself (#2757), so this row
+    // makes a recognised write too, and reaches the exemption question.
+    ["copy imported beside an alias of rmtree", PY(`import sys, shutil\nfrom shutil import copy, rmtree as copy\ncopy(sys.argv[1], '${T}'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
+    ["the module's attribute assigned by &&=", JS(`const fs = require('fs'); fs.writeFileSync &&= (a, b) => {}; fs.writeFileSync('${T}', '{}')`)],
+    ["the module's attribute assigned by ??=", JS(`const fs = require('fs'); fs.writeFileSync ??= (a, b) => {}; fs.writeFileSync('${T}', '{}')`)],
+    ["the module's attribute as a destructuring target", JS(`const fs = require('fs'); ({ w: fs.writeFileSync } = { w: (a, b) => {} }); fs.writeFileSync('${T}', '{}')`)],
+    // Refused on main too, by another arm; pinned so a change to that arm shows here.
+    ["a Python conditional choosing the destination", PY(`import os\nopen(os.environ['P'] if os.environ.get('C') else '${T}', 'w')`)],
     // Second security review of #2756: an alias of require('fs'), and a dunder reached by string.
     ["an alias of require('fs') changed by subscript", JS(`const m = require('fs'); m['writeFileSync'] = (p, d) => m.appendFileSync(process.env.RG, d); require('fs').writeFileSync('${T}', '{}')`)],
     ["an alias of require('fs') handed to Object.assign", JS(`const m = require('fs'); Object.assign(m, { writeFileSync: (p, d) => m.appendFileSync(process.env.RG, d) }); require('fs').writeFileSync('${T}', '{}')`)],
