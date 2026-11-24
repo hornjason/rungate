@@ -524,7 +524,11 @@ const UNCLAIMED_RATCHET = 150;
 // configurable per repo as Quick / Standard / Deep, a reading of the generated
 // workflow's turn budget per depth that no registered pattern expresses; the
 // `CRC-B9` describe in test/ai-review-turn-budget.test.ts names it (2026-11-23).
-const CLAIMED_UNBINDABLE = 210;
+// 211: SC-2806 (#2764) ticked by `sync-sc-status --only SC-2806` — a criterion's
+// placement is read from the `placement:` line beneath it, a reading of the
+// placement parser that no registered pattern expresses; the `SC-2806` describe
+// in test/spec-to-board-pipeline.test.ts names it (2026-11-24).
+const CLAIMED_UNBINDABLE = 211;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
