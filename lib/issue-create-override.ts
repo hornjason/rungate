@@ -342,9 +342,28 @@ function namesGh(text: string): boolean {
 const PYTHON = /^(python|pypy)[\d.]*$/;
 
 /**
+ * Does the `-c` at `i` belong to a Python? Only when the nearest word before
+ * it that is not a flag is a Python, and that word is not itself a flag's
+ * value (#2746 review round 7). Any earlier word used to count, so
+ * `PYTHONPATH=/opt/python bash -c` and `sudo -u python bash -c` exempted the
+ * shell's `-c`; and a value is not a program, so `bash --rcfile python -c`
+ * is the shell's `-c` too.
+ *
+ * Every miss falls on the side of refusing: `python3 -X dev -c` and
+ * `bash -x python3 -c` are read as command lines, and are refused when the
+ * text is malformed bash that names gh.
+ */
+function pythonOwnsFlag(c: string[], i: number): boolean {
+  let j = i - 1;
+  while (j >= 0 && c[j].startsWith("-")) j--;
+  if (j < 0 || !PYTHON.test(basename(c[j]))) return false;
+  return j === 0 || !c[j - 1].startsWith("-");
+}
+
+/**
  * The command lines a clause hands a shell, for `unreadableFiling`: `eval`'s
- * arguments joined, and the word after every `-c` flag unless a Python is named
- * before it. The same reach as `commandArguments`, `clauses()`'s reader, so a
+ * arguments joined, and the word after every `-c` flag unless the flag
+ * belongs to a Python (`pythonOwnsFlag`). The same reach as `commandArguments`, `clauses()`'s reader, so a
  * `-c` command line the grammar misreads is refused, whatever the shell is
  * called: `rbash`, `ksh93`, `osh`, `$SHELL`, or `bash -o pipefail -c`.
  * Reviews of #2746 named the next shell or flag each round that a list of
@@ -362,7 +381,7 @@ function shellCommandLines(c: string[]): string[] {
       break;
     }
     if (!COMMAND_FLAG.test(c[i]) || i + 1 >= c.length) continue;
-    if (!c.slice(0, i).some(w => PYTHON.test(basename(w)))) out.push(c[i + 1]);
+    if (!pythonOwnsFlag(c, i)) out.push(c[i + 1]);
   }
   return out;
 }

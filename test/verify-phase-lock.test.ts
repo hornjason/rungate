@@ -501,6 +501,12 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     [`rbash -c 'echo "$(printf case x)"; gh issue create --title t'`],
     [`ksh93 -c 'echo "$(printf case x)"; gh issue create --title t'`],
     [`osh -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    // #2746 round 7: the Python exemption reads the program -c belongs to,
+    // not any earlier word whose basename is python.
+    [`PYTHONPATH=/opt/python bash -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    [`sudo -u python bash -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    // A flag's value is not the program, even when it is spelled python.
+    [`bash --rcfile python -c 'echo "$(printf case x)"; gh issue create --title t'`],
     // The cost of failing closed: a flag that is not a shell's, carrying text
     // that is malformed bash and names gh, is refused too.
     [`grep -c 'gh pr (' notes.md`],
@@ -520,6 +526,8 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     [`python3 - <<'PY'\nimport subprocess\nsubprocess.run(["gh", "issue", "view", "1"])\nPY`],
     [`python3 -c 'import os; os.system("gh issue view 1")'`],
     [`/usr/bin/python3.12 -c 'import os; os.system("gh issue view 1")'`],
+    [`sudo -u ci python3 -c 'import os; os.system("gh issue view 1")'`],
+    [`python3 -I -c 'import os; os.system("gh issue view 1")'`],
     // A -c argument that parses, whatever the program, is read and not refused.
     [`tail -c 1024 notes.md`],
     // Names gh, and the grammar reads it.
