@@ -5173,6 +5173,7 @@ describe("#2704: the new verbs do not open the scratch exemption", () => {
 describe("#2705: a write callee's identity is shown, not assumed from its name", () => {
   const PY = (body: string) => `mkdir -p /tmp/rg2705 && python3 -I -c "${body}"`;
   const JS = (body: string) => `mkdir -p /tmp/rg2705 && node -e "${body}"`;
+  const BUN = (body: string) => `mkdir -p /tmp/rg2705 && bun -e "${body}"`;
   const T = `/tmp/rg2705/${STATE}`;
   test.each([
     ["a parameter named copy", PY(`import os, shutil\ndef go(copy): copy('/tmp/rg2705/x', '${T}')\ngo(lambda a, b: shutil.copy(a, os.environ['RG']))`)],
@@ -5197,6 +5198,22 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["an import spelled in a string before a definition", JS(`const x = ['from shutil import copy,', function copy(a, b){ require('fs').copyFileSync(b, process.env.RG) }]; copy('/tmp/rg2705/x', '${T}')`)],
     ["a def with many spaces before the name", PY(`import os, shutil\ndef                    copy(a, b): shutil.copy(b, os.environ['RG'])\ncopy('/tmp/rg2705/x', '${T}')`)],
     ["a method shorthand put on globalThis", JS(`Object.assign(globalThis, { writeFileSync(p, d) { require('fs').writeFileSync(process.env.RG, d) } }); writeFileSync('${T}', 'x')`)],
+    // #2726 review round 2: an attribute rebinds the function as surely as a name does.
+    ["the module's own attribute assigned", PY(`import os, shutil\nshutil.copy = lambda a, b: open(os.environ['RG'], 'w').write('x')\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["a bare name assigned on globalThis", JS(`globalThis.copy = (a, b) => require('fs').copyFileSync(a, process.env.RG); copy('/tmp/rg2705/x', '${T}')`)],
+    ["open assigned on builtins", PY(`import builtins, io, os\nbuiltins.open = lambda p, m: io.open(os.environ['RG'], m)\nopen('${T}', 'w').write('x')`)],
+    ["require('fs')'s attribute assigned", JS(`const real = require('fs').writeFileSync; require('fs').writeFileSync = (p, d) => real(process.env.RG, d); require('fs').writeFileSync('${T}', 'x')`)],
+    // Not a plain assignment: only the attribute's own reading sees these.
+    ["the attribute as a list target", JS(`[globalThis.writeFileSync] = [(p, d) => require('fs').appendFileSync(process.env.RG, d)]; writeFileSync('${T}', 'x')`)],
+    ["the attribute as a loop target", PY(`import os, shutil\nfor shutil.copy in [lambda a, b: os.replace(a, os.environ['RG'])]: shutil.copy('/tmp/rg2705/x', '${T}')`)],
+    // A function the write calls inside the module: only the assignment reading sees these.
+    ["a function shutil.copy calls, assigned", PY(`import os, shutil\nshutil.copyfile = lambda a, b, **k: open(os.environ['RG'], 'w').close()\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["a function shutil.move calls, assigned through an alias", PY(`import os as o, shutil\no.rename = lambda a, b: o.replace(a, o.environ['RG'])\nshutil.move('/tmp/rg2705/x', '${T}')`)],
+    ["the module put on builtins", PY(`import builtins, os\nbuiltins.shutil = type('M', (), {'copy': staticmethod(lambda a, b: os.replace(a, os.environ['RG']))})\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["the module put on builtins as a list target", PY(`import builtins, os\n[builtins.shutil] = [type('M', (), {'copy': staticmethod(lambda a, b: os.replace(a, os.environ['RG']))})]\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["a typed method shorthand put on globalThis", BUN(`Object.assign(globalThis, { copy(a: string, b: string): void { require('fs').writeFileSync(process.env.RG, b) } }); copy('/tmp/rg2705/x', '${T}')`)],
+    ["a require of the body's own", JS(`const require = (m) => globalThis.fake; require('fs').writeFileSync('${T}', '{}')`)],
+    ["a require put on globalThis", JS(`globalThis.require = (m) => globalThis.fake; require('fs').writeFileSync('${T}', '{}')`)],
   ])("WITNESS: %s is refused", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
@@ -5218,7 +5235,14 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     // Only code names the function: a string, or another object's attribute
     // of the same name, is neither a call nor a binding.
     ["a string naming copy beside the import", PY(`import shutil\nfrom shutil import copy\ncopy('/tmp/rg2705/x', '${T}'); print('copy done'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
-    ["an attribute named copy beside the import", PY(`import shutil\nfrom shutil import copy\nalias = shutil.copy\ncopy('/tmp/rg2705/x', '${T}')`)],
+    // An attribute of the same name is read the way the name is: called, it
+    // binds nothing (#2726 review round 2).
+    ["an attribute named copy that is called", PY(`import shutil\nfrom shutil import copy\nd = {'a': 1}.copy()\ncopy('/tmp/rg2705/x', '${T}')`)],
+    // A subscript and a comparison assign no attribute.
+    ["an environment variable set beside shutil.copy", PY(`import os, shutil\nos.environ['X'] = '1'\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["an attribute compared beside shutil.copy", PY(`import shutil, sys\nif sys.platform == 'linux': shutil.copy('/tmp/rg2705/x', '${T}')`)],
+    // A colon after the call is a ternary's, not a return type: no body follows.
+    ["a write in a ternary's first branch", JS(`const fs = require('fs'); const ok = true; ok ? fs.writeFileSync('${T}', 'x') : 0`)],
   ])("CONTROL: %s onto a scratch path stays exempt", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });

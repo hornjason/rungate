@@ -3835,30 +3835,49 @@ const REQUIRE_FS = /(?<![\w$.])require\(\s*(['"])(?:node:)?fs\1\s*\)\s*$/;
  * - A dotted callee needs a module receiver: `shutil.copy`, `fs.writeFileSync`,
  *   `require('fs').writeFileSync`. `foo.copy` is a method of something the
  *   body made, and so is `shutil.copy` once the body binds its own `shutil`
- *   (`receiverShown`).
- * - A bare name is shown when every place the code names it, outside string
- *   literals and attribute access, is a call that is not a definition, or an
- *   import from the module that defines it (`from shutil import copy`,
+ *   (`receiverShown`), or its own `require`.
+ * - The function's name is shown when every place the code names it, outside
+ *   string literals, is a call that is not a definition, or an import from the
+ *   module that defines it (`from shutil import copy`,
  *   `const { writeFileSync } = require('fs')`, `import { … } from 'fs'`).
+ *   That holds for the name as an attribute too (`globalThis.copy`,
+ *   `shutil.copy`), which is bound as surely as a bare name (#2726 review).
  *   `open` is a builtin and needs no import.
+ * - The body assigns no attribute (`assignsAttribute`): `shutil.copyfile = f`
+ *   replaces a function `shutil.copy` itself calls.
  *
  * This is a positive rule, not a list of binding forms: a parameter, a loop
  * variable, a tuple, an assignment or an alias all name the function somewhere
  * that is not a call, and each of those was a walk-around of matching the
- * forms (#2704). What it does not see is rebinding through a string
- * (`setattr(builtins, 'open', …)`), a decision to get around it.
+ * forms (#2704). What it does not see is a rebinding it cannot read as one:
+ * through a string or a mapping (`setattr(builtins, 'open', …)`,
+ * `vars(os).update(rename=f)`), or of a function the write calls inside its
+ * module as a tuple or loop target (`[shutil.copyfile] = [f]`), a decision to
+ * get around it.
  */
 function calleeShown(body: string, openIndex: number, callee: string, spans: [number, number][]): boolean {
+  if (assignsAttribute(body, spans)) return false;
   const dot = callee.lastIndexOf('.');
+  const name = callee.slice(dot + 1);
   if (dot >= 0) {
     const receiver = callee.slice(0, dot);
-    if (receiver !== '') return WRITE_MODULES.has(receiver) && receiverShown(body, receiver, spans);
-    // `require('fs').writeFileSync(`: the receiver is the call in front.
-    const before = body.slice(0, openIndex).replace(/\s+$/, '');
-    return REQUIRE_FS.test(before.slice(0, before.length - callee.length));
+    if (receiver !== '') {
+      if (!WRITE_MODULES.has(receiver) || !receiverShown(body, receiver, spans)) return false;
+    } else {
+      // `require('fs').writeFileSync(`: the receiver is the call in front, and
+      // `require` is the runtime's only when nothing else names it (#2726 review).
+      const before = body.slice(0, openIndex).replace(/\s+$/, '');
+      if (!REQUIRE_FS.test(before.slice(0, before.length - callee.length)) || !onlyCalled(body, 'require', spans, [])) return false;
+    }
+  } else if (!DEFINING_MODULE.has(name) && name !== 'open') {
+    return false;
   }
-  const module = DEFINING_MODULE.get(callee);
-  if (module === undefined && callee !== 'open') return false;
+  return onlyCalled(body, name, spans, importsOf(body, name));
+}
+
+/** The spans of the imports that bring `name` in, listed plainly, from the module that defines it (#2705). */
+function importsOf(body: string, name: string): Array<[number, number]> {
+  const module = DEFINING_MODULE.get(name);
   const imports: Array<[number, number]> = [];
   if (module !== undefined) {
     const forms = [
@@ -3873,19 +3892,39 @@ function calleeShown(body: string, openIndex: number, callee: string, spans: [nu
         // Listed plainly, not renamed: `copy as c` and `{ writeFileSync: w }`
         // bind another name, which is not a call to this one.
         const names = m[1].split(',').map(x => x.trim());
-        if (names.includes(callee)) imports.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+        if (names.includes(name)) imports.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
       }
     }
   }
-  const word = new RegExp(`(?<![\\w$.])${callee}(?![\\w$])`, 'g');
-  for (const m of body.matchAll(word)) {
+  return imports;
+}
+
+/**
+ * Whether every place the code names `name`, bare or as an attribute, outside
+ * string literals and the given import spans, is a call that is not a
+ * definition (#2705, #2726 review).
+ */
+function onlyCalled(body: string, name: string, spans: [number, number][], imports: Array<[number, number]>): boolean {
+  for (const m of body.matchAll(new RegExp(`(?<![\\w$])${name}(?![\\w$])`, 'g'))) {
     const at = m.index ?? 0;
-    if (spans.some(([s, e]) => at > s && at < e)) continue;
-    if (imports.some(([s, e]) => at >= s && at < e)) continue;
-    const rest = body.slice(at + callee.length);
-    if (!/^\s*\(/.test(rest) || definesName(body, at, at + callee.length + rest.indexOf('('), spans)) return false;
+    if (inLiteral(at, spans) || imports.some(([s, e]) => at >= s && at < e)) continue;
+    const rest = body.slice(at + name.length);
+    if (!/^\s*\(/.test(rest) || definesName(body, at, at + name.length + rest.indexOf('('), spans)) return false;
   }
   return true;
+}
+
+/**
+ * Whether the body assigns to an attribute (#2726 review): `shutil.copy = f`,
+ * `builtins.open = f`, and as much `shutil.copyfile = f` or `os.rename = f`,
+ * which the module's own write then calls. Any receiver, so an alias
+ * (`import os as o; o.rename = f`) or a subscript (`sys.modules['os'].rename
+ * = f`) counts. `==`, `<=`, `>=`, `!=` and `=>` assign nothing.
+ */
+function assignsAttribute(body: string, spans: [number, number][]): boolean {
+  const assignment = /\.\s*[A-Za-z_$][\w$]*\s*(?:>>>=|\*\*=|\/\/=|>>=|<<=|&&=|\|\|=|\?\?=|[-+*/%&|^@]=|=(?![=>]))/g;
+  for (const m of body.matchAll(assignment)) if (!inLiteral(m.index ?? 0, spans)) return true;
+  return false;
 }
 
 /** Whether the offset `at` falls inside a string literal, quotes included. */
@@ -3898,7 +3937,8 @@ function inLiteral(at: number, spans: [number, number][]): boolean {
  * calls (#2726 review): `def`, `class` or `function` before it, however much
  * whitespace lies between, or a body after its parameters (`name(p) { … }`,
  * a JavaScript method shorthand, which `Object.assign(globalThis, …)` can make
- * global).
+ * global), with or without a return type (`name(p: T): void { … }`, #2726
+ * review).
  */
 function definesName(body: string, at: number, open: number, spans: [number, number][]): boolean {
   if (/(?<![\w$])(?:def|class|function\s*\*?)$/.test(body.slice(0, at).replace(/\s+$/, ''))) return true;
@@ -3906,7 +3946,7 @@ function definesName(body: string, at: number, open: number, spans: [number, num
   for (let i = open; i < body.length; i++) {
     if (inLiteral(i, spans)) continue;
     if (body[i] === '(') depth++;
-    else if (body[i] === ')' && --depth === 0) return /^\s*\{/.test(body.slice(i + 1));
+    else if (body[i] === ')' && --depth === 0) return /^\s*(?::[^;{}\n]*)?\{/.test(body.slice(i + 1));
   }
   return false;
 }
@@ -3917,7 +3957,8 @@ function definesName(body: string, at: number, open: number, spans: [number, num
  * import that binds it (`import os, shutil`, `const fs = require('fs')`,
  * `import fs from 'fs'`, `import * as fs from 'fs'`). A class, an assignment
  * or a parameter of that name names it somewhere else, the rule bare names
- * are held to.
+ * are held to, and so does an attribute of that name that is not itself read
+ * through (`[builtins.shutil] = [m]`).
  */
 function receiverShown(body: string, name: string, spans: [number, number][]): boolean {
   const imports: Array<[number, number]> = [];
@@ -3932,7 +3973,8 @@ function receiverShown(body: string, name: string, spans: [number, number][]): b
       if (names.some(x => x === name || x.startsWith(`${name}.`))) imports.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
     }
   }
-  for (const m of body.matchAll(new RegExp(`(?<![\\w$.])${name}(?![\\w$])`, 'g'))) {
+  // As an attribute too: `builtins.shutil` is the name `shutil` resolves to (#2726 review).
+  for (const m of body.matchAll(new RegExp(`(?<![\\w$])${name}(?![\\w$])`, 'g'))) {
     const at = m.index ?? 0;
     if (inLiteral(at, spans) || imports.some(([s, e]) => at >= s && at < e)) continue;
     if (/^\s*\./.test(body.slice(at + name.length))) continue;
