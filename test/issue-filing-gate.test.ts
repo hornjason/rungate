@@ -110,7 +110,7 @@ import {
   type CommentTarget,
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
-import { API_BOOLEAN_FLAGS, filingDirectory } from "../lib/issue-create-override";
+import { API_BOOLEAN_FLAGS, filingDirectory, UNREADABLE_COMMAND } from "../lib/issue-create-override";
 import { decomposedBody } from "../lib/issue-decomposition";
 import {
   ISSUE_SECTIONS,
@@ -1892,11 +1892,15 @@ describe("#1302 a document heredoc is not a filing", () => {
     expect(attempts[0].labels).toEqual(["follow-up"]);
   });
 
-  test("FG-43 CONTROL: an UNTERMINATED heredoc is still read, because it is not a heredoc", () => {
-    // `stripHeredocs` deliberately leaves a body whose terminator never
-    // arrives, and that direction is the safe one: a filing hidden behind an
-    // unclosed delimiter must not become invisible. Green before and after.
-    expect(filingAttempts(`cat > /tmp/d.md <<'EOF'\n${FILING}\n`)).toHaveLength(1);
+  test("FG-43: an UNTERMINATED heredoc naming gh is refused as unreadable, not read past", async () => {
+    // A filing hidden behind an unclosed delimiter must not become invisible.
+    // #2735 kept that by reading the command a second time with the token
+    // reader; #2743 keeps one reader, so the gate refuses the command as one
+    // it cannot read, before it adjudicates anything.
+    const cmd = `cat > /tmp/d.md <<'EOF'\n${FILING}\n`;
+    const r = await filingGate(cmd, { projectRoot: tmpdir() });
+    expect(r.refusal).toContain(UNREADABLE_COMMAND);
+    expect(r.rows, "refused before any clause was adjudicated").toEqual([]);
   });
 
   test("FG-44 CONTROL: an ordinary inline filing is untouched", () => {

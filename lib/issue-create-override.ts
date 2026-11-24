@@ -132,23 +132,12 @@ export function tokenize(cmd: string): string[] {
   return scanTokens(cmd).tokens;
 }
 
-/** A command substitution inside a double-quoted string. */
-interface QuotedSubstitution {
-  /** The index, in `tokens`, of the word the substitution is part of. */
-  token: number;
-  /** The command it runs. */
-  text: string;
-}
-
 /**
- * `tokenize`'s scan, which also records every `$(…)` and backtick
- * substitution inside a double-quoted string (#2722). The shell keeps such a
- * string as one word and still runs what it substitutes. `tokenClauses` reads
- * them, for a command the grammar rejects (#2727).
+ * `tokenize`'s scan. A `$(…)` or backtick substitution inside a double-quoted
+ * string stays part of its word, as the shell keeps it (#2722).
  */
-function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[] } {
+function scanTokens(cmd: string): { tokens: string[] } {
   const out: string[] = [];
-  const subs: QuotedSubstitution[] = [];
   let cur = "";
   let quote: '"' | "'" | null = null;
   let started = false;
@@ -183,7 +172,6 @@ function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[]
     }
     if (quote === '"' && c === "$" && cmd[i + 1] === "(") {
       const end = substitutionEnd(cmd, i + 2);
-      subs.push({ token: out.length, text: cmd.slice(i + 2, end) });
       cur += cmd.slice(i, end + 1);
       i = end;
       continue;
@@ -191,7 +179,6 @@ function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[]
     if (quote === '"' && c === "`") {
       let j = i + 1;
       while (j < cmd.length && cmd[j] !== "`") j += cmd[j] === "\\" ? 2 : 1;
-      subs.push({ token: out.length, text: cmd.slice(i + 1, Math.min(j, cmd.length)) });
       cur += cmd.slice(i, j + 1);
       i = j;
       continue;
@@ -221,10 +208,8 @@ function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[]
     started = true;
   }
   flush();
-  return { tokens: out, subs };
+  return { tokens: out };
 }
-
-const SEPARATORS = new Set(OPERATORS);
 
 /**
  * The commands a command line runs, one array of words per command, read with
@@ -237,13 +222,15 @@ const SEPARATORS = new Set(OPERATORS);
  * misread let a filing or a board write through. A quoted heredoc expands
  * nothing, and its body yields no command, as the shell runs none.
  *
- * **A command the grammar reports malformed is read twice.** The grammar can
- * be wrong about valid bash: `unbash` 6.0.5 reads `case` as a keyword in
- * `echo "$(printf case x)"; gh issue create`, reports the substitution
- * unterminated, and the filing after it becomes part of a word. So when the
- * parse carries errors, the hand-written token reading of the same text is
- * added (`tokenClauses`), which can only add commands, the direction that
- * refuses. Measured on 139,229 real commands: 97 parse with errors.
+ * **A command the grammar reports malformed is not read a second way.** The
+ * grammar can be wrong about valid bash: `unbash` 6.0.5 reads `case` as a
+ * keyword in `echo "$(printf case x)"; gh issue create`, reports the
+ * substitution unterminated, and the filing after it becomes part of a word.
+ * #2735 read such a command again with the hand-written token reader, and each
+ * of its review rounds found the next shape that reader misread. So each guard
+ * asks `unreadableFiling()` first, and refuses a malformed command that names
+ * `gh` as one it cannot read (#2743). Measured on 139,243 real commands: 97
+ * parse with errors.
  *
  * Two places stay outside the grammar, because the shell hands them on as
  * text: a heredoc or herestring given to an interpreter (`interpreterPrograms`,
@@ -264,9 +251,7 @@ const SEPARATORS = new Set(OPERATORS);
 export function clauses(cmd: string, depth = 0): string[][] {
   const out: string[][] = [];
   for (const text of [cmd, ...interpreterPrograms(cmd).map(p => p.program)]) {
-    const read = parsedCommands(text);
-    const commands = read.malformed ? [...read.commands, ...tokenClauses(text)] : read.commands;
-    for (const c of commands) {
+    for (const c of parsedCommands(text).commands) {
       out.push(c);
       if (depth >= 4) continue; // a wrapper chain this deep is not an accident
       for (const inner of commandArguments(c)) out.push(...clauses(inner, depth + 1));
@@ -314,11 +299,10 @@ function parsedCommands(text: string): { commands: string[][]; malformed: boolea
 }
 
 /**
- * Whether the grammar's reading of a text cannot be trusted alone: it reported
+ * Whether the grammar's reading of a text cannot be trusted: it reported
  * errors, or a heredoc's delimiter never arrived. Bash only warns about the
  * second, but a filing behind an unclosed delimiter must not become invisible
- * (FG-43, kept from #1302). `clauses()` and `filingDirectory()` both ask this,
- * so they agree about which commands get the second reading (#2735 review).
+ * (FG-43, kept from #1302), so it is unreadable too (#2743).
  */
 function malformed(script: SyntaxNode): boolean {
   let unclosed = false;
@@ -330,21 +314,51 @@ function malformed(script: SyntaxNode): boolean {
   return unclosed || ((script.errors as unknown[] | undefined)?.length ?? 0) > 0;
 }
 
+/** How every guard's refusal of a command it cannot read begins (#2743). */
+export const UNREADABLE_COMMAND = "Cannot read this command";
+
+/** A shell, whose `-c` argument is a command line the shell itself runs. */
+const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
+
 /**
- * The hand-written reading of `text`, for a command the grammar rejects: split
- * at the shell's operators by `scanTokens`, with each quoted substitution read
- * in turn, to the same depth of 4.
+ * Why no guard can read this command, or null when it can (#2743).
+ *
+ * A command line the shell runs is unreadable when the grammar reports it
+ * malformed (`malformed()`) and it names `gh`. That covers the command itself,
+ * a heredoc handed to a shell, and a shell's `-c` or `eval` argument, to the
+ * depth of 4 `clauses()` uses. A non-shell program (`python3 -c`, a heredoc
+ * handed to `node`) is not bash, so its failing to parse as bash says nothing.
+ * `gh` is looked for with quotes and backslashes taken out, and any ANSI-C
+ * `$'…'` counts, since one can spell it: this decides only which unreadable
+ * commands are refused, so it errs toward refusing.
+ *
+ * Every guard asks this before it reads the command, and so reads a command
+ * one way only. #2735 read a malformed command a second time with the
+ * hand-written token reader, and each of its review rounds found the next
+ * shape that reader misread.
  */
-function tokenClauses(text: string, depth = 0): string[][] {
-  const flat: string[][] = [[]];
-  const { tokens, subs } = scanTokens(text);
-  for (const t of tokens) {
-    if (SEPARATORS.has(t)) flat.push([]);
-    else flat[flat.length - 1].push(t);
+export function unreadableFiling(cmd: string, depth = 0): string | null {
+  const texts = [cmd, ...interpreterPrograms(cmd).filter(p => p.shell).map(p => p.program)];
+  for (const text of texts) {
+    const read = parsedCommands(text);
+    if (read.malformed && (/\bgh\b/.test(text.replace(/["'\\]/g, "")) || text.includes("$'"))) {
+      return (
+        `${UNREADABLE_COMMAND}: the bash grammar reports it malformed and it names gh, so no guard can tell ` +
+        "what it would run (#2743). Give each gh call a simple command of its own. Two known causes: the " +
+        'word case as an argument inside $( ), as in "$(printf case x)", and a heredoc whose closing ' +
+        "delimiter never arrives."
+      );
+    }
+    if (depth >= 4) continue;
+    for (const c of read.commands) {
+      if (!c.some(w => SHELLS.has(basename(w)) || basename(w) === "eval")) continue;
+      for (const inner of commandArguments(c)) {
+        const why = unreadableFiling(inner, depth + 1);
+        if (why !== null) return why;
+      }
+    }
   }
-  const out = flat.filter(c => c.length > 0);
-  if (depth < 4) for (const sub of subs) out.push(...tokenClauses(sub.text, depth + 1));
-  return out;
+  return null;
 }
 
 /**
@@ -415,13 +429,9 @@ function substitutionEnd(cmd: string, from: number): number {
  * The inner scope's directory is discarded and only a filing found inside it
  * is kept, because a wrapper's `cd` does not outlive the wrapper.
  *
- * **A command the grammar reports malformed is read twice here too**, as
- * `clauses()` reads it (#2735 review). There the second reading can find a
- * filing the grammar folded into a word, so it must also say where that
- * filing runs. It places only a filing the grammar did not find: a filing the
- * grammar found keeps the grammar's directory, because the token reading
- * mis-scopes what the grammar reads right, a case pattern's `)` among them
- * (review round 2).
+ * A command the grammar reports malformed, and that names `gh`, is refused by
+ * every guard before this runs (`unreadableFiling`, #2743). On one that names
+ * no `gh` there is no filing to place.
  *
  * ## Two documented limits, both asserted rather than assumed
  *
@@ -500,8 +510,7 @@ function scanForFiling(
     if (words[0] === "cd") scope.dir = cdTarget(words.slice(1), scope.dir);
   };
 
-  const script = parse(cmd) as unknown as SyntaxNode;
-  run(script, top);
+  run(parse(cmd) as unknown as SyntaxNode, top);
   if (depth < 4) {
     for (const p of interpreterPrograms(cmd)) {
       if (found !== null) break;
@@ -509,103 +518,7 @@ function scanForFiling(
       if (nested.found !== null) found = nested.found;
     }
   }
-  if (found === null && malformed(script)) {
-    const read = tokenScan(cmd, from, depth);
-    if (read.found !== null) return read;
-  }
   return { found, dir: top.dir };
-}
-
-/**
- * `scanForFiling`'s second reading, for a command the grammar reports
- * malformed: the hand-written token scan `filingDirectory` used before the
- * grammar, over the same tokens `tokenClauses` reads.
- *
- * `entered` is the scope stack. A backtick is a TOGGLE and not an opener:
- * backticks do not nest, so the second one pops the scope the first pushed.
- * Pushing on both was the first spelling of this, and it leaked a command
- * substitution's `cd` into everything after the closing backtick. An unquoted
- * `$(…)` needs nothing: `tokenize` emits `$` and `(` separately, so it pushes
- * and pops through the same stack. One inside double quotes is a single word
- * to `tokenize`, so `scanTokens` records it, and it is read in the directory
- * its word is read in (#2723 review).
- */
-function tokenScan(cmd: string, from: string, depth: number): { found: string | null; dir: string } {
-  let dir = from;
-  const entered: string[] = [];
-  let inBacktick = false;
-  let clause: string[] = [];
-  let found: string | null = null;
-
-  const settle = (): void => {
-    if (found !== null || clause.length === 0) return;
-    if (createsIssue(clause)) {
-      found = dir;
-      return;
-    }
-    // Before the `cd`, not after: a wrapper's argument runs in the directory
-    // the wrapper was invoked from, and the clause cannot be both.
-    if (depth < 4) {
-      for (const inner of commandArguments(clause)) {
-        const nested = scanForFiling(inner, dir, depth + 1);
-        if (nested.found !== null) {
-          found = nested.found;
-          return;
-        }
-      }
-    }
-    if (clause[0] === "cd") dir = cdTarget(clause.slice(1), dir);
-  };
-
-  const close = (): void => {
-    settle();
-    clause = [];
-    // An unbalanced closer is a malformed command, not a reason to pop an
-    // empty stack and lose the directory the filing actually ran in.
-    if (entered.length > 0) dir = entered.pop()!;
-  };
-
-  const { tokens, subs } = scanTokens(cmd);
-  for (const [k, t] of tokens.entries()) {
-    if (t === "`") {
-      if (inBacktick) close();
-      else {
-        settle();
-        clause = [];
-        entered.push(dir);
-      }
-      inBacktick = !inBacktick;
-      continue;
-    }
-    if (t === "(") {
-      settle();
-      clause = [];
-      entered.push(dir);
-      continue;
-    }
-    if (t === ")") {
-      close();
-      continue;
-    }
-    if (SEPARATORS.has(t)) {
-      settle();
-      clause = [];
-      continue;
-    }
-    clause.push(t);
-    if (found === null && depth < 4) {
-      for (const sub of subs) {
-        if (sub.token !== k) continue;
-        const nested = tokenScan(sub.text, dir, depth + 1);
-        if (nested.found !== null) {
-          found = nested.found;
-          break;
-        }
-      }
-    }
-  }
-  settle();
-  return { found, dir };
 }
 
 /** Where a `cd` with these arguments lands, or `dir` when it cannot be read. */
@@ -1049,6 +962,8 @@ export function labelValues(tokens: string[]): string[] {
  * second.
  */
 export function verifyPhaseRefusal(cmd: string): string | null {
+  const unreadable = unreadableFiling(cmd);
+  if (unreadable !== null) return `[VerifyPhaseLock] ${unreadable}`;
   const offending = clauses(cmd).filter(createsIssue);
   if (offending.length === 0) return null;
 

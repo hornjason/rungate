@@ -28,11 +28,13 @@ import { homedir, tmpdir } from "os";
 import { join } from "path";
 import {
   OVERRIDE_LABELS,
+  UNREADABLE_COMMAND,
   clauses,
   createsIssue,
   filingDirectory,
   labelValues,
   tokenize,
+  unreadableFiling,
   verifyPhaseRefusal,
 } from "../lib/issue-create-override";
 import { parse } from "unbash";
@@ -406,14 +408,18 @@ describe("#2723 review round 2", () => {
 describe("#2727: a filing the shell runs is read, whatever the quoting around it", () => {
   test("a word case as an argument does not hide a filing after the substitution", () => {
     // Round 2's case reading counted these, never closed the substitution, and
-    // swallowed the filing (round 3's high findings).
+    // swallowed the filing (round 3's high findings). The grammar misreads the
+    // argument `case` as a keyword and reports each malformed, so since #2743
+    // each is refused as unreadable rather than read a second way.
     for (const cmd of [
       `echo "$(printf case x)" ; gh issue create --title t`,
       `echo "$(echo case )" ; gh issue create --label bug`,
       `gh issue comment 2714 --body "$(grep case )" && gh issue create --label bug`,
       `gh issue comment 2714 --body "$(git log --grep=x case )" && gh issue create --label bug`,
     ]) {
-      expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+      expect(parse(cmd).errors?.length ?? 0, `the grammar reads ${cmd} right now; this row no longer reaches the refusal`)
+        .toBeGreaterThan(0);
+      expect(verifyPhaseRefusal(cmd), cmd).toContain(UNREADABLE_COMMAND);
     }
   });
 
@@ -440,27 +446,35 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
   });
 
-  // #2735 review: on a command the grammar reports malformed, the second
-  // reading finds the filing, so it must also say where the filing runs.
+  // #2743: one reader per command. A command the grammar reports malformed,
+  // and that names gh, is refused as unreadable. It used to be read a second
+  // time by the hand-written token reader, which misread a new shape in each
+  // review round of #2735.
   test.each([
-    [`cd /tmp/wt && echo "$(printf case x)"; gh issue create --title T --body-file body.md`, "/repo", "/tmp/wt"],
-    [`echo "$(printf case x)"; cd /wt/a && gh issue create --title t`, "/main", "/wt/a"],
-  ])("WITNESS: on a malformed parse, %s files from the directory it runs in", (cmd, from, dir) => {
-    expect(parse(cmd).errors?.length ?? 0, "the grammar reads this right now; the row no longer reaches the second reading")
-      .toBeGreaterThan(0);
-    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
-    expect(filingDirectory(cmd, from), cmd).toBe(dir);
+    [`echo "$(printf case x)"; gh issue create --title t`],
+    [`cd /tmp/wt && echo "$(printf case x)"; gh issue create --title T --body-file body.md`],
+    [`echo "$(printf case x)"; cd /wt/a && gh issue create --title t 2>&1 --label follow-up`],
+    [`bash -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    [`echo "$(printf case x)"; $'\\x67h' issue create --title t`],
+    [`cat > /tmp/d.md <<'EOF'\ngh issue create --title t\n`],
+  ])("WITNESS: %s is refused as unreadable", cmd => {
+    expect(unreadableFiling(cmd), cmd).toContain(UNREADABLE_COMMAND);
+    expect(verifyPhaseRefusal(cmd), cmd).toContain(UNREADABLE_COMMAND);
   });
 
-  test("CONTROL: on a malformed parse, a subshell's cd still does not outlive it", () => {
-    const cmd = `(cd /a && echo "$(printf case x)"); gh issue create --title t`;
-    expect(parse(cmd).errors?.length ?? 0).toBeGreaterThan(0);
-    expect(filingDirectory(cmd, "/main")).toBe("/main");
+  test.each([
+    // Malformed, but names no gh: nothing here can file, so it runs.
+    [`echo "$(printf case x)"; ls -la`],
+    [`cat > /tmp/d.md <<'EOF'\nhello\n`],
+    // Names gh, and the grammar reads it.
+    [`gh issue create --title t --label follow-up`],
+    [`echo "$(printf x)"; gh issue view 12`],
+  ])("CONTROL: %s is not unreadable", cmd => {
+    expect(unreadableFiling(cmd), cmd).toBeNull();
   });
 
-  // #2735 review round 2: the token reading only places a filing the grammar
-  // did not find. Here the grammar finds it, in /a, and the token reading takes
-  // the case pattern's `)` for the subshell's and leaks `cd /c` out of it.
+  // #2735 review round 2: here the grammar finds the filing, in /a, though the
+  // parse is malformed: the case pattern's `)` closes nothing it should not.
   test("WITNESS: on a malformed parse, a filing the grammar found keeps the grammar's directory", () => {
     const cmd = `cd /a; (case x in a) cd /c;; esac); gh issue create --title t; echo "$(printf case x)"`;
     expect(parse(cmd).errors?.length ?? 0, "the grammar reads this right now; the row no longer reaches the second reading")

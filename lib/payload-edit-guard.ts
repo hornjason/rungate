@@ -79,7 +79,7 @@ import { spawnSync } from "child_process";
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { basename, join } from "path";
 import { createGitHubClient, getIssue } from "./github";
-import { clauses } from "./issue-create-override";
+import { clauses, unreadableFiling } from "./issue-create-override";
 
 /** The `gh issue edit` flags whose write `scripts/hand-edits.ts` counts as a hand edit. */
 export const BOARD_WRITE_FLAGS: readonly string[] = [
@@ -189,12 +189,9 @@ const BARE_REDIRECT = /^\d*(?:>>?|<)$/;
 /** Every `gh issue edit` in the command that carries a board-write flag. */
 function boardEdits(command: string): BoardEdit[] {
   const edits: BoardEdit[] = [];
-  // `2>&1`, `>&file`, `>& file`, `<&3` and `&>` are redirections, not the `&`
-  // the token reading splits on (#2719 review rounds 3 and 5). The grammar
-  // reads them either way; the token reading is what `clauses()` adds for a
-  // command the grammar rejects (#2727).
-  const text = command.replace(/([<>])&(?=[ \t]*[^\s&;|])/g, "$1").replace(/&>/g, ">");
-  for (const w of clauses(text)) {
+  // `2>&1`-style redirections need no rewrite: the grammar does not split at
+  // their `&`, and since #2743 nothing reads the command another way.
+  for (const w of clauses(command)) {
     const at = w.findIndex((x, i) => x === "edit" && w[i - 1] === "issue" && basename(w[i - 2] ?? "") === "gh");
     if (at < 0) continue;
     const envRepo = w.slice(0, at - 2).map(x => /^GH_REPO=(.+)$/.exec(x)?.[1]).filter(Boolean).pop() ?? null;
@@ -270,6 +267,11 @@ export async function payloadEditRefusal(command: string, opts: PayloadEditOptio
   // so missed `g$'h'`, `e$"dit"`, `$'\x65dit'` and a backslash-newline inside
   // either word, all of which the grammar decodes (#2735 review). Reading
   // every command costs about 0.1 ms a parse.
+  //
+  // A command the grammar cannot read, that names gh, is refused rather than
+  // read a second way (#2743).
+  const unreadable = unreadableFiling(command);
+  if (unreadable !== null) return `${unreadable} (#2713: a speed bump; scripts/hand-edits.ts reads the outcome)`;
   const edits = boardEdits(command);
   if (edits.length === 0) return null;
   const why = "(#2713: a speed bump; scripts/hand-edits.ts reads the outcome)";
