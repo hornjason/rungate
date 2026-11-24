@@ -95,7 +95,7 @@ converted by a tool, not by hand.
    placement line will not touch the criterion's wording or its fingerprint
    once row 1 adds `placement` to `ANNOTATION_KEYS`; until then, no tool
    writes one.
-2. **The generated view is printed, not stored — Jason decides.** This
+2. **The generated view is printed, not stored — Jason decided, 2026-11-24.** This
    changes what he agreed to on 2026-11-24, which was a generated table in
    the spec. A stored table conflicts whether a person or a tool writes it
    (the fourth row above). `plan-spec <spec> --placement` prints each
