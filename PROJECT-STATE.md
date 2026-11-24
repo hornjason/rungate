@@ -2,11 +2,11 @@
 
 **Current phase: Engine — a spec becomes a readable board, with nothing hand-run (ADR-009) — IN PROGRESS**
 
-**Session 103 (2026-11-23)** — SC-2625, the engine's acceptance test, is ticked: the board job takes the hand-edit reading and a finished engine reads MET. ADR-025 was accepted and most of it shipped: Haiku 5.5 by default, the job's own token instead of the Claude GitHub App, a merge command for three-run rounds, and CRC-M18 retired. ship.js lost two more hand copies to the launch bundle, and an incomplete failed list no longer retires a refusal. Waiting on Jason: the merge of #2674.
+**Session 104 (2026-11-24)** — The bash write guard reads six more write shapes. The ship gate retires a refusal only on a check it listed as passed. Review depth is configurable per repo, and three reviewer runs merge into one round. An agent's board edit to a payload issue is refused. ship.js lost three more hand copies to the launch bundle, and wave 7 is split so the last one can move. Waiting on Jason: the ruling on #2726 and #2729.
 
-Suite: 25 PRs merged (#2640 to #2691); three releases, 0.8.43 to 0.8.45.
-Issues opened: #2642, #2645, #2647, #2648, #2649, #2650, #2651, #2655, #2657, #2659, #2661, #2663, #2664, #2666, #2667, #2669, #2672, #2676, #2678, #2680, #2682, #2684, #2685, #2688, #2690, #2692, #2693
-Issues closed: #1722, #2639, #2642, #2645, #2647, #2649, #2651, #2655, #2657, #2659, #2661, #2663, #2664, #2666, #2667, #2669, #2672, #2676, #2678, #2680, #2682, #2684, #2685, #2688, #2690
+Suite: 20 PRs merged (#2674, and #2695 to #2739); one release, 0.8.46.
+Issues opened: #2697, #2700, #2701, #2702, #2705, #2706, #2707, #2708, #2710, #2713, #2714, #2720, #2722, #2724, #2727, #2728, #2730, #2731, #2733, #2734, #2736, #2737, #2738
+Issues closed: #1407, #1425, #1655, #1885, #2648, #2650, #2692, #2693, #2697, #2700, #2701, #2702, #2707, #2708, #2710, #2713, #2714, #2720, #2722, #2730, #2736
 
 Read this before anything else. The suite is green under a CLEAN ENVIRONMENT, which is a stronger claim than the one this file made yesterday — run `bun scripts/test-clean-env.ts`, not `bun test`, before believing any gate. Plain `bun test` passes on this machine for reasons that have nothing to do with the code.
 
@@ -100,6 +100,16 @@ Suite: 25/25 SCs done.
 
 ---
 
+**Session 2026-11-24 session 104 (the bash write guard reads six more write shapes; a refusal retires only on a signed pass list; review depth is configurable; three more ship.js hand copies go to the launch bundle):**
+- MERGED: 20 PRs since session 103 (#2674, and #2695 to #2739), the last of them (#2739) on 2026-11-24. One release: 0.8.46 (#2703, closing #2700).
+- THE BASH WRITE GUARD READS SIX MORE SHAPES: the cp -a row is a real bypass, executed rather than described (#2696, closing #1425); a write call past a long argument (#2699, closing #1407); shutil.copy2, fs.writeFile and the other spellings it missed (#2704, closing #2701); a JavaScript body read with a parser as well as the mask (#2712, closing #2702); a protected name followed through JavaScript path calls, fallbacks and templates (#2718, closing #2714); and the mask binds a protected literal to the assignment holding it (#2721, closing #2720). #2726 (#2705), the scratch exemption's callee identity, stopped at review round 4 under rule 5 and waits on Jason's ruling.
+- A REFUSAL RETIRES ONLY ON A SIGNED PASS LIST: the ship gate retires a refusal only on a check the gate listed as passed (#2695, closing #2692, the producer fix session 103 named); a gate run removes its previous JUnit report before the suite runs (#2698, closing #2697); the decomposition refusal reads what Phase 1 kept after the cap (#2716, closing #2710).
+- THE AI REVIEW: three reviewer runs merged into one round (#2674, merged by Jason, closing #2648 and #1885); the consumer AI review guide (#2715, closing #2650); review depth is configurable per repo as Quick, Standard or Deep (#2725, closing #1655, CRC-B9); the generated Rules line follows dev.agentTestCmd while CI keeps the full suite (#2717, closing #2707).
+- THE BOARD'S HAND-EDIT GUARDS: hand-edits' third run opens just after the #2655 body edit (#2711, closing #2708); an agent's gh issue edit that writes a payload issue's board fields is refused (#2719, closing #2713); the shell tokenizer the guards share reads command substitutions inside double quotes (#2723, closing #2722).
+- SHIP.JS LOSES THREE MORE HAND COPIES (SC-2775, plan on #2290): ship.run.js carries lib/phase2-decomposition.ts (#2709, closing #2693) and lib/evidence-command-transport.ts (#2732, closing #2730); tests reach shellQuote through one helper (#2739, closing #2736). Wave 7 is split: #2737 moves the last five readers, #2734 moves shellQuote into the bundle, and #2738 then refuses any hand copy and completes SC-2775.
+- IN FLIGHT: #2735 (#2727: the filing guards read a command with a bash grammar, unbash 6.0.5; the primary checkout needs bun install after it lands); #2740 (#2733: a refused evidence command is recorded on the AC); #2737 and #2734 (wave 7).
+- OPEN, for Jason: the review-override ruling on #2726; #2729 (an ai-review.yml edit); #2605 and #2488 as before.
+
 **Session 2026-11-23 session 103 (the engine's acceptance test is ticked; ADR-025 accepted and mostly shipped; ship.js loses two more hand copies; refusal retirement stops trusting an incomplete failed list):**
 - MERGED: 25 PRs since session 102 (#2640 to #2691), the last of them (#2691) on 2026-11-23. Three releases: 0.8.43 (#2660), 0.8.44 (#2665) and 0.8.45 (#2673).
 - THE ENGINE'S ACCEPTANCE TEST IS TICKED: hand-edits' second run opens when the successor gap closed (#2640), the board job takes the hand-edit reading and SC-2625 is ticked (#2644, closing #1722), and a finished engine reads MET when no engine issue is open rather than 0 of 0 (#2646).
@@ -120,14 +130,4 @@ Suite: 25/25 SCs done.
 - SMALLER: the missing-environments case observes the environment check it is named after (#2617).
 - IN FLIGHT: #2640 starts a second hand-edits run for SC-2625 (#2639). The first run failed on one forced milestone edit, on #2463 on 2026-11-19, made because nothing then filed a criterion's successor. Jason approved the restart on #1722 on 2026-11-22. The second run opens at 2026-11-20T12:36:43Z, when that gap closed, and reads MET.
 - OPEN, for Jason: ADR-025's five criteria; #2605 (an eval's CI cost) and #2488 (needs an ADR).
-
-**Session 2026-11-21 session 101 (a closed criterion's successor files itself; consumer-reported scaffold fixes; review convergence work; releases 0.8.39 to 0.8.42):**
-- MERGED: 32 PRs from #2527 to #2588, the last of them (#2570) on 2026-11-21. Releases 0.8.39, 0.8.40, 0.8.41 and 0.8.42 are on npm.
-- A CLOSED CRITERION'S SUCCESSOR FILES ITSELF: rungate criterion-successor files a successor for each criterion a closed issue leaves owed by nobody (#2534), refusing when two open milestones read as one phase (#2537); criterion-label.yml runs it when an issue closes (#2540) and on a daily sweep (#2545, #2548, #2550), so closing a criterion's last issue no longer reds every PR for want of a hand-filed successor.
-- MERGES BY AUTOMATION (ADR-022) finished: a merge-triggered adr-accepted run closes the issues the merged pull requests declare (#2533, SC-2788), and rows added to an accepted ADR's Decomposition are placed on merge (#2582). The human-steps report says whether board.id is set and whether the token can write the board (#2529, SC-2793).
-- CONSUMER-REPORTED SCAFFOLD FIXES (#2564 to #2567, #2571, #2576), released in 0.8.42: the key-files rows come from one reading (#2574), docs-routing states no file count (#2573), the discovery brief names the rule files that hold its tables (#2575), brief templates ship no test canary (#2577), consumer-intake mirrors the Criteria column after triage (#2572), and the reader selection handles a template basename (#2578). rungate owned-jobs prints the jobs the scaffold owns (#2579); scaffold refuses an unreadable config by name before writing (#2553).
-- REVIEW CONVERGENCE: a class finding stays open until a reply states its population (#2570, CRC-N7); CRC-N3's population rate reads 29 of 45 (#2538); an over-budget diff is reviewed whole files at a time with the scope stated (#2585), and CRC-M18 is ticked from the live reading on #1932 (#2588); the self-inflicted ratio is measured, 14.0% (#2583); the generated review prompt asks for the root cause on a bug fix (#2543); rounds-to-pass labels run attempts and distinct rounds apart (#2551); CRC-B4's vote recording is recorded as built, not wired (#2554); first-pass completeness measured (#2563).
-- SMALLER: the work loop fences the test command exactly (#2527); stage F's retro case sets its own timeout (#2530).
-- IN FLIGHT: #2590 ticks CRC-N3 (#2544); #2589, a two-day grace in criteria-named for consumer-filed issues, is built and goes to Jason to merge because it changes what a board check counts; CRC-N4 is reworded by Jason's decision and waits on #2590 (#2552).
-- OPEN, for Jason: ADR-024 (#2569, issue #2568) needs his merge; #2488 and #2504 each still need an ADR.
 
