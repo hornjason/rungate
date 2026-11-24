@@ -27,11 +27,17 @@ export const WORKTREE_REPO_MODULE = "lib/worktree-repo.ts";
 export const WORKFLOW_SECURITY_MODULE = "lib/workflow-security.ts";
 
 /**
- * The module the AC-PAYLOAD-TRANSPORT region's `shellSingleQuote` comes from
+ * The module the evidence-command transport's `shellSingleQuote` comes from
  * (#2693, SC-2775 wave 6a). ship.js's PHASE2-DECOMPOSITION copy is gone; the
  * launch bundle carries the library's code in its place.
  */
 export const PHASE2_DECOMPOSITION_MODULE = "lib/phase2-decomposition.ts";
+
+/**
+ * The module ship.js's AC-PAYLOAD-TRANSPORT block copied until #2730 (SC-2775
+ * wave 6b). The block is gone; the launch bundle carries the library's code.
+ */
+export const EVIDENCE_TRANSPORT_MODULE = "lib/evidence-command-transport.ts";
 
 /** One module as ship.run.js bundles it; refused, naming the region, if the bundle no longer carries it. */
 function moduleBundle(module: string, region: string): string {
@@ -53,12 +59,21 @@ export function workflowSecurityBundle(): string {
 }
 
 /**
- * lib/phase2-decomposition.ts as ship.run.js bundles it, the code the
- * AC-PAYLOAD-TRANSPORT region's `shellSingleQuote` resolves to; refused if the
- * bundle no longer carries it.
+ * The evidence-command transport as ship.run.js runs it (#2730):
+ * lib/evidence-command-transport.ts's bundle, with lib/phase2-decomposition.ts,
+ * where its `shellSingleQuote` comes from, in front, in the launch bundle's
+ * order. Refused, naming the module, if the bundle no longer carries either.
  */
-export function phase2DecompositionBundle(): string {
-  return moduleBundle(PHASE2_DECOMPOSITION_MODULE, "AC-PAYLOAD-TRANSPORT");
+export function evidenceTransportBundle(): string {
+  const plan: Record<string, readonly string[]> = {};
+  for (const module of [PHASE2_DECOMPOSITION_MODULE, EVIDENCE_TRANSPORT_MODULE]) {
+    const names = LAUNCH_BUNDLE[module];
+    if (names === undefined) {
+      throw new Error(`LAUNCH_BUNDLE no longer carries ${module}, so the evidence-command transport cannot run`);
+    }
+    plan[module] = names;
+  }
+  return bundleLibCores(plan, path => readFileSync(join(ROOT, path), "utf-8")).text;
 }
 
 /**

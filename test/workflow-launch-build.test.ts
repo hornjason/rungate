@@ -402,6 +402,10 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
       "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals", "failureCheckName"],
       // #2693, SC-2775 wave 6a: ship.js's PHASE2-DECOMPOSITION copy.
       "lib/phase2-decomposition.ts": ["acsForGroup", "shellSingleQuote", "acListBlock", "phase2AcsCommand", "decompositionRefusal"],
+      // #2730, SC-2775 wave 6b: ship.js's AC-PAYLOAD-TRANSPORT copy.
+      "lib/evidence-command-transport.ts": [
+        "AC_PAYLOAD_ARGV_INDEX", "acPayloadRecords", "acPayloadJson", "acPayloadShellArgument", "acPayloadReadExpression", "recordEvidenceRewrite",
+      ],
     });
   });
 
@@ -427,6 +431,8 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
       "failureCheckName",
       // #2693: the phase-2 decomposition rules and the quoting they share.
       "acsForGroup", "shellSingleQuote", "acListBlock", "phase2AcsCommand", "decompositionRefusal",
+      // #2730: the evidence-command transport.
+      "AC_PAYLOAD_ARGV_INDEX", "acPayloadRecords", "acPayloadJson", "acPayloadShellArgument", "acPayloadReadExpression", "recordEvidenceRewrite",
     ]) {
       expect(bundle.defined).toContain(name);
       expect(() => buildWorkflowLaunch(`${source}\nfunction ${name}() { return null; }`, WORKFLOW_SCRIPT_CAP, bundle)).toThrow(
