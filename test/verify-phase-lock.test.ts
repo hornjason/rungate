@@ -497,6 +497,13 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     [`bash -o pipefail -c 'echo "$(printf case x)"; gh issue create --title t'`],
     [`bash -eo pipefail -c 'echo "$(printf case x)"; gh issue create --title t'`],
     [`bash --rcfile /tmp/rc -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    // #2746 round 6: no list of shell names. Main's token reader read these.
+    [`rbash -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    [`ksh93 -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    [`osh -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    // The cost of failing closed: a flag that is not a shell's, carrying text
+    // that is malformed bash and names gh, is refused too.
+    [`grep -c 'gh pr (' notes.md`],
     // An unclosed heredoc is the command's own shell-level fault, whatever the
     // heredoc feeds: bash would take the rest of the command as its body.
     [`python3 - <<'PY'\nprint("gh")\n`],
@@ -513,9 +520,8 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     [`python3 - <<'PY'\nimport subprocess\nsubprocess.run(["gh", "issue", "view", "1"])\nPY`],
     [`python3 -c 'import os; os.system("gh issue view 1")'`],
     [`/usr/bin/python3.12 -c 'import os; os.system("gh issue view 1")'`],
-    // Another program's -c is a flag, not a command line: a count, a byte limit.
-    [`grep -c 'gh pr (' notes.md`],
-    [`tail -c 'gh (' notes.md`],
+    // A -c argument that parses, whatever the program, is read and not refused.
+    [`tail -c 1024 notes.md`],
     // Names gh, and the grammar reads it.
     [`gh issue create --title t --label follow-up`],
     [`echo "$(printf x)"; gh issue view 12`],

@@ -338,19 +338,21 @@ function namesGh(text: string): boolean {
   return /\bgh\b/.test(joined);
 }
 
-/** Shells, whose `-c` argument is a command line the shell runs. */
-const SHELL_NAMES = new Set(["bash", "sh", "zsh", "dash", "ksh", "ash", "mksh", "yash", "fish", "tcsh", "csh", "busybox"]);
+/** Python, whose `-c` argument is Python, not a command line. */
+const PYTHON = /^(python|pypy)[\d.]*$/;
 
 /**
  * The command lines a clause hands a shell, for `unreadableFiling`: `eval`'s
- * arguments joined, and the word after a `-c` flag when a shell, or a program
- * held in a variable (`$SHELL`, `"$BASH"`), is named anywhere before the flag.
- * Anywhere, not the word just before it: a flag that takes a value sits
- * between them in `bash -o pipefail -c` and `bash --rcfile FILE -c`, and so do
- * a wrapper's own flags in `sudo -u ci bash -c` (#2746 review). Narrower than
- * `commandArguments`, which reads every `-c`: here `grep -c` and `tail -c` are
- * a count and a limit, and reading their argument as a command line would
- * refuse a grep for being malformed bash (#2746 review round 3).
+ * arguments joined, and the word after every `-c` flag unless a Python is named
+ * before it. The same reach as `commandArguments`, `clauses()`'s reader, so a
+ * `-c` command line the grammar misreads is refused, whatever the shell is
+ * called: `rbash`, `ksh93`, `osh`, `$SHELL`, or `bash -o pipefail -c`.
+ * Reviews of #2746 named the next shell or flag each round that a list of
+ * shell names was tried, and main's token reader read all of them.
+ *
+ * The cost is failing closed on a flag that is not a shell's: `grep -c 'gh ('`
+ * carries text that is malformed bash and names gh, and is refused. Measured on
+ * 139,619 real commands: 29 refused, 3 more than with a list of shell names.
  */
 function shellCommandLines(c: string[]): string[] {
   const out: string[] = [];
@@ -360,7 +362,7 @@ function shellCommandLines(c: string[]): string[] {
       break;
     }
     if (!COMMAND_FLAG.test(c[i]) || i + 1 >= c.length) continue;
-    if (c.slice(0, i).some(w => SHELL_NAMES.has(basename(w)) || w.startsWith("$"))) out.push(c[i + 1]);
+    if (!c.slice(0, i).some(w => PYTHON.test(basename(w)))) out.push(c[i + 1]);
   }
   return out;
 }
