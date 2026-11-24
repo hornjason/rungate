@@ -5267,6 +5267,13 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["a parenthesised attribute target across a line break", JS(`const fs = require('fs'); (fs.writeFileSync\n) = (a, b) => {}; fs.writeFileSync('${T}', '{}')`)],
     ["the module's attribute assigned after a line continuation", PYS(`import os, shutil\nshutil.copy \\\n= lambda a, b: os.replace(a, os.environ["RG"])\nshutil.copy("/tmp/rg2705/x", "${T}")`)],
     ["the module's attribute assigned by >>=", JS(`const fs = require('fs'); fs.writeFileSync >>= 0; fs.writeFileSync('${T}', '{}')`)],
+    // #2756 review round 3. Rule 5: the method changes rather than a fourth spelling
+    // joining a list. A module outside a short allowed list, or imported under an alias,
+    // ends the exemption, as does `constructor`.
+    ["code run from a string by require('vm')", JS(`const fs = require('fs'); require('vm').runInThisContext('globalThis.x = 1'); fs.writeFileSync('${T}', '{}')`)],
+    ["sys.modules reached through an alias", PY(`import sys as s, types as t, os\ns.modules['shutil'] = t.SimpleNamespace(copy=lambda a, b: os.replace(a, os.environ['RG']))\nimport shutil\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["fs reached through module.constructor", JS(`const f = module.constructor._load('fs'); f['writeFileSync'] = (p, d) => f.appendFileSync(process.env.RG, d); require('fs').writeFileSync('${T}', '{}')`)],
+    ["a module outside the allowed imports beside shutil.copy", PY(`import shutil, importlib\nimportlib.reload(shutil)\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
     // Refused on main too, by another arm; pinned so a change to that arm shows here.
     ["a Python conditional choosing the destination", PY(`import os\nopen(os.environ['P'] if os.environ.get('C') else '${T}', 'w')`)],
     // Second security review of #2756: an alias of require('fs'), and a dunder reached by string.
@@ -5310,6 +5317,12 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["open on the line after a comment", PY(`# write the state\nopen('${T}', 'w').write('{}')`)],
     ["open inside a with statement", PY(`with open('${T}', 'w') as f: f.write('{}')`)],
     ["an annotated name beside shutil.copy", PY(`import shutil\nn: int = 1\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    // #2756 review round 3: a colon after an attribute is not an annotation unless the
+    // attribute starts the statement, and a keyword argument assigns nothing.
+    ["an if on an attribute beside shutil.copy", PY(`import shutil, sys\nif sys.flags.dev_mode:\n    pass\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["a keyword argument beside an attribute argument", PY(`import shutil, sys\nshutil.copy(sys.argv[1], '${T}', follow_symlinks=True)`)],
+    ["path required beside fs", JS(`const fs = require('fs'); const path = require('path'); fs.writeFileSync('${T}', path.basename('a/b'))`)],
+    ["several allowed modules imported beside shutil", PY(`import os, json, sys, shutil\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
   ])("CONTROL: %s onto a scratch path stays exempt", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });

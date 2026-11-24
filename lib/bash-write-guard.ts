@@ -3847,6 +3847,13 @@ function calleeBefore(body: string, openIndex: number): string {
  *   (`&&=`, `??=`), an annotation, a loop target, `as`, or a destructuring
  *   pattern: `shutil.copy = f`, and as surely `os.rename = f`, which
  *   `shutil.move` calls inside the module.
+ * - **Every import is on a short list** (`PY_MODULES`, `JS_MODULES`), and
+ *   no Python import binds an alias. A module outside it can bind anything
+ *   when it loads or when it is called: `vm` runs code from a string,
+ *   `types` and `importlib` reach the module table, and `import sys as s`
+ *   spells `sys.modules` as `s.modules`. Review round 3 of #2756 found the
+ *   third of these after two rounds of naming such mechanisms one at a time,
+ *   so the list is of what is allowed, not of what is not (AGENTS.md rule 5).
  * - **The name is shown.** A dotted callee needs a module receiver that names
  *   the function (`MODULE_WRITES`), imported as itself and named nowhere
  *   else but as a receiver. A bare one may be imported only from the module
@@ -3887,9 +3894,13 @@ function moduleWrites(mod: string): readonly string[] | null {
 const FS_WRITES: readonly string[] = ['writeFileSync', 'appendFileSync', 'createWriteStream', 'copyFileSync', 'renameSync', 'unlinkSync', 'rmSync', 'truncateSync'];
 const FS_SPECIFIERS = new Set(['fs', 'node:fs']);
 
+/** The modules a body may import, Python and JavaScript, and still be read. */
+const PY_MODULES = new Set(['os', 'os.path', 'shutil', 'json', 'io', 'sys', 'pathlib', 'time', 'datetime', 're', 'tempfile', 'glob', 'hashlib', 'textwrap', 'math', 'string', 'random', 'collections', 'itertools']);
+const JS_MODULES = new Set([...FS_SPECIFIERS, 'path', 'node:path']);
+
 /** Names that bind, or reach a binding, without the code spelling the name bound. */
 const DYNAMIC_BINDING =
-  /\b(?:globals|vars|locals|setattr|delattr|getattr|exec|eval|builtins|importlib|globalThis|global|Reflect|defineProperty|defineProperties|setPrototypeOf|prototype|Function)\b|\b__\w+__\b|\bObject\s*\.\s*assign\b|\bwith\s*\(|\bimport\s*\*(?!\s*as\b)|\bsys\s*\.\s*(?:modules|path|meta_path|path_hooks)\b/;
+  /\b(?:globals|vars|locals|setattr|delattr|getattr|exec|eval|builtins|importlib|globalThis|global|Reflect|defineProperty|defineProperties|setPrototypeOf|prototype|constructor|Function)\b|(?<!\bfrom\s+[\w.]+\s+)\bimport\s*\(|\b__\w+__\b|\bObject\s*\.\s*assign\b|\bwith\s*\(|\bimport\s*\*(?!\s*as\b)|\bsys\s*\.\s*(?:modules|path|meta_path|path_hooks)\b/;
 
 /** Keywords a call may follow and still be a call rather than a definition. */
 const CALL_KEYWORDS = new Set(['return', 'await', 'yield', 'not', 'and', 'or', 'in', 'is', 'if', 'elif', 'else', 'while', 'assert', 'with', 'throw', 'typeof', 'void', 'case', 'do', 'print']);
@@ -3912,6 +3923,7 @@ function calleeShownIn(body: string, openIndex: number, view: CodeView): boolean
   if (view.literals.some(([open, close]) => /__\w+__/.test(body.slice(open + 1, close)))) return false;
   if (DYNAMIC_BINDING.test(code)) return false;
   if (assignsAttribute(code)) return false;
+  if (!importsAllowed(code, body, view)) return false;
 
   // The code view blanks a literal's quotes with its contents, so a literal
   // is found by stepping over whitespace in the body itself.
@@ -3959,12 +3971,12 @@ function calleeShownIn(body: string, openIndex: number, view: CodeView): boolean
     for (const at of occurrences(code, mod)) if (!moduleNameShown(code, at, mod, requireFs, literalAt)) return false;
   }
 
-  if (receiver === 'require') return FS_WRITES.includes(name) && requireTrusted(code);
+  if (receiver === 'require') return FS_WRITES.includes(name) && requireTrusted(code, literalAt);
   if (receiver !== 'none') {
     const writes = receiver === 'fs' ? FS_WRITES : moduleWrites(receiver);
     if (!writes || !writes.includes(name)) return false;
     if (!occurrences(code, receiver).some(at => importsModule(code, at, receiver, requireFs, literalAt))) return false;
-    return receiver !== 'fs' || requireTrusted(code);
+    return receiver !== 'fs' || requireTrusted(code, literalAt);
   }
 
   // A bare name: imported, if at all, from the module that defines it, and
@@ -3974,7 +3986,7 @@ function calleeShownIn(body: string, openIndex: number, view: CodeView): boolean
     if (isCall(code, at, name.length)) continue;
     if (importedFrom(code, at, name, requireFs, literalAt) === null) return false;
   }
-  return requireTrusted(code);
+  return requireTrusted(code, literalAt);
 }
 
 /** The index of the last code character at or before `i`, stepping over whitespace and line continuations. */
@@ -4025,7 +4037,7 @@ function isCall(code: string, at: number, len: number): boolean {
 
 /** Does any assignment, loop or `as` target an attribute? `os.environ['X'] = …` assigns an item. */
 function assignsAttribute(code: string): boolean {
-  const TARGET_ATTR = /\.\s*[A-Za-z_$][\w$]*\s*(?=$|[,\]):])/;
+  const TARGET_ATTR = /\.\s*[A-Za-z_$][\w$]*\s*(?=$|[,\])])/;
   for (let k = 0; k < code.length; k++) {
     if (code[k] !== '=' || '=!'.includes(code[k - 1] ?? '') || '=>'.includes(code[k + 1] ?? '')) continue;
     // `<=` and `>=` compare; `<<=` and `>>=` assign.
@@ -4050,10 +4062,12 @@ function assignsAttribute(code: string): boolean {
       else if (depth === 0 && c === '\n' && code[start - 1] !== '\\') break;
     }
     const target = code.slice(start + 1, end + 1);
-    if (TARGET_ATTR.test(target.trimEnd() + '\n'.slice(1))) return true;
+    if (TARGET_ATTR.test(target.trimEnd())) return true;
+    // An annotated assignment: an attribute chain where a statement can start,
+    // then `:`. `if x.y:` is not one (review round 3 of #2756).
+    if (/(?:^|:)\s*[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)+\s*:(?![:=])/.test(target)) return true;
     if (/\.\s*[A-Za-z_$][\w$]*\s*$/.test(target)) return true;
   }
-  if (/\.\s*[A-Za-z_$][\w$]*\s*:(?![:=])/.test(code)) return true; // an annotated attribute
   // A destructuring pattern: `({ w: fs.writeFileSync } = …)`, `[a.b] = …`.
   // The statement walk above stops at its `}`, so the pattern is read here.
   for (let k = 0; k < code.length; k++) {
@@ -4077,12 +4091,51 @@ type RequireFs = (at: number) => number;
 type LiteralAt = (at: number) => { value: string; close: number } | null;
 
 /**
+ * Is every module the body imports or requires on the allowed list, with no
+ * Python alias? A literal the code view blanked is read from the body.
+ */
+function importsAllowed(code: string, body: string, view: CodeView): boolean {
+  const literalAfter = (at: number): string | null => {
+    while (at < body.length && WHITESPACE.has(body[at])) at++;
+    const lit = view.literals.find(([open]) => open === at);
+    return lit ? body.slice(lit[0] + 1, lit[1]) : null;
+  };
+  // JavaScript: `require(<lit>)`, `import … from <lit>`, and a bare `import <lit>`.
+  for (const m of code.matchAll(/(?<![\w$.])require\s*\(/g)) {
+    const v = literalAfter((m.index ?? 0) + m[0].length);
+    if (v === null || !JS_MODULES.has(v)) return false;
+  }
+  for (const m of code.matchAll(/\bfrom\b(?=\s*$|\s*;|\s*\n|\s+)/g)) {
+    const v = literalAfter((m.index ?? 0) + m[0].length);
+    if (v !== null && !JS_MODULES.has(v)) return false;
+  }
+  for (const m of code.matchAll(/(?:^|[;\n])\s*import(?=\s)/g)) {
+    const v = literalAfter((m.index ?? 0) + m[0].length);
+    if (v !== null && !JS_MODULES.has(v)) return false;
+  }
+  // Python: `import a, b.c` and `from a import …`, one statement per line or `;`.
+  for (const stmt of code.split(/[\n;]/)) {
+    const imp = /^\s*import\s+([A-Za-z_][\w., \t]*)$/.exec(stmt);
+    // `import fs from 'fs'` is JavaScript, read above.
+    if (imp && !/\bfrom\b/.test(imp[1])) {
+      for (const name of imp[1].split(',')) {
+        const n = name.trim();
+        if (/\s/.test(n) || !PY_MODULES.has(n)) return false; // `x as y` carries a space
+      }
+    }
+    const from = /^\s*from\s+([A-Za-z_][\w.]*)\s+import\b(.*)$/.exec(stmt);
+    if (from && (!PY_MODULES.has(from[1]) || /\bas\b/.test(from[2]))) return false;
+  }
+  return true;
+}
+
+/**
  * Does every `require` the code spells call it, and use what it returns only
  * as a receiver or a binding's value? A `require` of the body's own is no
  * module loader, and `Object.assign(require('fs'), …)` changes the module
  * every later `require('fs')` returns (security review of #2756).
  */
-function requireTrusted(code: string): boolean {
+function requireTrusted(code: string, literalAt: LiteralAt): boolean {
   return occurrences(code, 'require').every(at => {
     if (code[prevCode(code, at - 1)] === '.' || !isCall(code, at, 'require'.length)) return false;
     let depth = 0;
@@ -4095,9 +4148,13 @@ function requireTrusted(code: string): boolean {
     while (next < code.length && (code[next] === ' ' || code[next] === '\t' || code[next] === '\r')) next++;
     if (code[next] === '.') return true;
     if (next < code.length && !';\n'.includes(code[next])) return false;
-    // Bound, it must be bound to `fs`, which is checked as a module name
+    // Bound, `fs` must be bound to `fs`, which is checked as a module name
     // everywhere, or destructured into functions. Any other name is a second
     // spelling of the module nothing follows (second security review of #2756).
+    // Another allowed module (`path`) hands out no write function, so it may
+    // be bound to any name.
+    const required = literalAt(nextCode(code, at + 'require'.length) + 1);
+    if (required !== null && !FS_SPECIFIERS.has(required.value)) return true;
     const before = code.slice(0, at);
     return /\b(?:const|let|var)\s+fs\s*=\s*$/.test(before) || /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*$/.test(before) || /(?:^|[;\n])\s*$/.test(before);
   });
