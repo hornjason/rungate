@@ -5261,6 +5261,12 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["the module's attribute assigned by &&=", JS(`const fs = require('fs'); fs.writeFileSync &&= (a, b) => {}; fs.writeFileSync('${T}', '{}')`)],
     ["the module's attribute assigned by ??=", JS(`const fs = require('fs'); fs.writeFileSync ??= (a, b) => {}; fs.writeFileSync('${T}', '{}')`)],
     ["the module's attribute as a destructuring target", JS(`const fs = require('fs'); ({ w: fs.writeFileSync } = { w: (a, b) => {} }); fs.writeFileSync('${T}', '{}')`)],
+    // Third security review of #2756: the target and its `=` on different lines.
+    ["the module's attribute assigned across a line break", JS(`const fs = require('fs'); fs.writeFileSync\n= (a, b) => {}; fs.writeFileSync('${T}', '{}')`)],
+    ["the module's attribute assigned by &&= across a line break", JS(`const fs = require('fs'); fs.writeFileSync\n&&= (a, b) => {}; fs.writeFileSync('${T}', '{}')`)],
+    ["a parenthesised attribute target across a line break", JS(`const fs = require('fs'); (fs.writeFileSync\n) = (a, b) => {}; fs.writeFileSync('${T}', '{}')`)],
+    ["the module's attribute assigned after a line continuation", PYS(`import os, shutil\nshutil.copy \\\n= lambda a, b: os.replace(a, os.environ["RG"])\nshutil.copy("/tmp/rg2705/x", "${T}")`)],
+    ["the module's attribute assigned by >>=", JS(`const fs = require('fs'); fs.writeFileSync >>= 0; fs.writeFileSync('${T}', '{}')`)],
     // Refused on main too, by another arm; pinned so a change to that arm shows here.
     ["a Python conditional choosing the destination", PY(`import os\nopen(os.environ['P'] if os.environ.get('C') else '${T}', 'w')`)],
     // Second security review of #2756: an alias of require('fs'), and a dunder reached by string.

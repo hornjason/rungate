@@ -4027,12 +4027,29 @@ function isCall(code: string, at: number, len: number): boolean {
 function assignsAttribute(code: string): boolean {
   const TARGET_ATTR = /\.\s*[A-Za-z_$][\w$]*\s*(?=$|[,\]):])/;
   for (let k = 0; k < code.length; k++) {
-    if (code[k] !== '=' || '=!<>'.includes(code[k - 1] ?? '') || '=>'.includes(code[k + 1] ?? '')) continue;
-    if (code[k - 1] === ':' ) continue; // a walrus binds a name, never an attribute
-    let start = k - 1;
-    while (start >= 0 && !'\n;{}'.includes(code[start])) start--;
-    // An augmented or logical operator sits between the target and `=`.
-    const target = code.slice(start + 1, k).replace(/(?:\*\*|\/\/|<<|>>>|>>|&&|\|\||\?\?|[-+*/%&|^@])$/, '');
+    if (code[k] !== '=' || '=!'.includes(code[k - 1] ?? '') || '=>'.includes(code[k + 1] ?? '')) continue;
+    // `<=` and `>=` compare; `<<=` and `>>=` assign.
+    if ((code[k - 1] === '<' || code[k - 1] === '>') && code[k - 2] !== code[k - 1]) continue;
+    if (code[k - 1] === ':') continue; // a walrus binds a name, never an attribute
+    // An augmented or logical operator sits between the target and `=`, and
+    // the target may end a line or more above it: `fs.writeFileSync\n= f` and
+    // Python's `shutil.copy \\\n= f` (third security review of #2756).
+    const op = /(?:\*\*|\/\/|<<|>>>|>>|&&|\|\||\?\?|[-+*/%&|^@])$/.exec(code.slice(Math.max(0, k - 3), k))?.[0].length ?? 0;
+    const end = prevCode(code, k - op - 1);
+    // Back to the statement's start: a newline ends it only outside brackets
+    // and when no continuation joins it, so `(fs.writeFileSync\n) = f` is read whole.
+    let start = end;
+    let depth = 0;
+    for (; start >= 0; start--) {
+      const c = code[start];
+      if (c === ')' || c === ']') depth++;
+      else if (c === '(' || c === '[') {
+        if (depth === 0) break;
+        depth--;
+      } else if (depth === 0 && (c === ';' || c === '{' || c === '}')) break;
+      else if (depth === 0 && c === '\n' && code[start - 1] !== '\\') break;
+    }
+    const target = code.slice(start + 1, end + 1);
     if (TARGET_ATTR.test(target.trimEnd() + '\n'.slice(1))) return true;
     if (/\.\s*[A-Za-z_$][\w$]*\s*$/.test(target)) return true;
   }
