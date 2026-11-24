@@ -15,13 +15,13 @@
  * `evals/scaffold-workspace.sh` is #2605's work.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 const ROOT = join(import.meta.dir, "..");
 const REAL_GIT = Bun.which("git") ?? "git";
-const SCAFFOLDS = ["evals/aditi-visual-review/scaffold.sh"];
+const SCAFFOLDS = ["evals/aditi-visual-review/scaffold.sh", "evals/discovery-finds-spec/scaffold.sh"];
 
 const scratch: string[] = [];
 afterAll(() => {
@@ -153,7 +153,7 @@ for (const path of SCAFFOLDS) {
       const r = scaffold(path, cwd, planted ? { ...row.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, REAL_GIT: REAL_GIT } : row.env);
       if (row.writes) {
         expect(r.code, r.err).toBe(0);
-        expect(existsSync(join(cwd, ".claude", "rungate", "config.json")), "the fixture was not written").toBe(true);
+        expect(readdirSync(cwd).filter((e) => e !== ".git").length, "the fixture was not written").toBeGreaterThan(0);
       } else {
         expect(r.code, "the scaffold did not refuse").toBe(1);
         expect(r.err).toContain("scaffold.sh: refusing");
