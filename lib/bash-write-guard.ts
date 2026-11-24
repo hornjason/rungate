@@ -3862,14 +3862,14 @@ function calleeShown(body: string, openIndex: number, callee: string, spans: [nu
   const imports: Array<[number, number]> = [];
   if (module !== undefined) {
     const forms = [
+      // The names stop at a quote, so an import spelled inside a string
+      // covers only that string, whose text is never read (#2726 review).
       new RegExp(`from\\s+${module}\\s+import\\s+\\(?([^\\n;)'"#]*)`, 'g'),
       new RegExp(`(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*require\\(\\s*(['"])(?:node:)?${module}\\2\\s*\\)`, 'g'),
       new RegExp(`import\\s*\\{([^}]*)\\}\\s*from\\s*(['"])(?:node:)?${module}\\2`, 'g'),
     ];
     for (const form of forms) {
       for (const m of body.matchAll(form)) {
-        // An import spelled inside a string is not one (#2726 review).
-        if (inLiteral(m.index ?? 0, spans)) continue;
         // Listed plainly, not renamed: `copy as c` and `{ writeFileSync: w }`
         // bind another name, which is not a call to this one.
         const names = m[1].split(',').map(x => x.trim());
@@ -3928,7 +3928,6 @@ function receiverShown(body: string, name: string, spans: [number, number][]): b
   ];
   for (const form of forms) {
     for (const m of body.matchAll(form)) {
-      if (inLiteral(m.index ?? 0, spans)) continue;
       const names = m[1].split(',').map(x => x.trim());
       if (names.some(x => x === name || x.startsWith(`${name}.`))) imports.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
     }
