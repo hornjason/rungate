@@ -64,7 +64,9 @@ several rows per phase. The one writer is `withPhase` in
 `lib/spec-evidence.ts` reads a closed set of indented `key: value` lines
 beneath a criterion (`ANNOTATION_KEYS`: `needs`, `proved-by`, `fingerprint`
 and the waiver keys). They stay out of the hashed text, so adding one moves
-no criterion's `fingerprint`.
+no criterion's `fingerprint`. `placement` is not in that set today, so a
+placement line written now would be hashed as criterion text and move the
+fingerprint. Row 1 adds it, and SC-2806 asserts the fingerprint does not move.
 
 ## Decision
 
@@ -89,7 +91,9 @@ converted by a tool, not by hand.
    MEASURED. This ADR does not change the table's behaviour. The annotation
    reader keeps only the last value of a repeated key, so the placement
    reader counts the lines itself rather than trusting that map. Adding a
-   placement line does not touch the criterion's wording or its fingerprint.
+   placement line will not touch the criterion's wording or its fingerprint
+   once row 1 adds `placement` to `ANNOTATION_KEYS`; until then, no tool
+   writes one.
 2. **The generated view is printed, not stored — Jason decides.** This
    changes what he agreed to on 2026-11-24, which was a generated table in
    the spec. A stored table conflicts whether a person or a tool writes it
