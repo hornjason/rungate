@@ -17,13 +17,21 @@ if [ -n "$listing" ]; then
   exit 1
 fi
 
-# Claude Code needs a git repository. The harness's directory is already inside
-# one it created with no commits, rooted one level up, and that is used as it
-# is. Outside any repository, one is made here. Any other answer from git, such
-# as a repository it will not open, is refused rather than read as "none".
+# Claude Code needs a git repository. The harness runs the case in a directory
+# inside a repository it has just created, with no commits and no refs at all,
+# and that repository is used as it is. Any repository with a ref, a branch or
+# a tag on any line of history, is somebody's checkout, and is refused, so no
+# fixture file lands in a real working tree. Outside any repository, one is
+# made here. git's answer is read in the C locale, so a translated git is not
+# misread, and any other answer is refused rather than read as "none".
 # Nothing here writes git config or commits, so no repository's identity is
 # touched (#84).
-if ! out="$(git rev-parse --git-dir 2>&1)"; then
+if out="$(LC_ALL=C git rev-parse --git-dir 2>&1)"; then
+  if ! refs="$(git for-each-ref --count=1 2>&1)" || [ -n "$refs" ] || git rev-parse --verify -q HEAD >/dev/null; then
+    echo "scaffold.sh: refusing to write inside a git repository that has history: $(git rev-parse --show-toplevel 2>&1)" >&2
+    exit 1
+  fi
+else
   case "$out" in
     *"not a git repository"*) git init -q ;;
     *) echo "scaffold.sh: git could not read this directory: $out" >&2; exit 1 ;;
