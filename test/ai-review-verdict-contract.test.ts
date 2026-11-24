@@ -122,7 +122,10 @@ import {
   AI_REVIEW_VERDICT_KEY,
   AI_REVIEW_WORKFLOW_FILE,
   buildReviewRunScript,
+  reviewDepthConfig,
+  type ReviewDepthDecision,
 } from "../lib/scaffold/ai-review-step";
+import { loadRungateConfig } from "../lib/config-loader";
 
 const ROOT = join(import.meta.dir, "..");
 const COMMITTED = join(ROOT, ".github", "workflows", AI_REVIEW_WORKFLOW_FILE);
@@ -768,8 +771,11 @@ describe("AC-5 (#675): the VERDICT STEP's refusal is routed through the exit con
     const dir = mkdtempSync(join(tmpdir(), "ai-review-675-mutant-"));
     const path = join(dir, "ai-review-step.ts");
     writeFileSync(path, mutated);
-    const mod = (await import(path)) as { buildReviewRunScript: (v: string) => string };
-    mutantScript = mod.buildReviewRunScript(shippedVersion());
+    const mod = (await import(path)) as {
+      buildReviewRunScript: (v: string, d: ReviewDepthDecision) => string;
+      reviewDepthConfig: (ci: unknown) => ReviewDepthDecision;
+    };
+    mutantScript = mod.buildReviewRunScript(shippedVersion(), mod.reviewDepthConfig(loadRungateConfig(ROOT).ci));
     rmSync(dir, { recursive: true, force: true });
   });
 
@@ -778,8 +784,10 @@ describe("AC-5 (#675): the VERDICT STEP's refusal is routed through the exit con
     // module, at the version the artefact names, must reproduce the committed
     // step exactly — then zeroing the constant mutates that same artefact.
     const committed = committedRunScript();
+    // At this repository's own depth: the messages name it (#2728), and the
+    // committed step was generated from this config, not from a default.
     expect(
-      buildReviewRunScript(shippedVersion()),
+      buildReviewRunScript(shippedVersion(), reviewDepthConfig(loadRungateConfig(ROOT).ci)),
       "the committed verdict step is not what the generator emits at the version it names, " +
         "so the mutant below is a mutation of something else",
     ).toBe(committed);
