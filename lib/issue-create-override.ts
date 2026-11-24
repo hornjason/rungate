@@ -85,7 +85,7 @@ import { interpreterPrograms } from "./bash-write-guard";
  * the executable ones back, and that binding returns herestrings in the same
  * list. So the scope widened as a consequence of fixing a false refusal, and
  * narrowing it again would mean writing a second decider that disagrees with
- * `lib/bash-write-guard.ts`. See `heredocView` below.
+ * `lib/bash-write-guard.ts`. See `clauses` below.
  */
 
 /** Labels that permit an issue to be filed mid-VERIFY, and what each means. */
@@ -129,16 +129,24 @@ const OPERATORS = ["&&", "||", ";;", ";", "|", "&", "(", ")", "`", "\n"];
  * flags nobody wrote.
  */
 export function tokenize(cmd: string): string[] {
-  return scanTokens(cmd);
+  return scanTokens(cmd).tokens;
+}
+
+/** A command substitution inside a double-quoted string. */
+interface QuotedSubstitution {
+  /** The command it runs. */
+  text: string;
 }
 
 /**
- * `tokenize`'s scan. A `$(…)` or backtick substitution inside a double-quoted
- * string stays part of its word, as the shell keeps it. Which commands such a
- * substitution runs is `clauses()`'s question, answered by the grammar (#2727).
+ * `tokenize`'s scan, which also records every `$(…)` and backtick
+ * substitution inside a double-quoted string (#2722). The shell keeps such a
+ * string as one word and still runs what it substitutes. `tokenClauses` reads
+ * them, for a command the grammar rejects (#2727).
  */
-function scanTokens(cmd: string): string[] {
+function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[] } {
   const out: string[] = [];
+  const subs: QuotedSubstitution[] = [];
   let cur = "";
   let quote: '"' | "'" | null = null;
   let started = false;
@@ -173,6 +181,7 @@ function scanTokens(cmd: string): string[] {
     }
     if (quote === '"' && c === "$" && cmd[i + 1] === "(") {
       const end = substitutionEnd(cmd, i + 2);
+      subs.push({ text: cmd.slice(i + 2, end) });
       cur += cmd.slice(i, end + 1);
       i = end;
       continue;
@@ -180,6 +189,7 @@ function scanTokens(cmd: string): string[] {
     if (quote === '"' && c === "`") {
       let j = i + 1;
       while (j < cmd.length && cmd[j] !== "`") j += cmd[j] === "\\" ? 2 : 1;
+      subs.push({ text: cmd.slice(i + 1, Math.min(j, cmd.length)) });
       cur += cmd.slice(i, j + 1);
       i = j;
       continue;
@@ -209,7 +219,7 @@ function scanTokens(cmd: string): string[] {
     started = true;
   }
   flush();
-  return out;
+  return { tokens: out, subs };
 }
 
 const SEPARATORS = new Set(OPERATORS);
@@ -224,6 +234,14 @@ const SEPARATORS = new Set(OPERATORS);
  * replaced misread each of those (#2719, #2723 review rounds), and each
  * misread let a filing or a board write through. A quoted heredoc expands
  * nothing, and its body yields no command, as the shell runs none.
+ *
+ * **A command the grammar reports malformed is read twice.** The grammar can
+ * be wrong about valid bash: `unbash` 6.0.5 reads `case` as a keyword in
+ * `echo "$(printf case x)"; gh issue create`, reports the substitution
+ * unterminated, and the filing after it becomes part of a word. So when the
+ * parse carries errors, the hand-written token reading of the same text is
+ * added (`tokenClauses`), which can only add commands, the direction that
+ * refuses. Measured on 139,229 real commands: 97 parse with errors.
  *
  * Two places stay outside the grammar, because the shell hands them on as
  * text: a heredoc or herestring given to an interpreter (`interpreterPrograms`,
@@ -244,7 +262,9 @@ const SEPARATORS = new Set(OPERATORS);
 export function clauses(cmd: string, depth = 0): string[][] {
   const out: string[][] = [];
   for (const text of [cmd, ...interpreterPrograms(cmd).map(p => p.program)]) {
-    for (const c of parsedCommands(text)) {
+    const read = parsedCommands(text);
+    const commands = read.malformed ? [...read.commands, ...tokenClauses(text)] : read.commands;
+    for (const c of commands) {
       out.push(c);
       if (depth >= 4) continue; // a wrapper chain this deep is not an accident
       for (const inner of commandArguments(c)) out.push(...clauses(inner, depth + 1));
@@ -276,17 +296,42 @@ function commandWords(node: SyntaxNode): string[] {
   return words;
 }
 
-/** Every command `text` runs, in source order, each as its words. */
-function parsedCommands(text: string): string[][] {
-  const out: string[][] = [];
+/**
+ * Every command `text` runs, in source order, each as its words, and whether
+ * the grammar reported the text malformed. A heredoc whose delimiter never
+ * arrives counts as malformed too: bash only warns, but a filing behind an
+ * unclosed delimiter must not become invisible (FG-43, kept from #1302).
+ */
+function parsedCommands(text: string): { commands: string[][]; malformed: boolean } {
+  const commands: string[][] = [];
+  let unclosed = false;
   const walk = (node: SyntaxNode): void => {
     if (node.type === "Command") {
       const words = commandWords(node);
-      if (words.length > 0) out.push(words);
+      if (words.length > 0) commands.push(words);
     }
+    if (node.type === "HereDoc" && node.closing === undefined) unclosed = true;
     forEachChild(node as never, walk as never);
   };
-  walk(parse(text) as unknown as SyntaxNode);
+  const script = parse(text);
+  walk(script as unknown as SyntaxNode);
+  return { commands, malformed: unclosed || (script.errors?.length ?? 0) > 0 };
+}
+
+/**
+ * The hand-written reading of `text`, for a command the grammar rejects: split
+ * at the shell's operators by `scanTokens`, with each quoted substitution read
+ * in turn, to the same depth of 4.
+ */
+function tokenClauses(text: string, depth = 0): string[][] {
+  const flat: string[][] = [[]];
+  const { tokens, subs } = scanTokens(text);
+  for (const t of tokens) {
+    if (SEPARATORS.has(t)) flat.push([]);
+    else flat[flat.length - 1].push(t);
+  }
+  const out = flat.filter(c => c.length > 0);
+  if (depth < 4) for (const sub of subs) out.push(...tokenClauses(sub.text, depth + 1));
   return out;
 }
 

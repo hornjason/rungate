@@ -28,14 +28,12 @@
  * claiming an issue stays allowed.
  *
  * The command is read by `clauses()` from `lib/issue-create-override.ts`,
- * the shell tokenizer the filing guard already uses (#2719 review round 2).
- * Quotes, backslash escapes, line continuations, comments, heredocs and
- * `bash -c` are its job, not a second reader's. ANSI-C quoting is the form it
- * does not read: `gh $'issue' edit` tokenizes as `$issue`. That is the shared
- * tokenizer's to fix, for the filing guard too, and has its own issue. A
- * short flag may carry its value attached (`-bTEXT`, `-mTITLE`,
- * `-Rowner/name`), as gh's flag parser allows, and a redirection is not an
- * argument.
+ * the reading the filing guard already uses (#2719 review round 2), which is a
+ * bash grammar since #2727. Quotes, ANSI-C quoting, backslash escapes, line
+ * continuations, comments, substitutions however nested, `case` branches,
+ * heredocs and `bash -c` are its job, not a second reader's. A short flag may
+ * carry its value attached (`-bTEXT`, `-mTITLE`, `-Rowner/name`), as gh's flag
+ * parser allows, and a redirection is not an argument.
  *
  * ## Which issues
  *
@@ -192,7 +190,9 @@ const BARE_REDIRECT = /^\d*(?:>>?|<)$/;
 function boardEdits(command: string): BoardEdit[] {
   const edits: BoardEdit[] = [];
   // `2>&1`, `>&file`, `>& file`, `<&3` and `&>` are redirections, not the `&`
-  // the tokenizer splits on (#2719 review rounds 3 and 5).
+  // the token reading splits on (#2719 review rounds 3 and 5). The grammar
+  // reads them either way; the token reading is what `clauses()` adds for a
+  // command the grammar rejects (#2727).
   const text = command.replace(/([<>])&(?=[ \t]*[^\s&;|])/g, "$1").replace(/&>/g, ">");
   for (const w of clauses(text)) {
     const at = w.findIndex((x, i) => x === "edit" && w[i - 1] === "issue" && basename(w[i - 2] ?? "") === "gh");
@@ -267,7 +267,7 @@ export interface PayloadEditOptions {
 export async function payloadEditRefusal(command: string, opts: PayloadEditOptions = {}): Promise<string | null> {
   // A cheap pre-check, over the text with its quotes and backslashes taken
   // out: `gh "issue" edit` and `gh iss\\ue edit` are the same command to the
-  // shell, and the tokenizer below reads them so (#2719 review round 3).
+  // shell, and `clauses()` below reads them so (#2719 review round 3).
   const plain = command.replace(/["'\\]/g, "");
   if (!/\bgh\b/.test(plain) || !/\bedit\b/.test(plain)) return null;
   const edits = boardEdits(command);
