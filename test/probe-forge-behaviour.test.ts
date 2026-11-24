@@ -29,6 +29,7 @@ import {
   MERGED_FIXTURE,
   type Observations,
   type Ran,
+  BESIDE_LINES,
   REFUSE_EXIT,
   remoteNamesRepo,
   SLEEP_MS,
@@ -334,10 +335,11 @@ describe("#1910: citationViolations — the tree and the inventory agree", () =>
     expect(citationViolations(FORGE_BEHAVIOURS, tree)).toEqual([]);
   });
 
-  const row = { id: "a-behaviour", assumes: "x", citedBy: ["scripts/a.ts"] };
+  const row = { id: "a-behaviour", assumes: "x", citedBy: [{ path: "scripts/a.ts", beside: "relies()" }] };
+  const cited = (lines: string[]) => lines.join("\n");
 
   test("a file citing an id the inventory does not list is named", () => {
-    const v = citationViolations([row], { "scripts/a.ts": mark("a-behaviour"), "lib/b.ts": mark("another-one") });
+    const v = citationViolations([row], { "scripts/a.ts": cited([mark("a-behaviour"), "relies()"]), "lib/b.ts": mark("another-one") });
     expect(v).toEqual(["lib/b.ts: cites `another-one`, which the inventory does not list"]);
   });
 
@@ -345,12 +347,29 @@ describe("#1910: citationViolations — the tree and the inventory agree", () =>
     expect(citationViolations([row], { "scripts/a.ts": "// nothing here" })).toEqual(["a-behaviour: scripts/a.ts carries no marker for it"]);
   });
 
+  // #2750 review: a marker binds to the line it cites, so one that outlives
+  // that line, or drifts away from it, is red.
+  test("a marker whose cited line is gone is named", () => {
+    expect(citationViolations([row], { "scripts/a.ts": cited([mark("a-behaviour"), "other()"]) })).toEqual([
+      "a-behaviour: scripts/a.ts has no line containing `relies()`, the line its marker cites",
+    ]);
+  });
+
+  test("a marker more than BESIDE_LINES from its cited line is named, and one at the limit is not", () => {
+    const far = cited([mark("a-behaviour"), ...Array(BESIDE_LINES).fill("x"), "relies()"]);
+    const near = cited([mark("a-behaviour"), ...Array(BESIDE_LINES - 1).fill("x"), "relies()"]);
+    expect(citationViolations([row], { "scripts/a.ts": far })).toEqual([
+      `a-behaviour: scripts/a.ts's marker is not within ${BESIDE_LINES} lines of \`relies()\``,
+    ]);
+    expect(citationViolations([row], { "scripts/a.ts": near })).toEqual([]);
+  });
+
   test("a row naming a file that was not read is named, not skipped", () => {
     expect(citationViolations([row], {})).toEqual(["a-behaviour: names scripts/a.ts, which was not read"]);
   });
 
   test("a marker in a file its row does not name is named", () => {
-    const v = citationViolations([row], { "scripts/a.ts": mark("a-behaviour"), "lib/c.ts": mark("a-behaviour") });
+    const v = citationViolations([row], { "scripts/a.ts": cited([mark("a-behaviour"), "relies()"]), "lib/c.ts": mark("a-behaviour") });
     expect(v).toEqual(["lib/c.ts: cites `a-behaviour`, whose row does not name this file"]);
   });
 });

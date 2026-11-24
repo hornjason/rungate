@@ -33,9 +33,10 @@
  * so is a row whose named file does not carry its marker. A new dependency is
  * added by writing the marker and the row together.
  *
- * What it checks is that the file carries the marker, not where. A marker left
- * behind after the line it stood beside is deleted is not caught here; the
- * change that deletes the line is where the marker goes too.
+ * Each citation also names the text of the line that relies on the
+ * behaviour, and the marker must stand within `BESIDE_LINES` of it. Delete or
+ * rewrite that line and the marker left behind is red, so a citation cannot
+ * outlive the code it describes (#2750 review).
  *
  * A row with no probe says why in `unprobedBecause`, reads `UNMEASURED` every
  * run, and is listed by the suite. Two rows need a throwaway pull request to
@@ -59,13 +60,25 @@ export const REFUSE_EXIT = 1;
 
 export type ForgeReading = "CONFIRMED" | "CHANGED" | "UNMEASURED";
 
+export interface Citation {
+  path: string;
+  /** Text found on the line that relies on the behaviour. */
+  beside: string;
+}
+
+/** How far, in lines, a marker may stand from the line it cites. */
+export const BESIDE_LINES = 3;
+
 export interface ForgeBehaviour {
   /** Kebab-case, and what the marker in each citing file names. */
   id: string;
   /** What the tools assume, in one sentence. */
   assumes: string;
-  /** Repository-relative files carrying this row's marker, exactly. */
-  citedBy: readonly string[];
+  /**
+   * The files carrying this row's marker, exactly, each with the text of the
+   * line that relies on the behaviour. The marker must stand beside it.
+   */
+  citedBy: readonly Citation[];
   /** Why there is no probe yet. Absent when one exists. */
   unprobedBecause?: string;
 }
@@ -89,41 +102,41 @@ export const FORGE_BEHAVIOURS: readonly ForgeBehaviour[] = [
     assumes:
       "`Bun.spawnSync` honours a `timeout` of 2**31 - 1 ms, and kills the child within milliseconds at 2**31, " +
       "so `MAX_TIMEOUT_MS` is the largest bound measured to behave.",
-    citedBy: ["scripts/verify-merge-ref.ts"],
+    citedBy: [{ path: "scripts/verify-merge-ref.ts", beside: "export const MAX_TIMEOUT_MS = " }],
   },
   {
     id: "ls-remote-absent-ref-exits-zero",
     assumes:
       "`git ls-remote <remote> refs/heads/<absent>` exits 0 with no output, so a branch that is gone is told " +
       "apart from a remote that was not read.",
-    citedBy: ["scripts/verify-merge-ref.ts"],
+    citedBy: [{ path: "scripts/verify-merge-ref.ts", beside: "remoteRead?: boolean;" }],
   },
   {
     id: "ls-remote-unreadable-exits-nonzero",
     assumes:
       "`git ls-remote` against a remote it cannot read exits non-zero (128 measured), so a failed read never " +
       "arrives as an empty answer.",
-    citedBy: ["scripts/verify-merge-ref.ts"],
+    citedBy: [{ path: "scripts/verify-merge-ref.ts", beside: "remoteRead?: boolean;" }],
   },
   {
     id: "head-ref-oid-frozen-at-merge",
     assumes:
       "a merged pull request's `headRefOid` stays at its merge-time head when its branch moves on, so a push " +
       "after the merge is visible as a difference.",
-    citedBy: ["scripts/verify-merge-ref.ts"],
+    citedBy: [{ path: "scripts/verify-merge-ref.ts", beside: "if (remoteHead && remoteHead !== prHead) {" }],
   },
   {
     id: "match-head-commit-checked-at-arm-time",
     assumes:
       "`gh pr merge --auto --match-head-commit` compares the pin when auto-merge is armed, not when the merge " +
       "fires, so it does not refuse a push that arrives after arming.",
-    citedBy: ["scripts/verify-merge-ref.ts"],
+    citedBy: [{ path: "scripts/verify-merge-ref.ts", beside: "push arriving after firing has no merge left to refuse." }],
     unprobedBecause: "reading it needs a throwaway pull request armed and then pushed to (#2749)",
   },
   {
     id: "dirty-pull-request-runs-no-checks",
     assumes: "a `pull_request` run checks out the merge ref, so a conflicted pull request runs no checks at all.",
-    citedBy: ["reference/board-mechanics-worked-instances.md"],
+    citedBy: [{ path: "reference/board-mechanics-worked-instances.md", beside: "Rebase first, then read the checks." }],
     unprobedBecause: "reading it needs a throwaway pull request that conflicts with main (#2749)",
   },
 ];
@@ -311,17 +324,27 @@ export function citationViolations(inventory: readonly ForgeBehaviour[], files: 
   const out: string[] = [];
   const known = new Map(inventory.map((b) => [b.id, b]));
   for (const b of inventory) {
-    for (const path of b.citedBy) {
+    for (const { path, beside } of b.citedBy) {
       const text = files[path];
-      if (text === undefined) out.push(`${b.id}: names ${path}, which was not read`);
-      else if (![...text.matchAll(MARKER)].some((m) => m[1] === b.id)) out.push(`${b.id}: ${path} carries no marker for it`);
+      if (text === undefined) {
+        out.push(`${b.id}: names ${path}, which was not read`);
+        continue;
+      }
+      const lines = text.split("\n");
+      const markerLines = lines.flatMap((l, i) => ([...l.matchAll(MARKER)].some((m) => m[1] === b.id) ? [i] : []));
+      const besideLines = lines.flatMap((l, i) => (l.includes(beside) ? [i] : []));
+      if (markerLines.length === 0) out.push(`${b.id}: ${path} carries no marker for it`);
+      else if (besideLines.length === 0) out.push(`${b.id}: ${path} has no line containing \`${beside}\`, the line its marker cites`);
+      else if (!markerLines.some((m) => besideLines.some((l) => Math.abs(m - l) <= BESIDE_LINES))) {
+        out.push(`${b.id}: ${path}'s marker is not within ${BESIDE_LINES} lines of \`${beside}\``);
+      }
     }
   }
   for (const [path, text] of Object.entries(files)) {
     for (const m of text.matchAll(MARKER)) {
       const row = known.get(m[1]);
       if (!row) out.push(`${path}: cites \`${m[1]}\`, which the inventory does not list`);
-      else if (!row.citedBy.includes(path)) out.push(`${path}: cites \`${m[1]}\`, whose row does not name this file`);
+      else if (!row.citedBy.some((c) => c.path === path)) out.push(`${path}: cites \`${m[1]}\`, whose row does not name this file`);
     }
   }
   return out;
@@ -405,7 +428,7 @@ export function main(argv: string[]): number {
     if (r.reading !== "CONFIRMED") {
       allConfirmed = false;
       console.log(`  assumed: ${row.assumes}`);
-      console.log(`  relied on by: ${row.citedBy.join(", ")}`);
+      console.log(`  relied on by: ${row.citedBy.map((c) => c.path).join(", ")}`);
     }
   }
   return allConfirmed ? 0 : REFUSE_EXIT;
