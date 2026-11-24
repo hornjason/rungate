@@ -44,7 +44,10 @@ export const EvidenceRewriteSchema = z.object({
   /** The site that made the change, named so a reader can go and read it. */
   by: z.string(),
   from: z.string(),
-  to: z.string(),
+  /** null when the change removed the command: discovery's screen refused it (#2733). */
+  to: z.string().nullable(),
+  /** Why the command was removed. */
+  reason: z.string().optional(),
 });
 
 export const EvidenceMethodSchema = z.object({

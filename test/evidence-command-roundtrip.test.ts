@@ -56,7 +56,8 @@ import {
 import { autoPopulateACs } from "../gates/gate-executor";
 import { prevalidateEvidence } from "../lib/evidence-prevalidator";
 import { EvidenceMethodSchema } from "../gates/schema";
-import { evidenceTransportBundle } from "./helpers/ship-block";
+import { structuralCut } from "../lib/source-slice";
+import { evidenceTransportBundle, workflowSecurityBundle } from "./helpers/ship-block";
 
 const REPO = join(import.meta.dir, "..");
 const SHIP = join(REPO, "workflows", "ship.js");
@@ -477,12 +478,14 @@ describe("#614 SC-2055: rewrite provenance — both forms, at every rewriting si
     // The fourth, the pre-validator, is executed in its own case below.
     const sites = [...shipSource.matchAll(/recordEvidenceRewrite\(ac\.evidenceMethod, '([^']+)'/g)]
       .map(m => m[1]);
+    // discovery-path-normalize twice: once on the accepted path, and once on
+    // the rejected path before the screen records its refusal (#2733).
     expect(sites.sort(), "a ship.js rewrite site assigns the command without recording the authored form")
-      .toEqual(["discovery-path-normalize", "evidence-type-ratio"]);
+      .toEqual(["discovery-evidence-screen", "discovery-path-normalize", "discovery-path-normalize", "evidence-type-ratio"]);
 
-    // And nothing assigns the command behind the recorder's back.
-    const bare = [...shipSource.matchAll(/ac\.evidenceMethod\.command\s*=/g)];
-    expect(bare.map(m => m[0]), "a ship.js site still overwrites the command directly").toEqual([]);
+    // And nothing assigns or deletes the command behind the recorder's back.
+    const bare = [...shipSource.matchAll(/ac\.evidenceMethod\.command\s*=|delete\s+ac\.evidenceMethod\.command\b/g)];
+    expect(bare.map(m => m[0]), "a ship.js site still overwrites or deletes the command directly").toEqual([]);
 
     const gateSource = readFileSync(join(REPO, "gates", "gate-executor.ts"), "utf-8");
     expect(gateSource).toContain('recordEvidenceRewrite(ac.evidenceMethod, "normalize-git-refs"');
@@ -503,5 +506,84 @@ describe("#614 SC-2055: rewrite provenance — both forms, at every rewriting si
     expect(results[0].originalCommand).toBe("bun test test/canary.test.ts | grep -c pass");
     expect(results[0].fixedCommand).toBeTruthy();
     expect(results[0].fixedCommand).not.toBe(results[0].originalCommand);
+  });
+});
+
+/**
+ * #2733: discovery's screen downgrades an evidence command
+ * `validateEvidenceCommand` rejects to MANUAL. It used to delete the command
+ * too, and nothing recorded what the agent wrote, so the persisted AC read as
+ * an ordinary manual check. The screen now records the authored form and the
+ * reason through `recordEvidenceRewrite`, the function that records a rewrite.
+ */
+describe("#2733: a rejected evidence command is recorded on the AC, not deleted without a trace", () => {
+  /**
+   * ship.js's own normalisation block, run over one AC with the launch
+   * bundle's `validateEvidenceCommand` and `recordEvidenceRewrite`: what
+   * ship.run.js runs, not a copy of it.
+   */
+  function screen(ac: Record<string, any>, projectRoot = "/proj"): string[] {
+    const block = structuralCut(shipSource, "if (ac.evidenceMethod?.command) {", { balanced: "{" });
+    const logs: string[] = [];
+    new Function("ac", "PROJECT_ROOT", "log", `${workflowSecurityBundle()}\n${evidenceTransportBundle()}\n${block}`)(
+      ac, projectRoot, (m: string) => logs.push(m),
+    );
+    return logs;
+  }
+
+  /** The AC as `writeACs` receives it: through the payload the setup step persists, read back. */
+  function persisted(ac: Record<string, any>): Record<string, any> {
+    return EvidenceMethodSchema.parse(JSON.parse(acPayloadJson([ac]))[0].evidenceMethod);
+  }
+
+  test("#2733: the persisted AC carries the authored form and the reason", () => {
+    const ac: Record<string, any> = { id: "AC-1", evidenceMethod: { type: "COMMAND", command: "rm -rf tmp && ls" } };
+    const logs = screen(ac);
+    expect(logs.join("\n")).toContain("REJECTED evidence command for AC-1");
+    const em = persisted(ac);
+    expect(em.type).toBe("MANUAL");
+    expect(em.command, "a refused command must not stay runnable").toBeUndefined();
+    expect(em.authoredCommand).toBe("rm -rf tmp && ls");
+    expect(em.rewrites).toEqual([
+      { by: "discovery-evidence-screen", from: "rm -rf tmp && ls", to: null, reason: "Dangerous pattern: rm\\s+-rf" },
+    ]);
+  });
+
+  test("#2733: a command the normaliser changed first records both steps, and the screen names what it read", () => {
+    const ac: Record<string, any> = { id: "AC-2", evidenceMethod: { type: "COMMAND", command: "cd /proj && rm -rf /proj/tmp" } };
+    screen(ac);
+    const em = persisted(ac);
+    expect(em.authoredCommand).toBe("cd /proj && rm -rf /proj/tmp");
+    expect(em.rewrites).toEqual([
+      { by: "discovery-path-normalize", from: "cd /proj && rm -rf /proj/tmp", to: "rm -rf tmp" },
+      { by: "discovery-evidence-screen", from: "rm -rf tmp", to: null, reason: "Dangerous pattern: rm\\s+-rf" },
+    ]);
+  });
+
+  test("#2733: CONTROL: an accepted command is recorded only where the normaliser changed it", () => {
+    const kept: Record<string, any> = { id: "AC-3", evidenceMethod: { type: "COMMAND", command: "grep -c x lib/a.ts" } };
+    screen(kept);
+    expect(persisted(kept)).toEqual({ type: "COMMAND", command: "grep -c x lib/a.ts" });
+
+    const moved: Record<string, any> = { id: "AC-4", evidenceMethod: { type: "COMMAND", command: "grep -c x /proj/lib/a.ts" } };
+    screen(moved);
+    expect(persisted(moved).rewrites).toEqual([
+      { by: "discovery-path-normalize", from: "grep -c x /proj/lib/a.ts", to: "grep -c x lib/a.ts" },
+    ]);
+  });
+
+  test("#2733: recordEvidenceRewrite records a removal: no command left, the authored form kept, the reason given", () => {
+    const em: Record<string, any> = { type: "COMMAND", command: "a" };
+    expect(recordEvidenceRewrite(em, "b-site", "b")).toBe(true);
+    expect(recordEvidenceRewrite(em, "screen", null, "refused")).toBe(true);
+    expect("command" in em).toBe(false);
+    expect(em.authoredCommand).toBe("a");
+    expect(em.rewrites).toEqual([
+      { by: "b-site", from: "a", to: "b" },
+      { by: "screen", from: "b", to: null, reason: "refused" },
+    ]);
+    // Nothing left to remove: a second removal records nothing.
+    expect(recordEvidenceRewrite(em, "screen", null, "refused")).toBe(false);
+    expect(em.rewrites).toHaveLength(2);
   });
 });

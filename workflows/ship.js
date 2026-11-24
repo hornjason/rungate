@@ -2597,7 +2597,12 @@ Project root: ${PROJECT_ROOT}
       if (!verdict.safe) {
         log(`REJECTED evidence command for ${ac.id}: ${verdict.reason} — downgraded to MANUAL`)
         ac.evidenceMethod.type = 'MANUAL'
-        delete ac.evidenceMethod.command
+        // On the record, not deleted without a trace (#2733): the authored
+        // form and the reason it was refused, through the function that
+        // records a rewrite. The normaliser's change is recorded first, so the
+        // screen's entry names the command it actually read.
+        recordEvidenceRewrite(ac.evidenceMethod, 'discovery-path-normalize', cmd)
+        recordEvidenceRewrite(ac.evidenceMethod, 'discovery-evidence-screen', null, verdict.reason)
       } else if (recordEvidenceRewrite(ac.evidenceMethod, 'discovery-path-normalize', cmd)) {
         // Both forms, not just the new one (#614). A reader of a broken
         // evidence command could not tell a repair from a corruption, which
