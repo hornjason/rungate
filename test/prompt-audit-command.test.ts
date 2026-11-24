@@ -108,6 +108,12 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     }
   });
 
+  // #2779: an example path in a rendered rule is a real file, so rungate's own
+  // audit comes back clean on rungate, where `lib/scaffold/` exists.
+  test("rungate's own tree has no harness-owned dangling-path finding", () => {
+    expect(promptAudit(ROOT).findings.filter(f => f.lint === "dangling-path" && f.owner === "harness").map(f => `${f.file}: ${f.message}`)).toEqual([]);
+  });
+
   test("a finding belongs to whoever wrote the line: each preserved section on both sides of its boundary", () => {
     const artifact = "Read the files in ${SOURCE_DIRS} first.";
     const owners = (root: string) => of(promptAudit(root), "template-artifact");
