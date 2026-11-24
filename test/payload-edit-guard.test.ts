@@ -28,6 +28,27 @@ const lookup = (issue: string, repo: string | null): string => {
 const decide = (command: string) => payloadEditRefusal(command, { prefix: "Convergence", milestoneOf: lookup });
 const VALUELESS = new Set(["--remove-milestone"]);
 
+/**
+ * #2727: the guard reads a command with a bash grammar, so a board write the
+ * shell runs is refused however it is quoted: inside a case statement in a
+ * quoted substitution, a nested quoted substitution, an unquoted heredoc's
+ * substitution, or ANSI-C quoting.
+ */
+describe("#2727: a board write the shell runs is read, whatever the quoting around it", () => {
+  test.each([
+    [`echo "$(case x in x) gh issue edit 2655 --add-label x;; esac)"`],
+    [`gh issue comment 2714 --body "$(echo "$(echo ")")"; gh issue edit 2655 --add-label x)"`],
+    [`gh issue comment 2714 --body-file - <<EOF\n$(gh issue edit 2655 --add-label x)\nEOF`],
+    [`gh $'issue' edit 2655 --add-label x`],
+  ])("WITNESS: %s is refused", async cmd => {
+    expect(await decide(cmd), cmd).not.toBeNull();
+  });
+
+  test("CONTROL: a quoted heredoc expands nothing, so nothing is written", async () => {
+    expect(await decide(`cat <<'EOF'\n$(gh issue edit 2655 --add-label x)\nEOF`)).toBeNull();
+  });
+});
+
 describe("#2713: a board write to a payload issue is refused", () => {
   test("the prefix is the payload spec's board.prefix, found through the engine spec's governs line", () => {
     expect(payloadPrefix(ROOT)).toBe("Convergence");

@@ -397,14 +397,12 @@ describe("#2723 review round 2", () => {
 
 /**
  * #2723 review rounds 2 to 5 read `case` statements inside a quoted
- * substitution, and each round found the next miss in that reading: a word
- * `case` as an argument, `esac` positions, a branch printing a quote, a cost
- * that grew with the fourth power of the count, `case` straight after a `)`,
- * and a substitution only a second reading reached. Rule 5: the reading was
- * taken out. A pattern's `)` closes the substitution as any `)` does, and how
- * this file reads a command at all is the follow-up issue's.
+ * substitution with the hand-written tokenizer, and each round found the next
+ * miss in that reading. Rule 5 took the reading out and left the shapes as a
+ * CONCESSION. #2727 reads the command with a bash grammar instead, so the
+ * shell's own structure decides where a substitution ends.
  */
-describe("#2723 rule 5: case statements in a quoted substitution are not read", () => {
+describe("#2727: a filing the shell runs is read, whatever the quoting around it", () => {
   test("a word case as an argument does not hide a filing after the substitution", () => {
     // Round 2's case reading counted these, never closed the substitution, and
     // swallowed the filing (round 3's high findings).
@@ -418,16 +416,27 @@ describe("#2723 rule 5: case statements in a quoted substitution are not read", 
     }
   });
 
-  test("CONCESSION: a filing a case statement hides is not read, as on main", () => {
-    // The shapes rounds 2 to 5 found, pinned so the redesign turns them red.
-    for (const cmd of [
-      `echo "$(case x in x) gh issue create --title t;; esac)"`,
-      `echo "$(case x in x) echo '"';; esac)"; gh issue create --title t`,
-      `echo "$(case a in a)case b in b) true;; esac;; c) gh issue create --title t;; esac)"`,
-      `echo "$(case x in x) echo '"' ;; esac)" "$(gh issue create --label bug)"`,
-    ]) {
-      expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
-    }
+  test.each([
+    // Was the CONCESSION: the four case-statement shapes rounds 2 to 5 found.
+    [`echo "$(case x in x) gh issue create --title t;; esac)"`],
+    [`echo "$(case x in x) echo '"';; esac)"; gh issue create --title t`],
+    [`echo "$(case a in a)case b in b) true;; esac;; c) gh issue create --title t;; esac)"`],
+    [`echo "$(case x in x) echo '"' ;; esac)" "$(gh issue create --label bug)"`],
+    // The other three shapes #2727 names.
+    [`gh issue comment 2714 --body "$(echo "$(echo ")")"; gh issue create --title t)"`],
+    [`gh issue comment 1 --body-file - <<EOF\n$(gh issue create --title t)\nEOF`],
+    [`gh $'issue' create --title t`],
+  ])("WITNESS: %s files an issue", cmd => {
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+  });
+
+  test.each([
+    // A quoted heredoc expands nothing; a string argument is data.
+    [`cat <<'EOF'\n$(gh issue create --title t)\nEOF`],
+    [`echo 'gh issue create --title t'`],
+    [`echo "gh issue create --title t"`],
+  ])("CONTROL: %s files nothing", cmd => {
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
   });
 });
 
