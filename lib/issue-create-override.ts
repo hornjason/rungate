@@ -418,8 +418,10 @@ function substitutionEnd(cmd: string, from: number): number {
  * **A command the grammar reports malformed is read twice here too**, as
  * `clauses()` reads it (#2735 review). There the second reading can find a
  * filing the grammar folded into a word, so it must also say where that
- * filing runs: on a malformed parse, the token reading's directory is taken
- * when it finds a filing, and the grammar's otherwise.
+ * filing runs. It places only a filing the grammar did not find: a filing the
+ * grammar found keeps the grammar's directory, because the token reading
+ * mis-scopes what the grammar reads right, a case pattern's `)` among them
+ * (review round 2).
  *
  * ## Two documented limits, both asserted rather than assumed
  *
@@ -429,9 +431,11 @@ function substitutionEnd(cmd: string, from: number): number {
  * that can disagree (`.claude/rules/checks-must-be-able-to-fail.md`, the
  * fourth shape).
  *
- * **A `cd` this cannot resolve leaves the directory alone.** `cd -` is the
- * only such spelling — it needs `OLDPWD`, which is the shell's state and not
- * the command's text. A bare `cd` IS resolvable and goes to `homedir()`.
+ * **A `cd` this cannot resolve leaves the directory alone.** `cd -` needs
+ * `OLDPWD`, and a target the shell expands at run time needs the shell's
+ * state: a variable, a command substitution, or `~user` (#2735 review round
+ * 2). Each is the shell's state and not the command's text. A bare `cd` IS
+ * resolvable and goes to `homedir()`, and so are `~` and `~/path`.
  */
 export function filingDirectory(cmd: string, from: string): string {
   return scanForFiling(cmd, from, 0).found ?? from;
@@ -501,7 +505,7 @@ function scanForFiling(
       if (nested.found !== null) found = nested.found;
     }
   }
-  if (malformed(script)) {
+  if (found === null && malformed(script)) {
     const read = tokenScan(cmd, from, depth);
     if (read.found !== null) return read;
   }
@@ -606,6 +610,8 @@ function cdTarget(args: string[], dir: string): string {
   if (path.length === 0) return args.includes("-") ? dir : homedir();
   if (path.length > 1) return dir;
   const target = path[0];
+  // Expanded by the shell at run time, so not readable here (#2735 review round 2).
+  if (/[$`]/.test(target) || /^~[^/]/.test(target)) return dir;
   if (target === "~") return homedir();
   if (target.startsWith("~/")) return join(homedir(), target.slice(2));
   return resolve(dir, target);

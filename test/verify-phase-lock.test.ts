@@ -24,7 +24,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 import {
   OVERRIDE_LABELS,
@@ -456,6 +456,35 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     const cmd = `(cd /a && echo "$(printf case x)"); gh issue create --title t`;
     expect(parse(cmd).errors?.length ?? 0).toBeGreaterThan(0);
     expect(filingDirectory(cmd, "/main")).toBe("/main");
+  });
+
+  // #2735 review round 2: the token reading only places a filing the grammar
+  // did not find. Here the grammar finds it, in /a, and the token reading takes
+  // the case pattern's `)` for the subshell's and leaks `cd /c` out of it.
+  test("WITNESS: on a malformed parse, a filing the grammar found keeps the grammar's directory", () => {
+    const cmd = `cd /a; (case x in a) cd /c;; esac); gh issue create --title t; echo "$(printf case x)"`;
+    expect(parse(cmd).errors?.length ?? 0, "the grammar reads this right now; the row no longer reaches the second reading")
+      .toBeGreaterThan(0);
+    expect(filingDirectory(cmd, "/main")).toBe("/a");
+  });
+
+  // #2735 review round 2: a cd whose target the shell expands at run time is
+  // one this cannot resolve, so it leaves the directory alone, as the
+  // docblock says, instead of inventing a path with the `$` in it.
+  test.each([
+    [`cd "$WT" && gh issue create --title t`],
+    [`cd "$HOME/wt" && gh issue create --title t`],
+    [`cd "$(git rev-parse --show-toplevel)" && gh issue create --title t`],
+    ["cd `pwd` && gh issue create --title t"],
+    [`cd ~bob/x && gh issue create --title t`],
+  ])("WITNESS: %s leaves the directory alone", cmd => {
+    expect(filingDirectory(cmd, "/repo")).toBe("/repo");
+  });
+
+  test("CONTROL: a cd to ~, ~/path, or a plain path still resolves", () => {
+    expect(filingDirectory(`cd ~ && gh issue create --title t`, "/repo")).toBe(homedir());
+    expect(filingDirectory(`cd ~/wt && gh issue create --title t`, "/repo")).toBe(join(homedir(), "wt"));
+    expect(filingDirectory(`cd ../wt && gh issue create --title t`, "/repo/main")).toBe("/repo/wt");
   });
 });
 
