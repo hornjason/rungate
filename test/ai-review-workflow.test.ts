@@ -92,8 +92,10 @@ import {
   AI_REVIEW_APP_INSTALL_CAUSE,
   buildReviewRunScript,
   buildReviewRunStep,
+  reviewDepthConfig,
   vertexCiConfig,
 } from "../lib/scaffold/ai-review-step";
+import { loadRungateConfig } from "../lib/config-loader";
 import { CLAUDE_CODE_ACTION } from "../lib/claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../lib/google-auth-action";
 import { actionRef } from "../lib/workflow-actions";
@@ -1374,7 +1376,9 @@ describe("#803 / #2649: a non-zero exit with no payload names its likely cause, 
     // one. So the committed `ai-review.yml` could hold a report script the
     // generator no longer produces, and every test here would still pass —
     // they all drive `buildReviewRunScript(…)` directly.
-    const indented = buildReviewRunScript(harnessVersion())
+    // At this repository's own depth: the messages name it (#2728), and the
+    // committed file was generated from this config, not from a default.
+    const indented = buildReviewRunScript(harnessVersion(), reviewDepthConfig(loadRungateConfig(REPO_ROOT).ci))
       .trimEnd()
       .split("\n")
       .map(l => (l ? `          ${l}` : ""))

@@ -44,6 +44,7 @@ import { join } from "path";
 
 import { createCiWorkflows } from "../lib/scaffold/steps";
 import {
+  AI_REVIEW_EXECUTION_FILE_VAR,
   AI_REVIEW_JOB,
   AI_REVIEW_MAX_TURNS,
   AI_REVIEW_REQUIRE_VALUE,
@@ -418,12 +419,100 @@ describe("CRC-B9: review depth is configurable per repo as Quick, Standard or De
     const declared = generate({ ...FIXTURE_CI, reviewDepth: "standard" });
     expect(turnsIn(absent)).toEqual(turnsIn(declared));
     expect(absent).toContain(reviewDepthConfig(FIXTURE_CI).reason);
-    expect(declared).not.toContain("ci.reviewDepth");
+    expect(declared).not.toContain(reviewDepthConfig(FIXTURE_CI).reason);
   });
 
   test("the turn-limit diagnosis names the configured budget, not the Standard one", () => {
-    expect(buildReviewRunScript(FIXTURE_VERSION, AI_REVIEW_MAX_TURNS * 2)).toContain(`this job sets to ${AI_REVIEW_MAX_TURNS * 2};`);
-    expect(buildReviewRunScript(FIXTURE_VERSION)).toContain(`this job sets to ${AI_REVIEW_MAX_TURNS};`);
-    expect(generate({ ...FIXTURE_CI, reviewDepth: "deep" })).toContain(`sets to ${AI_REVIEW_MAX_TURNS * 2};`);
+    const deep = reviewDepthConfig({ reviewDepth: "deep" });
+    expect(buildReviewRunScript(FIXTURE_VERSION, deep)).toContain(`this job's maximum of ${AI_REVIEW_MAX_TURNS * 2}.`);
+    expect(buildReviewRunScript(FIXTURE_VERSION)).toContain(`this job's maximum of ${AI_REVIEW_MAX_TURNS}.`);
+    expect(generate({ ...FIXTURE_CI, reviewDepth: "deep" })).toContain(`maximum of ${AI_REVIEW_MAX_TURNS * 2}.`);
+  });
+});
+
+/**
+ * #2728: a consumer cannot set `AI_REVIEW_MAX_TURNS`, a constant inside
+ * rungate. The two routes that end on the turn budget name the setting that
+ * is theirs, `ci.reviewDepth`, and the depth and budget this review ran at.
+ * Each route is driven by its own execution file, and each row first checks
+ * it reached that route, so a message printed by some other branch cannot
+ * satisfy it.
+ */
+describe("#2728: the turn-budget messages name ci.reviewDepth, the setting a consumer controls", () => {
+  const ROUTES = {
+    "out of turns": {
+      outcome: "success",
+      execution: JSON.stringify([{ type: "result", subtype: "error_max_turns", is_error: true, num_turns: 81 }]),
+      marker: "error_max_turns",
+    },
+    "rejected over the limit": {
+      outcome: "failure",
+      execution: JSON.stringify([{ type: "result", subtype: "success", is_error: false, num_turns: 82 }]),
+      marker: "reported a SUCCESSFUL result",
+    },
+  } as const;
+  const DEPTHS = {
+    "no depth declared": reviewDepthConfig(undefined),
+    quick: reviewDepthConfig({ reviewDepth: "quick" }),
+    standard: reviewDepthConfig({ reviewDepth: "standard" }),
+    deep: reviewDepthConfig({ reviewDepth: "deep" }),
+  };
+  const run = (route: keyof typeof ROUTES, depth: keyof typeof DEPTHS): string => {
+    const dir = scratchDir("ai-review-depth-lever-");
+    const script = join(dir, "report.sh");
+    writeFileSync(script, buildReviewRunScript(FIXTURE_VERSION, DEPTHS[depth]));
+    const exec = join(dir, "claude-execution-output.json");
+    writeFileSync(exec, ROUTES[route].execution);
+    const r = Bun.spawnSync(["bash", "-e", script], {
+      cwd: dir,
+      env: {
+        PATH: stubBunxAbsent(),
+        AI_REVIEW_MODE: "vertex",
+        AI_REVIEW_ACTION_OUTCOME: ROUTES[route].outcome,
+        AI_REVIEW_FINDINGS_PATH: join(dir, "findings.json"),
+        [AI_REVIEW_EXECUTION_FILE_VAR]: exec,
+        GITHUB_OUTPUT: join(dir, "github_output"),
+      },
+    });
+    return new TextDecoder().decode(r.stdout) + new TextDecoder().decode(r.stderr);
+  };
+  const ROWS = (Object.keys(ROUTES) as Array<keyof typeof ROUTES>).flatMap(route =>
+    (Object.keys(DEPTHS) as Array<keyof typeof DEPTHS>).map(depth => [route, depth] as const),
+  );
+
+  test.each(ROWS)("%s, %s: the message names ci.reviewDepth and this depth's budget", (route, depth) => {
+    const out = run(route, depth);
+    expect(out, "the run did not reach this route").toContain(ROUTES[route].marker);
+    expect(out, "the message names a constant inside rungate as the lever").not.toContain("AI_REVIEW_MAX_TURNS");
+    expect(out, "the message does not name the setting").toContain("ci.reviewDepth");
+    expect(out, "the message does not say which budget this review had").toContain(`(${DEPTHS[depth].maxTurns} turns)`);
+    if (DEPTHS[depth].depth === "deep") {
+      expect(out, "a Deep review is told to raise a depth there is none above").toContain("the largest budget ci.reviewDepth allows");
+    } else {
+      expect(out, "the deeper setting is not named").toContain(`deep is ${DEPTHS.deep.maxTurns} turns`);
+    }
+  });
+
+  test.each(Object.keys(ROUTES) as Array<keyof typeof ROUTES>)(
+    "%s: an undeclared depth is said to be one, and a declared Standard is not",
+    route => {
+      expect(run(route, "no depth declared")).toContain("declares no ci.reviewDepth");
+      expect(run(route, "standard")).not.toContain("declares no ci.reviewDepth");
+    },
+  );
+
+  // #2729 review: both config layouts are supported (.claude/rules/config-access.md),
+  // so the note that tells a consumer where to set the depth names both.
+  test.each(Object.keys(ROUTES) as Array<keyof typeof ROUTES>)(
+    "%s: the undeclared note names both config layouts",
+    route => {
+      const out = run(route, "no depth declared");
+      expect(out).toContain(".claude/rungate/config.json");
+      expect(out).toContain(".claude/rungate.json");
+    },
+  );
+
+  test("the out-of-turns route keeps the guidance against an early payload", () => {
+    expect(run("out of turns", "standard")).toContain("making the prompt write a payload early is NOT");
   });
 });
