@@ -22,11 +22,13 @@ import {
   PROMPT_AUDIT_LINTS,
   generatedNames,
   lineOwners,
+  looksLikeRepoPath,
   promptAudit,
   upstreamBodies,
   writeUpstreamBodies,
   type PromptAudit,
 } from "../lib/prompt-audit";
+import { symptomKeys } from "../lib/finding-arbiter";
 import { SURFACE_LINTS } from "../lib/surface-lint";
 import { commitFixture, initFixtureRepo } from "./helpers/git-fixture";
 
@@ -108,10 +110,24 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     }
   });
 
-  // #2779: an example path in a rendered rule is a real file, so rungate's own
-  // audit comes back clean on rungate, where `lib/scaffold/` exists.
+  // #2779: an example path in a rendered rule names no directory any tree has,
+  // so rungate's own audit comes back clean on rungate, where `lib/scaffold/`
+  // exists. A real file would dangle in every consumer with that directory.
   test("rungate's own tree has no harness-owned dangling-path finding", () => {
     expect(promptAudit(ROOT).findings.filter(f => f.lint === "dangling-path" && f.owner === "harness").map(f => `${f.file}: ${f.message}`)).toEqual([]);
+  });
+
+  // #2780 review: the filing rule's example is a placeholder, not a path, so an
+  // agent that copies it names no path, and two reports that both copied it
+  // share no duplicate key.
+  test("the reporting-upstream example is read as a placeholder by both the lint and the filing gate's keys", () => {
+    const rule = readFileSync(join(ROOT, ".claude", "rules", "reporting-upstream.md"), "utf-8");
+    const line = rule.split("\n").find(l => l.includes("path with its directory"));
+    expect(line, "the rule's example line").toBeDefined();
+    const tokens = [...line!.matchAll(/`([^`]+)`/g)].map(m => m[1]!);
+    expect(tokens.length).toBeGreaterThan(0);
+    for (const t of tokens) expect(looksLikeRepoPath(t), t).toBe(false);
+    expect(symptomKeys({ title: "t", body: line! } as Parameters<typeof symptomKeys>[0]).filter(k => k.startsWith("file:"))).toEqual([]);
   });
 
   test("a finding belongs to whoever wrote the line: each preserved section on both sides of its boundary", () => {
