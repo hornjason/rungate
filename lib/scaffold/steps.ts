@@ -43,6 +43,7 @@ import {
   buildOutcomesHeader,
   buildReviewRunStep,
   vertexCiConfig,
+  reviewDepthConfig,
 } from "./ai-review-step";
 import {
   AI_REVIEW_WORKFLOW_NAME,
@@ -4481,6 +4482,9 @@ ${setupBunEnv("        ")}
   // decider that always agrees with this one and could never be told apart
   // from it (`.claude/rules/checks-must-be-able-to-fail.md`, fourth shape).
   const vertex = vertexCiConfig(harness?.ci);
+  // #1655. The review depth, read once here beside the vertex reading and
+  // threaded into the step that hands the reviewer its turn budget.
+  const reviewDepth = reviewDepthConfig(harness?.ci);
 
   // `id-token: write` is what lets the runner mint the OIDC token GCP's STS
   // exchanges. Granted ONLY when there is a federation to use it, because a
@@ -4602,6 +4606,8 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     // line, and the verdict step reports UNMEASURED rather than reading the
     // failure as a refusal.
     harnessVersion(),
+    undefined,
+    reviewDepth,
   )}`;
 
   // #1488. The second AI-review workflow: `workflow_run: completed`, which is

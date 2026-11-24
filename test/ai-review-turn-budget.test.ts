@@ -53,6 +53,7 @@ import {
   AI_REVIEW_WORKFLOW_FILE,
   aiReviewClaudeArgs,
   buildReviewRunScript,
+  reviewDepthConfig,
   vertexCiConfig,
   type VertexCiDecision,
   AI_REVIEW_RUNS,
@@ -114,9 +115,11 @@ describe("AC-2: the turn budget is declared once and interpolated", () => {
       literal.length,
       "the module names --max-turns somewhere unexpected:\n" + literal.join("\n"),
     ).toBeGreaterThan(0);
+    // #1655: the args interpolate the configured depth's budget, which is
+    // derived from the constant (the next test moves it with a mutant).
     for (const value of literal) {
       expect(value, "a turn count is written out instead of interpolated").toBe(
-        "${AI_REVIEW_MAX_TURNS}",
+        "${depth.maxTurns}",
       );
     }
   });
@@ -349,5 +352,78 @@ describe("AC-4: a review that exhausted its budget is UNMEASURED, not a pass", (
     expect(failed.length, "the exhausted run printed nothing at all").toBeGreaterThan(0);
     expect(ok.length, "the completed run printed nothing at all").toBeGreaterThan(0);
     expect(failed).not.toBe(ok);
+  });
+});
+
+/**
+ * #1655: review depth is a per-repo setting, `ci.reviewDepth`, and each value
+ * changes what the reviewer is handed. Quick is three quarters of the turn
+ * budget and Deep doubles it; Standard is `AI_REVIEW_MAX_TURNS`, so a repository that sets it,
+ * or sets nothing, keeps the workflow it has. An absent key reviews at
+ * Standard and the generated workflow says so; any other value is refused,
+ * since a corrupt setting is never a missing one (.claude/rules/config-access.md).
+ */
+describe("CRC-B9: review depth is configurable per repo as Quick, Standard or Deep (#1655)", () => {
+  const generate = (ci: Record<string, unknown>): string => {
+    const project = scratchDir("ai-review-depth-project-");
+    mkdirSync(join(project, ".claude", "rungate"), { recursive: true });
+    writeFileSync(
+      join(project, ".claude", "rungate", "config.json"),
+      JSON.stringify({ project: "ai-review-depth-fixture", ci }, null, 2) + "\n",
+    );
+    createCiWorkflows(project, []);
+    return readFileSync(join(project, ".github", "workflows", AI_REVIEW_WORKFLOW_FILE), "utf-8");
+  };
+  const turnsIn = (text: string): number[] =>
+    ((Bun.YAML.parse(text) as any).jobs[AI_REVIEW_JOB].steps as any[])
+      .map(st => /--max-turns (\d+)/.exec(String(st?.with?.claude_args ?? ""))?.[1])
+      .filter((t): t is string => t !== undefined)
+      .map(Number);
+
+  test("the reading: three depths, each with its budget, and an absent key at Standard with a reason", () => {
+    expect(reviewDepthConfig({ reviewDepth: "quick" })).toMatchObject({ depth: "quick", maxTurns: (AI_REVIEW_MAX_TURNS * 3) / 4 });
+    expect(reviewDepthConfig({ reviewDepth: "standard" })).toMatchObject({ depth: "standard", maxTurns: AI_REVIEW_MAX_TURNS });
+    expect(reviewDepthConfig({ reviewDepth: "deep" })).toMatchObject({ depth: "deep", maxTurns: AI_REVIEW_MAX_TURNS * 2 });
+    const absent = reviewDepthConfig({ runner: "ubuntu-latest" });
+    expect(absent).toMatchObject({ depth: "standard", maxTurns: AI_REVIEW_MAX_TURNS, declared: false });
+    expect(absent.reason).toContain("ci.reviewDepth");
+    expect(reviewDepthConfig(undefined).declared).toBe(false);
+  });
+
+  test.each([["Quick"], ["DEEP"], ["fast"], [""], [1], [true], [null], [["deep"]]])(
+    "a ci.reviewDepth of %p is refused, not read as Standard",
+    value => {
+      expect(() => reviewDepthConfig({ reviewDepth: value })).toThrow(/ci\.reviewDepth/);
+    },
+  );
+
+  // #2725 review: a ci section that is not an object is corrupt, not one that
+  // declares nothing, for this reader and for ci.vertex's beside it.
+  test.each([["deep"], [["deep"]], [5], [true], [null]])("a ci section of %p is refused, not read as declaring nothing", ci => {
+    expect(() => reviewDepthConfig(ci)).toThrow(/\bci\b.*object/);
+    expect(() => vertexCiConfig(ci)).toThrow(/\bci\b.*object/);
+  });
+
+  test("the three depths produce three different reviewer invocations, one per run", () => {
+    const quick = turnsIn(generate({ ...FIXTURE_CI, reviewDepth: "quick" }));
+    const standard = turnsIn(generate({ ...FIXTURE_CI, reviewDepth: "standard" }));
+    const deep = turnsIn(generate({ ...FIXTURE_CI, reviewDepth: "deep" }));
+    expect(quick).toEqual(Array(AI_REVIEW_RUNS).fill((AI_REVIEW_MAX_TURNS * 3) / 4));
+    expect(standard).toEqual(Array(AI_REVIEW_RUNS).fill(AI_REVIEW_MAX_TURNS));
+    expect(deep).toEqual(Array(AI_REVIEW_RUNS).fill(AI_REVIEW_MAX_TURNS * 2));
+  });
+
+  test("an absent key reviews at Standard and the workflow records why; a declared Standard is the same workflow without the note", () => {
+    const absent = generate(FIXTURE_CI);
+    const declared = generate({ ...FIXTURE_CI, reviewDepth: "standard" });
+    expect(turnsIn(absent)).toEqual(turnsIn(declared));
+    expect(absent).toContain(reviewDepthConfig(FIXTURE_CI).reason);
+    expect(declared).not.toContain("ci.reviewDepth");
+  });
+
+  test("the turn-limit diagnosis names the configured budget, not the Standard one", () => {
+    expect(buildReviewRunScript(FIXTURE_VERSION, AI_REVIEW_MAX_TURNS * 2)).toContain(`this job sets to ${AI_REVIEW_MAX_TURNS * 2};`);
+    expect(buildReviewRunScript(FIXTURE_VERSION)).toContain(`this job sets to ${AI_REVIEW_MAX_TURNS};`);
+    expect(generate({ ...FIXTURE_CI, reviewDepth: "deep" })).toContain(`sets to ${AI_REVIEW_MAX_TURNS * 2};`);
   });
 });

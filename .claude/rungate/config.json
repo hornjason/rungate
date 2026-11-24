@@ -42,6 +42,7 @@
   },
   "consumers": [],
   "ci": {
+    "reviewDepth": "standard",
     "bunVersion": "1.3.14",
     "runner": "ubuntu-24.04",
     "globalTools": {

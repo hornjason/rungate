@@ -520,7 +520,11 @@ const UNCLAIMED_RATCHET = 150;
 // and what a pull request costs, a reading of a doc against the job's constants
 // that no registered pattern expresses; the `CRC-B13` describe in
 // test/agents-md-refs.test.ts names it (2026-11-23).
-const CLAIMED_UNBINDABLE = 209;
+// 210: CRC-B9 (#1655) ticked by `sync-sc-status --only CRC-B9` — review depth is
+// configurable per repo as Quick / Standard / Deep, a reading of the generated
+// workflow's turn budget per depth that no registered pattern expresses; the
+// `CRC-B9` describe in test/ai-review-turn-budget.test.ts names it (2026-11-23).
+const CLAIMED_UNBINDABLE = 210;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

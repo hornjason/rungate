@@ -1560,8 +1560,23 @@ const VERTEX_REGION = /^[a-z][a-z0-9-]{1,30}[a-z0-9]$/;
  * could carry a second input, so the charsets above admit nothing that needs
  * escaping and the absence of escaping is therefore not a gap.
  */
+/**
+ * The config's `ci` section, or `undefined` when it has none (#2725 review).
+ * A `ci` that is not an object (`"ci": "deep"`, an array, `null`) throws: a
+ * corrupt section is never one that declares nothing, so a reader below cannot
+ * report a key as absent when the section holding it could not be read. JSON
+ * has no `undefined`, so only a config with no `ci` key reaches the first line.
+ */
+function ciSection(ci: unknown): Record<string, unknown> | undefined {
+  if (ci === undefined) return undefined;
+  if (ci === null || typeof ci !== 'object' || Array.isArray(ci)) {
+    throw new Error(`ci in .claude/rungate/config.json is ${JSON.stringify(ci)}; it must be an object`);
+  }
+  return ci as Record<string, unknown>;
+}
+
 export function vertexCiConfig(ci: unknown): VertexCiDecision {
-  const raw = (ci as { vertex?: unknown } | null | undefined)?.vertex;
+  const raw = ciSection(ci)?.vertex;
 
   if (raw === undefined || raw === null) {
     return {
@@ -3269,6 +3284,82 @@ export const AI_REVIEW_RUNTIME_CONFIG_TITLE = "AI review runtime config UNMEASUR
  */
 export const AI_REVIEW_MAX_TURNS = 80;
 
+/** The review depths a repository may choose (#1655, CRC-B9). */
+export const AI_REVIEW_DEPTHS = ["quick", "standard", "deep"] as const;
+export type AiReviewDepth = (typeof AI_REVIEW_DEPTHS)[number];
+
+/**
+ * Each depth's turn budget (#1655). Standard is `AI_REVIEW_MAX_TURNS`, so a
+ * repository that sets it, or sets nothing, keeps the workflow it has. Quick
+ * is three quarters of it, 60: above the p95 of the readings above (59), so it
+ * caps what the largest reviews cost and runs out only on them, which report
+ * UNMEASURED, never a pass. Half would sit at the p50 (39) and run out on about
+ * half of ordinary reviews (#2725 review). Deep doubles it. Derived from the
+ * one constant, not written out, so the budget is still one number.
+ *
+ * The budget is a cap: under it the reviewer works the same, so Quick and
+ * Standard differ only on a review that would run past 60 turns. Depth moves
+ * the cap and nothing else. The runs per round and the model are ADR-025's
+ * decisions, not a depth's.
+ */
+export const AI_REVIEW_DEPTH_TURNS: Readonly<Record<AiReviewDepth, number>> = {
+  quick: (AI_REVIEW_MAX_TURNS * 3) / 4,
+  standard: AI_REVIEW_MAX_TURNS,
+  deep: AI_REVIEW_MAX_TURNS * 2,
+};
+
+/** The reading of `ci.reviewDepth`, which always carries a reason. */
+export interface ReviewDepthDecision {
+  depth: AiReviewDepth;
+  maxTurns: number;
+  /** Whether the config declares it. An absent key reviews at Standard. */
+  declared: boolean;
+  /** Why, in one sentence. The generated workflow carries it when the key is absent. */
+  reason: string;
+}
+
+/**
+ * Read `ci.reviewDepth` off a consumer's config (#1655, CRC-B9), as a pure
+ * function over `unknown`, the way `vertexCiConfig` reads `ci.vertex`.
+ *
+ * The value is read exactly: `quick`, `standard` or `deep`, nothing else, since
+ * a loose read of a setting is a setting that changes itself. An absent key
+ * is Standard, and the reading says so, so the generated workflow records the
+ * substitution rather than making it silently. Any other value, `null`
+ * included, throws: a corrupt setting is never a missing one
+ * (`.claude/rules/config-access.md`).
+ */
+export function reviewDepthConfig(ci: unknown): ReviewDepthDecision {
+  const raw = ciSection(ci)?.reviewDepth;
+  if (raw === undefined) {
+    return {
+      depth: "standard",
+      maxTurns: AI_REVIEW_DEPTH_TURNS.standard,
+      declared: false,
+      reason:
+        `the config declares no ci.reviewDepth, so this review runs at Standard depth ` +
+        `(${AI_REVIEW_DEPTH_TURNS.standard} turns); set it to ${AI_REVIEW_DEPTHS.join(", ")} in .claude/rungate/config.json`,
+    };
+  }
+  if (typeof raw !== "string" || !(AI_REVIEW_DEPTHS as readonly string[]).includes(raw)) {
+    throw new Error(`ci.reviewDepth is ${JSON.stringify(raw)}; it must be one of ${AI_REVIEW_DEPTHS.join(", ")}`);
+  }
+  const depth = raw as AiReviewDepth;
+  return {
+    depth,
+    maxTurns: AI_REVIEW_DEPTH_TURNS[depth],
+    declared: true,
+    reason: `ci.reviewDepth is ${depth} (${AI_REVIEW_DEPTH_TURNS[depth]} turns)`,
+  };
+}
+
+/**
+ * The reading of a config that sets no depth: Standard, with the note that
+ * says so. The default for a caller composing the step with no config to read,
+ * so a direct call and a scaffold of such a config emit the same text.
+ */
+export const AI_REVIEW_UNSET_DEPTH: ReviewDepthDecision = reviewDepthConfig(undefined);
+
 /**
  * The `claude_args` line, with the model the consumer's config resolved.
  *
@@ -3283,10 +3374,10 @@ export const AI_REVIEW_MAX_TURNS = 80;
  * would let the action's own default float, which is `AI_REVIEW_MODEL`'s
  * whole subject.
  */
-export function aiReviewClaudeArgs(vertex: VertexCiDecision): string {
+export function aiReviewClaudeArgs(vertex: VertexCiDecision, depth: ReviewDepthDecision = AI_REVIEW_UNSET_DEPTH): string {
   const model = vertex.config?.model ?? AI_REVIEW_MODEL;
   return (
-    `--model ${model} --max-turns ${AI_REVIEW_MAX_TURNS} ` +
+    `--model ${model} --max-turns ${depth.maxTurns} ` +
     `--allowedTools ${AI_REVIEW_ALLOWED_TOOLS} ` +
     // #824 AC-2. The action's own config dump reported
     // `"settingSources": ["user", "project", "local"]` — the reviewer loads
@@ -6678,7 +6769,7 @@ export const AI_REVIEW_APP_INSTALL_CAUSE =
 export const AI_REVIEW_FRESH_CWD =
   'rungate_bunx_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rungate-bunx.XXXXXX")" && cd "$rungate_bunx_dir"';
 
-export function buildReviewRunScript(version: string): string {
+export function buildReviewRunScript(version: string, maxTurns: number = AI_REVIEW_MAX_TURNS): string {
   // The exact command the success branch runs. Built here so the comments
   // below and the bash are one string, and so a test can name it.
   const adjudicator =
@@ -6742,7 +6833,7 @@ export function buildReviewRunScript(version: string): string {
     `thing that does this is the action's own turn accounting, which throws ` +
     `when the completed run's turn count exceeds --max-turns. Read the ` +
     `execution file's num_turns against the configured maximum, which this ` +
-    `job sets to ${AI_REVIEW_MAX_TURNS}; raising it is the lever if they ` +
+    `job sets to ${maxTurns}; raising it is the lever if they ` +
     `are close. The Claude ` +
     `Code GitHub App is NOT the cause here — the reviewer could not have run ` +
     `at all without it. This check is UNMEASURED, not a passing review.`;
@@ -11849,6 +11940,7 @@ export function buildReviewRunStep(
   refs: AiReviewActionRefs,
   version: string,
   indent = "      ",
+  depth: ReviewDepthDecision = AI_REVIEW_UNSET_DEPTH,
 ): string {
   const modeIs = (mode: string) =>
     `steps.${AI_REVIEW_AUTH_STEP_ID}.outputs.mode == '${mode}'`;
@@ -12142,7 +12234,9 @@ export function buildReviewRunStep(
     // job's `permissions:`. The reviewer posts nothing itself; the threads
     // step already posts with GITHUB_TOKEN.
     `    github_token: \${{ secrets.GITHUB_TOKEN }}`,
-    `    claude_args: ${aiReviewClaudeArgs(vertex)}`,
+    // #1655: the configured depth's turn budget, and why when no depth is set.
+    ...(depth.declared ? [] : [`    # ${depth.reason}`]),
+    `    claude_args: ${aiReviewClaudeArgs(vertex, depth)}`,
     `    prompt: |`,
     ...buildReviewPrompt().trimEnd().split("\n").map(l => (l ? `      ${l}` : "")),
   ];
@@ -12315,7 +12409,7 @@ export function buildReviewRunStep(
     // `AI_REVIEW_OVERRIDE_LABEL` for why this is a label and not a variable.
     `    ${AI_REVIEW_OVERRIDE_VAR}: \${{ contains(github.event.pull_request.labels.*.name, '${AI_REVIEW_OVERRIDE_LABEL}') }}`,
     `  run: |`,
-    ...buildReviewRunScript(version).trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
+    ...buildReviewRunScript(version, depth.maxTurns).trimEnd().split("\n").map(l => (l ? `    ${l}` : "")),
   ];
 
   // #1307. BEFORE the report step, and the position is the whole design.
