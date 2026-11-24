@@ -114,6 +114,34 @@ describe("#1910: the inventory and its probes", () => {
 });
 
 describe("#1910: forgeBehaviourReading", () => {
+  // #2750 review: a killed child has no exit code, so wherever a row reads a
+  // child's exit, a kill there reads UNMEASURED. Every git and gh child the
+  // rows consult, one at a time. The timeout row is not here: a kill is its
+  // observation.
+  const killed = ran({ exit: null, killed: true, ms: 30_000 });
+  const KILLS: Array<[string, string, (o: Observations) => void]> = [
+    ["ls-remote-absent-ref-exits-zero", "control", (o) => { o["ls-remote-absent-ref-exits-zero"]!.control = killed; }],
+    ["ls-remote-absent-ref-exits-zero", "absent", (o) => { o["ls-remote-absent-ref-exits-zero"]!.absent = killed; }],
+    ["ls-remote-absent-ref-exits-zero", "absentAgain, after one failure", (o) => {
+      o["ls-remote-absent-ref-exits-zero"]!.absent = ran({ exit: 2 });
+      o["ls-remote-absent-ref-exits-zero"]!.absentAgain = killed;
+    }],
+    ["ls-remote-absent-ref-exits-zero", "controlAfter, after two failures", (o) => {
+      o["ls-remote-absent-ref-exits-zero"]!.absent = ran({ exit: 2 });
+      o["ls-remote-absent-ref-exits-zero"]!.absentAgain = ran({ exit: 2 });
+      o["ls-remote-absent-ref-exits-zero"]!.controlAfter = killed;
+    }],
+    ["ls-remote-unreadable-exits-nonzero", "unreadable", (o) => { o["ls-remote-unreadable-exits-nonzero"]!.unreadable = killed; }],
+    ["head-ref-oid-frozen-at-merge", "url", (o) => { o["head-ref-oid-frozen-at-merge"]!.url = killed; }],
+    ["head-ref-oid-frozen-at-merge", "view", (o) => { o["head-ref-oid-frozen-at-merge"]!.view = killed; }],
+    ["head-ref-oid-frozen-at-merge", "branch", (o) => { o["head-ref-oid-frozen-at-merge"]!.branch = killed; }],
+  ];
+  test.each(KILLS)("%s: a killed %s reads UNMEASURED", (id, _child, kill) => {
+    const obs = confirmedObservations();
+    kill(obs);
+    expect(forgeBehaviourReading(id, obs).reading).toBe("UNMEASURED");
+  });
+
   test("every probed row reads CONFIRMED when observed as assumed", () => {
     const obs = confirmedObservations();
     for (const id of PROBED) expect(forgeBehaviourReading(id, obs).reading, id).toBe("CONFIRMED");
