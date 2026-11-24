@@ -3865,8 +3865,8 @@ function calleeBefore(body: string, openIndex: number): string {
  * here: each reads `#` and `/` its own way, and a reading that disagrees is
  * one in which the identity is not shown.
  *
- * Not read: a module the body imports can rebind anything when it loads, and
- * a `python3` without `-I` imports a planted `shutil.py` from the working
+ * Not read: what a module on the allowed list does when it loads is trusted,
+ * and a `python3` without `-I` imports a planted `shutil.py` from the working
  * directory. Both are what the body loads, not what it says.
  */
 function calleeShown(body: string, openIndex: number): boolean {
