@@ -493,6 +493,10 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     [`$SHELL -c 'echo "$(printf case x)"; gh issue create --title t'`],
     [`fish -c 'echo "$(printf case x)"; gh issue create --title t'`],
     [`sudo -u ci bash -l -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    // A flag that takes a value sits between the shell and -c.
+    [`bash -o pipefail -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    [`bash -eo pipefail -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    [`bash --rcfile /tmp/rc -c 'echo "$(printf case x)"; gh issue create --title t'`],
     // An unclosed heredoc is the command's own shell-level fault, whatever the
     // heredoc feeds: bash would take the rest of the command as its body.
     [`python3 - <<'PY'\nprint("gh")\n`],

@@ -343,9 +343,11 @@ const SHELL_NAMES = new Set(["bash", "sh", "zsh", "dash", "ksh", "ash", "mksh", 
 
 /**
  * The command lines a clause hands a shell, for `unreadableFiling`: `eval`'s
- * arguments joined, and the word after a `-c` flag whose program is a shell or
- * is held in a variable (`$SHELL -c`, `"$BASH" -c`). The program is the word
- * before the flag, past any other flags (`bash -l -c`). Narrower than
+ * arguments joined, and the word after a `-c` flag when a shell, or a program
+ * held in a variable (`$SHELL`, `"$BASH"`), is named anywhere before the flag.
+ * Anywhere, not the word just before it: a flag that takes a value sits
+ * between them in `bash -o pipefail -c` and `bash --rcfile FILE -c`, and so do
+ * a wrapper's own flags in `sudo -u ci bash -c` (#2746 review). Narrower than
  * `commandArguments`, which reads every `-c`: here `grep -c` and `tail -c` are
  * a count and a limit, and reading their argument as a command line would
  * refuse a grep for being malformed bash (#2746 review round 3).
@@ -358,10 +360,7 @@ function shellCommandLines(c: string[]): string[] {
       break;
     }
     if (!COMMAND_FLAG.test(c[i]) || i + 1 >= c.length) continue;
-    let p = i - 1;
-    while (p >= 0 && c[p].startsWith("-")) p--;
-    const program = p >= 0 ? c[p] : "";
-    if (SHELL_NAMES.has(basename(program)) || program.startsWith("$")) out.push(c[i + 1]);
+    if (c.slice(0, i).some(w => SHELL_NAMES.has(basename(w)) || w.startsWith("$"))) out.push(c[i + 1]);
   }
   return out;
 }
