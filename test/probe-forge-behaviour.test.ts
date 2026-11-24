@@ -26,6 +26,8 @@ import {
   citationViolations,
   FORGE_BEHAVIOURS,
   forgeBehaviourReading,
+  HEAD_MISMATCH,
+  settle,
   MERGED_FIXTURE,
   type Observations,
   type Ran,
@@ -41,7 +43,10 @@ const SOURCE = readFileSync(SCRIPT, "utf-8");
 
 // ── observations ────────────────────────────────────────────
 
-const ran = (over: Partial<Ran> = {}): Ran => ({ started: true, exit: 0, out: "", killed: false, ms: 5, ...over });
+const ran = (over: Partial<Ran> = {}): Ran => ({ started: true, exit: 0, out: "", err: "", killed: false, ms: 5, ...over });
+
+/** What gh printed when the forge refused a stale pin, live on #2768's round-2 run. */
+const STALE_REFUSAL = "GraphQL: Failed to add PR #2774: expected head oid does not match the current head oid (enablePullRequestAutoMerge)";
 const BRANCH_HEAD = "6c3d11115fb7bc9cab67fd19f9b9e200f437970d";
 
 /** Every probed row observed as the tools assume. */
@@ -65,6 +70,8 @@ function confirmedObservations(): Observations {
     },
     "match-head-commit-checked-at-arm-time": {
       fixture: { built: true, failure: "", leftovers: [] },
+      heldBy: "closing-references",
+      staleError: STALE_REFUSAL,
       staleRefused: true,
       armed: true,
       secondHead: BRANCH_HEAD,
@@ -579,8 +586,22 @@ describe("#2749: the arm-time and conflicted-pull-request readings", () => {
     expect(arm({ staleRefused: null }).reading).toBe("UNMEASURED");
   });
 
+  // #2768 review, round 2.
+  test("arm-time: a fixture nothing was seen holding open is UNMEASURED, and was not armed", () => {
+    expect(arm({ heldBy: "" }).reading).toBe("UNMEASURED");
+    expect(arm({ heldBy: "" }).detail).toContain("not armed");
+  });
+
+  test("arm-time: a stale pin refused for some other reason is UNMEASURED, quoting gh", () => {
+    const r = arm({ staleRefused: null, staleError: "HTTP 502: Bad Gateway" });
+    expect(r.reading).toBe("UNMEASURED");
+    expect(r.detail).toContain("HTTP 502: Bad Gateway");
+  });
+
   test("arm-time: CONFIRMED says the pin is not observed when the merge fires", () => {
     expect(arm().detail).toContain("Whether the merge compares the pin again when it fires is not observed");
+    // The refusal is quoted, so a live CONFIRMED records what gh said.
+    expect(arm().detail).toContain(STALE_REFUSAL.slice(0, 120));
   });
 
   test("conflicted: a fixture that did not conflict, and a control with no runs, are UNMEASURED", () => {
@@ -635,6 +656,7 @@ describe("#2768 review: what the throwaway fixtures do when GitHub's replies go 
         'for (const r of JSON.parse(process.env.FAKE_GH_RULES || "[]")) {',
         "  if (!argv.includes(r.has)) continue;",
         '  if (r.out !== undefined) process.stdout.write(typeof r.out === "string" ? r.out : JSON.stringify(r.out));',
+        "  if (r.err !== undefined) process.stderr.write(r.err);",
         "  process.exit(r.exit ?? 0);",
         "}",
         "process.exit(1);",
@@ -644,7 +666,7 @@ describe("#2768 review: what the throwaway fixtures do when GitHub's replies go 
     chmodSync(join(scriptedBin, "gh"), 0o755);
   });
 
-  interface Rule { has: string; out?: unknown; exit?: number }
+  interface Rule { has: string; out?: unknown; exit?: number; err?: string }
   const mainRequires = (contexts: string[]): Rule[] => [
     { has: `api repos/${R}/branches/main`, out: { protection: { required_status_checks: { contexts } } } },
     { has: `api repos/${R}/git/ref/heads/main`, out: { object: { sha: "base1" } } },
@@ -652,6 +674,7 @@ describe("#2768 review: what the throwaway fixtures do when GitHub's replies go 
   const BRANCH_OK: Rule = { has: `api -X POST repos/${R}/git/refs`, out: { ref: "refs/heads/x" } };
   const COMMIT_OK: Rule = { has: `api -X PUT repos/${R}/contents/`, out: { commit: { sha: "first1" } } };
   const PULL_OK: Rule = { has: `api -X POST repos/${R}/pulls`, out: { number: 7 } };
+  const HELD: Rule = { has: "commits/first1/check-runs", out: { check_runs: [{ name: "lint", conclusion: "failure" }, { name: "test", conclusion: "failure" }] } };
   const CLEANS: Rule[] = [
     { has: "pr list", out: [] },
     { has: "pr close", exit: 0 },
@@ -675,7 +698,8 @@ describe("#2768 review: what the throwaway fixtures do when GitHub's replies go 
 
   test("arming that is refused is reported as arming, and the pull request it opened is closed", () => {
     const r = scripted([
-      ...mainRequires(["test"]), BRANCH_OK, COMMIT_OK, PULL_OK,
+      ...mainRequires(["test"]), BRANCH_OK, COMMIT_OK, PULL_OK, HELD,
+      { has: "--match-head-commit base1", exit: 1, err: STALE_REFUSAL },
       { has: "pr merge 7", exit: 1 },
       { has: "--json headRefOid,autoMergeRequest", out: { headRefOid: "first1", autoMergeRequest: null } },
       ...CLEANS,
@@ -718,11 +742,25 @@ describe("#2768 review: what the throwaway fixtures do when GitHub's replies go 
     expect(r.out).not.toContain("could not be removed");
   }, 30_000);
 
-  test("a main that does not require the test check gets no fixture at all", () => {
-    const r = scripted([...mainRequires(["ai-review"]), BRANCH_OK, COMMIT_OK, PULL_OK, ...CLEANS]);
-    expect(r.out).toContain("main does not require the `test` check");
+  test("a main that requires no check gets no fixture at all", () => {
+    const r = scripted([...mainRequires([]), BRANCH_OK, COMMIT_OK, PULL_OK, ...CLEANS]);
+    expect(r.out).toContain("main requires no status check");
     expect(r.log).not.toContain("git/refs -f");
     expect(r.log).not.toContain("pr merge");
+  }, 30_000);
+
+  // #2768 review, round 2: a failure that is not the pin says nothing about the pin.
+  test("a stale pin's arming that fails for another reason is UNMEASURED, and the right head is never armed", () => {
+    const r = scripted([
+      ...mainRequires(["test"]), BRANCH_OK, COMMIT_OK, PULL_OK, HELD,
+      { has: "--match-head-commit base1", exit: 1, err: "HTTP 502: Bad Gateway" },
+      { has: "--json headRefOid,autoMergeRequest", out: { headRefOid: "first1", autoMergeRequest: null } },
+      ...CLEANS,
+    ]);
+    expect(r.out).toStartWith("UNMEASURED match-head-commit-checked-at-arm-time:");
+    expect(r.out).toContain("HTTP 502: Bad Gateway");
+    expect(r.log).not.toContain("--match-head-commit first1");
+    expect(r.log).toContain(`pr close 7 --repo ${R}`);
   }, 30_000);
 
   test("a negative is read only after the whole wait, in both rows", () => {
@@ -734,5 +772,29 @@ describe("#2768 review: what the throwaway fixtures do when GitHub's replies go 
     expect(armTime).toContain("o.armedAfter = later === null ? null : armedIn(later);");
     // No runs on the conflicted head: a settle that stops only at its first run.
     expect(dirty).toContain("o.dirtyRuns = settle(() => runsOn(dirtyHead), (n) => n !== null && n > 0);");
+  });
+});
+
+describe("#2768 review, round 2: settle, driven rather than read from the source", () => {
+  test("settle reads until done holds, and no further", () => {
+    let n = 0;
+    expect(settle(() => ++n, (v) => v === 3, 5_000, 1)).toBe(3);
+    expect(n).toBe(3);
+  });
+
+  test("settle returns the last read when the wait runs out, having read more than once", () => {
+    let n = 0;
+    const t0 = Date.now();
+    const last = settle(() => ++n, () => false, 40, 1);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(40);
+    expect(n).toBeGreaterThan(1);
+    expect(last).toBe(n);
+  });
+
+  test("HEAD_MISMATCH reads gh's stale-pin refusal, and no other failure", () => {
+    expect(HEAD_MISMATCH.test(STALE_REFUSAL), STALE_REFUSAL).toBe(true);
+    for (const other of ["HTTP 502: Bad Gateway", "GraphQL: Could not resolve to a PullRequest", "Pull request is in clean status", ""]) {
+      expect(HEAD_MISMATCH.test(other), other).toBe(false);
+    }
   });
 });
