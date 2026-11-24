@@ -1,5 +1,7 @@
 /**
- * A spec's *Phase placement* table, and the milestones derived from it (#1647).
+ * A spec's placement, read from its *Phase placement* table or from the
+ * `placement:` line beneath each criterion (ADR-026), and the milestones
+ * derived from it (#1647).
  *
  * `docs/adr/ADR-003-spec-to-tracker-mapping.md` decides the model: a criterion
  * is placed in the spec, a milestone is DERIVED from that placement, and an
@@ -182,7 +184,45 @@ export interface PhaseHeading {
 }
 
 /**
- * Every row of the placement table.
+ * Every placement row (ADR-026 Decision 3). THE one reader of placement: every
+ * reader gets it here, whichever form the spec uses.
+ *
+ * From the criteria's `placement:` lines when the spec has any: one row per
+ * placement value, in the order values are first seen, with ids in document
+ * order and the line of that value's first `placement:` line, so a row has the
+ * same shape whichever form it came from. From the `### Phase placement` table
+ * when it has none, exactly as before lines existed ({@link parsePlacementTable}).
+ *
+ * A spec with both, a table that lists a criterion and a placement line,
+ * still reads its table here; {@link placementReading} reads it UNMEASURED, so
+ * nothing that gates on the reading acts on either source.
+ */
+export function parsePlacementRows(content: string): PlacementRow[] {
+  const table = parsePlacementTable(content);
+  const lines = placementLines(content);
+  if (lines.length === 0 || table.some(r => r.ids.length > 0)) return table;
+  const rows = new Map<string, PlacementRow>();
+  for (const l of lines) {
+    const row = rows.get(l.value) ?? { placement: l.value, ids: [], line: l.line };
+    row.ids.push(l.id);
+    rows.set(l.value, row);
+  }
+  return [...rows.values()];
+}
+
+/**
+ * Every `placement:` line beneath a criterion, in document order (ADR-026).
+ * Asterisks are stripped as {@link parsePlacementTable} strips a cell's, so a
+ * value copied from a table reads the same in either form (#2777 review).
+ */
+export function placementLines(content: string): { id: string; value: string; line: number }[] {
+  return parseCriteria(content).flatMap(c =>
+    c.placements.map(p => ({ id: c.id, value: p.value.replaceAll("*", "").trim(), line: p.line })),
+  );
+}
+
+/**
+ * Every row of the placement table, and nothing from placement lines.
  *
  * Returns `[]` when the section is absent, which callers must distinguish from
  * a present-but-empty table: {@link placementReading} does, by reporting
@@ -190,7 +230,7 @@ export interface PhaseHeading {
  * that was never found reads exactly like a spec in perfect order
  * (`.claude/rules/config-access.md`).
  */
-export function parsePlacementRows(content: string): PlacementRow[] {
+export function parsePlacementTable(content: string): PlacementRow[] {
   const lines = content.split("\n");
   const start = lines.findIndex(l => l.startsWith(PLACEMENT_HEADING));
   if (start === -1) return [];
@@ -244,21 +284,42 @@ export interface PlacementReading {
 }
 
 export function placementReading(content: string): PlacementReading {
-  const criteria = parseCriteria(content).map(c => c.id);
+  const parsed = parseCriteria(content);
+  const criteria = parsed.map(c => c.id);
   const rows = parsePlacementRows(content);
+  const lines = placementLines(content);
   const reasons: string[] = [];
 
-  if (!content.includes(PLACEMENT_HEADING)) {
+  // A spec of placement lines needs no table (ADR-026 Decision 3).
+  if (lines.length === 0 && !content.includes(PLACEMENT_HEADING)) {
     reasons.push(
-      `no \`${PLACEMENT_HEADING}\` section — every criterion is unplaced for an instrument ` +
-        `reason, which reads the same as a spec nobody has started`,
+      `no \`${PLACEMENT_HEADING}\` section and no \`placement:\` line — every criterion is unplaced for an ` +
+        `instrument reason, which reads the same as a spec nobody has started`,
     );
-  } else if (rows.length === 0) {
+  } else if (lines.length === 0 && rows.length === 0) {
     reasons.push(`the \`${PLACEMENT_HEADING}\` section has no table rows`);
+  }
+  if (lines.length > 0 && parsePlacementTable(content).some(r => r.ids.length > 0)) {
+    reasons.push(
+      `this spec places criteria both ways: its \`${PLACEMENT_HEADING}\` table lists criteria, and ` +
+        `${lines[0]!.id} has a \`placement:\` line at line ${lines[0]!.line}. Two sources for one fact ` +
+        `will disagree, so keep one`,
+    );
+  }
+  // Counted from the lines, not the annotation map, which keeps only the last
+  // value of a repeated key (ADR-026 Decision 1).
+  for (const c of parsed) {
+    if (c.placements.length > 1) {
+      reasons.push(
+        `${c.id} has ${c.placements.length} placement lines (lines ${c.placements.map(p => p.line).join(", ")}); ` +
+          `a criterion is placed once`,
+      );
+    }
   }
   if (criteria.length === 0) {
     reasons.push("the spec states no criteria — nothing to place, which is not the same as placed");
   }
+
 
   const where = new Map<string, string[]>();
   for (const r of rows) for (const id of r.ids) where.set(id, [...(where.get(id) ?? []), r.placement]);

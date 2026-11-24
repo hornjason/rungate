@@ -93,6 +93,7 @@ export const ANNOTATION_KEYS = [
   "waived-reason",
   "waived-by",
   "waived-until",
+  "placement",
 ] as const;
 
 /** A criterion as parsed out of a spec, before any judgement about it. */
@@ -113,6 +114,12 @@ export interface ParsedCriterion {
   recordedFingerprint: string | null;
   /** An explicit decision not to prove this one. */
   waiver: WaiverFields | null;
+  /**
+   * Every `placement:` line beneath the criterion, in order (ADR-026). A list,
+   * because the annotation map keeps only the last value of a repeated key,
+   * and a criterion placed twice must be seen twice.
+   */
+  placements: { value: string; line: number }[];
 }
 
 /**
@@ -251,6 +258,7 @@ export function parseCriteria(content: string): ParsedCriterion[] {
     if (!m) continue;
 
     const annotations = new Map<string, string>();
+    const placements: { value: string; line: number }[] = [];
     let text = m[3];
 
     for (let j = i + 1; j < lines.length; j++) {
@@ -274,6 +282,7 @@ export function parseCriteria(content: string): ParsedCriterion[] {
       // name.
       const kv = next.match(/^\s{2,}([a-z-]+):\s*(.*)$/);
       if (kv && (ANNOTATION_KEYS as readonly string[]).includes(kv[1])) {
+        if (kv[1] === "placement") placements.push({ value: kv[2].trim(), line: j + 1 });
         annotations.set(kv[1], kv[2].trim());
         continue;
       }
@@ -309,6 +318,7 @@ export function parseCriteria(content: string): ParsedCriterion[] {
       waiver: anyWaiverField
         ? { reason: waiverReason ?? "", by: waiverBy ?? "", until: waiverUntil ?? "" }
         : null,
+      placements,
     });
   }
 

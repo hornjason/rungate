@@ -17,7 +17,14 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { PHASE_VALUE, parsePhaseHeadings, parsePlacementRows } from "../lib/spec-placement";
+import {
+  PHASE_VALUE,
+  parsePhaseHeadings,
+  parsePlacementRows,
+  parsePlacementTable,
+  placementReading,
+  placementsById,
+} from "../lib/spec-placement";
 import { parseCriteria } from "../lib/spec-evidence";
 
 const ROOT = join(import.meta.dir, "..");
@@ -394,5 +401,100 @@ describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs"
         "mechanical record that no registry pattern checks this criterion; without it the " +
         "criterion reads as covered. Re-run `bun bin/rungate.ts scaffold . --fix`.",
     ).toContain("REVIEW: unmatched");
+  });
+});
+
+// covers SC-2806
+describe("SC-2806: a criterion's placement is read from the line beneath it (ADR-026)", () => {
+  const spec = (lines: string[]) => `---\ndoc-type: spec\n---\n\n## Success Criteria\n\n${lines.join("\n")}\n`;
+  const LINES = spec([
+    "- [ ] SC-1: one.",
+    "      placement: Phase 1",
+    "- [ ] SC-2: two.",
+    "      needs: test",
+    "      placement: Phase 2",
+    "- [ ] SC-3: three.",
+    "      placement: Phase 1",
+    "- [ ] SC-4: four.",
+    "      placement: Blocked — on the vendor",
+  ]);
+  const TABLE = spec([
+    "- [ ] SC-1: one.",
+    "- [ ] SC-2: two.",
+    "",
+    "### Phase placement",
+    "",
+    "| Placement | Criteria |",
+    "|---|---|",
+    "| **Phase 1** | SC-1 |",
+    "| Done | SC-2 |",
+  ]);
+
+  test("rows come from the placement lines: one per value, in first-seen order, ids in document order", () => {
+    expect(parsePlacementRows(LINES).map(r => [r.placement, r.ids])).toEqual([
+      ["Phase 1", ["SC-1", "SC-3"]],
+      ["Phase 2", ["SC-2"]],
+      ["Blocked — on the vendor", ["SC-4"]],
+    ]);
+    // A row's line is its first placement line, so a message points at one.
+    expect(parsePlacementRows(LINES)[0]!.line).toBe(LINES.split("\n").indexOf("      placement: Phase 1") + 1);
+  });
+
+  test("a spec of placement lines and no table reads MEASURED, and every reader gets the same values", () => {
+    const r = placementReading(LINES);
+    expect(r.reading, r.unmeasuredReasons.join("; ")).toBe("MEASURED");
+    expect(r.unplaced).toEqual([]);
+    expect(r.doubled).toEqual([]);
+    expect(placementsById(LINES).get("SC-2")).toBe("Phase 2");
+    expect(placementsById(LINES).get("SC-4")).toBe("Blocked — on the vendor");
+  });
+
+  test("a spec with no placement lines is read from its table exactly as before", () => {
+    expect(parsePlacementRows(TABLE)).toEqual(parsePlacementTable(TABLE));
+    expect(parsePlacementRows(TABLE).map(r => [r.placement, r.ids])).toEqual([["Phase 1", ["SC-1"]], ["Done", ["SC-2"]]]);
+    expect(placementReading(TABLE).reading).toBe("MEASURED");
+    // Both of rungate's placed specs are still tables, and read as tables.
+    for (const name of ["SPEC-TO-BOARD-PIPELINE-SPEC.md", "CODE-REVIEW-CONVERGENCE-SPEC.md"]) {
+      const content = readFileSync(join(ROOT, "specs", name), "utf-8");
+      expect(parseCriteria(content).some(c => c.placements.length > 0), name).toBe(false);
+      expect(parsePlacementRows(content), name).toEqual(parsePlacementTable(content));
+    }
+  });
+
+  test("a table that lists a criterion beside a placement line is UNMEASURED, naming the spec's two sources", () => {
+    const mixed = TABLE.replace("- [ ] SC-1: one.", "- [ ] SC-1: one.\n      placement: Phase 1");
+    const r = placementReading(mixed);
+    expect(r.reading).toBe("UNMEASURED");
+    expect(r.unmeasuredReasons.join("\n")).toContain("this spec places criteria both ways");
+    expect(r.unmeasuredReasons.join("\n")).toContain("SC-1");
+  });
+
+  test("a table heading that lists no criterion id does not make a spec of placement lines mixed", () => {
+    const meanings = LINES + "\n### Phase placement\n\n| Placement | Criteria |\n|---|---|\n| Phase 1 | |\n";
+    expect(placementReading(meanings).reading, placementReading(meanings).unmeasuredReasons.join("; ")).toBe("MEASURED");
+    // And the lines are what was read, not the empty table (#2777 review).
+    expect(placementReading(meanings).unplaced).toEqual([]);
+    expect(placementsById(meanings).get("SC-2")).toBe("Phase 2");
+  });
+
+  test("a criterion with two placement lines is UNMEASURED and named, even when both say the same", () => {
+    for (const second of ["      placement: Phase 2", "      placement: Phase 1"]) {
+      const twice = LINES.replace("      placement: Phase 1\n- [ ] SC-2", `      placement: Phase 1\n${second}\n- [ ] SC-2`);
+      const r = placementReading(twice);
+      expect(r.reading).toBe("UNMEASURED");
+      expect(r.unmeasuredReasons.join("\n")).toContain("SC-1 has 2 placement lines");
+    }
+  });
+
+  // #2777 review: a value copied from a table cell keeps its emphasis.
+  test("a placement line's emphasis is stripped as a table cell's is", () => {
+    const starred = LINES.replace("placement: Phase 2", "placement: **Phase 2**");
+    expect(placementsById(starred).get("SC-2")).toBe("Phase 2");
+    expect(placementReading(starred).unrecognised).toEqual([]);
+  });
+
+  test("a placement line's value is checked as a table's is", () => {
+    const odd = LINES.replace("placement: Phase 2", "placement: Phase two");
+    expect(placementReading(odd).unrecognised).toEqual(["Phase two"]);
   });
 });

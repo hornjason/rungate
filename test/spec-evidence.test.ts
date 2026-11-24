@@ -521,6 +521,26 @@ describe("the parser saw what it thinks it saw", () => {
     ]);
   });
 
+  // covers SC-2806
+  test("SC-2806: a placement line leaves the criterion's text and fingerprint unchanged", () => {
+    const bare = `${BOUND}- [ ] SC-2560: the gate refuses an unsigned payload.\n      needs: test\n`;
+    const placed = `${BOUND}- [ ] SC-2560: the gate refuses an unsigned payload.\n      needs: test\n      placement: Phase 7\n`;
+    const [a] = parseCriteria(bare);
+    const [b] = parseCriteria(placed);
+    expect(b!.text).toBe(a!.text);
+    expect(criterionFingerprint(b!.text)).toBe(criterionFingerprint(a!.text));
+    expect(b!.placements.map(p => p.value)).toEqual(["Phase 7"]);
+  });
+
+  // covers SC-2806
+  test("SC-2806: every placement line is kept, so a second one can be counted", () => {
+    // The annotation map keeps the last value of a repeated key, which would
+    // read a criterion placed twice as placed once (ADR-026 Decision 1).
+    const [p] = parseCriteria(`${BOUND}- [ ] SC-2560: x.\n      placement: Phase 7\n      placement: Phase 8\n`);
+    expect(p!.placements.map(x => x.value)).toEqual(["Phase 7", "Phase 8"]);
+    expect(p!.placements[1]!.line).toBe(p!.placements[0]!.line + 1);
+  });
+
   test("an uppercase fingerprint is the same fingerprint", () => {
     const text = "the loader throws on malformed JSON.";
     const content =
@@ -538,14 +558,16 @@ describe("the parser saw what it thinks it saw", () => {
       "waived-reason",
       "waived-by",
       "waived-until",
+      "placement",
     ]);
     // Every key the parser surfaces must be in the set — otherwise the set
     // is documentation rather than the thing the parser consults.
     const content =
       `${BOUND}- [x] SC-2560: x.\n      needs: test\n      proved-by: a\n` +
       "      fingerprint: deadbeef\n      waived-reason: r\n      waived-by: b\n" +
-      "      waived-until: 2027-01-01\n";
+      "      waived-until: 2027-01-01\n      placement: Phase 7\n";
     const [p] = parseCriteria(content);
+    expect(p.placements.map(x => x.value)).toEqual(["Phase 7"]);
     expect(p.needs).toBe("test");
     expect(p.provedBy).toBe("a");
     expect(p.recordedFingerprint).toBe("deadbeef");
