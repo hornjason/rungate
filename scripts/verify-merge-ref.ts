@@ -17,6 +17,7 @@
  * the value is read at arm time while auto-merge fires later. A push arriving
  * between arming and firing is exactly the window the flag leaves open, and a
  * push arriving after firing has no merge left to refuse.
+ * forge-behaviour: match-head-commit-checked-at-arm-time
  *
  * ## What this does NOT do, said first
  *
@@ -130,6 +131,9 @@ export interface RefInputs {
    * The distinction was always available: against a real remote
    * `git ls-remote <r> refs/heads/nope` exits 0 with empty output, and
    * against an unreachable one it exits 128.
+   *
+   * forge-behaviour: ls-remote-absent-ref-exits-zero
+   * forge-behaviour: ls-remote-unreadable-exits-nonzero
    */
   remoteRead?: boolean;
   /** What `git ls-remote` reports for the branch, absent when the ref is gone. */
@@ -218,7 +222,9 @@ export function mergeRefReading(input: RefInputs): RefVerdict {
   if (merged) {
     // The #1847 shape. The commits on the remote are real bytes on no path
     // to main, and they are indistinguishable from merged work until
-    // somebody diffs the trees — which is what this is instead of.
+    // somebody diffs the trees — which is what this is instead of. It sees
+    // them only because `headRefOid` stays at the merge-time head.
+    // forge-behaviour: head-ref-oid-frozen-at-merge
     if (remoteHead && remoteHead !== prHead) {
       return {
         reading: "PUSHED_AFTER_MERGE",
@@ -455,7 +461,10 @@ function remoteHostOf(url: string): string | null {
  */
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
-/** The largest bound measured to behave. See `timeoutReading` for the table. */
+/**
+ * The largest bound measured to behave. See `timeoutReading` for the table.
+ * forge-behaviour: bun-spawn-timeout-window
+ */
 export const MAX_TIMEOUT_MS = 2_147_483_647;
 
 export type TimeoutReading = { ok: true; ms: number } | { ok: false; detail: string };

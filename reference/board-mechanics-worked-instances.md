@@ -74,6 +74,7 @@ merge conflict. The merge conflict must be resolved first." The event builds
 GitHub reports as `DIRTY` has no merge commit to run on, and its checks
 simply never start. That looks the same as a queue that has not picked them
 up yet. Rebase first, then read the checks.
+(forge-behaviour: dirty-pull-request-runs-no-checks)
 
 To take the reading on any pull request whose checks have not started:
 
