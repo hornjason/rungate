@@ -15,13 +15,13 @@
  * `evals/scaffold-workspace.sh` is #2605's work.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 const ROOT = join(import.meta.dir, "..");
 const REAL_GIT = Bun.which("git") ?? "git";
-const SCAFFOLDS = ["evals/aditi-visual-review/scaffold.sh"];
+const SCAFFOLDS = ["evals/aditi-visual-review/scaffold.sh", "evals/discovery-finds-spec/scaffold.sh"];
 
 const scratch: string[] = [];
 afterAll(() => {
@@ -153,7 +153,7 @@ for (const path of SCAFFOLDS) {
       const r = scaffold(path, cwd, planted ? { ...row.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, REAL_GIT: REAL_GIT } : row.env);
       if (row.writes) {
         expect(r.code, r.err).toBe(0);
-        expect(existsSync(join(cwd, ".claude", "rungate", "config.json")), "the fixture was not written").toBe(true);
+        expect(readdirSync(cwd).filter((e) => e !== ".git").length, "the fixture was not written").toBeGreaterThan(0);
       } else {
         expect(r.code, "the scaffold did not refuse").toBe(1);
         expect(r.err).toContain("scaffold.sh: refusing");
@@ -163,3 +163,24 @@ for (const path of SCAFFOLDS) {
     });
   });
 }
+
+// #2754 review: the issue in the discovery prompt names one invoice line and
+// the two totals it shows. The planted code must produce exactly those totals,
+// or an agent that runs it against the issue finds no defect to size.
+describe("#2752: the discovery fixture shows the symptom its issue reports", () => {
+  test("the issue's line gives the issue's screen and PDF totals, and they differ", async () => {
+    const prompt = readFileSync(join(ROOT, "evals/discovery-finds-spec/prompt.md"), "utf-8");
+    const m = prompt.match(/a line of (\d+) x \$([\d.]+) shows a total of \$([\d.]+) on screen but \$([\d.]+) in the PDF/);
+    expect(m, "the prompt's issue no longer names a line and two totals").not.toBeNull();
+    const [, quantity, unitPrice, screen, pdf] = m!;
+    expect(screen).not.toBe(pdf);
+    const root = mkdtempSync(join(tmpdir(), "rg-eval-scaffold-"));
+    scratch.push(root);
+    mkdirSync(join(root, "cwd"));
+    expect(scaffold("evals/discovery-finds-spec/scaffold.sh", join(root, "cwd")).code).toBe(0);
+    const invoice = await import(join(root, "cwd", "lib", "invoice.ts"));
+    const lines = [{ quantity: Number(quantity), unitPrice: Number(unitPrice) }];
+    expect(invoice.screenTotal(lines)).toBe(screen);
+    expect(invoice.pdfTotal(lines)).toBe(pdf);
+  });
+});

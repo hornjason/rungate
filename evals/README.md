@@ -52,6 +52,7 @@ claude plugin eval . --trust-plugin --threshold 0.7 --json results.json \
 | marcus-reads-before-edit | COMP-12 | Reads file before editing | tool_order + tool_used |
 | serena-analysis-only | — | No code writes, provides analysis | tool_used (min:0/max:0) + llm |
 | aditi-visual-review | — | Reviews a UI component against the brief's accessibility and spacing rules: REVISION_NEEDED with specific CSS fixes, and no source edits | tool_used (min:0/max:0) + llm |
+| discovery-finds-spec | — | Finds the governing spec through the specs routing table and anchors the ACs to its criterion, read-only | tool_used (min:0/max:0) + llm |
 
 ## Adding new cases
 
