@@ -210,9 +210,15 @@ export function parsePlacementRows(content: string): PlacementRow[] {
   return [...rows.values()];
 }
 
-/** Every `placement:` line beneath a criterion, in document order (ADR-026). */
+/**
+ * Every `placement:` line beneath a criterion, in document order (ADR-026).
+ * Asterisks are stripped as {@link parsePlacementTable} strips a cell's, so a
+ * value copied from a table reads the same in either form (#2777 review).
+ */
 export function placementLines(content: string): { id: string; value: string; line: number }[] {
-  return parseCriteria(content).flatMap(c => c.placements.map(p => ({ id: c.id, value: p.value, line: p.line })));
+  return parseCriteria(content).flatMap(c =>
+    c.placements.map(p => ({ id: c.id, value: p.value.replaceAll("*", "").trim(), line: p.line })),
+  );
 }
 
 /**

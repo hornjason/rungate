@@ -472,6 +472,9 @@ describe("SC-2806: a criterion's placement is read from the line beneath it (ADR
   test("a table heading that lists no criterion id does not make a spec of placement lines mixed", () => {
     const meanings = LINES + "\n### Phase placement\n\n| Placement | Criteria |\n|---|---|\n| Phase 1 | |\n";
     expect(placementReading(meanings).reading, placementReading(meanings).unmeasuredReasons.join("; ")).toBe("MEASURED");
+    // And the lines are what was read, not the empty table (#2777 review).
+    expect(placementReading(meanings).unplaced).toEqual([]);
+    expect(placementsById(meanings).get("SC-2")).toBe("Phase 2");
   });
 
   test("a criterion with two placement lines is UNMEASURED and named, even when both say the same", () => {
@@ -481,6 +484,13 @@ describe("SC-2806: a criterion's placement is read from the line beneath it (ADR
       expect(r.reading).toBe("UNMEASURED");
       expect(r.unmeasuredReasons.join("\n")).toContain("SC-1 has 2 placement lines");
     }
+  });
+
+  // #2777 review: a value copied from a table cell keeps its emphasis.
+  test("a placement line's emphasis is stripped as a table cell's is", () => {
+    const starred = LINES.replace("placement: Phase 2", "placement: **Phase 2**");
+    expect(placementsById(starred).get("SC-2")).toBe("Phase 2");
+    expect(placementReading(starred).unrecognised).toEqual([]);
   });
 
   test("a placement line's value is checked as a table's is", () => {
