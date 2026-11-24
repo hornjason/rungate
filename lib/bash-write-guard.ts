@@ -3822,8 +3822,8 @@ const DEFINING_MODULE = new Map<string, string>([
     .map((n): [string, string] => [n, 'fs']),
 ]);
 
-/** `require('fs')` or `require("node:fs")` ending exactly at `end`. */
-const REQUIRE_FS = /require\(\s*(['"])(?:node:)?fs\1\s*\)\s*$/;
+/** `require('fs')` or `require("node:fs")` ending the text, with `require` its own word. */
+const REQUIRE_FS = /(?<![\w$.])require\(\s*(['"])(?:node:)?fs\1\s*\)\s*$/;
 
 /**
  * Whether the write callee named in front of the `(` at `openIndex` is shown
@@ -3834,7 +3834,8 @@ const REQUIRE_FS = /require\(\s*(['"])(?:node:)?fs\1\s*\)\s*$/;
  *
  * - A dotted callee needs a module receiver: `shutil.copy`, `fs.writeFileSync`,
  *   `require('fs').writeFileSync`. `foo.copy` is a method of something the
- *   body made.
+ *   body made, and so is `shutil.copy` once the body binds its own `shutil`
+ *   (`receiverShown`).
  * - A bare name is shown when every place the code names it, outside string
  *   literals and attribute access, is a call that is not a definition, or an
  *   import from the module that defines it (`from shutil import copy`,
@@ -3851,7 +3852,7 @@ function calleeShown(body: string, openIndex: number, callee: string, spans: [nu
   const dot = callee.lastIndexOf('.');
   if (dot >= 0) {
     const receiver = callee.slice(0, dot);
-    if (receiver !== '') return WRITE_MODULES.has(receiver);
+    if (receiver !== '') return WRITE_MODULES.has(receiver) && receiverShown(body, receiver, spans);
     // `require('fs').writeFileSync(`: the receiver is the call in front.
     const before = body.slice(0, openIndex).replace(/\s+$/, '');
     return REQUIRE_FS.test(before.slice(0, before.length - callee.length));
@@ -3861,12 +3862,14 @@ function calleeShown(body: string, openIndex: number, callee: string, spans: [nu
   const imports: Array<[number, number]> = [];
   if (module !== undefined) {
     const forms = [
-      new RegExp(`from\\s+${module}\\s+import\\s+\\(?([^\\n;)]*)`, 'g'),
+      new RegExp(`from\\s+${module}\\s+import\\s+\\(?([^\\n;)'"#]*)`, 'g'),
       new RegExp(`(?:const|let|var)\\s*\\{([^}]*)\\}\\s*=\\s*require\\(\\s*(['"])(?:node:)?${module}\\2\\s*\\)`, 'g'),
       new RegExp(`import\\s*\\{([^}]*)\\}\\s*from\\s*(['"])(?:node:)?${module}\\2`, 'g'),
     ];
     for (const form of forms) {
       for (const m of body.matchAll(form)) {
+        // An import spelled inside a string is not one (#2726 review).
+        if (inLiteral(m.index ?? 0, spans)) continue;
         // Listed plainly, not renamed: `copy as c` and `{ writeFileSync: w }`
         // bind another name, which is not a call to this one.
         const names = m[1].split(',').map(x => x.trim());
@@ -3879,9 +3882,62 @@ function calleeShown(body: string, openIndex: number, callee: string, spans: [nu
     const at = m.index ?? 0;
     if (spans.some(([s, e]) => at > s && at < e)) continue;
     if (imports.some(([s, e]) => at >= s && at < e)) continue;
-    const call = /^\s*\(/.test(body.slice(at + callee.length));
-    const definition = /(?:\bdef|\bfunction\s*\*?|\bclass)\s+$/.test(body.slice(Math.max(0, at - 16), at));
-    if (!call || definition) return false;
+    const rest = body.slice(at + callee.length);
+    if (!/^\s*\(/.test(rest) || definesName(body, at, at + callee.length + rest.indexOf('('), spans)) return false;
+  }
+  return true;
+}
+
+/** Whether the offset `at` falls inside a string literal, quotes included. */
+function inLiteral(at: number, spans: [number, number][]): boolean {
+  return spans.some(([s, e]) => at >= s && at <= e);
+}
+
+/**
+ * Whether the name at `at`, followed by the `(` at `open`, defines rather than
+ * calls (#2726 review): `def`, `class` or `function` before it, however much
+ * whitespace lies between, or a body after its parameters (`name(p) { … }`,
+ * a JavaScript method shorthand, which `Object.assign(globalThis, …)` can make
+ * global).
+ */
+function definesName(body: string, at: number, open: number, spans: [number, number][]): boolean {
+  if (/(?<![\w$])(?:def|class|function\s*\*?)$/.test(body.slice(0, at).replace(/\s+$/, ''))) return true;
+  let depth = 0;
+  for (let i = open; i < body.length; i++) {
+    if (inLiteral(i, spans)) continue;
+    if (body[i] === '(') depth++;
+    else if (body[i] === ')' && --depth === 0) return /^\s*\{/.test(body.slice(i + 1));
+  }
+  return false;
+}
+
+/**
+ * Whether a module receiver (`shutil`, `fs`) is the module (#2726 review):
+ * every place the code names it is an attribute access (`shutil.copy`) or the
+ * import that binds it (`import os, shutil`, `const fs = require('fs')`,
+ * `import fs from 'fs'`, `import * as fs from 'fs'`). A class, an assignment
+ * or a parameter of that name names it somewhere else, the rule bare names
+ * are held to.
+ */
+function receiverShown(body: string, name: string, spans: [number, number][]): boolean {
+  const imports: Array<[number, number]> = [];
+  const forms = [
+    /(?:^|[\n;])[ \t]*import[ \t]+([^\n;#'"]+)/g,
+    new RegExp(`(?:const|let|var)\\s+(${name})\\s*=\\s*require\\(\\s*(['"])(?:node:)?${name}\\2\\s*\\)`, 'g'),
+    new RegExp(`import\\s+(?:\\*\\s*as\\s+)?(${name})\\s+from\\s*(['"])(?:node:)?${name}\\2`, 'g'),
+  ];
+  for (const form of forms) {
+    for (const m of body.matchAll(form)) {
+      if (inLiteral(m.index ?? 0, spans)) continue;
+      const names = m[1].split(',').map(x => x.trim());
+      if (names.some(x => x === name || x.startsWith(`${name}.`))) imports.push([m.index ?? 0, (m.index ?? 0) + m[0].length]);
+    }
+  }
+  for (const m of body.matchAll(new RegExp(`(?<![\\w$.])${name}(?![\\w$])`, 'g'))) {
+    const at = m.index ?? 0;
+    if (inLiteral(at, spans) || imports.some(([s, e]) => at >= s && at < e)) continue;
+    if (/^\s*\./.test(body.slice(at + name.length))) continue;
+    return false;
   }
   return true;
 }
