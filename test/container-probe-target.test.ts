@@ -44,6 +44,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { containerProbeTarget, CONTAINER_HOST } from "../lib/dev-liveness";
 import { shipPrelude } from "../scripts/build-workflow-launch";
+import { shipShellQuote as launchShellQuote } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -66,12 +67,8 @@ type Probe =
   | { kind: "unmeasured"; detail: string }
   | { kind: "probe"; host: string; port: number; healthPath: string; url: string; safeUrl: string };
 
-/** ship.js's own `shellQuote`, by name, for the harnesses below (#1031). */
-const shipShellQuote: (word: unknown) => string = (() => {
-  const m = shipSource.match(/function shellQuote\(word\) \{[\s\S]*?\n\}/);
-  if (!m) throw new Error("ship.js no longer defines shellQuote(word) — this harness extracts it by name");
-  return new Function(`${m[0]}\nreturn shellQuote`)();
-})();
+/** The `shellQuote` the launch file runs, for the harnesses below (#1031), through the one helper (#2736). */
+const shipShellQuote: (word: unknown) => string = launchShellQuote();
 
 // Since #2417 the probe ship.js runs is the one ship.run.js bundles from
 // lib/dev-liveness.ts, not a hand copy; this drives that bundled code, and a

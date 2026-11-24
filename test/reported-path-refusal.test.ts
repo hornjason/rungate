@@ -101,9 +101,16 @@
  * about.
  */
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
-import { securityHelpersRegion, shipWorktreeIdentity, worktreeIdentityRegion } from "./helpers/ship-block";
+import { shellQuote } from "../lib/workflow-security";
+import {
+  securityHelpersRegion,
+  shellQuoteSource,
+  shipShellQuote,
+  shipWorktreeIdentity,
+  worktreeIdentityRegion,
+} from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -575,5 +582,52 @@ describe("#2680: the one helper that reaches ship.js's security-helpers region",
     const pathRefusal = new Function(`${securityHelpersRegion()}\nreturn pathRefusal;`)() as (p: string) => unknown;
     expect(pathRefusal("lib/ok.ts")).toBeNull();
     expect(pathRefusal("../escape.ts")).not.toBeNull();
+  });
+});
+
+describe("#2736: the one helper that reaches the shellQuote the launch file runs", () => {
+  const ONE = "function shellQuote(word) {\n  return `<${String(word)}>`\n}";
+
+  test("#2736 AC-1: the live source yields a shellQuote that agrees with lib/workflow-security.ts", () => {
+    const quote = shipShellQuote();
+    for (const input of ["", "plain", "it's", "a'b'c", "\\", "a\nb", "$(x)", "`x`", 42, null, undefined]) {
+      expect(quote(input), JSON.stringify(input)).toBe(shellQuote(input));
+    }
+  });
+
+  test("#2736 AC-1: it returns the definition, and the function built from it", () => {
+    expect(shellQuoteSource(`before\n${ONE}\nafter`)).toBe(ONE);
+    expect(shipShellQuote(`before\n${ONE}\nafter`)("x")).toBe("<x>");
+  });
+
+  test("#2736 AC-1: a source with no shellQuote, or with two, is refused by name", () => {
+    expect(() => shellQuoteSource("function other(word) {}")).toThrow(/function shellQuote\(word\)/);
+    expect(() => shellQuoteSource(`${ONE}\n${ONE}`)).toThrow(/function shellQuote\(word\)/);
+  });
+
+  /**
+   * Every test that still names `function shellQuote(` outside the helper.
+   * #2734 removes ship.js's definition, and each of these would then cut
+   * nothing. The list must equal exactly the five #2737 moves, so it refuses
+   * a new reader and a reader moved without updating it alike.
+   */
+  test("#2736 AC-2: no test outside the helper reads shellQuote out of ship.js by name, save the five #2737 moves", () => {
+    const EXEMPT = new Map([
+      ["helpers/ship-block.ts", "the helper itself"],
+      ["reported-path-refusal.test.ts", "this file, whose fixture defines one"],
+      ["workflow-prompt-top-level-cd.test.ts", "it reads the SHELL-QUOTE blocks by their markers, and #2734 changes that population"],
+    ]);
+    const dir = import.meta.dir;
+    const readers = (readdirSync(dir, { recursive: true }) as string[])
+      .filter(f => f.endsWith(".ts") && !EXEMPT.has(f))
+      .filter(f => /function shellQuote\(/.test(readFileSync(join(dir, f), "utf-8").replaceAll("\\(", "(")))
+      .sort();
+    expect(readers, "a test reads shellQuote out of ship.js itself; use shellQuoteSource() or shipShellQuote()").toEqual([
+      "commit-subject-quoting.test.ts",
+      "security-verdict-blocks.test.ts",
+      "ship-local-env-clause.test.ts",
+      "verify-fanout.test.ts",
+      "worktree-repo.test.ts",
+    ]);
   });
 });

@@ -25,6 +25,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { shellQuoteSource } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -65,7 +66,8 @@ function loadBriefedAgent(roles: Record<string, unknown>): { call: BriefedAgent;
   // without it the block has a free reference and every case here dies on a
   // ReferenceError — which is the correct signal and the reason it is sliced
   // from its own markers rather than stubbed.
-  const block = `${shipSource.match(/function shellQuote\(word\)[\s\S]*?\n}/)?.[0] ?? ""}\n` +
+  // shellQuote as the launch file runs it, through the one helper (#2736).
+  const block = `${shellQuoteSource()}\n` +
     `${sliceBlock(PRECEDENCE_START, PRECEDENCE_END)}\n` +
     `${sliceBlock(TIMING_START, TIMING_END)}\n${sliceBlock(BLOCK_START, BLOCK_END)}`;
   const calls: Captured[] = [];

@@ -25,7 +25,7 @@ import {
   TASK_SOURCES,
 } from "../lib/brief-precedence";
 import { enclosingChain } from "../lib/reachability";
-import { securityHelpersRegion, shipWorktreeIdentity } from "./helpers/ship-block";
+import { securityHelpersRegion, shellQuoteSource, shipWorktreeIdentity } from "./helpers/ship-block";
 
 const REPO_ROOT = join(import.meta.dir, "..");
 const shipSource = readFileSync(join(REPO_ROOT, "workflows", "ship.js"), "utf-8");
@@ -164,7 +164,7 @@ describe("SC-1474: the brief alone still works", () => {
     // runtime above everything this file writes, so the counterweight is
     // placed last — nearest the task.
     const block =
-      `${shipSource.match(/function shellQuote\(word\)[\s\S]*?\n}/)?.[0] ?? ""}\n` +
+      `${shellQuoteSource()}\n` +
       `${slice(PRECEDENCE_START, PRECEDENCE_END)}\n` +
       `${slice(TIMING_START, TIMING_END)}\n` +
       `${slice(BRIEFED_START, BRIEFED_END)}`;
