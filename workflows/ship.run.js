@@ -659,6 +659,9 @@ function pathRefusal(p) {
     }
     return null;
 }
+function shellQuote(word) {
+    return `'${String(word).replace(/'/g, "'\\''")}'`;
+}
 function buildSafeGitAdd(filesChanged) {
     const validated = validateFilePaths(filesChanged);
     if (validated.rejected.length > 0) {
@@ -1167,9 +1170,6 @@ function bareBranchName(ref) {
     .replace(/^origin\//, '')
 }
 
-function shellQuote(word) {
-  return `'${String(word).replace(/'/g, "'\\''")}'`
-}
 
 
 function suiteOutputPath(workDir) {

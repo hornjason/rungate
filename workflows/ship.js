@@ -332,21 +332,10 @@ function bareBranchName(ref) {
 // composes the subject from the API into a file and the agent runs
 // `git commit -F` on it — one composer in the tree, and nothing to compare
 // it against, which is better than a comparator over a second copy.
-// ──── SHELL-QUOTE-START ────
-// Single-quote a shell word. Single quotes are the only shell quoting with
-// no interior expansion at all, so a path containing a space, a `$` or a
-// backtick all survive. `"${…}"` stops at the space and leaves the rest
-// expanding, which is the cheapest wrong fix for #1086 and not accepted.
-//
-// INLINED, not imported: the workflow sandbox has no require, no dynamic
-// import() and no filesystem (#69). `lib/workflow-security.ts` is the
-// source of truth; test/workflow-prompt-top-level-cd.test.ts runs every
-// copy against the same inputs and fails on any divergence, so changing
-// one means changing all of them.
-function shellQuote(word) {
-  return `'${String(word).replace(/'/g, "'\\''")}'`
-}
-// ──── SHELL-QUOTE-END ────
+// shellQuote, which single-quotes a shell word (#1086), is
+// lib/workflow-security.ts's own code, carried into workflows/ship.run.js by
+// the launch bundle (#2734, SC-2775 wave 7). ship.js holds no copy; the
+// workflows with no launch bundle keep their inline SHELL-QUOTE blocks.
 
 
 // ──── RECORDER-COMMAND-START ────

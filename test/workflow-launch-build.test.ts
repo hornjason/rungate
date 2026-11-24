@@ -391,12 +391,11 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
       "lib/worktree-repo.ts": [
         "repoSlug", "redactRemote", "looksLikeFilesystemPath", "worktreeIdentity", "worktreeIdentityViolations",
       ],
-      // #2684, SC-2775 wave 4-B: ship.js's SECURITY-HELPERS copies of these nine.
-      // shellQuote stays in ship.js's SHELL-QUOTE block, which four workflows
-      // carry byte-identical and test/workflow-prompt-top-level-cd.test.ts holds.
+      // #2684, SC-2775 wave 4-B: ship.js's SECURITY-HELPERS copies of these nine;
+      // #2734, wave 7: its SHELL-QUOTE copy of shellQuote.
       "lib/workflow-security.ts": [
         "pathRefusal", "validateFilePaths", "buildSafeGitAdd", "isSafeBranchName", "repoSlugRefusal",
-        "rootPathRefusal", "resolveEvidencePath", "validateEvidenceCommand", "buildSafeSSHCommand",
+        "rootPathRefusal", "resolveEvidencePath", "validateEvidenceCommand", "buildSafeSSHCommand", "shellQuote",
       ],
       // #2688, SC-2775 wave 5: ship.js's REFUSAL-CURRENCY copy.
       "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals", "failureCheckName"],
@@ -425,6 +424,8 @@ describe("#2400: the launch file carries suiteCurrency from lib, and ship.js no 
       "suiteCurrency", "planCoverage", "denylistViolations", "rookGateVerdict", "reviewIsCurrent", "priorWorkRefusal", "containerProbeTarget",
       // #2684: the security helpers, and a private rule only they use.
       "pathRefusal", "validateFilePaths", "isSafeBranchName", "buildSafeSSHCommand", "SHELL_METACHARACTERS",
+      // #2734: the quoter.
+      "shellQuote",
       // #2688: the refusal-currency rule.
       "resolvedCheckNames", "retireSupersededRefusals",
       // #2690: the one rule for which check a failure line belongs to.
