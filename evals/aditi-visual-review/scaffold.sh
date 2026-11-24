@@ -7,7 +7,12 @@ set -euo pipefail
 # directory that holds anything, a .git included, is somebody's work. The eval
 # harness hands the case an empty directory (measured 2026-11-24, claude
 # 2.1.331), so this refuses nothing the harness runs.
-if [ -n "$(ls -A . 2>/dev/null)" ]; then
+# A listing that fails is not an empty directory, so it is refused too.
+if ! listing="$(ls -A . 2>&1)"; then
+  echo "scaffold.sh: refusing to write into a directory that cannot be listed: $PWD ($listing)" >&2
+  exit 1
+fi
+if [ -n "$listing" ]; then
   echo "scaffold.sh: refusing to write into a directory that is not empty: $PWD" >&2
   exit 1
 fi
@@ -32,7 +37,7 @@ mkdir -p components .claude/rungate
 cat > .claude/rungate/config.json << 'JSONEOF'
 {
   "project": "billing-ui",
-  "pages": { "/settings/billing": ["SaveBar"] }
+  "pages": { "/settings/billing": "SaveBar" }
 }
 JSONEOF
 
