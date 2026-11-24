@@ -466,6 +466,9 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     // Malformed, but names no gh: nothing here can file, so it runs.
     [`echo "$(printf case x)"; ls -la`],
     [`cat > /tmp/d.md <<'EOF'\nhello\n`],
+    // A non-shell program is not bash, so failing to parse as bash says nothing.
+    [`python3 - <<'PY'\nimport subprocess\nsubprocess.run(["gh", "issue", "view", "1"])\nPY`],
+    [`python3 -c 'import os; os.system("gh issue view 1")'`],
     // Names gh, and the grammar reads it.
     [`gh issue create --title t --label follow-up`],
     [`echo "$(printf x)"; gh issue view 12`],
