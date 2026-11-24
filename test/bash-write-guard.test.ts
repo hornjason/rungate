@@ -5322,6 +5322,7 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["an if on an attribute beside shutil.copy", PY(`import shutil, sys\nif sys.flags.dev_mode:\n    pass\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
     ["a keyword argument beside an attribute argument", PY(`import shutil, sys\nshutil.copy(sys.argv[1], '${T}', follow_symlinks=True)`)],
     ["path required beside fs", JS(`const fs = require('fs'); const path = require('path'); fs.writeFileSync('${T}', path.basename('a/b'))`)],
+    ["an item assigned through an attribute key beside shutil.copy", PY(`import shutil, sys\ncfg = {}\ncfg[sys.platform] = 1\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
     ["several allowed modules imported beside shutil", PY(`import os, json, sys, shutil\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
   ])("CONTROL: %s onto a scratch path stays exempt", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);

@@ -4035,6 +4035,28 @@ function isCall(code: string, at: number, len: number): boolean {
   return code[nextCode(code, k + 1)] !== '{';
 }
 
+/**
+ * `t` with every subscript group blanked: a `[` that follows a name, `)` or
+ * `]` opens an index, not a pattern, so `cfg[args.kind]` keeps no attribute
+ * inside it for the pattern check to find (review round 3 of #2756).
+ */
+function withoutSubscripts(t: string): string {
+  let out = t;
+  for (let k = 0; k < out.length; k++) {
+    if (out[k] !== '[') continue;
+    const p = prevCode(out, k - 1);
+    if (p < 0 || !(isIdentChar(out[p]) || out[p] === ')' || out[p] === ']')) continue;
+    let depth = 0;
+    let e = k;
+    for (; e < out.length; e++) {
+      if (out[e] === '[') depth++;
+      else if (out[e] === ']' && --depth === 0) break;
+    }
+    out = out.slice(0, k + 1) + ' '.repeat(Math.max(0, e - k - 1)) + out.slice(e);
+  }
+  return out;
+}
+
 /** Does any assignment, loop or `as` target an attribute? `os.environ['X'] = …` assigns an item. */
 function assignsAttribute(code: string): boolean {
   const TARGET_ATTR = /\.\s*[A-Za-z_$][\w$]*\s*(?=$|[,\])])/;
@@ -4062,7 +4084,7 @@ function assignsAttribute(code: string): boolean {
       else if (depth === 0 && c === '\n' && code[start - 1] !== '\\') break;
     }
     const target = code.slice(start + 1, end + 1);
-    if (TARGET_ATTR.test(target.trimEnd())) return true;
+    if (TARGET_ATTR.test(withoutSubscripts(target).trimEnd())) return true;
     // An annotated assignment: an attribute chain where a statement can start,
     // then `:`. `if x.y:` is not one (review round 3 of #2756).
     if (/(?:^|:)\s*[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)+\s*:(?![:=])/.test(target)) return true;
@@ -4081,6 +4103,10 @@ function assignsAttribute(code: string): boolean {
       if (code[j] === code[k]) depth++;
       else if (code[j] === open && --depth === 0) break;
     }
+    // A subscript follows an expression; a pattern starts one. `cfg[args.kind] = x`
+    // assigns an item (review round 3 of #2756).
+    const before = prevCode(code, j - 1);
+    if (before >= 0 && (isIdentChar(code[before]) || code[before] === ')' || code[before] === ']')) continue;
     if (/\.\s*[A-Za-z_$]/.test(code.slice(j + 1, k))) return true;
   }
   for (const m of code.matchAll(/\bfor\s*\(?([^\n]*?)\b(?:in|of)\b/g)) if (/\.\s*[A-Za-z_$]/.test(m[1])) return true;
