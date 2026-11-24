@@ -9,11 +9,13 @@
  * watched: it passes today, and it would also pass over a transport that was
  * never fixed if the fixture happened to be quoted somewhere upstream.
  *
- * So the pre-#614 defect is REBUILT inside a copy of `workflows/ship.js` —
- * `acPayloadShellArgument` emptied and `acPayloadReadExpression` restored to
- * interpolating the payload into the program text — and a four-case suite is
+ * So the pre-#614 defect is REBUILT inside a copy of the transport ship runs —
+ * `lib/evidence-command-transport.ts` as the launch bundle carries it into
+ * `workflows/ship.run.js` (#2730; ship.js held a hand copy until then) —
+ * with `acPayloadShellArgument` emptied and `acPayloadReadExpression` restored
+ * to interpolating the payload into the program text. A four-case suite is
  * SPAWNED against both copies with one argv, differing only in
- * `SHIP_UNDER_TEST`.
+ * `TRANSPORT_UNDER_TEST`.
  *
  * ## Why the mutant escapes the inner double quotes
  *
@@ -44,24 +46,21 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { readJunitCheckNames } from "../lib/junit-checks";
-import { phase2DecompositionBundle } from "./helpers/ship-block";
+import { evidenceTransportBundle } from "./helpers/ship-block";
 
 const REPO = join(import.meta.dir, "..");
-const SHIP = join(REPO, "workflows", "ship.js");
-const shipSource = readFileSync(SHIP, "utf-8");
-
-const TRANSPORT_START = "// ──── AC-PAYLOAD-TRANSPORT-START ────";
-const TRANSPORT_END = "// ──── AC-PAYLOAD-TRANSPORT-END ────";
+/** The transport ship runs: the library, as the launch bundle carries it (#2730). */
+const transportSource = evidenceTransportBundle();
 
 /**
- * The two sites the mutation removes, each declared as a literal rather than
- * regex-built, so renaming one aborts this file instead of quietly mutating
- * nothing.
+ * The two sites the mutation removes, as the launch bundle emits them, each
+ * declared as a literal rather than regex-built, so renaming one aborts this
+ * file instead of quietly mutating nothing.
  */
 const ARGUMENT_SITE =
-  "function acPayloadShellArgument(acs) {\n  return shellSingleQuote(acPayloadJson(acs))\n}";
+  "function acPayloadShellArgument(acs) {\n    return shellSingleQuote(acPayloadJson(acs));\n}";
 const READ_SITE =
-  "function acPayloadReadExpression() {\n  return `JSON.parse(process.argv[${AC_PAYLOAD_ARGV_INDEX}])`\n}";
+  "function acPayloadReadExpression() {\n    return `JSON.parse(process.argv[${AC_PAYLOAD_ARGV_INDEX}])`;\n}";
 
 /**
  * The pre-#614 transport, rebuilt: nothing after the closing quote, and the
@@ -75,7 +74,7 @@ const MUTANT_ARGUMENT = "function acPayloadShellArgument(acs) {\n  return ''\n}"
 const MUTANT_READ =
   "function acPayloadReadExpression(acs) {\n  return acPayloadJson(acs).replace(/\"/g, '\\\\\"')\n}";
 
-export function buildRawInterpolationMutant(src: string = shipSource): string {
+export function buildRawInterpolationMutant(src: string = transportSource): string {
   for (const [label, site] of [
     ["the payload argument builder", ARGUMENT_SITE],
     ["the payload read expression", READ_SITE],
@@ -83,7 +82,7 @@ export function buildRawInterpolationMutant(src: string = shipSource): string {
     const hits = src.split(site).length - 1;
     if (hits !== 1) {
       throw new Error(
-        `could not build the mutant: ${label} appears ${hits} times in workflows/ship.js, expected exactly 1. ` +
+        `could not build the mutant: ${label} appears ${hits} times in the launch bundle's transport, expected exactly 1. ` +
           `Either it was renamed, or a second copy exists and replacing one would leave the other in place.`,
       );
     }
@@ -92,9 +91,6 @@ export function buildRawInterpolationMutant(src: string = shipSource): string {
   if (out === src) throw new Error("could not build the mutant: the replacement changed nothing");
   if (out.includes("shellSingleQuote(acPayloadJson")) {
     throw new Error("could not build the mutant: the quoting survived the replacement");
-  }
-  if (!out.includes(TRANSPORT_START) || !out.includes(TRANSPORT_END)) {
-    throw new Error("could not build the mutant: the transport markers were lost");
   }
   return out;
 }
@@ -113,26 +109,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
-const SHIP = process.env.SHIP_UNDER_TEST;
+// The transport under test: the launch bundle's (#2730), or the mutant of it.
+const TRANSPORT = process.env.TRANSPORT_UNDER_TEST;
 const REPO = process.env.REPO_UNDER_TEST;
-if (!SHIP) throw new Error("SHIP_UNDER_TEST is unset — this suite has nothing to observe");
+if (!TRANSPORT) throw new Error("TRANSPORT_UNDER_TEST is unset — this suite has nothing to observe");
 if (!REPO) throw new Error("REPO_UNDER_TEST is unset — there is no orchestrator to call");
-// The transport block's shellSingleQuote, as the launch file carries it (#2693).
-const PHASE2_BUNDLE = process.env.PHASE2_BUNDLE_UNDER_TEST;
-if (!PHASE2_BUNDLE) throw new Error("PHASE2_BUNDLE_UNDER_TEST is unset — the transport block has no quoting to run");
-const SRC = readFileSync(SHIP, "utf-8");
-
-function block(start, end) {
-  const a = SRC.indexOf(start);
-  const b = SRC.indexOf(end);
-  if (a === -1 || b === -1) throw new Error("the ship.js under test is missing " + start);
-  return SRC.slice(a + start.length, b);
-}
-
-const body =
-  PHASE2_BUNDLE +
-  "\n" +
-  block("// ──── AC-PAYLOAD-TRANSPORT-START ────", "// ──── AC-PAYLOAD-TRANSPORT-END ────");
+const body = readFileSync(TRANSPORT, "utf-8");
 
 const T = new Function(body + "\nreturn { acPayloadShellArgument, acPayloadReadExpression }")();
 
@@ -147,9 +129,9 @@ const CASES = [
 ];
 
 /**
- * Assemble the setup step exactly as ship.js assembles it, out of the ship.js
- * under test, and run it. Nothing here escapes anything on the payload's
- * behalf.
+ * Assemble the setup step exactly as ship.js assembles it, out of the
+ * transport under test, and run it. Nothing here escapes anything on the
+ * payload's behalf.
  */
 function roundTrip(command) {
   const S = mkdtempSync(join(tmpdir(), "mutation-roundtrip-"));
@@ -206,7 +188,7 @@ interface SpawnReading {
  * to tell apart. `readJunitCheckNames` is the harness's own reader, so `ran`
  * comes from the same code the gates use.
  */
-function spawnSuite(suiteFile: string, shipUnderTest: string, reportFile: string): SpawnReading {
+function spawnSuite(suiteFile: string, transportUnderTest: string, reportFile: string): SpawnReading {
   const r = spawnSync(
     "bun",
     ["test", suiteFile, "--reporter=junit", `--reporter-outfile=${reportFile}`],
@@ -216,9 +198,8 @@ function spawnSuite(suiteFile: string, shipUnderTest: string, reportFile: string
       timeout: 600000,
       env: {
         ...process.env,
-        SHIP_UNDER_TEST: shipUnderTest,
+        TRANSPORT_UNDER_TEST: transportUnderTest,
         REPO_UNDER_TEST: REPO,
-        PHASE2_BUNDLE_UNDER_TEST: phase2DecompositionBundle(),
       },
     },
   );
@@ -264,19 +245,12 @@ describe("#614 SC-2056: the round-trip cases go red when the defect is put back"
     // program text with only its double quotes escaped. On the command run
     // `wf_c92dd0a7-fe6` lost, the two produce different shell words.
     const mutantSrc = buildRawInterpolationMutant();
-    const scratch = mkdtempSync(join(tmpdir(), "ship-mutant-"));
-    try {
-      const mutantShip = join(scratch, "ship.js");
-      writeFileSync(mutantShip, mutantSrc);
-
-      const block = (src: string) =>
-        src.slice(src.indexOf(TRANSPORT_START) + TRANSPORT_START.length, src.indexOf(TRANSPORT_END));
-      // The quoting is lib/phase2-decomposition.ts's, as the launch file
-      // carries it (#2693); only the transport block differs between the two.
-      const phase2 = phase2DecompositionBundle();
+    {
+      // The quoting is lib/phase2-decomposition.ts's, in the same bundle; only
+      // the two transport sites differ between the two.
       const load = (src: string) =>
         new Function(
-          `${phase2}\n${block(src)}\nreturn { acPayloadShellArgument, acPayloadReadExpression }`,
+          `${src}\nreturn { acPayloadShellArgument, acPayloadReadExpression }`,
         )() as { acPayloadShellArgument: (a: unknown) => string; acPayloadReadExpression: (a?: unknown) => string };
 
       const acs = [{
@@ -288,7 +262,7 @@ describe("#614 SC-2056: the round-trip cases go red when the defect is put back"
         },
       }];
 
-      const real = load(shipSource);
+      const real = load(transportSource);
       const mutant = load(mutantSrc);
 
       expect(real.acPayloadShellArgument(acs), "the real builder stopped quoting").toContain("'");
@@ -299,8 +273,6 @@ describe("#614 SC-2056: the round-trip cases go red when the defect is put back"
         "the mutant does not carry the payload as program text — the defect was not rebuilt",
       ).toContain("{s+=$1}");
       expect(mutant.acPayloadReadExpression(acs)).not.toBe(real.acPayloadReadExpression(acs));
-    } finally {
-      rmSync(scratch, { recursive: true, force: true });
     }
   });
 
@@ -309,11 +281,13 @@ describe("#614 SC-2056: the round-trip cases go red when the defect is put back"
     try {
       const suiteFile = join(scratch, "spawned.test.ts");
       writeFileSync(suiteFile, SUITE_SOURCE);
-      const mutantShip = join(scratch, "ship.js");
-      writeFileSync(mutantShip, buildRawInterpolationMutant());
+      const realTransport = join(scratch, "transport.js");
+      writeFileSync(realTransport, transportSource);
+      const mutantTransport = join(scratch, "transport-mutant.js");
+      writeFileSync(mutantTransport, buildRawInterpolationMutant());
 
-      const real = spawnSuite(suiteFile, SHIP, join(scratch, "real.xml"));
-      const mutated = spawnSuite(suiteFile, mutantShip, join(scratch, "mutant.xml"));
+      const real = spawnSuite(suiteFile, realTransport, join(scratch, "real.xml"));
+      const mutated = spawnSuite(suiteFile, mutantTransport, join(scratch, "mutant.xml"));
 
       // `ran` before any verdict. A suite that failed to resolve its imports
       // reports no failures, which is indistinguishable from a suite that
@@ -343,14 +317,14 @@ describe("#614 SC-2057: the mutant builder refuses to no-op", () => {
   test("a renamed site aborts the build rather than mutating nothing", () => {
     // A mutation harness that silently returns an unmutated copy reports
     // green over a mutation that never happened.
-    const moved = shipSource.replace(ARGUMENT_SITE, ARGUMENT_SITE.replace("acPayloadShellArgument", "acPayloadArg"));
+    const moved = transportSource.replace(ARGUMENT_SITE, ARGUMENT_SITE.replace("acPayloadShellArgument", "acPayloadArg"));
     expect(() => buildRawInterpolationMutant(moved)).toThrow(/appears 0 times/);
   });
 
   test("a second copy of a site aborts the build too", () => {
     // Replacing one of two leaves the other in place, and the mutant would
     // behave like the real source for a reason unrelated to the mutation.
-    expect(() => buildRawInterpolationMutant(`${shipSource}\n${ARGUMENT_SITE}\n`))
+    expect(() => buildRawInterpolationMutant(`${transportSource}\n${ARGUMENT_SITE}\n`))
       .toThrow(/appears 2 times/);
   });
 });

@@ -942,6 +942,40 @@ function phase2AcsCommand(harnessRoot, workDir, acs) {
     return (`bun --cwd ${shellSingleQuote(harnessRoot)} -e 'require("fs").writeFileSync(process.argv[1], process.argv[2])' ` +
         `${workDir}/phase2-acs.json ${shellSingleQuote(payload)}`);
 }
+const AC_PAYLOAD_ARGV_INDEX = 1;
+function acPayloadRecords(acs) {
+    return (Array.isArray(acs) ? acs : []).map((ac) => ({
+        id: ac.id,
+        type: ac.type,
+        statement: ac.statement,
+        threshold: ac.threshold,
+        evidenceMethod: ac.evidenceMethod,
+        specElement: ac.specElement,
+        coversCriteria: ac.coversCriteria || [],
+        contextFiles: ac.contextFiles || [],
+    }));
+}
+function acPayloadJson(acs) {
+    return JSON.stringify(acPayloadRecords(acs));
+}
+function acPayloadShellArgument(acs) {
+    return shellSingleQuote(acPayloadJson(acs));
+}
+function acPayloadReadExpression() {
+    return `JSON.parse(process.argv[${AC_PAYLOAD_ARGV_INDEX}])`;
+}
+function recordEvidenceRewrite(evidenceMethod, by, next) {
+    if (!evidenceMethod || typeof evidenceMethod.command !== "string")
+        return false;
+    const from = evidenceMethod.command;
+    if (from === next)
+        return false;
+    if (evidenceMethod.authoredCommand === undefined)
+        evidenceMethod.authoredCommand = from;
+    evidenceMethod.command = next;
+    evidenceMethod.rewrites = [...(evidenceMethod.rewrites || []), { by, from, to: next }];
+    return true;
+}
 // ---- bundled from lib/ by scripts/build-workflow-launch.ts: end ----
 
 
@@ -1805,42 +1839,6 @@ function coverageRecord(successCriteria, acs, deferrals) {
 }
 
 
-const AC_PAYLOAD_ARGV_INDEX = 1
-
-function acPayloadRecords(acs) {
-  return (Array.isArray(acs) ? acs : []).map(ac => ({
-    id: ac.id,
-    type: ac.type,
-    statement: ac.statement,
-    threshold: ac.threshold,
-    evidenceMethod: ac.evidenceMethod,
-    specElement: ac.specElement,
-    coversCriteria: ac.coversCriteria || [],
-    contextFiles: ac.contextFiles || [],
-  }))
-}
-
-function acPayloadJson(acs) {
-  return JSON.stringify(acPayloadRecords(acs))
-}
-
-function acPayloadShellArgument(acs) {
-  return shellSingleQuote(acPayloadJson(acs))
-}
-
-function acPayloadReadExpression() {
-  return `JSON.parse(process.argv[${AC_PAYLOAD_ARGV_INDEX}])`
-}
-
-function recordEvidenceRewrite(evidenceMethod, by, next) {
-  if (!evidenceMethod || typeof evidenceMethod.command !== 'string') return false
-  const from = evidenceMethod.command
-  if (from === next) return false
-  if (evidenceMethod.authoredCommand === undefined) evidenceMethod.authoredCommand = from
-  evidenceMethod.command = next
-  evidenceMethod.rewrites = [...(evidenceMethod.rewrites || []), { by, from, to: next }]
-  return true
-}
 
 const REFUSAL_SEVERITY = ['GATE_FAIL', 'UNPOPULATED_SLOT', 'REFUSAL']
 

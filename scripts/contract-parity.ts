@@ -87,7 +87,7 @@ import {
 import { CLAUDE_CODE_ACTION } from "../lib/claude-code-action";
 import { GOOGLE_AUTH_ACTION } from "../lib/google-auth-action";
 import { acPayloadReadExpression, acPayloadShellArgument } from "../lib/evidence-command-transport";
-import { shellSingleQuote } from "../lib/phase2-decomposition";
+import { launchBundle } from "./build-workflow-launch";
 import { testCommandDecision } from "../lib/test-command";
 import {
   AGENTS_MD,
@@ -567,8 +567,6 @@ export function toolchainParity(root: string, running: string = Bun.version): Ca
 export const HOSTILE_EVIDENCE_COMMAND =
   "grep -rhcE '^export function x' lib | awk '{s+=$1} END {print s+0}' ${HOME} $(echo no) `echo no`";
 
-const TRANSPORT_MARKERS = { start: "AC-PAYLOAD-TRANSPORT-START", end: "AC-PAYLOAD-TRANSPORT-END" };
-
 /**
  * One binding decides whether this category may execute, so a test can mutate
  * it to `true` and watch the refusal stop refusing. A second copy of this
@@ -581,16 +579,6 @@ export function transportIsFirstParty(root: string): boolean {
 
 /** Declared once: two return paths naming one category must not disagree. */
 const TRANSPORT_TITLE = "an evidence command survives the path it is actually executed through";
-
-/** The block `workflows/ship.js` carries because it cannot import (#69). */
-export function inlinedTransportBlock(shipSource: string): string {
-  const start = shipSource.indexOf(TRANSPORT_MARKERS.start);
-  const end = shipSource.indexOf(TRANSPORT_MARKERS.end);
-  if (start === -1 || end === -1 || end < start) {
-    throw new Error(`workflows/ship.js has no ${TRANSPORT_MARKERS.start}…${TRANSPORT_MARKERS.end} block`);
-  }
-  return shipSource.slice(shipSource.indexOf("\n", start) + 1, shipSource.lastIndexOf("\n", end));
-}
 
 /**
  * Category 3. The dry-run and the real execution must be the same transport.
@@ -616,7 +604,7 @@ export function transportParity(root: string): CategoryReport {
       unmeasured: [
         unmeasurable(
           "unresolved-source",
-          "workflows/ship.js — the inlined copy",
+          "workflows/ship.run.js — the launch bundle's transport",
           `transport parity executes the inspected tree's own code, so it is measured only against ${REPO_ROOT}; ` +
             `${root} is a different tree and nothing in it was compiled or run`,
         ),
@@ -660,36 +648,35 @@ export function transportParity(root: string): CategoryReport {
     }
   }
 
-  // 2. The inlined copy in ship.js, driven over the same payload. Two copies
-  //    of one transport is the same defect as two files naming two commands.
+  // 2. The transport the launch file runs, driven over the same payload: the
+  //    library as the launch bundle carries it into workflows/ship.run.js
+  //    (#2730). ship.js held a hand copy until SC-2775 wave 6b; a bundling that
+  //    changed what the code does is the same defect as a second copy.
   const shipPath = join(root, "workflows", "ship.js");
   if (!existsSync(shipPath)) {
     unmeasured.push(unmeasurable("absent-file", "workflows/ship.js", `workflows/ship.js does not exist under ${root}`));
   } else {
     const shipSource = readFileSync(shipPath, "utf-8");
     try {
-      const block = inlinedTransportBlock(shipSource);
-      const build = new Function(
-        "shellSingleQuote",
-        `${block}\nreturn { acPayloadShellArgument, acPayloadReadExpression }`,
-      ) as (q: typeof shellSingleQuote) => {
+      const launched = new Function(
+        `${launchBundle().text}\nreturn { acPayloadShellArgument, acPayloadReadExpression }`,
+      )() as {
         acPayloadShellArgument: (acs: unknown) => string;
         acPayloadReadExpression: () => string;
       };
-      const inlined = build(shellSingleQuote);
-      const inlinedArgument = inlined.acPayloadShellArgument(acs);
+      const launchedArgument = launched.acPayloadShellArgument(acs);
       sites.push({
-        site: "workflows/ship.js — the inlined AC-PAYLOAD-TRANSPORT copy",
-        value: inlinedArgument === argument ? "byte-identical to the library" : inlinedArgument,
+        site: "workflows/ship.run.js — the launch bundle's transport",
+        value: launchedArgument === argument ? "byte-identical to the library" : launchedArgument,
       });
-      if (inlinedArgument !== argument || inlined.acPayloadReadExpression() !== acPayloadReadExpression()) {
+      if (launchedArgument !== argument || launched.acPayloadReadExpression() !== acPayloadReadExpression()) {
         violations.push(
-          `workflows/ship.js's inlined transport disagrees with lib/evidence-command-transport.ts on the same payload`,
+          `the launch bundle's transport disagrees with lib/evidence-command-transport.ts on the same payload`,
         );
       }
     } catch (e) {
       unmeasured.push(
-        unmeasurable("unresolved-source", "workflows/ship.js — the inlined copy", firstLine(e)),
+        unmeasurable("unresolved-source", "workflows/ship.run.js — the launch bundle's transport", firstLine(e)),
       );
     }
 

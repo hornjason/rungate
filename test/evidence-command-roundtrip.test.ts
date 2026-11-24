@@ -56,7 +56,7 @@ import {
 import { autoPopulateACs } from "../gates/gate-executor";
 import { prevalidateEvidence } from "../lib/evidence-prevalidator";
 import { EvidenceMethodSchema } from "../gates/schema";
-import { phase2DecompositionBundle } from "./helpers/ship-block";
+import { evidenceTransportBundle } from "./helpers/ship-block";
 
 const REPO = join(import.meta.dir, "..");
 const SHIP = join(REPO, "workflows", "ship.js");
@@ -270,43 +270,26 @@ describe("#614 SC-2053: the execution boundary hands the runner the authored com
 // ── AC-3 / AC-4 ─────────────────────────────────────────────────────────────
 
 /**
- * ship.js cannot import (#69), so the decision exists twice — once in
- * `lib/evidence-command-transport.ts` and once in a marked block in the
- * workflow. The #169 / #244 / #306 arrangement applies: extract the inlined
- * copy by marker, run both over one matrix, and make drift red.
+ * ship.js cannot import (#69). The transport it runs is
+ * `lib/evidence-command-transport.ts`'s own code, carried into
+ * `workflows/ship.run.js` by the launch bundle (#2730, SC-2775 wave 6b); ship.js
+ * holds no copy. The library and the bundled copy are run over one matrix, so
+ * a bundling that changed what the code does is red.
  *
- * Module scope on purpose. If the markers are gone this throws and every test
- * in the file fails to load, rather than skipping — which would turn "ship.js
- * lost its payload builder" into a quiet green.
+ * Module scope on purpose. If the bundle no longer carries the module this
+ * throws and every test in the file fails to load, rather than skipping —
+ * which would turn "the launch file lost its payload builder" into a quiet
+ * green.
  */
-const TRANSPORT_START = "// ──── AC-PAYLOAD-TRANSPORT-START ────";
-const TRANSPORT_END = "// ──── AC-PAYLOAD-TRANSPORT-END ────";
-
-export function markedBlock(src: string, start: string, end: string): string {
-  const a = src.indexOf(start);
-  const b = src.indexOf(end);
-  if (a === -1 || b === -1) {
-    throw new Error(`workflows/ship.js is missing the ${start} / ${end} markers`);
-  }
-  return src.slice(a + start.length, b);
-}
-
-const inlined = (() => {
-  // The transport block calls `shellSingleQuote`, which the launch file
-  // carries from lib/phase2-decomposition.ts's bundle (#2693). That bundle is
-  // loaded in front, built as ship.run.js builds it, so the extracted copy
-  // runs the quoting ship runs rather than a variant with it stubbed out.
-  const body =
-    phase2DecompositionBundle() +
-    "\n" +
-    markedBlock(shipSource, TRANSPORT_START, TRANSPORT_END);
+const launched = (() => {
+  const body = evidenceTransportBundle();
   const fns = new Function(
     `${body}\nreturn { acPayloadRecords, acPayloadJson, acPayloadShellArgument, acPayloadReadExpression, recordEvidenceRewrite, AC_PAYLOAD_ARGV_INDEX }`,
   )();
   for (const name of Object.keys(fns)) {
     if (name === "AC_PAYLOAD_ARGV_INDEX") continue;
     if (typeof fns[name] !== "function") {
-      throw new Error(`ship.js's transport block does not define ${name} — the matrix would compare nothing`);
+      throw new Error(`the launch bundle's transport does not define ${name} — the matrix would compare nothing`);
     }
   }
   return fns as {
@@ -402,9 +385,9 @@ describe("#614 SC-2054: the payload builder, driven with a $1-bearing command", 
     // closing quote gets `undefined`, and `JSON.parse(undefined)` throws —
     // loud, but only on a run. The pairing is a fact about the source, so it
     // is read off the source.
-    // `\$\{…\}` so the function DECLARATIONS in the marked block are not
-    // counted as call sites — a count that includes its own definition
-    // cannot be compared against anything.
+    // `\$\{…\}` so a function DECLARATION is never counted as a call site —
+    // a count that includes its own definition cannot be compared against
+    // anything.
     const reads = [...shipSource.matchAll(/\$\{acPayloadReadExpression\(\)\}/g)].map(m => m.index!);
     const args = [...shipSource.matchAll(/\$\{acPayloadShellArgument\(discovery\.acs\)\}/g)].map(m => m.index!);
     expect(reads.length, "no call site reads the payload").toBeGreaterThanOrEqual(2);
@@ -415,17 +398,17 @@ describe("#614 SC-2054: the payload builder, driven with a $1-bearing command", 
     }
   });
 
-  test("the inlined copy and the library agree on every form", () => {
+  test("the launch bundle's copy and the library agree on every form", () => {
     const acs = acsWithDollarForms();
-    expect(inlined.AC_PAYLOAD_ARGV_INDEX).toBe(AC_PAYLOAD_ARGV_INDEX);
-    expect(inlined.acPayloadRecords(acs)).toEqual(acPayloadRecords(acs));
-    expect(inlined.acPayloadJson(acs)).toBe(acPayloadJson(acs));
-    expect(inlined.acPayloadShellArgument(acs)).toBe(acPayloadShellArgument(acs));
-    expect(inlined.acPayloadReadExpression()).toBe(acPayloadReadExpression());
+    expect(launched.AC_PAYLOAD_ARGV_INDEX).toBe(AC_PAYLOAD_ARGV_INDEX);
+    expect(launched.acPayloadRecords(acs)).toEqual(acPayloadRecords(acs));
+    expect(launched.acPayloadJson(acs)).toBe(acPayloadJson(acs));
+    expect(launched.acPayloadShellArgument(acs)).toBe(acPayloadShellArgument(acs));
+    expect(launched.acPayloadReadExpression()).toBe(acPayloadReadExpression());
 
     const a = { type: "COMMAND", command: "grep -c x lib | awk '{s+=$1}'" };
     const b = { ...a };
-    expect(inlined.recordEvidenceRewrite(a, "t", "echo 1")).toBe(recordEvidenceRewrite(b, "t", "echo 1"));
+    expect(launched.recordEvidenceRewrite(a, "t", "echo 1")).toBe(recordEvidenceRewrite(b, "t", "echo 1"));
     expect(a).toEqual(b);
   });
 });

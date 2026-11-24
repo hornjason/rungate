@@ -1737,80 +1737,13 @@ function coverageRecord(successCriteria, acs, deferrals) {
 // carried into workflows/ship.run.js by the launch bundle (#2693, SC-2775
 // wave 6a). ship.js holds no copy.
 
-// ──── AC-PAYLOAD-TRANSPORT-START ────
-/**
- * Inline copy of lib/evidence-command-transport.ts (#614). ship.js cannot
- * import (#69), so this block and the library are held together by a shared
- * matrix in test/evidence-command-roundtrip.test.ts. The deny-list and phase-2
- * blocks that once shared this arrangement are now bundled from lib (#2404,
- * #2693); this one is next (SC-2775).
- *
- * The defect: the AC payload was interpolated into the setup agent's
- * DOUBLE-QUOTED `bun -e "…"` shell string. A shell expands `$1` to the empty
- * string inside double quotes, so run `wf_c92dd0a7-fe6` persisted
- * `awk '{s+=} END {print s+0}'` for a command the agent had written as
- * `awk '{s+=$1} END {print s+0}'` — an awk syntax error, an AC that could
- * never produce evidence, and a verify gate down with four failures.
- *
- * The payload now travels as a SINGLE-QUOTED argument after the program, and
- * the program reads it out of `process.argv` — a file in ${WORK_DIR} would be
- * archived by `beginRun`'s sweep (#288) before the read, which is how the
- * first draft of this failed. `shellSingleQuote` is lib/phase2-decomposition.ts's,
- * carried by the launch bundle (#2693); the matrix loads that bundle with
- * this block, so the extracted copy is the one that runs here.
- */
-const AC_PAYLOAD_ARGV_INDEX = 1
-
-function acPayloadRecords(acs) {
-  return (Array.isArray(acs) ? acs : []).map(ac => ({
-    id: ac.id,
-    type: ac.type,
-    statement: ac.statement,
-    threshold: ac.threshold,
-    evidenceMethod: ac.evidenceMethod,
-    // #669's `evidenceInterfaces` is deliberately NOT carried here yet. This
-    // function is held to byte-for-byte parity with `acPayloadRecords` in
-    // lib/evidence-command-transport.ts by test/evidence-command-roundtrip.ts
-    // (#614), so adding a field to one copy and not the other turns that
-    // matrix red — measured, not assumed: it reports three records differing
-    // by `"evidenceInterfaces": []`. The two must move in one commit, and
-    // lib/evidence-command-transport.ts is not a file this sub-issue claimed.
-    // The waiver reaches the decider off the AC itself in the meantime.
-    specElement: ac.specElement,
-    coversCriteria: ac.coversCriteria || [],
-    contextFiles: ac.contextFiles || [],
-  }))
-}
-
-function acPayloadJson(acs) {
-  return JSON.stringify(acPayloadRecords(acs))
-}
-
-function acPayloadShellArgument(acs) {
-  return shellSingleQuote(acPayloadJson(acs))
-}
-
-function acPayloadReadExpression() {
-  return `JSON.parse(process.argv[${AC_PAYLOAD_ARGV_INDEX}])`
-}
-
-/**
- * Change an evidence command, on the record. Returns true when it changed.
- *
- * `authoredCommand` is written once and never overwritten: a field holding
- * whatever the command was one rewrite ago cannot answer the question #614
- * took a run and a post-mortem to answer, which is what the AGENT wrote.
- */
-function recordEvidenceRewrite(evidenceMethod, by, next) {
-  if (!evidenceMethod || typeof evidenceMethod.command !== 'string') return false
-  const from = evidenceMethod.command
-  if (from === next) return false
-  if (evidenceMethod.authoredCommand === undefined) evidenceMethod.authoredCommand = from
-  evidenceMethod.command = next
-  evidenceMethod.rewrites = [...(evidenceMethod.rewrites || []), { by, from, to: next }]
-  return true
-}
-// ──── AC-PAYLOAD-TRANSPORT-END ────
+// AC_PAYLOAD_ARGV_INDEX, acPayloadRecords, acPayloadJson,
+// acPayloadShellArgument, acPayloadReadExpression and recordEvidenceRewrite
+// (#614) are lib/evidence-command-transport.ts's own code, carried into
+// workflows/ship.run.js by the launch bundle (#2730, SC-2775 wave 6b). ship.js
+// holds no copy. Why the AC payload travels as a single-quoted argument after
+// the program, and never inside its double-quoted text, is that module's
+// docblock.
 
 // ──── FAILURE-LEDGER-START ────
 /**

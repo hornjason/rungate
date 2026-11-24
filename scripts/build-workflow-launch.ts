@@ -651,6 +651,12 @@ export const LAUNCH_BUNDLE: Readonly<Record<string, readonly string[]>> = {
   "lib/gate-refusal-currency.ts": ["resolvedCheckNames", "retireSupersededRefusals", "failureCheckName"],
   // #2693, SC-2775 wave 6a: ship.js's PHASE2-DECOMPOSITION copy.
   "lib/phase2-decomposition.ts": ["acsForGroup", "shellSingleQuote", "acListBlock", "phase2AcsCommand", "decompositionRefusal"],
+  // #2730, SC-2775 wave 6b: ship.js's AC-PAYLOAD-TRANSPORT copy. Its one
+  // import, shellSingleQuote, is defined by the phase-2 entry above (#2404).
+  "lib/evidence-command-transport.ts": [
+    "AC_PAYLOAD_ARGV_INDEX", "acPayloadRecords", "acPayloadJson", "acPayloadShellArgument", "acPayloadReadExpression",
+    "recordEvidenceRewrite",
+  ],
 };
 
 /** The bundle the launch file is built with, read from this checkout's lib/. */
