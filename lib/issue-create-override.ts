@@ -1,7 +1,8 @@
 import { homedir } from "os";
 import { join, resolve } from "path";
 
-import { interpreterPrograms, stripHeredocs } from "./bash-write-guard";
+import { forEachChild, parse } from "unbash";
+import { interpreterPrograms } from "./bash-write-guard";
 
 /**
  * Whether a `gh issue create` may run during VERIFY, and why not (#365).
@@ -84,7 +85,7 @@ import { interpreterPrograms, stripHeredocs } from "./bash-write-guard";
  * the executable ones back, and that binding returns herestrings in the same
  * list. So the scope widened as a consequence of fixing a false refusal, and
  * narrowing it again would mean writing a second decider that disagrees with
- * `lib/bash-write-guard.ts`. See `heredocView` below.
+ * `lib/bash-write-guard.ts`. See `clauses` below.
  */
 
 /** Labels that permit an issue to be filed mid-VERIFY, and what each means. */
@@ -131,7 +132,7 @@ export function tokenize(cmd: string): string[] {
   return scanTokens(cmd).tokens;
 }
 
-/** A command substitution inside a double-quoted string, and the token it sits in. */
+/** A command substitution inside a double-quoted string. */
 interface QuotedSubstitution {
   /** The index, in `tokens`, of the word the substitution is part of. */
   token: number;
@@ -142,10 +143,8 @@ interface QuotedSubstitution {
 /**
  * `tokenize`'s scan, which also records every `$(…)` and backtick
  * substitution inside a double-quoted string (#2722). The shell keeps such a
- * string as one word and still runs what it substitutes. They are recorded
- * here, by the one scanner that follows the shell's comment rule, and not by
- * a second walk over the quoting: a second walk read an apostrophe in a `#`
- * comment as a quote and lost every later substitution (#2723 review).
+ * string as one word and still runs what it substitutes. `tokenClauses` reads
+ * them, for a command the grammar rejects (#2727).
  */
 function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[] } {
   const out: string[] = [];
@@ -228,45 +227,123 @@ function scanTokens(cmd: string): { tokens: string[]; subs: QuotedSubstitution[]
 const SEPARATORS = new Set(OPERATORS);
 
 /**
- * The command list, one token array per clause, descending into `-c`.
+ * The commands a command line runs, one array of words per command, read with
+ * a bash grammar (`unbash`, #2727) and descending into `-c`.
+ *
+ * The grammar decides where every command begins and ends: inside a quoted
+ * substitution, a nested one, a `case` branch, an unquoted heredoc's `$(…)`,
+ * a subshell, and with ANSI-C quoting decoded. The hand-written tokenizer this
+ * replaced misread each of those (#2719, #2723 review rounds), and each
+ * misread let a filing or a board write through. A quoted heredoc expands
+ * nothing, and its body yields no command, as the shell runs none.
+ *
+ * **A command the grammar reports malformed is read twice.** The grammar can
+ * be wrong about valid bash: `unbash` 6.0.5 reads `case` as a keyword in
+ * `echo "$(printf case x)"; gh issue create`, reports the substitution
+ * unterminated, and the filing after it becomes part of a word. So when the
+ * parse carries errors, the hand-written token reading of the same text is
+ * added (`tokenClauses`), which can only add commands, the direction that
+ * refuses. Measured on 139,229 real commands: 97 parse with errors.
+ *
+ * Two places stay outside the grammar, because the shell hands them on as
+ * text: a heredoc or herestring given to an interpreter (`interpreterPrograms`,
+ * the same reading `lib/bash-write-guard.ts` uses), and an argument that is
+ * itself a command (`bash -c '…'`, `eval '…'`, `commandArguments`). Each is
+ * parsed in turn, to the same depth of 4.
  *
  * The recursion is why `echo 'gh issue create --label bug'` stays allowed
  * while `bash -c 'gh issue create --label bug'` does not. A quoted string is
  * data to `echo` and a command to a shell, and only the second one files an
- * issue. Refusing both would be the safer direction and the wrong one — a
- * guard that refuses commands which create nothing is a guard people learn
- * to work around.
+ * issue.
  *
  * **There is deliberately no allowlist of shell names here.** The first
- * version had one — `sh`, `bash`, `zsh`, `dash`, `ksh`, `fish`, with the
- * program name resolved past any `VAR=value` prefix — and removing it
- * scored **0 red of 38**. No command could be written that the allowlist
- * decided: a non-shell interpreter's `-c` argument is source code, and
- * source code quotes the command it runs, so the inner text arrives as one
- * token and `createsIssue` needs three adjacent ones. `python3 -c
- * "print('gh issue create --label bug')"` is a table case and is allowed
- * with or without the allowlist. A branch no input can distinguish is a
- * branch that will be wrong silently, so it is gone rather than kept for
- * reassurance.
+ * version had one, and removing it scored **0 red of 38**: a non-shell
+ * interpreter's `-c` argument is source code, which quotes the command it
+ * runs, so `createsIssue` never sees three adjacent words in it.
  */
 export function clauses(cmd: string, depth = 0): string[][] {
+  const out: string[][] = [];
+  for (const text of [cmd, ...interpreterPrograms(cmd).map(p => p.program)]) {
+    const read = parsedCommands(text);
+    const commands = read.malformed ? [...read.commands, ...tokenClauses(text)] : read.commands;
+    for (const c of commands) {
+      out.push(c);
+      if (depth >= 4) continue; // a wrapper chain this deep is not an accident
+      for (const inner of commandArguments(c)) out.push(...clauses(inner, depth + 1));
+    }
+  }
+  return out;
+}
+
+/** An unbash syntax node, read structurally. */
+type SyntaxNode = { type?: string; [key: string]: unknown };
+
+/**
+ * One command's words as the shell hands them to the program: its assignments
+ * as written, its name, then its arguments with quotes removed and ANSI-C
+ * quoting decoded. Redirections are not words, and an expansion stays as
+ * written.
+ */
+function commandWords(node: SyntaxNode): string[] {
+  const words: string[] = [];
+  for (const p of (node.prefix as SyntaxNode[] | undefined) ?? []) {
+    if (p.type === "Assignment") words.push(String(p.text));
+  }
+  const name = node.name as SyntaxNode | undefined;
+  if (name !== undefined) words.push(String(name.value));
+  for (const a of (node.suffix as SyntaxNode[] | undefined) ?? []) {
+    if (a.type === "Word") words.push(String(a.value));
+    else if (a.type === "Assignment") words.push(String(a.text));
+  }
+  return words;
+}
+
+/** Every command `text` runs, in source order, each as its words, and whether the grammar's reading of it is `malformed`. */
+function parsedCommands(text: string): { commands: string[][]; malformed: boolean } {
+  const commands: string[][] = [];
+  const walk = (node: SyntaxNode): void => {
+    if (node.type === "Command") {
+      const words = commandWords(node);
+      if (words.length > 0) commands.push(words);
+    }
+    forEachChild(node as never, walk as never);
+  };
+  const script = parse(text) as unknown as SyntaxNode;
+  walk(script);
+  return { commands, malformed: malformed(script) };
+}
+
+/**
+ * Whether the grammar's reading of a text cannot be trusted alone: it reported
+ * errors, or a heredoc's delimiter never arrived. Bash only warns about the
+ * second, but a filing behind an unclosed delimiter must not become invisible
+ * (FG-43, kept from #1302). `clauses()` and `filingDirectory()` both ask this,
+ * so they agree about which commands get the second reading (#2735 review).
+ */
+function malformed(script: SyntaxNode): boolean {
+  let unclosed = false;
+  const walk = (node: SyntaxNode): void => {
+    if (node.type === "HereDoc" && node.closing === undefined) unclosed = true;
+    forEachChild(node as never, walk as never);
+  };
+  walk(script);
+  return unclosed || ((script.errors as unknown[] | undefined)?.length ?? 0) > 0;
+}
+
+/**
+ * The hand-written reading of `text`, for a command the grammar rejects: split
+ * at the shell's operators by `scanTokens`, with each quoted substitution read
+ * in turn, to the same depth of 4.
+ */
+function tokenClauses(text: string, depth = 0): string[][] {
   const flat: string[][] = [[]];
-  const { tokens, subs } = scanTokens(heredocView(cmd));
+  const { tokens, subs } = scanTokens(text);
   for (const t of tokens) {
     if (SEPARATORS.has(t)) flat.push([]);
     else flat[flat.length - 1].push(t);
   }
-
-  const out: string[][] = [];
-  for (const c of flat) {
-    if (c.length === 0) continue;
-    out.push(c);
-    if (depth >= 4) continue; // a wrapper chain this deep is not an accident
-    for (const inner of commandArguments(c)) out.push(...clauses(inner, depth + 1));
-  }
-  if (depth < 4) {
-    for (const sub of subs) out.push(...clauses(sub.text, depth + 1));
-  }
+  const out = flat.filter(c => c.length > 0);
+  if (depth < 4) for (const sub of subs) out.push(...tokenClauses(sub.text, depth + 1));
   return out;
 }
 
@@ -309,50 +386,6 @@ function substitutionEnd(cmd: string, from: number): number {
 }
 
 /**
- * The command text, with heredoc bodies routed by where they GO (#1302).
- *
- * A heredoc body handed to an interpreter is a program and is parsed. A body
- * going anywhere else — `cat > doc.md <<'EOF'`, `tee`, `gh --body-file -` —
- * is a DOCUMENT and is removed, because text on its way into a file is not a
- * command however exactly it is spelled.
- *
- * **Both halves come from `lib/bash-write-guard.ts`, which already decided
- * this and proved it over 5,060 real commands in #1240.** Writing the split
- * again here would be two deciders on one question — the fourth shape in
- * `.claude/rules/checks-must-be-able-to-fail.md` — and they were already
- * disagreeing: `BashWriteGuard` read the interpreter body and stripped the
- * document body, and this parser did the exact inverse. The inverse is the
- * one that false-positives, and it blocked real work: a `cat > probe.ts`
- * whose body quoted a filing was refused as though it were one.
- *
- * It is the same expression `decideBashWrite` builds its own view from, so
- * the two guards now read a command the same way by construction rather than
- * by agreement.
- *
- * Two behaviours worth knowing, both inherited and both in the safe
- * direction. An UNTERMINATED heredoc is left in place, so a filing hidden
- * behind an unclosed delimiter does not become invisible. And a herestring
- * to a shell — `bash <<< '…'` — now parses where it did not before. That
- * last one is a DOCUMENTED boundary being reversed, not an oversight being
- * corrected: the module docblock listed it as out of scope and
- * `test/verify-phase-lock.test.ts` asserted the allow. Both are updated in
- * the same commit, with the reason, because a boundary that moves silently
- * is worse than either position.
- */
-function heredocView(cmd: string): string {
-  // `blankComments: false` (#1741). The blanking is #1176's write-guard
-  // safety measure and this parser never wanted it: it deleted every `##`
-  // markdown heading from a multi-line `gh issue create --body "…"`, so the
-  // dedupe and the symptom scan read bodies with holes. `tokenize` below
-  // implements the shell's comment rule for this side of the fence, where a
-  // wrong answer costs a misparsed flag rather than an unseen write.
-  return [
-    stripHeredocs(cmd, false),
-    ...interpreterPrograms(cmd).map(p => p.program),
-  ].join("\n");
-}
-
-/**
  * The directory the first `gh issue create` in this command runs in (#1833).
  *
  * **An issue is a repository object, so nothing about a filing may depend on
@@ -371,12 +404,8 @@ function heredocView(cmd: string): string {
  * the value that was already wrong.
  *
  * **Subshell-aware, because the shell is.** A `cd` inside `( … )` or a
- * backtick pair is undone when that scope closes, so
+ * command substitution is undone when that scope closes, so
  * `(cd /a && echo) && gh issue create` files from `from` and not from `/a`.
- * `entered` is that stack. A backtick is a TOGGLE and not an opener —
- * backticks do not nest, so the second one pops the scope the first pushed.
- * Pushing on both was the first spelling of this, and it leaked a
- * command-substitution's `cd` into everything after the closing backtick.
  *
  * **It descends into `-c` and `eval` arguments, exactly where `clauses()`
  * does and for the same reason.** `bash -c "cd /wt/a && gh issue create …"`
@@ -386,10 +415,13 @@ function heredocView(cmd: string): string {
  * The inner scope's directory is discarded and only a filing found inside it
  * is kept, because a wrapper's `cd` does not outlive the wrapper.
  *
- * An unquoted `$(…)` needs nothing: `tokenize` already emits `$` and `(`
- * separately, so it pushes and pops through the same stack. One inside double
- * quotes is a single word to `tokenize`, so `scanTokens` records it and the
- * scan below reads it, in the directory its word is read in (#2723 review).
+ * **A command the grammar reports malformed is read twice here too**, as
+ * `clauses()` reads it (#2735 review). There the second reading can find a
+ * filing the grammar folded into a word, so it must also say where that
+ * filing runs. It places only a filing the grammar did not find: a filing the
+ * grammar found keeps the grammar's directory, because the token reading
+ * mis-scopes what the grammar reads right, a case pattern's `)` among them
+ * (review round 2).
  *
  * ## Two documented limits, both asserted rather than assumed
  *
@@ -399,9 +431,15 @@ function heredocView(cmd: string): string {
  * that can disagree (`.claude/rules/checks-must-be-able-to-fail.md`, the
  * fourth shape).
  *
- * **A `cd` this cannot resolve leaves the directory alone.** `cd -` is the
- * only such spelling — it needs `OLDPWD`, which is the shell's state and not
- * the command's text. A bare `cd` IS resolvable and goes to `homedir()`.
+ * **A `cd` target the shell expands at run time is resolved as written.**
+ * A variable, a command substitution, a glob or `~user` needs the shell's
+ * state, not the command's text. Written out, it names a directory that does
+ * not exist, so the gate cannot read a body, a plan or a committed config
+ * there, and it refuses. That is the safe direction. Leaving the directory
+ * alone instead, as review round 2 of #2735 had it, read the session's
+ * checkout, where a stale `--body-file` is readable and wrong (round 3).
+ * `cd -` still leaves the directory alone: it needs `OLDPWD`. A bare `cd` IS
+ * resolvable and goes to `homedir()`, and so are `~` and `~/path`.
  */
 export function filingDirectory(cmd: string, from: string): string {
   return scanForFiling(cmd, from, 0).found ?? from;
@@ -409,18 +447,90 @@ export function filingDirectory(cmd: string, from: string): string {
 
 /**
  * One scope's worth of the scan: the filing's directory if this text files,
- * and the directory the text ends in.
+ * and the directory the text ends in. A walk of the grammar `clauses()` reads
+ * (#2727), in source order:
  *
- * `depth` bounds the `-c` recursion at the same 4 `clauses()` uses — a
- * wrapper chain that deep is not an accident, and the two readers must agree
- * about which commands exist or one of them attributes a filing the other
- * cannot see.
+ * - a `cd` moves the directory of the scope it runs in;
+ * - a subshell, and a command or process substitution, is a scope of its own,
+ *   entered with the directory it is read in, and its `cd` does not outlive it;
+ * - a command's substitutions run before the command, in its directory;
+ * - a wrapper's command argument (`bash -c '…'`) runs in the directory the
+ *   wrapper was invoked from, and only a filing found inside it is kept.
+ *
+ * A heredoc or herestring handed to an interpreter is scanned after the
+ * command, in the directory the command ends in, as it was before the grammar.
+ * `depth` bounds the recursion at the same 4 `clauses()` uses.
  */
 function scanForFiling(
   cmd: string,
   from: string,
   depth: number,
 ): { found: string | null; dir: string } {
+  const top = { dir: from };
+  let found: string | null = null;
+
+  const run = (node: SyntaxNode, scope: { dir: string }): void => {
+    if (found !== null) return;
+    if (node.type === "Subshell" || node.type === "CommandExpansion" || node.type === "ProcessSubstitution") {
+      const inner = { dir: scope.dir };
+      forEachChild(node as never, ((c: SyntaxNode) => run(c, inner)) as never);
+      return;
+    }
+    if (node.type !== "Command") {
+      forEachChild(node as never, ((c: SyntaxNode) => run(c, scope)) as never);
+      return;
+    }
+    forEachChild(node as never, ((c: SyntaxNode) => run(c, scope)) as never);
+    if (found !== null) return;
+    const words = commandWords(node);
+    if (words.length === 0) return;
+    if (createsIssue(words)) {
+      found = scope.dir;
+      return;
+    }
+    if (depth < 4) {
+      for (const inner of commandArguments(words)) {
+        const nested = scanForFiling(inner, scope.dir, depth + 1);
+        if (nested.found !== null) {
+          found = nested.found;
+          return;
+        }
+      }
+    }
+    if (words[0] === "cd") scope.dir = cdTarget(words.slice(1), scope.dir);
+  };
+
+  const script = parse(cmd) as unknown as SyntaxNode;
+  run(script, top);
+  if (depth < 4) {
+    for (const p of interpreterPrograms(cmd)) {
+      if (found !== null) break;
+      const nested = scanForFiling(p.program, top.dir, depth + 1);
+      if (nested.found !== null) found = nested.found;
+    }
+  }
+  if (found === null && malformed(script)) {
+    const read = tokenScan(cmd, from, depth);
+    if (read.found !== null) return read;
+  }
+  return { found, dir: top.dir };
+}
+
+/**
+ * `scanForFiling`'s second reading, for a command the grammar reports
+ * malformed: the hand-written token scan `filingDirectory` used before the
+ * grammar, over the same tokens `tokenClauses` reads.
+ *
+ * `entered` is the scope stack. A backtick is a TOGGLE and not an opener:
+ * backticks do not nest, so the second one pops the scope the first pushed.
+ * Pushing on both was the first spelling of this, and it leaked a command
+ * substitution's `cd` into everything after the closing backtick. An unquoted
+ * `$(…)` needs nothing: `tokenize` emits `$` and `(` separately, so it pushes
+ * and pops through the same stack. One inside double quotes is a single word
+ * to `tokenize`, so `scanTokens` records it, and it is read in the directory
+ * its word is read in (#2723 review).
+ */
+function tokenScan(cmd: string, from: string, depth: number): { found: string | null; dir: string } {
   let dir = from;
   const entered: string[] = [];
   let inBacktick = false;
@@ -455,7 +565,7 @@ function scanForFiling(
     if (entered.length > 0) dir = entered.pop()!;
   };
 
-  const { tokens, subs } = scanTokens(heredocView(cmd));
+  const { tokens, subs } = scanTokens(cmd);
   for (const [k, t] of tokens.entries()) {
     if (t === "`") {
       if (inBacktick) close();
@@ -483,13 +593,10 @@ function scanForFiling(
       continue;
     }
     clause.push(t);
-    // A quoted substitution runs in the directory its word is read in, before
-    // the clause's own command, and its `cd` does not outlive it (#2723
-    // review): the same reading `clauses()` takes of it.
     if (found === null && depth < 4) {
       for (const sub of subs) {
         if (sub.token !== k) continue;
-        const nested = scanForFiling(sub.text, dir, depth + 1);
+        const nested = tokenScan(sub.text, dir, depth + 1);
         if (nested.found !== null) {
           found = nested.found;
           break;

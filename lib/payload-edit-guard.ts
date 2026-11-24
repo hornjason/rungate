@@ -28,14 +28,12 @@
  * claiming an issue stays allowed.
  *
  * The command is read by `clauses()` from `lib/issue-create-override.ts`,
- * the shell tokenizer the filing guard already uses (#2719 review round 2).
- * Quotes, backslash escapes, line continuations, comments, heredocs and
- * `bash -c` are its job, not a second reader's. ANSI-C quoting is the form it
- * does not read: `gh $'issue' edit` tokenizes as `$issue`. That is the shared
- * tokenizer's to fix, for the filing guard too, and has its own issue. A
- * short flag may carry its value attached (`-bTEXT`, `-mTITLE`,
- * `-Rowner/name`), as gh's flag parser allows, and a redirection is not an
- * argument.
+ * the reading the filing guard already uses (#2719 review round 2), which is a
+ * bash grammar since #2727. Quotes, ANSI-C quoting, backslash escapes, line
+ * continuations, comments, substitutions however nested, `case` branches,
+ * heredocs and `bash -c` are its job, not a second reader's. A short flag may
+ * carry its value attached (`-bTEXT`, `-mTITLE`, `-Rowner/name`), as gh's flag
+ * parser allows, and a redirection is not an argument.
  *
  * ## Which issues
  *
@@ -192,7 +190,9 @@ const BARE_REDIRECT = /^\d*(?:>>?|<)$/;
 function boardEdits(command: string): BoardEdit[] {
   const edits: BoardEdit[] = [];
   // `2>&1`, `>&file`, `>& file`, `<&3` and `&>` are redirections, not the `&`
-  // the tokenizer splits on (#2719 review rounds 3 and 5).
+  // the token reading splits on (#2719 review rounds 3 and 5). The grammar
+  // reads them either way; the token reading is what `clauses()` adds for a
+  // command the grammar rejects (#2727).
   const text = command.replace(/([<>])&(?=[ \t]*[^\s&;|])/g, "$1").replace(/&>/g, ">");
   for (const w of clauses(text)) {
     const at = w.findIndex((x, i) => x === "edit" && w[i - 1] === "issue" && basename(w[i - 2] ?? "") === "gh");
@@ -265,11 +265,11 @@ export interface PayloadEditOptions {
 
 /** The reason to refuse the command, or null to let it run. */
 export async function payloadEditRefusal(command: string, opts: PayloadEditOptions = {}): Promise<string | null> {
-  // A cheap pre-check, over the text with its quotes and backslashes taken
-  // out: `gh "issue" edit` and `gh iss\\ue edit` are the same command to the
-  // shell, and the tokenizer below reads them so (#2719 review round 3).
-  const plain = command.replace(/["'\\]/g, "");
-  if (!/\bgh\b/.test(plain) || !/\bedit\b/.test(plain)) return null;
+  // No text pre-check before the grammar reads the command. The one here took
+  // quotes and backslashes out of the text and looked for `gh` and `edit`, and
+  // so missed `g$'h'`, `e$"dit"`, `$'\x65dit'` and a backslash-newline inside
+  // either word, all of which the grammar decodes (#2735 review). Reading
+  // every command costs about 0.1 ms a parse.
   const edits = boardEdits(command);
   if (edits.length === 0) return null;
   const why = "(#2713: a speed bump; scripts/hand-edits.ts reads the outcome)";

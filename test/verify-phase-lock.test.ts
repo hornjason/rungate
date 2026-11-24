@@ -24,7 +24,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 import { join } from "path";
 import {
   OVERRIDE_LABELS,
@@ -35,6 +35,7 @@ import {
   tokenize,
   verifyPhaseRefusal,
 } from "../lib/issue-create-override";
+import { parse } from "unbash";
 
 const ROOT = join(import.meta.dir, "..");
 const HOOK = join(ROOT, "hooks", "VerifyPhaseLock.hook.ts");
@@ -397,14 +398,12 @@ describe("#2723 review round 2", () => {
 
 /**
  * #2723 review rounds 2 to 5 read `case` statements inside a quoted
- * substitution, and each round found the next miss in that reading: a word
- * `case` as an argument, `esac` positions, a branch printing a quote, a cost
- * that grew with the fourth power of the count, `case` straight after a `)`,
- * and a substitution only a second reading reached. Rule 5: the reading was
- * taken out. A pattern's `)` closes the substitution as any `)` does, and how
- * this file reads a command at all is the follow-up issue's.
+ * substitution with the hand-written tokenizer, and each round found the next
+ * miss in that reading. Rule 5 took the reading out and left the shapes as a
+ * CONCESSION. #2727 reads the command with a bash grammar instead, so the
+ * shell's own structure decides where a substitution ends.
  */
-describe("#2723 rule 5: case statements in a quoted substitution are not read", () => {
+describe("#2727: a filing the shell runs is read, whatever the quoting around it", () => {
   test("a word case as an argument does not hide a filing after the substitution", () => {
     // Round 2's case reading counted these, never closed the substitution, and
     // swallowed the filing (round 3's high findings).
@@ -418,16 +417,78 @@ describe("#2723 rule 5: case statements in a quoted substitution are not read", 
     }
   });
 
-  test("CONCESSION: a filing a case statement hides is not read, as on main", () => {
-    // The shapes rounds 2 to 5 found, pinned so the redesign turns them red.
-    for (const cmd of [
-      `echo "$(case x in x) gh issue create --title t;; esac)"`,
-      `echo "$(case x in x) echo '"';; esac)"; gh issue create --title t`,
-      `echo "$(case a in a)case b in b) true;; esac;; c) gh issue create --title t;; esac)"`,
-      `echo "$(case x in x) echo '"' ;; esac)" "$(gh issue create --label bug)"`,
-    ]) {
-      expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
-    }
+  test.each([
+    // Was the CONCESSION: the four case-statement shapes rounds 2 to 5 found.
+    [`echo "$(case x in x) gh issue create --title t;; esac)"`],
+    [`echo "$(case x in x) echo '"';; esac)"; gh issue create --title t`],
+    [`echo "$(case a in a)case b in b) true;; esac;; c) gh issue create --title t;; esac)"`],
+    [`echo "$(case x in x) echo '"' ;; esac)" "$(gh issue create --label bug)"`],
+    // The other three shapes #2727 names.
+    [`gh issue comment 2714 --body "$(echo "$(echo ")")"; gh issue create --title t)"`],
+    [`gh issue comment 1 --body-file - <<EOF\n$(gh issue create --title t)\nEOF`],
+    [`gh $'issue' create --title t`],
+  ])("WITNESS: %s files an issue", cmd => {
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+  });
+
+  test.each([
+    // A quoted heredoc expands nothing; a string argument is data.
+    [`cat <<'EOF'\n$(gh issue create --title t)\nEOF`],
+    [`echo 'gh issue create --title t'`],
+    [`echo "gh issue create --title t"`],
+  ])("CONTROL: %s files nothing", cmd => {
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(false);
+  });
+
+  // #2735 review: on a command the grammar reports malformed, the second
+  // reading finds the filing, so it must also say where the filing runs.
+  test.each([
+    [`cd /tmp/wt && echo "$(printf case x)"; gh issue create --title T --body-file body.md`, "/repo", "/tmp/wt"],
+    [`echo "$(printf case x)"; cd /wt/a && gh issue create --title t`, "/main", "/wt/a"],
+  ])("WITNESS: on a malformed parse, %s files from the directory it runs in", (cmd, from, dir) => {
+    expect(parse(cmd).errors?.length ?? 0, "the grammar reads this right now; the row no longer reaches the second reading")
+      .toBeGreaterThan(0);
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    expect(filingDirectory(cmd, from), cmd).toBe(dir);
+  });
+
+  test("CONTROL: on a malformed parse, a subshell's cd still does not outlive it", () => {
+    const cmd = `(cd /a && echo "$(printf case x)"); gh issue create --title t`;
+    expect(parse(cmd).errors?.length ?? 0).toBeGreaterThan(0);
+    expect(filingDirectory(cmd, "/main")).toBe("/main");
+  });
+
+  // #2735 review round 2: the token reading only places a filing the grammar
+  // did not find. Here the grammar finds it, in /a, and the token reading takes
+  // the case pattern's `)` for the subshell's and leaks `cd /c` out of it.
+  test("WITNESS: on a malformed parse, a filing the grammar found keeps the grammar's directory", () => {
+    const cmd = `cd /a; (case x in a) cd /c;; esac); gh issue create --title t; echo "$(printf case x)"`;
+    expect(parse(cmd).errors?.length ?? 0, "the grammar reads this right now; the row no longer reaches the second reading")
+      .toBeGreaterThan(0);
+    expect(filingDirectory(cmd, "/main")).toBe("/a");
+  });
+
+  // #2735 review rounds 2 and 3: a cd whose target the shell expands at run
+  // time cannot be resolved from the text. It is resolved as written, which
+  // names a directory that does not exist, so the gate's reads there fail and
+  // it refuses. Leaving the directory alone instead (round 2) read the
+  // session's checkout, where a stale --body-file is readable and wrong.
+  test.each([
+    [`cd "$WT" && gh issue create --title t`, "$WT"],
+    [`cd "$HOME/wt" && gh issue create --title t`, "$HOME/wt"],
+    [`cd "$(git rev-parse --show-toplevel)" && gh issue create --title t`, "$(git rev-parse --show-toplevel)"],
+    ["cd `pwd` && gh issue create --title t", "`pwd`"],
+    [`cd ~bob/x && gh issue create --title t`, "~bob/x"],
+    [`cd wt-* && gh issue create --title t`, "wt-*"],
+    [`cd rg-wt-? && gh issue create --title t`, "rg-wt-?"],
+  ])("WITNESS: %s is resolved as written, never as the session's directory", (cmd, target) => {
+    expect(filingDirectory(cmd, "/repo")).toBe(join("/repo", target));
+  });
+
+  test("CONTROL: a cd to ~, ~/path, or a plain path still resolves", () => {
+    expect(filingDirectory(`cd ~ && gh issue create --title t`, "/repo")).toBe(homedir());
+    expect(filingDirectory(`cd ~/wt && gh issue create --title t`, "/repo")).toBe(join(homedir(), "wt"));
+    expect(filingDirectory(`cd ../wt && gh issue create --title t`, "/repo/main")).toBe("/repo/wt");
   });
 });
 
