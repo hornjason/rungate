@@ -170,6 +170,8 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
     // eighteen. `status-issue` joined with #2097, which rewrites the pinned
     // "where we are" issue from live readings on every change — nineteen.
     // `claude-review` leaves with the trial reviewer (#2626, #2627).
+    // `forge-probe` joined with #1910, which reads on the pinned bun whether
+    // the forge behaviours this repository's tools rest on still hold.
     //
     // The floor and the list are two different claims, deliberately:
     // the floor says the scan read SOMETHING, so no case below is satisfied
@@ -196,6 +198,7 @@ describe("AC-2: no workflow under .github/workflows resolves Bun from a moving t
       "closing-references.yml",
       "consumer-intake.yml",
       "criterion-label.yml",
+      "forge-probe.yml",
       "gates.yml",
       "intake.yml",
       "issue-audit.yml",
