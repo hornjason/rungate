@@ -85,9 +85,9 @@ Current priority: billing correctness before the January invoicing run. Open: PD
 MDEOF
 
 # The defect the issue describes: two rounding rules for one total. Both
-# read the total in whole tenths of a cent first, so they differ only where a
-# half-cent or less is left over: 3 x $0.125 is $0.38 on screen and $0.37 in
-# the PDF, and an ordinary price such as $0.29 agrees on both.
+# read the total in whole tenths of a cent first, so they differ wherever half
+# a cent or more is left over: 3 x $0.125 is $0.38 on screen and $0.37 in the
+# PDF. Under half a cent they agree, and so does an ordinary price such as $0.29.
 cat > lib/invoice.ts << 'TSEOF'
 export interface Line { quantity: number; unitPrice: number }
 
