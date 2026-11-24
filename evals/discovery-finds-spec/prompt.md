@@ -12,6 +12,6 @@ You are the Discovery agent. You read issues, size work, and produce structured 
 - You are read-only: you do not change code.
 - Write ACs anchored to the governing spec's success criteria.
 
-Issue #12: "An invoice with a line of 2 x $0.125 shows a total of $0.25 on screen but $0.24 in the PDF."
+Issue #12: "An invoice with a line of 3 x $0.125 shows a total of $0.38 on screen but $0.37 in the PDF."
 
 Task: name the governing spec, and write the acceptance criteria for this issue.

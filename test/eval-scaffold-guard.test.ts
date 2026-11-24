@@ -163,3 +163,24 @@ for (const path of SCAFFOLDS) {
     });
   });
 }
+
+// #2754 review: the issue in the discovery prompt names one invoice line and
+// the two totals it shows. The planted code must produce exactly those totals,
+// or an agent that runs it against the issue finds no defect to size.
+describe("#2752: the discovery fixture shows the symptom its issue reports", () => {
+  test("the issue's line gives the issue's screen and PDF totals, and they differ", async () => {
+    const prompt = readFileSync(join(ROOT, "evals/discovery-finds-spec/prompt.md"), "utf-8");
+    const m = prompt.match(/a line of (\d+) x \$([\d.]+) shows a total of \$([\d.]+) on screen but \$([\d.]+) in the PDF/);
+    expect(m, "the prompt's issue no longer names a line and two totals").not.toBeNull();
+    const [, quantity, unitPrice, screen, pdf] = m!;
+    expect(screen).not.toBe(pdf);
+    const root = mkdtempSync(join(tmpdir(), "rg-eval-scaffold-"));
+    scratch.push(root);
+    mkdirSync(join(root, "cwd"));
+    expect(scaffold("evals/discovery-finds-spec/scaffold.sh", join(root, "cwd")).code).toBe(0);
+    const invoice = await import(join(root, "cwd", "lib", "invoice.ts"));
+    const lines = [{ quantity: Number(quantity), unitPrice: Number(unitPrice) }];
+    expect(invoice.screenTotal(lines)).toBe(screen);
+    expect(invoice.pdfTotal(lines)).toBe(pdf);
+  });
+});

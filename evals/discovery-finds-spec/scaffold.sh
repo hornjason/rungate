@@ -84,7 +84,10 @@ cat > PROJECT-STATE.md << 'MDEOF'
 Current priority: billing correctness before the January invoicing run. Open: PDF export parity with the screen.
 MDEOF
 
-# The defect the issue describes: two rounding rules for one total.
+# The defect the issue describes: two rounding rules for one total. Both
+# read the total in whole tenths of a cent first, so they differ only where a
+# half-cent or less is left over: 3 x $0.125 is $0.38 on screen and $0.37 in
+# the PDF, and an ordinary price such as $0.29 agrees on both.
 cat > lib/invoice.ts << 'TSEOF'
 export interface Line { quantity: number; unitPrice: number }
 
@@ -92,15 +95,18 @@ export function lineTotal(line: Line): number {
   return line.quantity * line.unitPrice;
 }
 
+/** The total in whole tenths of a cent. */
+function tenthsOfACent(lines: Line[]): number {
+  return Math.round(lines.reduce((sum, l) => sum + lineTotal(l), 0) * 1000);
+}
+
 /** The on-screen total. */
 export function screenTotal(lines: Line[]): string {
-  const raw = lines.reduce((sum, l) => sum + lineTotal(l), 0);
-  return (Math.round(raw * 100) / 100).toFixed(2);
+  return (Math.round(tenthsOfACent(lines) / 10) / 100).toFixed(2);
 }
 
 /** The PDF total. */
 export function pdfTotal(lines: Line[]): string {
-  const raw = lines.reduce((sum, l) => sum + lineTotal(l), 0);
-  return (Math.floor(raw * 100) / 100).toFixed(2);
+  return (Math.floor(tenthsOfACent(lines) / 10) / 100).toFixed(2);
 }
 TSEOF
