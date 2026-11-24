@@ -338,17 +338,26 @@ function namesGh(text: string): boolean {
   return /\bgh\b/.test(joined);
 }
 
-/** A shell, whose `-c` argument is a command line the shell itself runs. */
-const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
+/**
+ * Python, whose `-c` argument is Python, not a command line. Every other
+ * program's `-c` argument is read as one, as `clauses()` reads it: a shell
+ * named, unlisted (`fish`, `mksh`) or held in a variable (`$SHELL -c`) runs it
+ * as a command line, and a list of shell names here would refuse less than
+ * `clauses()` reads (#2746 review round 3).
+ */
+const PYTHON = /^(python|pypy)[\d.]*$/;
 
 /**
  * Why no guard can read this command, or null when it can (#2743).
  *
  * A command line the shell runs is unreadable when the grammar reports it
  * malformed (`malformed()`) and it names `gh`. That covers the command itself,
- * a heredoc handed to a shell, and a shell's `-c` or `eval` argument, to the
- * depth of 4 `clauses()` uses. A non-shell program (`python3 -c`, a heredoc
- * handed to `node`) is not bash, so its failing to parse as bash says nothing.
+ * a heredoc handed to a shell, and any `-c` or `eval` argument, to the depth of
+ * 4 `clauses()` uses. A Python `-c` argument, or a heredoc's body handed to a
+ * non-shell interpreter, is not bash, so its failing to parse as bash says
+ * nothing. A heredoc whose delimiter never arrives is different: that fault is
+ * in the command line itself, whatever the heredoc feeds, and bash would take
+ * the rest of the command as its body (#2746 review round 3).
  * Whether it names `gh` is `namesGh`'s reading.
  *
  * Every guard asks this before it reads the command, and so reads a command
@@ -370,7 +379,7 @@ export function unreadableFiling(cmd: string, depth = 0): string | null {
     }
     if (depth >= 4) continue;
     for (const c of read.commands) {
-      if (!c.some(w => SHELLS.has(basename(w)) || basename(w) === "eval")) continue;
+      if (c.some(w => PYTHON.test(basename(w)))) continue;
       for (const inner of commandArguments(c)) {
         const why = unreadableFiling(inner, depth + 1);
         if (why !== null) return why;

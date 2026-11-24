@@ -488,6 +488,13 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     // #2746 review: spellings of gh the name test missed, which bash joins.
     [`echo "$(printf case x)"; g\\\nh issue create --title t`],
     [`echo "$(printf case x)"; g$""h issue create --title t`],
+    // #2746 review round 3: a -c argument is a command line unless the program
+    // is Python, whether the shell is named, unlisted or a variable.
+    [`$SHELL -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    [`fish -c 'echo "$(printf case x)"; gh issue create --title t'`],
+    // An unclosed heredoc is the command's own shell-level fault, whatever the
+    // heredoc feeds: bash would take the rest of the command as its body.
+    [`python3 - <<'PY'\nprint("gh")\n`],
   ])("WITNESS: %s is refused as unreadable", cmd => {
     expect(unreadableFiling(cmd), cmd).toContain(UNREADABLE_COMMAND);
     expect(verifyPhaseRefusal(cmd), cmd).toContain(UNREADABLE_COMMAND);
@@ -500,6 +507,7 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     // A non-shell program is not bash, so failing to parse as bash says nothing.
     [`python3 - <<'PY'\nimport subprocess\nsubprocess.run(["gh", "issue", "view", "1"])\nPY`],
     [`python3 -c 'import os; os.system("gh issue view 1")'`],
+    [`/usr/bin/python3.12 -c 'import os; os.system("gh issue view 1")'`],
     // Names gh, and the grammar reads it.
     [`gh issue create --title t --label follow-up`],
     [`echo "$(printf x)"; gh issue view 12`],
