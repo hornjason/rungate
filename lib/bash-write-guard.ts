@@ -3900,7 +3900,7 @@ const JS_MODULES = new Set([...FS_SPECIFIERS, 'path', 'node:path']);
 
 /** Names that bind, or reach a binding, without the code spelling the name bound. */
 const DYNAMIC_BINDING =
-  /\b(?:globals|vars|locals|setattr|delattr|getattr|exec|eval|builtins|importlib|globalThis|global|Reflect|defineProperty|defineProperties|setPrototypeOf|prototype|constructor|Function)\b|(?<!\bfrom\s+[\w.]+\s+)\bimport\s*\(|\b__\w+__\b|\bObject\s*\.\s*assign\b|\bwith\s*\(|\bimport\s*\*(?!\s*as\b)|\bsys\s*\.\s*(?:modules|path|meta_path|path_hooks)\b/;
+  /\b(?:globals|vars|locals|setattr|delattr|getattr|exec|eval|builtins|importlib|globalThis|global|Reflect|defineProperty|defineProperties|setPrototypeOf|prototype|constructor|Function)\b|(?<!\bfrom[ \t]+[\w.]+[ \t]+)\bimport\s*\(|\b__\w+__\b|\bObject\s*\.\s*assign\b|\bwith\s*\(|\bimport\s*\*(?!\s*as\b)|\bsys\s*\.\s*(?:modules|path|meta_path|path_hooks)\b/;
 
 /** Keywords a call may follow and still be a call rather than a definition. */
 const CALL_KEYWORDS = new Set(['return', 'await', 'yield', 'not', 'and', 'or', 'in', 'is', 'if', 'elif', 'else', 'while', 'assert', 'with', 'throw', 'typeof', 'void', 'case', 'do', 'print']);
@@ -4040,12 +4040,24 @@ function isCall(code: string, at: number, len: number): boolean {
  * `]` opens an index, not a pattern, so `cfg[args.kind]` keeps no attribute
  * inside it for the pattern check to find (review round 3 of #2756).
  */
+/** Words after which `[` opens a pattern or a list, never an index. */
+const NOT_AN_OPERAND = new Set(['else', 'do', 'return', 'typeof', 'void', 'await', 'yield', 'in', 'of', 'case', 'new', 'delete', 'throw', 'instanceof', 'not', 'and', 'or', 'is', 'if', 'elif', 'while', 'assert', 'with', 'print', 'lambda', 'from', 'import', 'as', 'export', 'default', 'extends']);
+
+/**
+ * Does the `[` at `k` open an index? Only after a name that is not a keyword.
+ * A `)` or `]` before it may close an `if (…)` header or a list, so either
+ * reads as a pattern, the refusing direction (fourth security review of #2756).
+ */
+function opensIndex(t: string, k: number): boolean {
+  const p = prevCode(t, k - 1);
+  return p >= 0 && isIdentChar(t[p]) && !NOT_AN_OPERAND.has(wordEndingAt(t, p));
+}
+
 function withoutSubscripts(t: string): string {
   let out = t;
   for (let k = 0; k < out.length; k++) {
     if (out[k] !== '[') continue;
-    const p = prevCode(out, k - 1);
-    if (p < 0 || !(isIdentChar(out[p]) || out[p] === ')' || out[p] === ']')) continue;
+    if (!opensIndex(out, k)) continue;
     let depth = 0;
     let e = k;
     for (; e < out.length; e++) {
@@ -4105,10 +4117,12 @@ function assignsAttribute(code: string): boolean {
     }
     // A subscript follows an expression; a pattern starts one. `cfg[args.kind] = x`
     // assigns an item (review round 3 of #2756).
-    const before = prevCode(code, j - 1);
-    if (before >= 0 && (isIdentChar(code[before]) || code[before] === ')' || code[before] === ']')) continue;
+    if (opensIndex(code, j)) continue;
     if (/\.\s*[A-Za-z_$]/.test(code.slice(j + 1, k))) return true;
   }
+  // An annotated attribute where a statement can start, read over the whole
+  // code rather than back from an `=` (fourth security review of #2756).
+  if (/(?:^|[\n;:])[ \t]*[A-Za-z_$][\w$]*(?:[ \t]*\.[ \t]*[A-Za-z_$][\w$]*)+[ \t]*:(?![:=])/.test(code)) return true;
   for (const m of code.matchAll(/\bfor\s*\(?([^\n]*?)\b(?:in|of)\b/g)) if (/\.\s*[A-Za-z_$]/.test(m[1])) return true;
   return /\bas\s+[A-Za-z_$][\w$]*\s*\./.test(code);
 }
@@ -4126,9 +4140,17 @@ function importsAllowed(code: string, body: string, view: CodeView): boolean {
     const lit = view.literals.find(([open]) => open === at);
     return lit ? body.slice(lit[0] + 1, lit[1]) : null;
   };
+  /** `require(<lit>)` exactly: one literal, then the closing paren. */
+  const onlyLiteral = (at: number): string | null => {
+    while (at < body.length && WHITESPACE.has(body[at])) at++;
+    const lit = view.literals.find(([open]) => open === at);
+    if (!lit || code[nextCode(code, lit[1] + 1)] !== ')') return null;
+    return body.slice(lit[0] + 1, lit[1]);
+  };
   // JavaScript: `require(<lit>)`, `import … from <lit>`, and a bare `import <lit>`.
   for (const m of code.matchAll(/(?<![\w$.])require\s*\(/g)) {
-    const v = literalAfter((m.index ?? 0) + m[0].length);
+    // `require('path'.replace('path', 'vm'))` starts with an allowed name.
+    const v = onlyLiteral((m.index ?? 0) + m[0].length);
     if (v === null || !JS_MODULES.has(v)) return false;
   }
   for (const m of code.matchAll(/\bfrom\b(?=\s*$|\s*;|\s*\n|\s+)/g)) {
@@ -4139,8 +4161,13 @@ function importsAllowed(code: string, body: string, view: CodeView): boolean {
     const v = literalAfter((m.index ?? 0) + m[0].length);
     if (v !== null && !JS_MODULES.has(v)) return false;
   }
-  // Python: `import a, b.c` and `from a import …`, one statement per line or `;`.
-  for (const stmt of code.split(/[\n;]/)) {
+  // Python: `import a, b.c` and `from a import …`, one statement per line or
+  // `;`, once continuations are joined and a parenthesised list is one line.
+  // A statement that opens like an import and matches neither form is refused,
+  // never skipped (fourth security review of #2756).
+  const joined = code.replace(/\\\n/g, ' ').replace(/\bimport\s*\(([^)]*)\)/g, (_m, list: string) => `import ${list.replace(/\n/g, ' ')}`);
+  for (const stmt of joined.split(/[\n;]/)) {
+    const opensImport = /^\s*(?:import|from)\b/.test(stmt);
     const imp = /^\s*import\s+([A-Za-z_][\w., \t]*)$/.exec(stmt);
     // `import fs from 'fs'` is JavaScript, read above.
     if (imp && !/\bfrom\b/.test(imp[1])) {
@@ -4150,7 +4177,10 @@ function importsAllowed(code: string, body: string, view: CodeView): boolean {
       }
     }
     const from = /^\s*from\s+([A-Za-z_][\w.]*)\s+import\b(.*)$/.exec(stmt);
-    if (from && (!PY_MODULES.has(from[1]) || /\bas\b/.test(from[2]))) return false;
+    // `from sys import modules` reaches the module table with no `sys.` spelled.
+    if (from && (!PY_MODULES.has(from[1]) || from[1] === 'sys' || /\bas\b/.test(from[2]))) return false;
+    const jsImport = /^\s*import\b/.test(stmt) && (/\bfrom\b/.test(stmt) || /^\s*import\s*$/.test(stmt));
+    if (opensImport && !imp && !from && !jsImport) return false;
   }
   return true;
 }
@@ -4180,7 +4210,7 @@ function requireTrusted(code: string, literalAt: LiteralAt): boolean {
     // Another allowed module (`path`) hands out no write function, so it may
     // be bound to any name.
     const required = literalAt(nextCode(code, at + 'require'.length) + 1);
-    if (required !== null && !FS_SPECIFIERS.has(required.value)) return true;
+    if (required !== null && code[nextCode(code, required.close + 1)] === ')' && !FS_SPECIFIERS.has(required.value)) return true;
     const before = code.slice(0, at);
     return /\b(?:const|let|var)\s+fs\s*=\s*$/.test(before) || /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*$/.test(before) || /(?:^|[;\n])\s*$/.test(before);
   });

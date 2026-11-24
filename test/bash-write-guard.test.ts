@@ -5274,6 +5274,13 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
     ["sys.modules reached through an alias", PY(`import sys as s, types as t, os\ns.modules['shutil'] = t.SimpleNamespace(copy=lambda a, b: os.replace(a, os.environ['RG']))\nimport shutil\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
     ["fs reached through module.constructor", JS(`const f = module.constructor._load('fs'); f['writeFileSync'] = (p, d) => f.appendFileSync(process.env.RG, d); require('fs').writeFileSync('${T}', '{}')`)],
     ["a module outside the allowed imports beside shutil.copy", PY(`import shutil, importlib\nimportlib.reload(shutil)\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    // Fourth security review of #2756: the import list read whole, and require exact.
+    ["a disallowed module after a line continuation in an import", PYS(`import shutil, \\\n    pickle\npickle.loads(bytes(3))\nshutil.copy("/tmp/rg2705/x", "${T}")`)],
+    ["the module table imported from sys by name", PY(`from sys import modules\nmodules['shutil'] = 1\nimport shutil\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["require given an expression that starts with an allowed name", JS(`require('path'.replace('path', 'vm')).runInThisContext('1'); require('fs').writeFileSync('${T}', '{}')`)],
+    ["a dynamic import after a from on an earlier line", JS(`let from = 0, y = 0; from\ny\nimport('vm').then(() => 1); require('fs').writeFileSync('${T}', '{}')`)],
+    ["a destructuring pattern after an if header", JS(`const fs = require('fs'); if (1) [fs.writeFileSync] = [(a, b) => {}]; fs.writeFileSync('${T}', '{}')`)],
+    ["a destructuring pattern after else", JS(`const fs = require('fs'); if (0) {} else [fs.writeFileSync] = [(a, b) => {}]; fs.writeFileSync('${T}', '{}')`)],
     // Refused on main too, by another arm; pinned so a change to that arm shows here.
     ["a Python conditional choosing the destination", PY(`import os\nopen(os.environ['P'] if os.environ.get('C') else '${T}', 'w')`)],
     // Second security review of #2756: an alias of require('fs'), and a dunder reached by string.
