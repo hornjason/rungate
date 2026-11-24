@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: aditi-visual-review
+tags: [aditi, ui-review, accessibility]
+context:
+  scaffold_script: scaffold.sh
