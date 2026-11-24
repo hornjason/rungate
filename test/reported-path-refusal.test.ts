@@ -588,19 +588,19 @@ describe("#2680: the one helper that reaches ship.js's security-helpers region",
 describe("#2736: the one helper that reaches the shellQuote the launch file runs", () => {
   const ONE = "function shellQuote(word) {\n  return `<${String(word)}>`\n}";
 
-  test("#2736: the live source yields a shellQuote that agrees with lib/workflow-security.ts", () => {
+  test("#2736 AC-1: the live source yields a shellQuote that agrees with lib/workflow-security.ts", () => {
     const quote = shipShellQuote();
     for (const input of ["", "plain", "it's", "a'b'c", "\\", "a\nb", "$(x)", "`x`", 42, null, undefined]) {
       expect(quote(input), JSON.stringify(input)).toBe(shellQuote(input));
     }
   });
 
-  test("#2736: it returns the definition, and the function built from it", () => {
+  test("#2736 AC-1: it returns the definition, and the function built from it", () => {
     expect(shellQuoteSource(`before\n${ONE}\nafter`)).toBe(ONE);
     expect(shipShellQuote(`before\n${ONE}\nafter`)("x")).toBe("<x>");
   });
 
-  test("#2736: a source with no shellQuote, or with two, is refused by name", () => {
+  test("#2736 AC-1: a source with no shellQuote, or with two, is refused by name", () => {
     expect(() => shellQuoteSource("function other(word) {}")).toThrow(/function shellQuote\(word\)/);
     expect(() => shellQuoteSource(`${ONE}\n${ONE}`)).toThrow(/function shellQuote\(word\)/);
   });
@@ -611,7 +611,7 @@ describe("#2736: the one helper that reaches the shellQuote the launch file runs
    * nothing. The list must equal exactly the five #2737 moves, so it refuses
    * a new reader and a reader moved without updating it alike.
    */
-  test("#2736: no test outside the helper reads shellQuote out of ship.js by name, save the five #2737 moves", () => {
+  test("#2736 AC-2: no test outside the helper reads shellQuote out of ship.js by name, save the five #2737 moves", () => {
     const EXEMPT = new Map([
       ["helpers/ship-block.ts", "the helper itself"],
       ["reported-path-refusal.test.ts", "this file, whose fixture defines one"],
