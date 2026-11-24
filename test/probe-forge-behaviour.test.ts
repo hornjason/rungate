@@ -63,6 +63,19 @@ function confirmedObservations(): Observations {
       view: ran({ out: JSON.stringify({ state: "MERGED", headRefOid: MERGED_FIXTURE.mergeTimeHead }) }),
       branch: ran({ out: `${BRANCH_HEAD}\trefs/heads/${MERGED_FIXTURE.branch}` }),
     },
+    "match-head-commit-checked-at-arm-time": {
+      fixture: { built: true, failure: "", leftovers: [] },
+      armed: true,
+      secondHead: BRANCH_HEAD,
+      headAfter: BRANCH_HEAD,
+      armedAfter: true,
+    },
+    "dirty-pull-request-runs-no-checks": {
+      fixture: { built: true, failure: "", leftovers: [] },
+      dirtyMergeable: "CONFLICTING",
+      dirtyRuns: 0,
+      cleanRuns: 3,
+    },
   };
 }
 
@@ -74,27 +87,20 @@ const BREAKS: Record<string, (o: Observations) => void> = {
   "head-ref-oid-frozen-at-merge": (o) => {
     o["head-ref-oid-frozen-at-merge"]!.view = ran({ out: JSON.stringify({ state: "MERGED", headRefOid: BRANCH_HEAD }) });
   },
+  "match-head-commit-checked-at-arm-time": (o) => { o["match-head-commit-checked-at-arm-time"]!.armedAfter = false; },
+  "dirty-pull-request-runs-no-checks": (o) => { o["dirty-pull-request-runs-no-checks"]!.dirtyRuns = 2; },
 };
 
 const PROBED = FORGE_BEHAVIOURS.filter((b) => !b.unprobedBecause).map((b) => b.id);
 
 describe("#1910: the inventory and its probes", () => {
-  test("the rows with no probe are exactly the two that need a throwaway pull request (#2749)", () => {
-    // This list only shrinks. A row added without a probe is named here, and
-    // #2749 empties it.
-    expect(FORGE_BEHAVIOURS.filter((b) => b.unprobedBecause).map((b) => b.id)).toEqual([
-      "match-head-commit-checked-at-arm-time",
-      "dirty-pull-request-runs-no-checks",
-    ]);
-    for (const b of FORGE_BEHAVIOURS.filter((b) => b.unprobedBecause)) {
-      const r = forgeBehaviourReading(b.id, confirmedObservations());
-      expect(r.reading).toBe("UNMEASURED");
-      expect(r.detail).toContain("#2749");
-    }
+  test("no row lacks a probe (#2749 emptied the list)", () => {
+    // A row added without a probe is named here, by id, until it has one.
+    expect(FORGE_BEHAVIOURS.filter((b) => b.unprobedBecause).map((b) => b.id)).toEqual([]);
   });
 
   test("every probed row has its own reading, and none falls through", () => {
-    expect(PROBED.length).toBe(4);
+    expect(PROBED.length).toBe(6);
     expect(Object.keys(BREAKS).sort()).toEqual([...PROBED].sort());
     for (const id of PROBED) {
       const r = forgeBehaviourReading(id, {});
@@ -493,9 +499,20 @@ describe("#1910: the script, end to end", () => {
     expect(r.out).toStartWith("UNMEASURED head-ref-oid-frozen-at-merge:");
   });
 
-  test("a row with no probe reads UNMEASURED by name, and refuses", () => {
-    const r = bothHalves(["--only", "match-head-commit-checked-at-arm-time"]);
-    expect(r.out).toStartWith("UNMEASURED match-head-commit-checked-at-arm-time: no probe:");
+  // #2749: with a gh that answers nothing it was not planted for, the
+  // throwaway-pull-request rows build nothing, so nothing needs removing.
+  test("a throwaway-pull-request row whose gh does not answer builds nothing, reads UNMEASURED, and refuses", () => {
+    for (const id of ["match-head-commit-checked-at-arm-time", "dirty-pull-request-runs-no-checks"]) {
+      const r = bothHalves(["--only", id]);
+      expect(r.out).toStartWith(`UNMEASURED ${id}: the fixture was not built: main's head could not be read`);
+    }
+  });
+
+  test("a value-taking flag given last is refused, not read as absent (#2749)", () => {
+    for (const flag of ["--only", "--remote"]) {
+      const r = bothHalves([flag]);
+      expect(r.err).toContain(`${flag} needs a value after it`);
+    }
   });
 
   test("an unknown row is refused, naming the known ones", () => {
@@ -508,5 +525,78 @@ describe("#1910: the script, end to end", () => {
     const m = r.out.match(/^(CONFIRMED|CHANGED|UNMEASURED) bun-spawn-timeout-window: /);
     expect(m, r.out + r.err).not.toBeNull();
     expect(r.code).toBe(m![1] === "CONFIRMED" ? 0 : REFUSE_EXIT);
+  });
+});
+
+// ── #2749: the throwaway-pull-request rows ──────────────────
+
+const builtFixture = () => ({ built: true, failure: "", leftovers: [] as string[] });
+
+describe("#2749: the arm-time and conflicted-pull-request readings", () => {
+  const arm = (over: Partial<NonNullable<Observations["match-head-commit-checked-at-arm-time"]>> = {}) =>
+    forgeBehaviourReading("match-head-commit-checked-at-arm-time", {
+      "match-head-commit-checked-at-arm-time": { ...confirmedObservations()["match-head-commit-checked-at-arm-time"]!, ...over },
+    });
+  const dirty = (over: Partial<NonNullable<Observations["dirty-pull-request-runs-no-checks"]>> = {}) =>
+    forgeBehaviourReading("dirty-pull-request-runs-no-checks", {
+      "dirty-pull-request-runs-no-checks": { ...confirmedObservations()["dirty-pull-request-runs-no-checks"]!, ...over },
+    });
+
+  test("a fixture that could not be removed is named, and is not a pass, in both rows", () => {
+    const left = { built: true, failure: "", leftovers: ["pull request #9", "branch rungate-forge-probe-x-arm"] };
+    for (const r of [arm({ fixture: left }), dirty({ fixture: left })]) {
+      expect(r.reading).toBe("UNMEASURED");
+      expect(r.detail).toContain("pull request #9");
+      expect(r.detail).toContain("branch rungate-forge-probe-x-arm");
+    }
+  });
+
+  test("a fixture that was not built says which step failed, in both rows", () => {
+    const unbuilt = { built: false, failure: "main's head could not be read: not authenticated, or offline", leftovers: [] };
+    for (const r of [arm({ fixture: unbuilt }), dirty({ fixture: unbuilt })]) {
+      expect(r.reading).toBe("UNMEASURED");
+      expect(r.detail).toContain("main's head could not be read");
+    }
+  });
+
+  test("arm-time: arming that failed, a push not yet visible, and an unreadable state are UNMEASURED", () => {
+    expect(arm({ armed: false }).reading).toBe("UNMEASURED");
+    expect(arm({ headAfter: "0000000000000000000000000000000000000000" }).reading).toBe("UNMEASURED");
+    expect(arm({ secondHead: "" }).reading).toBe("UNMEASURED");
+    expect(arm({ armedAfter: null }).reading).toBe("UNMEASURED");
+  });
+
+  test("arm-time: still armed after the push is CONFIRMED, and turned off is CHANGED", () => {
+    expect(arm().reading).toBe("CONFIRMED");
+    expect(arm({ armedAfter: false }).reading).toBe("CHANGED");
+  });
+
+  test("conflicted: a fixture that did not conflict, and a control with no runs, are UNMEASURED", () => {
+    expect(dirty({ dirtyMergeable: "MERGEABLE" }).reading).toBe("UNMEASURED");
+    expect(dirty({ dirtyMergeable: "" }).reading).toBe("UNMEASURED");
+    expect(dirty({ cleanRuns: 0 }).reading).toBe("UNMEASURED");
+    expect(dirty({ cleanRuns: null }).reading).toBe("UNMEASURED");
+    expect(dirty({ dirtyRuns: null }).reading).toBe("UNMEASURED");
+  });
+
+  test("conflicted: no runs beside a control that ran is CONFIRMED, and runs on it are CHANGED", () => {
+    expect(dirty().reading).toBe("CONFIRMED");
+    expect(dirty({ dirtyRuns: 1 }).reading).toBe("CHANGED");
+  });
+});
+
+describe("#2749: the fixes folded in from #2750's round 5", () => {
+  test("a reply of JSON null makes the frozen-head row UNMEASURED rather than throwing", () => {
+    const o = confirmedObservations();
+    o["head-ref-oid-frozen-at-merge"]!.view = ran({ out: "null" });
+    const r = forgeBehaviourReading("head-ref-oid-frozen-at-merge", o);
+    expect(r.reading).toBe("UNMEASURED");
+    expect(r.detail).toContain("not an object");
+  });
+
+  test("the probe spawns with the kill signal scripts/verify-merge-ref.ts uses", () => {
+    const runBody = SOURCE.slice(SOURCE.indexOf("function run("), SOURCE.indexOf("function arg("));
+    expect(runBody).toContain('killSignal: "SIGKILL"');
+    expect(readFileSync(join(ROOT, "scripts", "verify-merge-ref.ts"), "utf-8")).toContain('killSignal: "SIGKILL"');
   });
 });

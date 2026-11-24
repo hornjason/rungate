@@ -39,8 +39,12 @@
  * outlive the code it describes (#2750 review).
  *
  * A row with no probe says why in `unprobedBecause`, reads `UNMEASURED` every
- * run, and is listed by the suite. Two rows need a throwaway pull request to
- * read and have none yet (#2749).
+ * run, and is listed by the suite; today no row lacks one. Two rows open
+ * throwaway pull requests to read (#2749): each closes them and deletes their
+ * branches when it is done, a fixture it could not remove is named and is not a
+ * pass, and the arm-time fixture's head carries a failing test so it can never
+ * merge. In `forge-probe.yml` the job's token is read-only, so there those two
+ * rows read UNMEASURED by name; run them where `gh` may open pull requests.
  *
  * ## Properties the test asserts
  *
@@ -131,13 +135,11 @@ export const FORGE_BEHAVIOURS: readonly ForgeBehaviour[] = [
       "`gh pr merge --auto --match-head-commit` compares the pin when auto-merge is armed, not when the merge " +
       "fires, so it does not refuse a push that arrives after arming.",
     citedBy: [{ path: "scripts/verify-merge-ref.ts", beside: "push arriving after firing has no merge left to refuse." }],
-    unprobedBecause: "reading it needs a throwaway pull request armed and then pushed to (#2749)",
   },
   {
     id: "dirty-pull-request-runs-no-checks",
     assumes: "a `pull_request` run checks out the merge ref, so a conflicted pull request runs no checks at all.",
     citedBy: [{ path: "reference/board-mechanics-worked-instances.md", beside: "Rebase first, then read the checks." }],
-    unprobedBecause: "reading it needs a throwaway pull request that conflicts with main (#2749)",
   },
 ];
 
@@ -166,6 +168,46 @@ export interface Observations {
   "ls-remote-absent-ref-exits-zero"?: { control: Ran; absent: Ran; absentAgain: Ran; controlAfter: Ran };
   "ls-remote-unreadable-exits-nonzero"?: { unreadable: Ran };
   "head-ref-oid-frozen-at-merge"?: { url: Ran; view: Ran; branch: Ran };
+  "match-head-commit-checked-at-arm-time"?: ArmTimeObservation;
+  "dirty-pull-request-runs-no-checks"?: DirtyObservation;
+}
+
+/**
+ * A throwaway pull request, as built and removed (#2749). `built` is false
+ * when any step of building it failed, and `failure` says which. `leftovers`
+ * names every pull request or branch it could not remove: a fixture left
+ * behind is reported by name, and the row is not a pass while it stands.
+ */
+export interface Fixture {
+  built: boolean;
+  failure: string;
+  leftovers: string[];
+}
+
+/**
+ * Auto-merge armed with the head pinned, then one more commit pushed. `armed`
+ * is whether arming succeeded; `headAfter` and `armedAfter` are read once the
+ * pull request's head is the second commit, or when the wait runs out.
+ */
+export interface ArmTimeObservation {
+  fixture: Fixture;
+  armed: boolean | null;
+  secondHead: string;
+  headAfter: string;
+  armedAfter: boolean | null;
+}
+
+/**
+ * Two pull requests into a throwaway base: one that conflicts with it and a
+ * clean control. The runs are `pull_request` workflow runs on each head, read
+ * once the control has some, so "none on the conflicted one" is told apart
+ * from "no workflow runs on pull requests into this base at all".
+ */
+export interface DirtyObservation {
+  fixture: Fixture;
+  dirtyMergeable: string;
+  dirtyRuns: number | null;
+  cleanRuns: number | null;
 }
 
 /**
@@ -286,6 +328,10 @@ export function forgeBehaviourReading(id: string, obs: Observations): RowReading
       } catch {
         return say("UNMEASURED", `\`gh pr view ${f.pr}\` returned something that is not JSON.`);
       }
+      // `null` parses, and reading a field of it throws (#2750 review).
+      if (pj === null || typeof pj !== "object") {
+        return say("UNMEASURED", `\`gh pr view ${f.pr}\` returned JSON that is not an object.`);
+      }
       if (pj.state !== "MERGED") return say("UNMEASURED", `the fixture, pull request ${f.pr}, reads ${String(pj.state)}, not MERGED.`);
       const head = typeof pj.headRefOid === "string" ? pj.headRefOid : "";
       if (head === "") return say("UNMEASURED", `\`gh pr view ${f.pr}\` answered with no \`headRefOid\`.`);
@@ -306,6 +352,40 @@ export function forgeBehaviourReading(id: string, obs: Observations): RowReading
         return say("CHANGED", `pull request ${f.pr}'s \`headRefOid\` now follows its branch (${head.slice(0, 8)}), so a push after a merge can no longer be seen.`);
       }
       return say("CHANGED", `pull request ${f.pr}'s \`headRefOid\` is \`${head}\`: neither its merge-time head nor its branch.`);
+    }
+    case "match-head-commit-checked-at-arm-time": {
+      const o = obs[id];
+      if (!o) return say("UNMEASURED", "the throwaway pull request was not observed.");
+      const left = fixtureNotPassing(o.fixture);
+      if (left) return say("UNMEASURED", left);
+      if (o.armed !== true) return say("UNMEASURED", "auto-merge could not be armed with the head pinned, so nothing about the pin was read.");
+      if (o.secondHead === "" || o.headAfter !== o.secondHead) {
+        return say("UNMEASURED", "the second commit did not become the pull request's head in time, so the push was not observed.");
+      }
+      if (o.armedAfter === true) {
+        return say("CONFIRMED", `auto-merge armed with the head pinned stayed armed after a push moved the head to ${o.headAfter.slice(0, 8)}.`);
+      }
+      if (o.armedAfter === false) {
+        return say("CHANGED", "a push after arming turned auto-merge off, so the pin is no longer checked only when auto-merge is armed.");
+      }
+      return say("UNMEASURED", "auto-merge's state after the push could not be read.");
+    }
+    case "dirty-pull-request-runs-no-checks": {
+      const o = obs[id];
+      if (!o) return say("UNMEASURED", "the throwaway pull requests were not observed.");
+      const left = fixtureNotPassing(o.fixture);
+      if (left) return say("UNMEASURED", left);
+      if (o.dirtyMergeable !== "CONFLICTING") {
+        return say("UNMEASURED", `the conflicting pull request reads \`${o.dirtyMergeable || "nothing"}\`, not CONFLICTING, so it was not a conflicted pull request.`);
+      }
+      if (o.cleanRuns === null || o.cleanRuns === 0) {
+        return say("UNMEASURED", "the clean control started no pull_request run, so none on the conflicted one says nothing.");
+      }
+      if (o.dirtyRuns === null) return say("UNMEASURED", "the conflicted pull request's runs could not be read.");
+      if (o.dirtyRuns === 0) {
+        return say("CONFIRMED", `the clean control started ${o.cleanRuns} pull_request run(s), and the conflicted pull request started none.`);
+      }
+      return say("CHANGED", `the conflicted pull request started ${o.dirtyRuns} pull_request run(s), so a conflict no longer means no checks.`);
     }
   }
   return say("UNMEASURED", `\`${id}\` names no unprobed reason and has no reading. Add one, or say why there is none.`);
@@ -357,7 +437,9 @@ const CALL_TIMEOUT_MS = 30_000;
 function run(cmd: string[], timeoutMs = CALL_TIMEOUT_MS): Ran {
   const start = performance.now();
   try {
-    const r = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe", timeout: timeoutMs });
+    // `killSignal` as scripts/verify-merge-ref.ts spawns, so the timeout row
+    // measures the kill path the dependent takes (#2750 review).
+    const r = Bun.spawnSync(cmd, { stdout: "pipe", stderr: "pipe", timeout: timeoutMs, killSignal: "SIGKILL" });
     return {
       started: true,
       exit: r.exitCode,
@@ -373,6 +455,15 @@ function run(cmd: string[], timeoutMs = CALL_TIMEOUT_MS): Ran {
 function arg(name: string, argv: string[]): string | undefined {
   const i = argv.indexOf(`--${name}`);
   return i >= 0 ? argv[i + 1] : undefined;
+}
+
+/** A value-taking flag given with no value after it; `null` when every one has its value. */
+function flagMissingValue(argv: string[]): string | null {
+  for (const name of ["only", "remote"]) {
+    const i = argv.indexOf(`--${name}`);
+    if (i >= 0 && (i + 1 >= argv.length || argv[i + 1].startsWith("--"))) return `--${name}`;
+  }
+  return null;
 }
 
 function observe(id: string, remote: string): Observations {
@@ -409,11 +500,219 @@ function observe(id: string, remote: string): Observations {
           branch: run(["git", "ls-remote", remote, `refs/heads/${MERGED_FIXTURE.branch}`]),
         },
       };
+    case "match-head-commit-checked-at-arm-time":
+      return { [id]: observeArmTime() };
+    case "dirty-pull-request-runs-no-checks":
+      return { [id]: observeDirty() };
   }
   return {};
 }
 
+// ── the throwaway pull requests (#2749) ─────────────────────
+
+/** The repository the throwaway pull requests are opened in: the merged fixture's. */
+const FIXTURE_REPO = MERGED_FIXTURE.repo;
+
+/** How long a fixture waits for GitHub to settle a pull request, and how often it looks. */
+const SETTLE_MS = 180_000;
+const POLL_MS = 5_000;
+
+const FIXTURE_BODY =
+  "A throwaway pull request opened by `scripts/probe-forge-behaviour.ts` (#2749). " +
+  "It is closed and its branch deleted by the probe that opened it. Never merge it.";
+
+/**
+ * The arm-time fixture's first commit: a test that always fails. A required
+ * check therefore stays red, so the pull request can never merge, even when
+ * the probe dies before it closes it (Jason, 2026-11-24, #2749).
+ */
+const NEVER_MERGES =
+  "// Forge probe fixture (#2749). It fails on purpose, so this pull request can never merge.\n" +
+  'import { test } from "bun:test";\n' +
+  'test("forge probe fixture never merges", () => {\n  throw new Error("forge probe fixture: never merge");\n});\n';
+
+/** Why a fixture's row cannot read CONFIRMED or CHANGED, or "" when it can. */
+function fixtureNotPassing(f: Fixture): string {
+  if (f.leftovers.length > 0) {
+    return `the fixture could not be removed: ${f.leftovers.join(", ")}. Remove it by hand; a fixture left behind is not a pass.`;
+  }
+  if (!f.built) return `the fixture was not built: ${f.failure || "no reason recorded"}.`;
+  return "";
+}
+
+/** A field of a parsed JSON reply, or "" when it is absent or not a string. */
+function field(json: unknown, ...path: string[]): string {
+  let v: unknown = json;
+  for (const k of path) v = v !== null && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
+  return typeof v === "string" ? v : typeof v === "number" ? String(v) : "";
+}
+
+/** `gh` with a JSON reply, or `null` when it did not finish, failed, or answered with something that is not JSON. */
+function ghJson(args: string[]): unknown {
+  const r = run(["gh", ...args]);
+  if (!finished(r) || r.exit !== 0) return null;
+  try {
+    return JSON.parse(r.out);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Builds throwaway branches and pull requests through the API, and removes
+ * every one it built. Nothing touches the local checkout.
+ */
+class Throwaway {
+  readonly tag = `rungate-forge-probe-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
+  failure = "";
+  private readonly branches: string[] = [];
+  private readonly pulls: string[] = [];
+
+  private fail(why: string): false {
+    if (this.failure === "") this.failure = why;
+    return false;
+  }
+
+  mainHead(): string {
+    const sha = field(ghJson(["api", `repos/${FIXTURE_REPO}/git/ref/heads/main`]), "object", "sha");
+    if (sha === "") this.fail("main's head could not be read: not authenticated, or offline");
+    return sha;
+  }
+
+  branch(name: string, sha: string): boolean {
+    const made = field(ghJson(["api", "-X", "POST", `repos/${FIXTURE_REPO}/git/refs`, "-f", `ref=refs/heads/${name}`, "-f", `sha=${sha}`]), "ref");
+    if (made === "") return this.fail(`branch ${name} could not be created`);
+    this.branches.push(name);
+    return true;
+  }
+
+  /** Commit one new file onto `branch`; the new commit's sha, or "". */
+  commit(branch: string, path: string, content: string): string {
+    const reply = ghJson([
+      "api", "-X", "PUT", `repos/${FIXTURE_REPO}/contents/${path}`,
+      "-f", "message=Forge probe fixture (#2749)",
+      "-f", `content=${Buffer.from(content).toString("base64")}`,
+      "-f", `branch=${branch}`,
+    ]);
+    const sha = field(reply, "commit", "sha");
+    if (sha === "") this.fail(`a commit to ${branch} could not be made`);
+    return sha;
+  }
+
+  /** Open a pull request; its number, or "". */
+  open(head: string, base: string): string {
+    const reply = ghJson([
+      "api", "-X", "POST", `repos/${FIXTURE_REPO}/pulls`,
+      "-f", `title=Forge probe fixture, never merge (${this.tag})`,
+      "-f", `head=${head}`, "-f", `base=${base}`, "-f", `body=${FIXTURE_BODY}`,
+    ]);
+    const n = field(reply, "number");
+    if (n === "") {
+      this.fail(`a pull request from ${head} into ${base} could not be opened`);
+      return "";
+    }
+    this.pulls.push(n);
+    return n;
+  }
+
+  /** Close every pull request and delete every branch; what could not be removed, by name. */
+  cleanup(): string[] {
+    const left: string[] = [];
+    for (const n of this.pulls) {
+      run(["gh", "pr", "close", n, "--repo", FIXTURE_REPO]);
+      if (field(ghJson(["pr", "view", n, "--repo", FIXTURE_REPO, "--json", "state"]), "state") !== "CLOSED") left.push(`pull request #${n}`);
+    }
+    for (const b of this.branches) {
+      run(["gh", "api", "-X", "DELETE", `repos/${FIXTURE_REPO}/git/refs/heads/${b}`]);
+      // Gone only when GitHub says so. A read that failed is not a 404.
+      const after = run(["gh", "api", `repos/${FIXTURE_REPO}/git/ref/heads/${b}`]);
+      if (after.exit === 0 || !after.out.includes("Not Found")) left.push(`branch ${b}`);
+    }
+    return left;
+  }
+}
+
+/** Poll `read` until `done` holds or the wait runs out; the last value read. */
+function settle<T>(read: () => T, done: (v: T) => boolean, ms = SETTLE_MS): T {
+  const until = Date.now() + ms;
+  let v = read();
+  while (!done(v) && Date.now() < until) {
+    Bun.sleepSync(POLL_MS);
+    v = read();
+  }
+  return v;
+}
+
+function observeArmTime(): ArmTimeObservation {
+  const t = new Throwaway();
+  const o: ArmTimeObservation = { fixture: { built: false, failure: "", leftovers: [] }, armed: null, secondHead: "", headAfter: "", armedAfter: null };
+  try {
+    const base = t.mainHead();
+    const head = `${t.tag}-arm`;
+    if (base === "" || !t.branch(head, base)) return o;
+    const first = t.commit(head, `test/${t.tag}.test.ts`, NEVER_MERGES);
+    const pr = first === "" ? "" : t.open(head, "main");
+    if (pr === "") return o;
+    const view = () => ghJson(["pr", "view", pr, "--repo", FIXTURE_REPO, "--json", "headRefOid,autoMergeRequest"]);
+    const arm = run(["gh", "pr", "merge", pr, "--repo", FIXTURE_REPO, "--squash", "--auto", "--match-head-commit", first]);
+    const armedView = settle(view, (v) => field(v, "autoMergeRequest", "enabledAt") !== "", 30_000);
+    o.armed = arm.exit === 0 && field(armedView, "autoMergeRequest", "enabledAt") !== "";
+    if (!o.armed) return o;
+    o.secondHead = t.commit(head, `test/${t.tag}-second.txt`, "the commit pushed after arming\n");
+    if (o.secondHead === "") return o;
+    const after = settle(view, (v) => field(v, "headRefOid") === o.secondHead, 60_000);
+    o.headAfter = field(after, "headRefOid");
+    o.armedAfter = after === null ? null : field(after, "autoMergeRequest", "enabledAt") !== "";
+    o.fixture.built = true;
+    return o;
+  } finally {
+    o.fixture.failure = t.failure;
+    o.fixture.leftovers = t.cleanup();
+  }
+}
+
+function observeDirty(): DirtyObservation {
+  const t = new Throwaway();
+  const o: DirtyObservation = { fixture: { built: false, failure: "", leftovers: [] }, dirtyMergeable: "", dirtyRuns: null, cleanRuns: null };
+  const runsOn = (sha: string): number | null => {
+    const n = field(ghJson(["api", `repos/${FIXTURE_REPO}/actions/runs?event=pull_request&head_sha=${sha}`]), "total_count");
+    return n === "" ? null : Number(n);
+  };
+  try {
+    const main = t.mainHead();
+    const base = `${t.tag}-base`;
+    const dirty = `${t.tag}-dirty`;
+    const clean = `${t.tag}-clean`;
+    if (main === "" || !t.branch(base, main) || !t.branch(dirty, main)) return o;
+    // Both sides add the same new file with different contents: a conflict
+    // that no rebase of main can resolve or race.
+    const dirtyHead = t.commit(dirty, `${t.tag}.txt`, "the conflicting side\n");
+    const baseHead = dirtyHead === "" ? "" : t.commit(base, `${t.tag}.txt`, "the base side\n");
+    if (baseHead === "" || !t.branch(clean, baseHead)) return o;
+    const cleanHead = t.commit(clean, `${t.tag}-clean.txt`, "the clean control\n");
+    if (cleanHead === "") return o;
+    const dirtyPr = t.open(dirty, base);
+    if (dirtyPr === "" || t.open(clean, base) === "") return o;
+    const mergeable = () => field(ghJson(["pr", "view", dirtyPr, "--repo", FIXTURE_REPO, "--json", "mergeable"]), "mergeable");
+    o.cleanRuns = settle(() => runsOn(cleanHead), (n) => n !== null && n > 0);
+    o.dirtyMergeable = settle(mergeable, (m) => m !== "" && m !== "UNKNOWN", 60_000);
+    o.dirtyRuns = runsOn(dirtyHead);
+    o.fixture.built = true;
+    return o;
+  } finally {
+    o.fixture.failure = t.failure;
+    o.fixture.leftovers = t.cleanup();
+  }
+}
+
 export function main(argv: string[]): number {
+  // Given last, `--only` would read as absent and run every row, and
+  // `--remote` would fall back to origin (#2750 review).
+  const missing = flagMissingValue(argv);
+  if (missing !== null) {
+    console.error(`UNMEASURED: ${missing} needs a value after it.`);
+    return REFUSE_EXIT;
+  }
   const only = arg("only", argv);
   const remote = arg("remote", argv) ?? "origin";
   const rows = only === undefined ? FORGE_BEHAVIOURS : FORGE_BEHAVIOURS.filter((b) => b.id === only);
