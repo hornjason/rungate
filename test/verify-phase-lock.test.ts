@@ -468,17 +468,21 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     expect(filingDirectory(cmd, "/main")).toBe("/a");
   });
 
-  // #2735 review round 2: a cd whose target the shell expands at run time is
-  // one this cannot resolve, so it leaves the directory alone, as the
-  // docblock says, instead of inventing a path with the `$` in it.
+  // #2735 review rounds 2 and 3: a cd whose target the shell expands at run
+  // time cannot be resolved from the text. It is resolved as written, which
+  // names a directory that does not exist, so the gate's reads there fail and
+  // it refuses. Leaving the directory alone instead (round 2) read the
+  // session's checkout, where a stale --body-file is readable and wrong.
   test.each([
-    [`cd "$WT" && gh issue create --title t`],
-    [`cd "$HOME/wt" && gh issue create --title t`],
-    [`cd "$(git rev-parse --show-toplevel)" && gh issue create --title t`],
-    ["cd `pwd` && gh issue create --title t"],
-    [`cd ~bob/x && gh issue create --title t`],
-  ])("WITNESS: %s leaves the directory alone", cmd => {
-    expect(filingDirectory(cmd, "/repo")).toBe("/repo");
+    [`cd "$WT" && gh issue create --title t`, "$WT"],
+    [`cd "$HOME/wt" && gh issue create --title t`, "$HOME/wt"],
+    [`cd "$(git rev-parse --show-toplevel)" && gh issue create --title t`, "$(git rev-parse --show-toplevel)"],
+    ["cd `pwd` && gh issue create --title t", "`pwd`"],
+    [`cd ~bob/x && gh issue create --title t`, "~bob/x"],
+    [`cd wt-* && gh issue create --title t`, "wt-*"],
+    [`cd rg-wt-? && gh issue create --title t`, "rg-wt-?"],
+  ])("WITNESS: %s is resolved as written, never as the session's directory", (cmd, target) => {
+    expect(filingDirectory(cmd, "/repo")).toBe(join("/repo", target));
   });
 
   test("CONTROL: a cd to ~, ~/path, or a plain path still resolves", () => {

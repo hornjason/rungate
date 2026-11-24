@@ -431,10 +431,14 @@ function substitutionEnd(cmd: string, from: number): number {
  * that can disagree (`.claude/rules/checks-must-be-able-to-fail.md`, the
  * fourth shape).
  *
- * **A `cd` this cannot resolve leaves the directory alone.** `cd -` needs
- * `OLDPWD`, and a target the shell expands at run time needs the shell's
- * state: a variable, a command substitution, or `~user` (#2735 review round
- * 2). Each is the shell's state and not the command's text. A bare `cd` IS
+ * **A `cd` target the shell expands at run time is resolved as written.**
+ * A variable, a command substitution, a glob or `~user` needs the shell's
+ * state, not the command's text. Written out, it names a directory that does
+ * not exist, so the gate cannot read a body, a plan or a committed config
+ * there, and it refuses. That is the safe direction. Leaving the directory
+ * alone instead, as review round 2 of #2735 had it, read the session's
+ * checkout, where a stale `--body-file` is readable and wrong (round 3).
+ * `cd -` still leaves the directory alone: it needs `OLDPWD`. A bare `cd` IS
  * resolvable and goes to `homedir()`, and so are `~` and `~/path`.
  */
 export function filingDirectory(cmd: string, from: string): string {
@@ -610,8 +614,6 @@ function cdTarget(args: string[], dir: string): string {
   if (path.length === 0) return args.includes("-") ? dir : homedir();
   if (path.length > 1) return dir;
   const target = path[0];
-  // Expanded by the shell at run time, so not readable here (#2735 review round 2).
-  if (/[$`]/.test(target) || /^~[^/]/.test(target)) return dir;
   if (target === "~") return homedir();
   if (target.startsWith("~/")) return join(homedir(), target.slice(2));
   return resolve(dir, target);
