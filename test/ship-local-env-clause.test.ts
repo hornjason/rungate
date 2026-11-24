@@ -34,6 +34,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 import { stripJsComments } from "../lib/strip-js-comments";
+import { shellQuoteSource } from "./helpers/ship-block";
 
 const SHIP = readFileSync(join(import.meta.dir, "..", "workflows", "ship.js"), "utf-8");
 
@@ -51,15 +52,9 @@ function markedBlock(name: string): string {
  * The clause quotes the URL now — it is a word in a `curl` the agent runs —
  * so the block needs the quoter to execute. A copy written in this file would
  * be two deciders that agree, and the rows below would then be measuring a
- * quoter this test invented.
+ * quoter this test invented. Read through the one helper (#2737).
  */
-const SHELL_QUOTE_SOURCE = (() => {
-  const start = SHIP.indexOf("function shellQuote(word) {");
-  if (start < 0) throw new Error("ship.js no longer declares shellQuote");
-  const end = SHIP.indexOf("\n}", start);
-  if (end < 0) throw new Error("ship.js's shellQuote has no closing brace");
-  return SHIP.slice(start, end + 2);
-})();
+const SHELL_QUOTE_SOURCE = shellQuoteSource();
 
 type Clause = (field: "api" | "ui", url: string | null, configKey: string) => string;
 

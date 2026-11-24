@@ -608,10 +608,9 @@ describe("#2736: the one helper that reaches the shellQuote the launch file runs
   /**
    * Every test that still names `function shellQuote(` outside the helper.
    * #2734 removes ship.js's definition, and each of these would then cut
-   * nothing. The list must equal exactly the five #2737 moves, so it refuses
-   * a new reader and a reader moved without updating it alike.
+   * nothing. Since #2737 moved the last five, the list is empty.
    */
-  test("#2736 AC-2: no test outside the helper reads shellQuote out of ship.js by name, save the five #2737 moves", () => {
+  test("#2736 AC-2: no test outside the helper reads shellQuote out of ship.js by name (#2737: none left)", () => {
     const EXEMPT = new Map([
       ["helpers/ship-block.ts", "the helper itself"],
       ["reported-path-refusal.test.ts", "this file, whose fixture defines one"],
@@ -622,12 +621,6 @@ describe("#2736: the one helper that reaches the shellQuote the launch file runs
       .filter(f => f.endsWith(".ts") && !EXEMPT.has(f))
       .filter(f => /function shellQuote\(/.test(readFileSync(join(dir, f), "utf-8").replaceAll("\\(", "(")))
       .sort();
-    expect(readers, "a test reads shellQuote out of ship.js itself; use shellQuoteSource() or shipShellQuote()").toEqual([
-      "commit-subject-quoting.test.ts",
-      "security-verdict-blocks.test.ts",
-      "ship-local-env-clause.test.ts",
-      "verify-fanout.test.ts",
-      "worktree-repo.test.ts",
-    ]);
+    expect(readers, "a test reads shellQuote out of ship.js itself; use shellQuoteSource() or shipShellQuote()").toEqual([]);
   });
 });
