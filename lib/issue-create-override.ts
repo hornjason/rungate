@@ -317,6 +317,19 @@ function malformed(script: SyntaxNode): boolean {
 /** How every guard's refusal of a command it cannot read begins (#2743). */
 export const UNREADABLE_COMMAND = "Cannot read this command";
 
+/**
+ * Whether a text names `gh` once the shell's joins are undone: a
+ * backslash-newline, the `$` of a `$"…"` string, quotes and backslashes are
+ * taken out, so `g\⏎h`, `g$""h` and `g"h"` all read as `gh` (#2746 review). Any
+ * ANSI-C `$'…'` counts as well, since its escapes can spell anything. This
+ * decides only which unreadable commands are refused, so it errs toward yes.
+ */
+function namesGh(text: string): boolean {
+  if (text.includes("$'")) return true;
+  const joined = text.replace(/\\\n/g, "").replace(/\$(?=["'])/g, "").replace(/["'\\]/g, "");
+  return /\bgh\b/.test(joined);
+}
+
 /** A shell, whose `-c` argument is a command line the shell itself runs. */
 const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
 
@@ -328,9 +341,7 @@ const SHELLS = new Set(["bash", "sh", "zsh", "dash", "ksh"]);
  * a heredoc handed to a shell, and a shell's `-c` or `eval` argument, to the
  * depth of 4 `clauses()` uses. A non-shell program (`python3 -c`, a heredoc
  * handed to `node`) is not bash, so its failing to parse as bash says nothing.
- * `gh` is looked for with quotes and backslashes taken out, and any ANSI-C
- * `$'…'` counts, since one can spell it: this decides only which unreadable
- * commands are refused, so it errs toward refusing.
+ * Whether it names `gh` is `namesGh`'s reading.
  *
  * Every guard asks this before it reads the command, and so reads a command
  * one way only. #2735 read a malformed command a second time with the
@@ -341,7 +352,7 @@ export function unreadableFiling(cmd: string, depth = 0): string | null {
   const texts = [cmd, ...interpreterPrograms(cmd).filter(p => p.shell).map(p => p.program)];
   for (const text of texts) {
     const read = parsedCommands(text);
-    if (read.malformed && (/\bgh\b/.test(text.replace(/["'\\]/g, "")) || text.includes("$'"))) {
+    if (read.malformed && namesGh(text)) {
       return (
         `${UNREADABLE_COMMAND}: the bash grammar reports it malformed and it names gh, so no guard can tell ` +
         "what it would run (#2743). Give each gh call a simple command of its own. Two known causes: the " +

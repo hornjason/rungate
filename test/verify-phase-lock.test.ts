@@ -405,6 +405,20 @@ describe("#2723 review round 2", () => {
  * CONCESSION. #2727 reads the command with a bash grammar instead, so the
  * shell's own structure decides where a substitution ends.
  */
+describe("#2746 review: eval runs all its arguments as one command line", () => {
+  // Already true before the review: createsIssue reads gh issue create among
+  // eval's own words. Pinned, because the review read it as a bypass.
+  test("an unquoted eval filing is read as the filing it runs", () => {
+    const cmd = `eval gh issue create --label bug`;
+    expect(clauses(cmd).some(createsIssue), cmd).toBe(true);
+    expect(verifyPhaseRefusal(cmd), cmd).not.toBeNull();
+  });
+
+  test("CONTROL: the quoted form is read too", () => {
+    expect(clauses(`eval 'gh issue create --label bug'`).some(createsIssue)).toBe(true);
+  });
+});
+
 describe("#2727: a filing the shell runs is read, whatever the quoting around it", () => {
   test("a word case as an argument does not hide a filing after the substitution", () => {
     // Round 2's case reading counted these, never closed the substitution, and
@@ -457,6 +471,9 @@ describe("#2727: a filing the shell runs is read, whatever the quoting around it
     [`bash -c 'echo "$(printf case x)"; gh issue create --title t'`],
     [`echo "$(printf case x)"; $'\\x67h' issue create --title t`],
     [`cat > /tmp/d.md <<'EOF'\ngh issue create --title t\n`],
+    // #2746 review: spellings of gh the name test missed, which bash joins.
+    [`echo "$(printf case x)"; g\\\nh issue create --title t`],
+    [`echo "$(printf case x)"; g$""h issue create --title t`],
   ])("WITNESS: %s is refused as unreadable", cmd => {
     expect(unreadableFiling(cmd), cmd).toContain(UNREADABLE_COMMAND);
     expect(verifyPhaseRefusal(cmd), cmd).toContain(UNREADABLE_COMMAND);
