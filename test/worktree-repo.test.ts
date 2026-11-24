@@ -46,7 +46,7 @@ import { join } from "path";
 import { loadRungateConfig } from "../lib/config-loader";
 import { assertMarkedBlockReachable } from "../lib/reachability";
 import { SHIP_LAUNCH, shipPrelude } from "../scripts/build-workflow-launch";
-import { worktreeIdentityRegion } from "./helpers/ship-block";
+import { shellQuoteSource, worktreeIdentityRegion } from "./helpers/ship-block";
 import { structuralCut, structuralCutAround } from "../lib/source-slice";
 import {
   readWorktreeRemote,
@@ -562,10 +562,12 @@ function loadBriefedAgent(source = shipSource) {
     // test/briefed-agent-model.test.ts.
     // BRIEF-PRECEDENCE likewise: briefedAgent appends its notice (#180), so
     // without the block the composed prompt dies on a free reference.
-    // Cut to the function's closing brace, not to the first `\n}` a regex
-    // happens to reach: same bytes, and it refuses by name if shellQuote is
-    // renamed instead of silently interpolating an empty string (#664).
-    `${structuralCut(source, "function shellQuote(word)", { balanced: "{" })}\n` +
+    // Through the one helper (#2737): it cuts to the function's closing
+    // brace and refuses by name if shellQuote is renamed, instead of silently
+    // interpolating an empty string (#664).
+    // The live definition, not the one in `source`: a mutant source here
+    // changes the cwd pin, never the quoter.
+    `${shellQuoteSource()}\n` +
       `${block(PRECEDENCE)}\n${block(AGENT_TIMING)}\n${block(BRIEFED)}\nreturn briefedAgent;`,
   );
   const call = factory(

@@ -70,6 +70,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { structuralCut } from "../lib/source-slice";
+import { shellQuoteSource } from "./helpers/ship-block";
 import { commitSubject } from "../lib/commit-subject";
 import { closingReferences } from "../scripts/check-state-record-closes";
 
@@ -90,7 +91,8 @@ beforeAll(() => {
   // length assertion here — a missing binding cannot reach the cases
   // (`.claude/rules/checks-must-be-able-to-fail.md`, "For a script whose job
   // is to exit non-zero").
-  const quoteSrc = structuralCut(shipSource, "function shellQuote(", { balanced: "{" });
+  // The shellQuote the launch file runs, through the one helper (#2737).
+  const quoteSrc = shellQuoteSource();
 
   // `new Function` over this repository's own `workflows/ship.js`, which is
   // the only way to make ship.js the single decider — nothing untrusted is
@@ -452,7 +454,9 @@ describe("AC-6: one position composes a commit subject, and ship.js is not one",
     // And the control, because three `not.toContain`s over a 400,000-character
     // file are three assertions that would hold over an empty string: the
     // file really is ship.js, and it really does still run the commit step.
-    expect(shipSource, "the source read here is not ship.js").toContain("function shellQuote(");
+    // Its own meta block, not shellQuote's definition, which #2734 moves into
+    // the launch bundle (#2737).
+    expect(shipSource, "the source read here is not ship.js").toContain("export const meta = {\n  name: 'ship',");
     expect(shipSource).toContain("commit -F ");
   });
 

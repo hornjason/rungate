@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 
 import { assertMarkedBlockReachable } from "../lib/reachability";
+import { shipShellQuote } from "./helpers/ship-block";
 import { bundleLibCores, LAUNCH_BUNDLE, shipPrelude } from "../scripts/build-workflow-launch";
 import type { ReReviewDecision } from "../lib/security-verdict";
 import {
@@ -2150,16 +2151,10 @@ describe("#171 AC-6: removing the re-review makes the run refuse, never ship", (
  *
  * The fan-out block quotes the paths it hands to the record step, and a stub
  * that quoted differently from production would make these tests agree with
- * something that does not run. Extraction also fails loudly if the function is
- * renamed, instead of silently testing a local copy of the old one.
+ * something that does not run. Read through the one helper (#2737), which
+ * refuses by name if the definition is missing or doubled.
  */
-const shellQuote: (word: unknown) => string = (() => {
-  const match = shipSource.match(/function shellQuote\(word\) \{[\s\S]*?\n\}/);
-  if (!match) {
-    throw new Error("ship.js no longer defines shellQuote(word) — this harness extracts it by name");
-  }
-  return new Function(`${match[0]}\nreturn shellQuote`)();
-})();
+const shellQuote: (word: unknown) => string = shipShellQuote();
 
 /**
  * Only the container probe's module, bundled exactly as ship.run.js bundles it

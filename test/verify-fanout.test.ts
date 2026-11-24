@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { bundleLibCores, LAUNCH_BUNDLE, shipPrelude } from "../scripts/build-workflow-launch";
+import { shipShellQuote } from "./helpers/ship-block";
 
 /**
  * Coverage for the Verify-phase fan-out (#66 follow-on).
@@ -50,14 +51,9 @@ function sliceBlock(startMarker: string, endMarker: string): string {
  * ship.js's own `shellQuote`, extracted rather than reimplemented — the
  * fan-out quotes the paths it hands the recorder, and a stub that quoted
  * differently would make this harness agree with something that does not run.
+ * Read through the one helper (#2737).
  */
-const shellQuote: (word: unknown) => string = (() => {
-  const match = shipSource.match(/function shellQuote\(word\) \{[\s\S]*?\n\}/);
-  if (!match) {
-    throw new Error("ship.js no longer defines shellQuote(word) — this harness extracts it by name");
-  }
-  return new Function(`${match[0]}\nreturn shellQuote`)();
-})();
+const shellQuote: (word: unknown) => string = shipShellQuote();
 
 /** The scope/verdict helpers the launch file bundles from lib/security-verdict.ts (#129, #2408). */
 const security = new Function(
