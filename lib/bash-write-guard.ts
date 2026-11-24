@@ -3778,7 +3778,7 @@ function inWritePosition(body: string, start: number, spans: [number, number][])
     } else if (c === '(') {
       if (depth === 0) {
         const callee = calleeBefore(body, i);
-        if (!isWriteCallee(callee)) return UNPROVEN;
+        if (!isWriteCallee(callee) || !calleeShown(body, i)) return UNPROVEN;
         return index === destIndexOf(callee) ? IS_DESTINATION : 'argument';
       }
       depth--;
@@ -3812,6 +3812,268 @@ function calleeBefore(body: string, openIndex: number): string {
   let end = i + 1;
   while (i >= 0 && /[A-Za-z0-9_$.]/.test(body[i])) i--;
   return body.slice(i + 1, end);
+}
+
+/**
+ * Is the write function called at `openIndex` the module's own, under EVERY
+ * reading of the body (#2705, #2731)?
+ *
+ * `isWriteCallee` answers by spelling, so a body that defines or binds its own
+ * `copy` had its scratch literal read as the write's target while its real
+ * write went elsewhere. #2726 matched binding forms one at a time and each
+ * review round found another. This reads the other way round, and fails
+ * closed: the identity holds only when every place the code names the function
+ * or its module is a position on a short list, and anything else — a binding
+ * form nobody listed included — leaves it unproven.
+ *
+ * - **The body must be readable.** A quote left open, a backtick, an escaped
+ *   quote, or an f-string with a `{` puts code where the literal reader
+ *   sees a string, so any of them ends it.
+ * - **Nothing binds by string or scope.** `globals`, `vars`, `setattr`,
+ *   `exec`, `builtins`, `globalThis`, a JavaScript `with`, a star import,
+ *   `sys.modules` and their kind bind names the code never spells
+ *   (`DYNAMIC_BINDING`).
+ * - **No attribute is assigned.** `shutil.copy = f`, and as surely
+ *   `os.rename = f`, which `shutil.move` calls inside the module.
+ * - **The name is shown.** A dotted callee needs a module receiver that names
+ *   the function (`MODULE_WRITES`), imported as itself and named nowhere
+ *   else but as a receiver. A bare one may be imported only from the module
+ *   that defines it, and every other place the code names it must be a call
+ *   that is not a definition. A bare name nothing imports is a builtin
+ *   (`open`) or throws when called, and either way writes nowhere else.
+ *
+ * The four readings are `codeMask`'s, because a body's language is not known
+ * here: each reads `#` and `/` its own way, and a reading that disagrees is
+ * one in which the identity is not shown.
+ *
+ * Not read: a module the body imports can rebind anything when it loads, and
+ * a `python3` without `-I` imports a planted `shutil.py` from the working
+ * directory. Both are what the body loads, not what it says.
+ */
+function calleeShown(body: string, openIndex: number): boolean {
+  if (/[`]|\\['"]/.test(body)) return false;
+  return READINGS.every(reading => calleeShownIn(body, openIndex, codeMask(body, reading)));
+}
+
+/** Python modules, and the write functions each defines that a body may call. */
+const MODULE_WRITES: Readonly<Record<string, readonly string[]>> = {
+  shutil: ['copy', 'copyfile', 'copytree', 'move', 'rmtree'],
+  os: ['remove', 'rename', 'replace', 'unlink', 'rmdir'],
+  io: ['open'],
+  json: ['dump'],
+};
+/** The JavaScript module, reached by `import` or `require` under either specifier. */
+const FS_WRITES: readonly string[] = ['writeFileSync', 'appendFileSync', 'createWriteStream', 'copyFileSync', 'renameSync', 'unlinkSync', 'rmSync', 'truncateSync'];
+const FS_SPECIFIERS = new Set(['fs', 'node:fs']);
+
+/** Names that bind, or reach a binding, without the code spelling the name bound. */
+const DYNAMIC_BINDING =
+  /\b(?:globals|vars|locals|setattr|delattr|exec|eval|__dict__|__builtins__|builtins|importlib|globalThis|global|Reflect|defineProperty|Function)\b|\bwith\s*\(|\bimport\s*\*(?!\s*as\b)|\bsys\s*\.\s*(?:modules|path|meta_path|path_hooks)\b/;
+
+/** Keywords a call may follow and still be a call rather than a definition. */
+const CALL_KEYWORDS = new Set(['return', 'await', 'yield', 'not', 'and', 'or', 'in', 'is', 'if', 'elif', 'else', 'while', 'assert', 'with', 'throw', 'typeof', 'void', 'case', 'do', 'print']);
+
+const isIdentChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$]/.test(c);
+
+function calleeShownIn(body: string, openIndex: number, view: CodeView): boolean {
+  if (!view.balanced) return false;
+  // f'{…}' runs code the mask reads as a string.
+  for (const [open, close] of view.literals) {
+    if (/(?:^|[^A-Za-z0-9_$])(?:[fF][rRbB]?|[rRbB][fF])$/.test(body.slice(Math.max(0, open - 3), open)) && body.slice(open, close).includes('{')) return false;
+  }
+  let code = '';
+  for (let k = 0; k < body.length; k++) code += view.mask[k] === 0 || body[k] === '\n' ? body[k] : ' ';
+  if (DYNAMIC_BINDING.test(code)) return false;
+  if (assignsAttribute(code)) return false;
+
+  // The code view blanks a literal's quotes with its contents, so a literal
+  // is found by stepping over whitespace in the body itself.
+  const literalAt: LiteralAt = (at: number) => {
+    while (at < body.length && WHITESPACE.has(body[at])) at++;
+    const lit = view.literals.find(([open]) => open === at);
+    return lit ? { value: body.slice(lit[0] + 1, lit[1]), close: lit[1] } : null;
+  };
+  /** Is the text from `at` `require(<fs>)`, and where does it end? */
+  const requireFs = (at: number): number => {
+    const m = /^require\s*\(/.exec(code.slice(at));
+    if (!m || isIdentChar(code[at - 1]) || code[at - 1] === '.') return -1;
+    const lit = literalAt(at + m[0].length);
+    if (lit === null || !FS_SPECIFIERS.has(lit.value)) return -1;
+    const close = /^\s*\)/.exec(code.slice(lit.close + 1));
+    return close ? lit.close + 1 + close[0].length : -1;
+  };
+
+  // The callee, read back from the paren across whatever stands around a dot.
+  let j = prevCode(code, openIndex - 1);
+  const nameEnd = j + 1;
+  while (j >= 0 && isIdentChar(code[j])) j--;
+  const name = code.slice(j + 1, nameEnd);
+  if (!name) return false;
+  const dot = prevCode(code, j);
+  let receiver: 'none' | 'require' | string = 'none';
+  if (code[dot] === '.') {
+    const r = prevCode(code, dot - 1);
+    if (code[r] === ')') {
+      // Only require('fs') itself: find its start and read it forwards.
+      const start = code.lastIndexOf('require', r);
+      if (start < 0 || requireFs(start) !== r + 1) return false;
+      receiver = 'require';
+    } else if (isIdentChar(code[r])) {
+      let q = r;
+      while (q >= 0 && isIdentChar(code[q])) q--;
+      if (code[prevCode(code, q)] === '.') return false; // a deeper chain names no module here
+      receiver = code.slice(q + 1, r + 1);
+    } else return false;
+  }
+
+  // Every module name and `require` the code spells must be shown, whichever
+  // one the call goes through: a module calls the others inside itself.
+  for (const mod of [...Object.keys(MODULE_WRITES), 'fs', 'require']) {
+    for (const at of occurrences(code, mod)) if (!moduleNameShown(code, at, mod, requireFs, literalAt)) return false;
+  }
+
+  if (receiver === 'require') return FS_WRITES.includes(name) && requireTrusted(code);
+  if (receiver !== 'none') {
+    const writes = receiver === 'fs' ? FS_WRITES : MODULE_WRITES[receiver];
+    if (!writes || !writes.includes(name)) return false;
+    if (!occurrences(code, receiver).some(at => importsModule(code, at, receiver, requireFs, literalAt))) return false;
+    return receiver !== 'fs' || requireTrusted(code);
+  }
+
+  // A bare name: imported, if at all, from the module that defines it, and
+  // otherwise only ever called.
+  for (const at of occurrences(code, name)) {
+    if (code[prevCode(code, at - 1)] === '.') continue; // another object's attribute, not this name
+    if (isCall(code, at, name.length)) continue;
+    if (importedFrom(code, at, name, requireFs, literalAt) === null) return false;
+  }
+  return requireTrusted(code);
+}
+
+/** The index of the last code character at or before `i`, stepping over whitespace and line continuations. */
+function prevCode(code: string, i: number): number {
+  while (i >= 0 && (WHITESPACE.has(code[i]) || (code[i] === '\\' && code[i + 1] === '\n'))) i--;
+  return i;
+}
+
+/** The index of the first code character at or after `i`. */
+function nextCode(code: string, i: number): number {
+  while (i < code.length && (WHITESPACE.has(code[i]) || (code[i] === '\\' && code[i + 1] === '\n'))) i++;
+  return i;
+}
+
+/** Every offset where `name` stands as a whole identifier. */
+function occurrences(code: string, name: string): number[] {
+  const out: number[] = [];
+  for (let at = code.indexOf(name); at !== -1; at = code.indexOf(name, at + 1)) {
+    if (!isIdentChar(code[at - 1]) && !isIdentChar(code[at + name.length])) out.push(at);
+  }
+  return out;
+}
+
+/** The identifier ending at `end` (inclusive), or ''. */
+function wordEndingAt(code: string, end: number): string {
+  let q = end;
+  while (q >= 0 && isIdentChar(code[q])) q--;
+  return code.slice(q + 1, end + 1);
+}
+
+/** Is the name at `at` called, and not defined: `copy(…)`, never `def copy(`, `function copy(` or `copy(…) {`. */
+function isCall(code: string, at: number, len: number): boolean {
+  const open = nextCode(code, at + len);
+  if (code[open] !== '(') return false;
+  let p = at - 1;
+  while (p >= 0 && (code[p] === ' ' || code[p] === '\t' || code[p] === '\r' || (code[p] === '\n' && code[p - 1] === '\\'))) p -= code[p] === '\n' ? 2 : 1;
+  if (p >= 0 && !';,(=[{:!&|?+-*/%<>^~\n'.includes(code[p])) {
+    if (!isIdentChar(code[p]) || !CALL_KEYWORDS.has(wordEndingAt(code, p))) return false;
+  }
+  let depth = 0;
+  let k = open;
+  for (; k < code.length; k++) {
+    if (code[k] === '(') depth++;
+    else if (code[k] === ')' && --depth === 0) break;
+  }
+  return code[nextCode(code, k + 1)] !== '{';
+}
+
+/** Does any assignment, loop or `as` target an attribute? `os.environ['X'] = …` assigns an item. */
+function assignsAttribute(code: string): boolean {
+  const TARGET_ATTR = /\.\s*[A-Za-z_$][\w$]*\s*(?=$|[,\]):])/;
+  for (let k = 0; k < code.length; k++) {
+    if (code[k] !== '=' || '=!<>'.includes(code[k - 1] ?? '') || '=>'.includes(code[k + 1] ?? '')) continue;
+    if (code[k - 1] === ':' ) continue; // a walrus binds a name, never an attribute
+    let start = k - 1;
+    while (start >= 0 && !'\n;{}'.includes(code[start])) start--;
+    // An augmented operator sits between the target and `=`.
+    const target = code.slice(start + 1, k).replace(/(?:\*\*|\/\/|<<|>>|[-+*/%&|^@])$/, '');
+    if (TARGET_ATTR.test(target.trimEnd() + '\n'.slice(1))) return true;
+    if (/\.\s*[A-Za-z_$][\w$]*\s*$/.test(target)) return true;
+  }
+  if (/\.\s*[A-Za-z_$][\w$]*\s*:(?![:=])/.test(code)) return true; // an annotated attribute
+  for (const m of code.matchAll(/\bfor\s*\(?([^\n]*?)\b(?:in|of)\b/g)) if (/\.\s*[A-Za-z_$]/.test(m[1])) return true;
+  return /\bas\s+[A-Za-z_$][\w$]*\s*\./.test(code);
+}
+
+type RequireFs = (at: number) => number;
+type LiteralAt = (at: number) => { value: string; close: number } | null;
+
+/** Does every `require` the code spells call it? A `require` of the body's own is no module loader. */
+function requireTrusted(code: string): boolean {
+  return occurrences(code, 'require').every(at => code[prevCode(code, at - 1)] !== '.' && isCall(code, at, 'require'.length));
+}
+
+/** Is this spelling of a module name, or of `require`, one that leaves it the module? */
+function moduleNameShown(code: string, at: number, mod: string, requireFs: RequireFs, literalAt: LiteralAt): boolean {
+  if (code[prevCode(code, at - 1)] === '.') return true; // an attribute of something else
+  if (mod === 'require') return isCall(code, at, mod.length);
+  if (code[nextCode(code, at + mod.length)] === '.') return true; // used as a receiver
+  return importsModule(code, at, mod, requireFs, literalAt) || /^\s+import\b/.test(code.slice(at + mod.length)) && /\bfrom\s*$/.test(code.slice(0, at));
+}
+
+/** Is the module name at `at` bound by an import of that very module? */
+function importsModule(code: string, at: number, mod: string, requireFs: RequireFs, literalAt: LiteralAt): boolean {
+  const after = code.slice(at + mod.length);
+  if (mod === 'fs') {
+    const before = code.slice(0, at);
+    const fromFs = (rest: string, offset: number): boolean => {
+      const m = /^\s*from\b/.exec(rest);
+      if (!m) return false;
+      const lit = literalAt(offset + m[0].length);
+      return lit !== null && FS_SPECIFIERS.has(lit.value);
+    };
+    if (/\bimport\s+$/.test(before) || /\bimport\s*\*\s*as\s+$/.test(before)) return fromFs(after, at + mod.length);
+    if (/\b(?:const|let|var)\s+$/.test(before)) {
+      const m = /^\s*=\s*/.exec(after);
+      return !!m && requireFs(at + mod.length + m[0].length) !== -1;
+    }
+    return false;
+  }
+  // Python: `import os, shutil` or `import os.path` on a line no `from` opens.
+  const line = code.slice(code.lastIndexOf('\n', at) + 1, at);
+  const stmt = line.slice(line.lastIndexOf(';') + 1);
+  return /^\s*import\s+(?:[A-Za-z_][\w.]*\s*,\s*)*$/.test(stmt) && /^\s*(?:[,;\n.]|$)/.test(after);
+}
+
+/** The module a bare name at `at` is imported from, when the import names exactly it from the module defining it. */
+function importedFrom(code: string, at: number, name: string, requireFs: RequireFs, literalAt: LiteralAt): string | null {
+  const entryIs = (list: string): boolean => list.replace(/[()]/g, '').split(',').some(e => e.trim() === name);
+  for (const m of code.matchAll(/\bfrom\s+([A-Za-z_][\w.]*)\s+import\s+(\([^)]*\)|[^\n;]*)/g)) {
+    const listStart = (m.index ?? 0) + m[0].length - m[2].length;
+    if (at < listStart || at >= listStart + m[2].length) continue;
+    return MODULE_WRITES[m[1]]?.includes(name) && entryIs(m[2]) ? m[1] : null;
+  }
+  for (const m of code.matchAll(/\bimport\s*\{([^}]*)\}\s*from\b/g)) {
+    const listStart = (m.index ?? 0) + m[0].indexOf('{') + 1;
+    if (at < listStart || at >= listStart + m[1].length) continue;
+    const lit = literalAt((m.index ?? 0) + m[0].length);
+    return lit !== null && FS_SPECIFIERS.has(lit.value) && FS_WRITES.includes(name) && entryIs(m[1]) ? 'fs' : null;
+  }
+  for (const m of code.matchAll(/\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*/g)) {
+    const listStart = (m.index ?? 0) + m[0].indexOf('{') + 1;
+    if (at < listStart || at >= listStart + m[1].length) continue;
+    return requireFs((m.index ?? 0) + m[0].length) !== -1 && FS_WRITES.includes(name) && entryIs(m[1]) ? 'fs' : null;
+  }
+  return null;
 }
 
 /**

@@ -5152,12 +5152,133 @@ describe("#2704: the new verbs do not open the scratch exemption", () => {
     }
   });
 
-  // The names main already lists carry the same hole, on main as here: a body
-  // defining its own `copy` and passing the protected literal at the
-  // destination index exempts itself. Owned by #2705, which decides how a
-  // callee's identity is shown rather than assumed from its name.
-  test("CONCESSION: a body defining its own copy exempts itself, on main as here", () => {
+  // Was a CONCESSION: the names main listed carried the same hole. #2705
+  // shows a callee's identity instead of assuming it from its name.
+  test("WITNESS (#2705): a body defining its own copy is refused", () => {
     const cmd = `mkdir -p /tmp/rg2704c && python3 -I -c "import os, shutil\ndef copy(a, b): shutil.copy(b, os.environ['RG'])\ncopy('/tmp/rg2704c/x', '/tmp/rg2704c/${STATE}')"`;
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+});
+
+/**
+ * #2705: the scratch exemption shows a write callee's identity rather than
+ * assuming it from its last name. A dotted callee needs a module receiver
+ * (`shutil.copy`, `fs.writeFileSync`, `require('fs').writeFileSync`). A bare
+ * name is trusted only when every place the code names it is a call that is
+ * not a definition, or an import from the module that defines it
+ * (`from shutil import copy`, `const { writeFileSync } = require('fs')`).
+ * Binding the name any other way puts it somewhere that is not a call, so no
+ * list of binding forms is kept.
+ */
+describe("#2705: a write callee's identity is shown, not assumed from its name", () => {
+  const PY = (body: string) => `mkdir -p /tmp/rg2705 && python3 -I -c "${body}"`;
+  const JS = (body: string) => `mkdir -p /tmp/rg2705 && node -e "${body}"`;
+  const BUN = (body: string) => `mkdir -p /tmp/rg2705 && bun -e "${body}"`;
+  const PYS = (body: string) => `mkdir -p /tmp/rg2705 && python3 -I -c '${body}'`;
+  const T = `/tmp/rg2705/${STATE}`;
+  test.each([
+    ["a parameter named copy", PY(`import os, shutil\ndef go(copy): copy('/tmp/rg2705/x', '${T}')\ngo(lambda a, b: shutil.copy(a, os.environ['RG']))`)],
+    ["a loop variable named copy", PY(`import os, shutil\nfor copy in [lambda a, b: shutil.copy(a, os.environ['RG'])]: copy('/tmp/rg2705/x', '${T}')`)],
+    ["a tuple binding copy", PY(`import os, shutil\ncopy, _ = (lambda a, b: shutil.copy(a, os.environ['RG'])), 0\ncopy('/tmp/rg2705/x', '${T}')`)],
+    // A recognised write elsewhere makes each a write candidate; the question
+    // is whether the protected literal's role is shown.
+    ["copy imported from another module", PY(`import os, shutil\nfrom fakeshutil import copy\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', os.environ['RG'])`)],
+    ["another shutil function imported as copy", PY(`import os, shutil\nfrom shutil import move as copy\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', os.environ['RG'])`)],
+    ["a def open", PY(`import os, io\ndef open(p, m): return io.open(os.environ['RG'], m)\nopen('${T}', 'w').write('{}')`)],
+    ["a method on an object of the body's own", PY(`import os, shutil\nclass F:\n    def copy(self, a, b): shutil.copy(a, os.environ['RG'])\nF().copy('/tmp/rg2705/x', '${T}')`)],
+    ["a method on a named object of the body's own", PY(`import os, shutil\nclass F:\n    def copy(self, a, b): shutil.copy(a, os.environ['RG'])\nf = F()\nf.copy('/tmp/rg2705/x', '${T}')`)],
+    ["a JavaScript function writeFileSync", JS(`function writeFileSync(p, d) { require('fs').writeFileSync(process.env.RG, d) }; writeFileSync('${T}', '{}')`)],
+    ["a JavaScript const writeFileSync", JS(`const writeFileSync = (p, d) => require('fs').writeFileSync(process.env.RG, d); writeFileSync('${T}', '{}')`)],
+    ["writeFileSync destructured from another module", JS(`const { writeFileSync } = require('./fake'); writeFileSync('${T}', '{}')`)],
+    // #2726 review round 1.
+    ["a module receiver rebound to an object of the body's own", PY(`import os\nshutil = type('M', (), {'copy': staticmethod(lambda a, b: os.replace(a, os.environ['RG']))})\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["a class named like the module", PY(`import os\nclass shutil:\n    @staticmethod\n    def copy(a, b): open(os.environ['RG'], 'w').write('x')\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["a JavaScript object named fs", JS(`const fs = {writeFileSync(p, d){ require('fs').writeFileSync(process.env.RG, d) }}; fs.writeFileSync('${T}', 'x')`)],
+    ["a function whose name ends in require", JS(`const myrequire = () => ({ writeFileSync: (a, b) => require('fs').writeFileSync(process.env.RG, b) }); myrequire('fs').writeFileSync('${T}', 'x')`)],
+    ["an import spelled inside a string", PY(`import os, shutil; print('from shutil import copy, ', (lambda copy: copy('/tmp/rg2705/x', '${T}'))(lambda a, b: shutil.copy(a, os.environ['RG'])))`)],
+    ["an import spelled in a string before a definition", JS(`const x = ['from shutil import copy,', function copy(a, b){ require('fs').copyFileSync(b, process.env.RG) }]; copy('/tmp/rg2705/x', '${T}')`)],
+    ["a def with many spaces before the name", PY(`import os, shutil\ndef                    copy(a, b): shutil.copy(b, os.environ['RG'])\ncopy('/tmp/rg2705/x', '${T}')`)],
+    ["a method shorthand put on globalThis", JS(`Object.assign(globalThis, { writeFileSync(p, d) { require('fs').writeFileSync(process.env.RG, d) } }); writeFileSync('${T}', 'x')`)],
+    // #2726 review round 2: an attribute rebinds the function as surely as a name does.
+    ["the module's own attribute assigned", PY(`import os, shutil\nshutil.copy = lambda a, b: open(os.environ['RG'], 'w').write('x')\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["a bare name assigned on globalThis", JS(`globalThis.copy = (a, b) => require('fs').copyFileSync(a, process.env.RG); copy('/tmp/rg2705/x', '${T}')`)],
+    ["open assigned on builtins", PY(`import builtins, io, os\nbuiltins.open = lambda p, m: io.open(os.environ['RG'], m)\nopen('${T}', 'w').write('x')`)],
+    ["require('fs')'s attribute assigned", JS(`const real = require('fs').writeFileSync; require('fs').writeFileSync = (p, d) => real(process.env.RG, d); require('fs').writeFileSync('${T}', 'x')`)],
+    // Not a plain assignment: only the attribute's own reading sees these.
+    ["the attribute as a list target", JS(`[globalThis.writeFileSync] = [(p, d) => require('fs').appendFileSync(process.env.RG, d)]; writeFileSync('${T}', 'x')`)],
+    ["the attribute as a loop target", PY(`import os, shutil\nfor shutil.copy in [lambda a, b: os.replace(a, os.environ['RG'])]: shutil.copy('/tmp/rg2705/x', '${T}')`)],
+    // A function the write calls inside the module: only the assignment reading sees these.
+    ["a function shutil.copy calls, assigned", PY(`import os, shutil\nshutil.copyfile = lambda a, b, **k: open(os.environ['RG'], 'w').close()\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["a function shutil.move calls, assigned through an alias", PY(`import os as o, shutil\no.rename = lambda a, b: o.replace(a, o.environ['RG'])\nshutil.move('/tmp/rg2705/x', '${T}')`)],
+    ["the module put on builtins", PY(`import builtins, os\nbuiltins.shutil = type('M', (), {'copy': staticmethod(lambda a, b: os.replace(a, os.environ['RG']))})\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["the module put on builtins as a list target", PY(`import builtins, os\n[builtins.shutil] = [type('M', (), {'copy': staticmethod(lambda a, b: os.replace(a, os.environ['RG']))})]\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["a typed method shorthand put on globalThis", BUN(`Object.assign(globalThis, { copy(a: string, b: string): void { require('fs').writeFileSync(process.env.RG, b) } }); copy('/tmp/rg2705/x', '${T}')`)],
+    ["a require of the body's own", JS(`const require = (m) => globalThis.fake; require('fs').writeFileSync('${T}', '{}')`)],
+    ["a require put on globalThis", JS(`globalThis.require = (m) => globalThis.fake; require('fs').writeFileSync('${T}', '{}')`)],
+    // #2726 review round 3: the receiver is read across whatever stands
+    // between it, the dot and the name.
+    ["a space after the dot", PY(`import os, shutil\nshutil = type('F', (), {})()\nsetattr(shutil, 'copy', lambda a, b: open(os.environ['RG'], 'w').write('x'))\nshutil. copy('/tmp/rg2705/x', '${T}')`)],
+    ["spaces around the dot on a proxy", BUN(`const fs = require('fs'); new Proxy(fs, {get: () => (p, d) => fs.appendFileSync(process.env.RG, d)}) . writeFileSync('${T}', '{}')`)],
+    // Single-quoted, so the shell hands Python the backslash-newline.
+    ["a chain broken before the dot", PYS(`import os\nW = type("W", (), {"copy": staticmethod(lambda a, b: os.replace(a, os.environ["RG"]))})\nW\\\n    .copy("/tmp/rg2705/x", "${T}")`)],
+    ["a line continuation after the dot", PYS(`import os\nshutil = type("F", (), {"copy": staticmethod(lambda a, b: os.replace(a, os.environ["RG"]))})\nshutil.\\\ncopy("/tmp/rg2705/x", "${T}")`)],
+    ["a block comment between the dot and the name", JS(`const w = {}; w['writeFileSync'] = (p, d) => require('fs').appendFileSync(process.env.RG, d); w./* c */writeFileSync('${T}', 'x')`)],
+    // Each comment row also makes a recognised write beside the literal, so
+    // it reaches the exemption question rather than passing as no write.
+    ["a comment between the dot and the name inside brackets", PY(`import os, shutil\nW = type('W', (), {'copy': staticmethod(lambda a, b: os.replace(a, os.environ['RG']))})\nprint(W.  # c\n    copy('/tmp/rg2705/x', '${T}')); shutil.copy('/tmp/rg2705/x', os.environ['RG'])`)],
+    ["a line comment between the dot and the name", JS(`const w = {}; w['writeFileSync'] = (p, d) => require('fs').appendFileSync(process.env.RG, d); w. // c\n  writeFileSync('${T}', 'x')`)],
+    // A line that ends in a dot ends in code, though a // stands before it:
+    // Python's floor division, not a comment.
+    ["a dot ending a line after a floor division", PY(`import os, shutil\nW = type('W', (), {'copy': staticmethod(lambda a, b: os.replace(a, os.environ['RG']))})\nprint(2 // W.\n    copy('/tmp/rg2705/x', '${T}')); shutil.copy('/tmp/rg2705/x', os.environ['RG'])`)],
+    ["an annotated attribute assignment", PY(`import os, shutil\nshutil.copyfile: object = lambda a, b, **k: open(os.environ['RG'], 'w').close()\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    // A construct that binds names the code never spells.
+    ["a JavaScript with", JS(`with (require('/tmp/rg2705/fake.js')) { writeFileSync('${T}', 'x') }`)],
+    // #2731: forms #2726's lexical readers did not know. The first three, and
+    // the f-string, were allowed by #2726's round-4 code; the first is the
+    // issue's own three lines.
+    ["a comment's apostrophe hiding a definition", PY(`# don't\ndef copy(a, b): shutil.copy(b, os.getenv('RG'))  # it's\ncopy('/tmp/rg2705/x', '${T}')`)],
+    ["copy rebound through globals()", PY(`import os, shutil\nfrom shutil import copy\nglobals()['copy'] = lambda a, b: shutil.copy(a, os.environ['RG'])\ncopy('/tmp/rg2705/x', '${T}')`)],
+    ["a star import after the real one", PY(`import shutil\nfrom shutil import copy\nfrom fakeshutil import *\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
+    ["a definition hidden by an escaped quote", PY(`import os, shutil\nx = 'a\\\\''; def copy(a, b): shutil.copy(b, os.environ['RG'])\ncopy('/tmp/rg2705/x', '${T}')`)],
+    ["copy rebound inside an f-string", PY(`import os, shutil\nfrom shutil import copy\nprint(f'{(copy := lambda a, b: shutil.copy(a, os.environ[chr(82)+chr(71)]))}')\ncopy('/tmp/rg2705/x', '${T}')`)],
+  ])("WITNESS: %s is refused", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+  test.each([
+    ["shutil.copy", PY(`import shutil\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    // Each control below also makes a recognised write (scratch to scratch), so
+    // it reaches the exemption question rather than passing as no write.
+    ["copy imported from shutil", PY(`import shutil\nfrom shutil import copy\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
+    ["copy imported from shutil among others", PY(`import shutil\nfrom shutil import (move, copy)\ncopy('/tmp/rg2705/x', '${T}'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
+    ["the builtin open", PY(`open('${T}', 'w').write('{}')`)],
+    ["io.open", PY(`import io\nio.open('${T}', 'w').write('{}')`)],
+    ["fs.writeFileSync", JS(`const fs = require('fs'); fs.writeFileSync('${T}', '{}')`)],
+    ["fs imported as a default", JS(`import fs from 'fs'; fs.writeFileSync('${T}', 'x')`)],
+    ["fs imported as a namespace from node:fs", JS(`import * as fs from 'node:fs'; fs.writeFileSync('${T}', 'x')`)],
+    ["shutil imported beside os", PY(`import os, shutil\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["require('fs').writeFileSync", JS(`require('fs').writeFileSync('${T}', '{}')`)],
+    ["writeFileSync destructured from fs", JS(`const { writeFileSync } = require('fs'); writeFileSync('${T}', '{}')`)],
+    ["writeFileSync imported from node:fs", JS(`import { writeFileSync } from 'node:fs'; writeFileSync('${T}', '{}')`)],
+    // Only code names the function: a string, or another object's attribute
+    // of the same name, is neither a call nor a binding.
+    ["a string naming copy beside the import", PY(`import shutil\nfrom shutil import copy\ncopy('/tmp/rg2705/x', '${T}'); print('copy done'); shutil.copy('/tmp/rg2705/x', '/tmp/rg2705/y')`)],
+    // An attribute of the same name is read the way the name is: called, it
+    // binds nothing (#2726 review round 2).
+    ["an attribute named copy that is called", PY(`import shutil\nfrom shutil import copy\nd = {'a': 1}.copy()\ncopy('/tmp/rg2705/x', '${T}')`)],
+    // A subscript and a comparison assign no attribute.
+    ["an environment variable set beside shutil.copy", PY(`import os, shutil\nos.environ['X'] = '1'\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+    ["an attribute compared beside shutil.copy", PY(`import shutil, sys\nif sys.platform == 'linux': shutil.copy('/tmp/rg2705/x', '${T}')`)],
+    // A colon after the call is a ternary's, not a return type: no body follows.
+    ["a write in a ternary's first branch", JS(`const fs = require('fs'); const ok = true; ok ? fs.writeFileSync('${T}', 'x') : 0`)],
+    // Round 3: a module receiver still shows across what stands around the
+    // dot, and a bare call after a line, a comment or a with-block is bare.
+    ["shutil.copy with spaces around the dot", PY(`import shutil\nshutil . copy('/tmp/rg2705/x', '${T}')`)],
+    ["fs.writeFileSync chained onto the next line", JS(`const fs = require('fs'); fs\n  .writeFileSync('${T}', 'x')`)],
+    ["open on the line after an import", PY(`import os\nopen('${T}', 'w').write('{}')`)],
+    ["open on the line after a comment", PY(`# write the state\nopen('${T}', 'w').write('{}')`)],
+    ["open inside a with statement", PY(`with open('${T}', 'w') as f: f.write('{}')`)],
+    ["an annotated name beside shutil.copy", PY(`import shutil\nn: int = 1\nshutil.copy('/tmp/rg2705/x', '${T}')`)],
+  ])("CONTROL: %s onto a scratch path stays exempt", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 });
