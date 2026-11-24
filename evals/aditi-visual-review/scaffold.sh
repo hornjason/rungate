@@ -37,6 +37,8 @@ mkdir -p components .claude/rungate
 cat > .claude/rungate/config.json << 'JSONEOF'
 {
   "project": "billing-ui",
+  "repo": "example/billing-ui",
+  "issueRepo": "example/billing-ui",
   "pages": { "/settings/billing": "SaveBar" }
 }
 JSONEOF
