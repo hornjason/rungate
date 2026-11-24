@@ -26,6 +26,8 @@ import {
   citationViolations,
   FORGE_BEHAVIOURS,
   forgeBehaviourReading,
+  HEAD_MISMATCH,
+  settle,
   MERGED_FIXTURE,
   type Observations,
   type Ran,
@@ -41,7 +43,10 @@ const SOURCE = readFileSync(SCRIPT, "utf-8");
 
 // ── observations ────────────────────────────────────────────
 
-const ran = (over: Partial<Ran> = {}): Ran => ({ started: true, exit: 0, out: "", killed: false, ms: 5, ...over });
+const ran = (over: Partial<Ran> = {}): Ran => ({ started: true, exit: 0, out: "", err: "", killed: false, ms: 5, ...over });
+
+/** What gh printed when the forge refused a stale pin, live on #2768's round-2 run. */
+const STALE_REFUSAL = "GraphQL: Failed to add PR #2774: expected head oid does not match the current head oid (enablePullRequestAutoMerge)";
 const BRANCH_HEAD = "6c3d11115fb7bc9cab67fd19f9b9e200f437970d";
 
 /** Every probed row observed as the tools assume. */
@@ -63,6 +68,22 @@ function confirmedObservations(): Observations {
       view: ran({ out: JSON.stringify({ state: "MERGED", headRefOid: MERGED_FIXTURE.mergeTimeHead }) }),
       branch: ran({ out: `${BRANCH_HEAD}\trefs/heads/${MERGED_FIXTURE.branch}` }),
     },
+    "match-head-commit-checked-at-arm-time": {
+      fixture: { built: true, failure: "", leftovers: [] },
+      heldBy: "closing-references",
+      staleError: STALE_REFUSAL,
+      staleRefused: true,
+      armed: true,
+      secondHead: BRANCH_HEAD,
+      headAfter: BRANCH_HEAD,
+      armedAfter: true,
+    },
+    "dirty-pull-request-runs-no-checks": {
+      fixture: { built: true, failure: "", leftovers: [] },
+      dirtyMergeable: "CONFLICTING",
+      dirtyRuns: 0,
+      cleanRuns: 3,
+    },
   };
 }
 
@@ -74,27 +95,20 @@ const BREAKS: Record<string, (o: Observations) => void> = {
   "head-ref-oid-frozen-at-merge": (o) => {
     o["head-ref-oid-frozen-at-merge"]!.view = ran({ out: JSON.stringify({ state: "MERGED", headRefOid: BRANCH_HEAD }) });
   },
+  "match-head-commit-checked-at-arm-time": (o) => { o["match-head-commit-checked-at-arm-time"]!.armedAfter = false; },
+  "dirty-pull-request-runs-no-checks": (o) => { o["dirty-pull-request-runs-no-checks"]!.dirtyRuns = 2; },
 };
 
 const PROBED = FORGE_BEHAVIOURS.filter((b) => !b.unprobedBecause).map((b) => b.id);
 
 describe("#1910: the inventory and its probes", () => {
-  test("the rows with no probe are exactly the two that need a throwaway pull request (#2749)", () => {
-    // This list only shrinks. A row added without a probe is named here, and
-    // #2749 empties it.
-    expect(FORGE_BEHAVIOURS.filter((b) => b.unprobedBecause).map((b) => b.id)).toEqual([
-      "match-head-commit-checked-at-arm-time",
-      "dirty-pull-request-runs-no-checks",
-    ]);
-    for (const b of FORGE_BEHAVIOURS.filter((b) => b.unprobedBecause)) {
-      const r = forgeBehaviourReading(b.id, confirmedObservations());
-      expect(r.reading).toBe("UNMEASURED");
-      expect(r.detail).toContain("#2749");
-    }
+  test("no row lacks a probe (#2749 emptied the list)", () => {
+    // A row added without a probe is named here, by id, until it has one.
+    expect(FORGE_BEHAVIOURS.filter((b) => b.unprobedBecause).map((b) => b.id)).toEqual([]);
   });
 
   test("every probed row has its own reading, and none falls through", () => {
-    expect(PROBED.length).toBe(4);
+    expect(PROBED.length).toBe(6);
     expect(Object.keys(BREAKS).sort()).toEqual([...PROBED].sort());
     for (const id of PROBED) {
       const r = forgeBehaviourReading(id, {});
@@ -493,9 +507,20 @@ describe("#1910: the script, end to end", () => {
     expect(r.out).toStartWith("UNMEASURED head-ref-oid-frozen-at-merge:");
   });
 
-  test("a row with no probe reads UNMEASURED by name, and refuses", () => {
-    const r = bothHalves(["--only", "match-head-commit-checked-at-arm-time"]);
-    expect(r.out).toStartWith("UNMEASURED match-head-commit-checked-at-arm-time: no probe:");
+  // #2749: with a gh that answers nothing it was not planted for, the
+  // throwaway-pull-request rows build nothing, so nothing needs removing.
+  test("a throwaway-pull-request row whose gh does not answer builds nothing, reads UNMEASURED, and refuses", () => {
+    for (const id of ["match-head-commit-checked-at-arm-time", "dirty-pull-request-runs-no-checks"]) {
+      const r = bothHalves(["--only", id]);
+      expect(r.out).toStartWith(`UNMEASURED ${id}: the fixture was not built: main's head could not be read`);
+    }
+  });
+
+  test("a value-taking flag given last is refused, not read as absent (#2749)", () => {
+    for (const flag of ["--only", "--remote"]) {
+      const r = bothHalves([flag]);
+      expect(r.err).toContain(`${flag} needs a value after it`);
+    }
   });
 
   test("an unknown row is refused, naming the known ones", () => {
@@ -508,5 +533,268 @@ describe("#1910: the script, end to end", () => {
     const m = r.out.match(/^(CONFIRMED|CHANGED|UNMEASURED) bun-spawn-timeout-window: /);
     expect(m, r.out + r.err).not.toBeNull();
     expect(r.code).toBe(m![1] === "CONFIRMED" ? 0 : REFUSE_EXIT);
+  });
+});
+
+// ── #2749: the throwaway-pull-request rows ──────────────────
+
+const builtFixture = () => ({ built: true, failure: "", leftovers: [] as string[] });
+
+describe("#2749: the arm-time and conflicted-pull-request readings", () => {
+  const arm = (over: Partial<NonNullable<Observations["match-head-commit-checked-at-arm-time"]>> = {}) =>
+    forgeBehaviourReading("match-head-commit-checked-at-arm-time", {
+      "match-head-commit-checked-at-arm-time": { ...confirmedObservations()["match-head-commit-checked-at-arm-time"]!, ...over },
+    });
+  const dirty = (over: Partial<NonNullable<Observations["dirty-pull-request-runs-no-checks"]>> = {}) =>
+    forgeBehaviourReading("dirty-pull-request-runs-no-checks", {
+      "dirty-pull-request-runs-no-checks": { ...confirmedObservations()["dirty-pull-request-runs-no-checks"]!, ...over },
+    });
+
+  test("a fixture that could not be removed is named, and is not a pass, in both rows", () => {
+    const left = { built: true, failure: "", leftovers: ["pull request #9", "branch rungate-forge-probe-x-arm"] };
+    for (const r of [arm({ fixture: left }), dirty({ fixture: left })]) {
+      expect(r.reading).toBe("UNMEASURED");
+      expect(r.detail).toContain("pull request #9");
+      expect(r.detail).toContain("branch rungate-forge-probe-x-arm");
+    }
+  });
+
+  test("a fixture that was not built says which step failed, in both rows", () => {
+    const unbuilt = { built: false, failure: "main's head could not be read: not authenticated, or offline", leftovers: [] };
+    for (const r of [arm({ fixture: unbuilt }), dirty({ fixture: unbuilt })]) {
+      expect(r.reading).toBe("UNMEASURED");
+      expect(r.detail).toContain("main's head could not be read");
+    }
+  });
+
+  test("arm-time: arming that failed, a push not yet visible, and an unreadable state are UNMEASURED", () => {
+    expect(arm({ armed: false }).reading).toBe("UNMEASURED");
+    expect(arm({ headAfter: "0000000000000000000000000000000000000000" }).reading).toBe("UNMEASURED");
+    expect(arm({ secondHead: "" }).reading).toBe("UNMEASURED");
+    expect(arm({ armedAfter: null }).reading).toBe("UNMEASURED");
+  });
+
+  test("arm-time: still armed after the push is CONFIRMED, and turned off is CHANGED", () => {
+    expect(arm().reading).toBe("CONFIRMED");
+    expect(arm({ armedAfter: false }).reading).toBe("CHANGED");
+  });
+
+  // #2768 review: "still armed" is what a pin checked only when the merge
+  // fires produces too, so the stale pin is the half that tells them apart.
+  test("arm-time: a stale pin that arms is CHANGED, and one not read is UNMEASURED", () => {
+    expect(arm({ staleRefused: false }).reading).toBe("CHANGED");
+    expect(arm({ staleRefused: null }).reading).toBe("UNMEASURED");
+  });
+
+  // #2768 review, round 2.
+  test("arm-time: a fixture nothing was seen holding open is UNMEASURED, and was not armed", () => {
+    expect(arm({ heldBy: "" }).reading).toBe("UNMEASURED");
+    expect(arm({ heldBy: "" }).detail).toContain("not armed");
+  });
+
+  test("arm-time: a stale pin refused for some other reason is UNMEASURED, quoting gh", () => {
+    const r = arm({ staleRefused: null, staleError: "HTTP 502: Bad Gateway" });
+    expect(r.reading).toBe("UNMEASURED");
+    expect(r.detail).toContain("HTTP 502: Bad Gateway");
+  });
+
+  test("arm-time: CONFIRMED says the pin is not observed when the merge fires", () => {
+    expect(arm().detail).toContain("Whether the merge compares the pin again when it fires is not observed");
+    // The refusal is quoted, so a live CONFIRMED records what gh said.
+    expect(arm().detail).toContain(STALE_REFUSAL.slice(0, 120));
+  });
+
+  test("conflicted: a fixture that did not conflict, and a control with no runs, are UNMEASURED", () => {
+    expect(dirty({ dirtyMergeable: "MERGEABLE" }).reading).toBe("UNMEASURED");
+    expect(dirty({ dirtyMergeable: "" }).reading).toBe("UNMEASURED");
+    expect(dirty({ cleanRuns: 0 }).reading).toBe("UNMEASURED");
+    expect(dirty({ cleanRuns: null }).reading).toBe("UNMEASURED");
+    expect(dirty({ dirtyRuns: null }).reading).toBe("UNMEASURED");
+  });
+
+  test("conflicted: no runs beside a control that ran is CONFIRMED, and runs on it are CHANGED", () => {
+    expect(dirty().reading).toBe("CONFIRMED");
+    expect(dirty({ dirtyRuns: 1 }).reading).toBe("CHANGED");
+  });
+});
+
+describe("#2749: the fixes folded in from #2750's round 5", () => {
+  test("a reply of JSON null makes the frozen-head row UNMEASURED rather than throwing", () => {
+    const o = confirmedObservations();
+    o["head-ref-oid-frozen-at-merge"]!.view = ran({ out: "null" });
+    const r = forgeBehaviourReading("head-ref-oid-frozen-at-merge", o);
+    expect(r.reading).toBe("UNMEASURED");
+    expect(r.detail).toContain("not an object");
+  });
+
+  test("the probe spawns with the kill signal scripts/verify-merge-ref.ts uses", () => {
+    const runBody = SOURCE.slice(SOURCE.indexOf("function run("), SOURCE.indexOf("function arg("));
+    expect(runBody).toContain('killSignal: "SIGKILL"');
+    expect(readFileSync(join(ROOT, "scripts", "verify-merge-ref.ts"), "utf-8")).toContain('killSignal: "SIGKILL"');
+  });
+});
+
+// ── #2768 review: the fixtures, through a gh that answers by rule ──
+
+describe("#2768 review: what the throwaway fixtures do when GitHub's replies go wrong", () => {
+  const R = MERGED_FIXTURE.repo;
+  let scriptedBin = "";
+  let calls = 0;
+
+  beforeAll(() => {
+    scriptedBin = join(dir, "scripted-bin");
+    mkdirSync(scriptedBin, { recursive: true });
+    // Logs every call, and answers with the first rule whose `has` the
+    // arguments contain; with no rule it fails, like gh with no network.
+    writeFileSync(
+      join(scriptedBin, "gh"),
+      [
+        "#!/usr/bin/env bun",
+        'const { appendFileSync } = require("node:fs");',
+        'const argv = process.argv.slice(2).join(" ");',
+        'appendFileSync(process.env.FAKE_GH_LOG, argv + "\\n");',
+        'for (const r of JSON.parse(process.env.FAKE_GH_RULES || "[]")) {',
+        "  if (!argv.includes(r.has)) continue;",
+        '  if (r.out !== undefined) process.stdout.write(typeof r.out === "string" ? r.out : JSON.stringify(r.out));',
+        "  if (r.err !== undefined) process.stderr.write(r.err);",
+        "  process.exit(r.exit ?? 0);",
+        "}",
+        "process.exit(1);",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(scriptedBin, "gh"), 0o755);
+  });
+
+  interface Rule { has: string; out?: unknown; exit?: number; err?: string }
+  const mainRequires = (contexts: string[]): Rule[] => [
+    { has: `api repos/${R}/branches/main`, out: { protection: { required_status_checks: { contexts } } } },
+    { has: `api repos/${R}/git/ref/heads/main`, out: { object: { sha: "base1" } } },
+  ];
+  const BRANCH_OK: Rule = { has: `api -X POST repos/${R}/git/refs`, out: { ref: "refs/heads/x" } };
+  const COMMIT_OK: Rule = { has: `api -X PUT repos/${R}/contents/`, out: { commit: { sha: "first1" } } };
+  const PULL_OK: Rule = { has: `api -X POST repos/${R}/pulls`, out: { number: 7 } };
+  const HELD: Rule = { has: "commits/first1/check-runs", out: { check_runs: [{ name: "lint", conclusion: "failure" }, { name: "test", conclusion: "failure" }] } };
+  const CLEANS: Rule[] = [
+    { has: "pr list", out: [] },
+    { has: "pr close", exit: 0 },
+    { has: "--json state", out: { state: "CLOSED" } },
+    { has: `api -X DELETE repos/${R}/git/refs/heads/`, exit: 0 },
+    { has: `api repos/${R}/git/ref/heads/rungate-forge-probe-`, out: '{"message":"Not Found"}', exit: 1 },
+  ];
+
+  function scripted(rules: Rule[]) {
+    const log = join(dir, `scripted-${++calls}.log`);
+    writeFileSync(log, "");
+    const env: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+      PATH: `${scriptedBin}:${process.env.PATH}`,
+      FAKE_GH_RULES: JSON.stringify(rules),
+      FAKE_GH_LOG: log,
+    };
+    const r = Bun.spawnSync(["bun", SCRIPT, "--only", "match-head-commit-checked-at-arm-time"], { cwd: dir, env, stdout: "pipe", stderr: "pipe" });
+    return { code: r.exitCode, out: new TextDecoder().decode(r.stdout).trim(), log: readFileSync(log, "utf-8") };
+  }
+
+  test("arming that is refused is reported as arming, and the pull request it opened is closed", () => {
+    const r = scripted([
+      ...mainRequires(["test"]), BRANCH_OK, COMMIT_OK, PULL_OK, HELD,
+      { has: "--match-head-commit base1", exit: 1, err: STALE_REFUSAL },
+      { has: "pr merge 7", exit: 1 },
+      { has: "--json headRefOid,autoMergeRequest", out: { headRefOid: "first1", autoMergeRequest: null } },
+      ...CLEANS,
+    ]);
+    expect(r.out).toStartWith("UNMEASURED match-head-commit-checked-at-arm-time: auto-merge could not be armed with the pull request's own head pinned");
+    expect(r.out).not.toContain("not built");
+    // The stale pin is tried first, then the pull request's own head.
+    expect(r.log.indexOf("--match-head-commit base1")).toBeGreaterThan(-1);
+    expect(r.log.indexOf("--match-head-commit first1")).toBeGreaterThan(r.log.indexOf("--match-head-commit base1"));
+    expect(r.log).toContain(`pr close 7 --repo ${R}`);
+    expect(r.code).toBe(REFUSE_EXIT);
+  }, 30_000);
+
+  test("a branch whose create reply was lost is still deleted", () => {
+    const r = scripted([...mainRequires(["test"]), { has: `api -X POST repos/${R}/git/refs`, exit: 1 }, ...CLEANS]);
+    expect(r.out).toMatch(/the fixture was not built: branch rungate-forge-probe-\S+-arm could not be created/);
+    expect(r.log).toMatch(new RegExp(`api -X DELETE repos/${R}/git/refs/heads/rungate-forge-probe-\\S+-arm`));
+  }, 30_000);
+
+  test("a branch whose create reply was lost, and that will not delete, is named", () => {
+    const r = scripted([
+      ...mainRequires(["test"]),
+      { has: `api -X POST repos/${R}/git/refs`, exit: 1 },
+      { has: `api repos/${R}/git/ref/heads/rungate-forge-probe-`, out: { ref: "refs/heads/x" } },
+      ...CLEANS,
+    ]);
+    expect(r.out).toMatch(/the fixture could not be removed: branch rungate-forge-probe-\S+-arm/);
+  }, 30_000);
+
+  test("a pull request whose open reply was lost is found by its head and closed", () => {
+    const r = scripted([
+      ...mainRequires(["test"]), BRANCH_OK, COMMIT_OK,
+      { has: `api -X POST repos/${R}/pulls`, exit: 1 },
+      { has: "pr list", out: [{ number: 8 }] },
+      ...CLEANS,
+    ]);
+    expect(r.out).toContain("could not be opened");
+    expect(r.log).toMatch(/pr list --repo \S+ --head rungate-forge-probe-\S+-arm/);
+    expect(r.log).toContain(`pr close 8 --repo ${R}`);
+    expect(r.out).not.toContain("could not be removed");
+  }, 30_000);
+
+  test("a main that requires no check gets no fixture at all", () => {
+    const r = scripted([...mainRequires([]), BRANCH_OK, COMMIT_OK, PULL_OK, ...CLEANS]);
+    expect(r.out).toContain("main requires no status check");
+    expect(r.log).not.toContain("git/refs -f");
+    expect(r.log).not.toContain("pr merge");
+  }, 30_000);
+
+  // #2768 review, round 2: a failure that is not the pin says nothing about the pin.
+  test("a stale pin's arming that fails for another reason is UNMEASURED, and the right head is never armed", () => {
+    const r = scripted([
+      ...mainRequires(["test"]), BRANCH_OK, COMMIT_OK, PULL_OK, HELD,
+      { has: "--match-head-commit base1", exit: 1, err: "HTTP 502: Bad Gateway" },
+      { has: "--json headRefOid,autoMergeRequest", out: { headRefOid: "first1", autoMergeRequest: null } },
+      ...CLEANS,
+    ]);
+    expect(r.out).toStartWith("UNMEASURED match-head-commit-checked-at-arm-time:");
+    expect(r.out).toContain("HTTP 502: Bad Gateway");
+    expect(r.log).not.toContain("--match-head-commit first1");
+    expect(r.log).toContain(`pr close 7 --repo ${R}`);
+  }, 30_000);
+
+  test("a negative is read only after the whole wait, in both rows", () => {
+    const body = (from: string, to: string) => SOURCE.slice(SOURCE.indexOf(from), SOURCE.indexOf(to));
+    const armTime = body("function observeArmTime(", "function observeDirty(");
+    const dirty = body("function observeDirty(", "export function main(");
+    // Still armed: a settle that stops only when auto-merge reads off.
+    expect(armTime).toContain("const later = settle(view, (v) => v !== null && !armedIn(v));");
+    expect(armTime).toContain("o.armedAfter = later === null ? null : armedIn(later);");
+    // No runs on the conflicted head: a settle that stops only at its first run.
+    expect(dirty).toContain("o.dirtyRuns = settle(() => runsOn(dirtyHead), (n) => n !== null && n > 0);");
+  });
+});
+
+describe("#2768 review, round 2: settle, driven rather than read from the source", () => {
+  test("settle reads until done holds, and no further", () => {
+    let n = 0;
+    expect(settle(() => ++n, (v) => v === 3, 5_000, 1)).toBe(3);
+    expect(n).toBe(3);
+  });
+
+  test("settle returns the last read when the wait runs out, having read more than once", () => {
+    let n = 0;
+    const t0 = Date.now();
+    const last = settle(() => ++n, () => false, 40, 1);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(40);
+    expect(n).toBeGreaterThan(1);
+    expect(last).toBe(n);
+  });
+
+  test("HEAD_MISMATCH reads gh's stale-pin refusal, and no other failure", () => {
+    expect(HEAD_MISMATCH.test(STALE_REFUSAL), STALE_REFUSAL).toBe(true);
+    for (const other of ["HTTP 502: Bad Gateway", "GraphQL: Could not resolve to a PullRequest", "Pull request is in clean status", ""]) {
+      expect(HEAD_MISMATCH.test(other), other).toBe(false);
+    }
   });
 });
