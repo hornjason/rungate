@@ -3338,7 +3338,8 @@ export function reviewDepthConfig(ci: unknown): ReviewDepthDecision {
       declared: false,
       reason:
         `the config declares no ci.reviewDepth, so this review runs at Standard depth ` +
-        `(${AI_REVIEW_DEPTH_TURNS.standard} turns); set it to ${AI_REVIEW_DEPTHS.join(", ")} in .claude/rungate/config.json`,
+        `(${AI_REVIEW_DEPTH_TURNS.standard} turns); set it to ${AI_REVIEW_DEPTHS.join(", ")} in the rungate config: ` +
+        `.claude/rungate/config.json, or .claude/rungate.json in the single-file layout`,
     };
   }
   if (typeof raw !== "string" || !(AI_REVIEW_DEPTHS as readonly string[]).includes(raw)) {

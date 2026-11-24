@@ -501,6 +501,17 @@ describe("#2728: the turn-budget messages name ci.reviewDepth, the setting a con
     },
   );
 
+  // #2729 review: both config layouts are supported (.claude/rules/config-access.md),
+  // so the note that tells a consumer where to set the depth names both.
+  test.each(Object.keys(ROUTES) as Array<keyof typeof ROUTES>)(
+    "%s: the undeclared note names both config layouts",
+    route => {
+      const out = run(route, "no depth declared");
+      expect(out).toContain(".claude/rungate/config.json");
+      expect(out).toContain(".claude/rungate.json");
+    },
+  );
+
   test("the out-of-turns route keeps the guidance against an early payload", () => {
     expect(run("out of turns", "standard")).toContain("making the prompt write a payload early is NOT");
   });
