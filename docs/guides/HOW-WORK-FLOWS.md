@@ -29,7 +29,7 @@ live state*. An agent is never the transform.
   YOU write                           COMMAND transforms         GITHUB holds
   ─────────                           ──────────────────         ────────────
 1 a spec, with a
-  "Phase placement" table
+  placement line per criterion
                                  2 →  plan-spec            →     milestones
 
 3 an ADR with a
@@ -46,17 +46,20 @@ bun bin/rungate.ts create-spec "title"
 ```
 
 Creates the file with the required frontmatter. You then write the criteria
-and — this is the part the later steps depend on — a **Phase placement
-table** saying which phase each criterion belongs to.
+and — this is the part the later steps depend on — a **`placement:` line**
+beneath each one saying which phase it belongs to, such as
+`      placement: Phase 2` (ADR-026). A spec written before that keeps its
+phases in an older *Phase placement* table, which is still read;
+`plan-spec <spec.md> --convert-placement --write` moves it into lines.
 
-### 2. Placement table → milestones
+### 2. Placements → milestones
 
 ```bash
 bun bin/rungate.ts plan-spec <spec.md> \
   --repo <owner/name> --prefix <name> --write
 ```
 
-Reads the table and creates the milestones. `--prefix Pipeline` gives
+Reads the placements and creates the milestones. `--prefix Pipeline` gives
 `Pipeline Phase 0`, `Pipeline Phase 1`, and so on. **It writes no file.**
 Without `--write` it reports and mutates nothing.
 
