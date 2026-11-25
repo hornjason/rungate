@@ -118,6 +118,20 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     expect(promptAudit(ROOT).findings.filter(f => f.lint === "dangling-path" && f.owner === "harness").map(f => `${f.file}: ${f.message}`)).toEqual([]);
   });
 
+  // #2781: a rendered harness line that names one of rungate's own files
+  // dangles in any consumer that has the same directory, and lib/ is common.
+  // The fixture has none of them, so they are planted here: one file in each
+  // of rungate's top-level directories, which makes each directory exist
+  // without supplying any file a rendered line names.
+  test("a consumer laid out like rungate gets no harness-owned dangling-path finding", () => {
+    const dirs = ["lib", "lib/scaffold", "lib/generators", "scripts", "specs", "docs", "templates", "test", "hooks"];
+    const root = planted(...dirs.map((d): [string, string] => [`${d}/consumer-own-2781.ts`, "export {};"]));
+    const dangling = promptAudit(root).findings
+      .filter(f => f.lint === "dangling-path" && f.owner === "harness")
+      .map(f => `${f.file}: ${f.message}`);
+    expect(dangling).toEqual([]);
+  });
+
   // #2784: every lint, not one. The same reading runs on rungate's own tree and
   // on a render planted with one harness-owned trigger per lint, so the empty
   // reading on rungate is only believed for lints the planted case shows it

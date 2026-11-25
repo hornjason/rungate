@@ -4,7 +4,7 @@ description: Show a proposal as a dry run — the real planning tools without --
 doc-type: reference
 status: active
 updated: 2026-11-12
-generated-sha: de74f34b22e95426
+generated-sha: d87529654ac95565
 ---
 
 Show **$ARGUMENTS** as a dry run (step 2 of the four-step process,
@@ -42,7 +42,7 @@ none, say so and stop.
      is one — submodules are not supported here. Otherwise `<checkout>` is what it
      printed with the trailing `/.git` removed. From a
      linked worktree that names the main checkout, never the worktree — the
-     same `--git-common-dir` question `repoRootFrom` in `lib/paths.ts` asks.
+     same `--git-common-dir` question rungate's own repo-root lookup asks.
      Use that path below and in step 2.
    - `git -C "<checkout>" fetch origin main`. If the fetch fails, stop and run nothing else:
      the count below would read a stale ref and could say zero.

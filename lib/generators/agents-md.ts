@@ -518,7 +518,7 @@ consumer; \`roles.json\`'s \`tiers.reinforcement\` carries section NAMES, not
 rule text; and the write itself was a bare \`writeFileSync\`.
 
 So \`.claude/agents/*.md\` now works the way \`AGENTS.md\` does, through the
-same merge in \`lib/agents-md-sections.ts\`:
+same section merge rungate applies to \`AGENTS.md\`:
 
 - Add a \`## Project Constraints\` heading to a brief and everything under
   it, up to the next \`##\`, is yours. A re-scaffold carries it forward
