@@ -232,6 +232,11 @@ function backquoteEnd(s: string, open: number): number {
  * The index just past a `$(…)` whose `(` is at `open`, or -1 when it is
  * never closed. Quotes, nested substitutions and backquotes inside it are
  * skipped whole, so a parenthesis inside them does not count.
+ *
+ * Fail closed on what it does not model (security review of #2815): a
+ * comment, a heredoc, a `case` pattern or a newline inside the body can each
+ * hold a `)` that closes nothing, so any of them reads as -1, a line that
+ * runs no hook, rather than a guess at where the substitution ends.
  */
 function substitutionEnd(s: string, open: number): number {
   let depth = 1;
@@ -263,6 +268,13 @@ function substitutionEnd(s: string, open: number): number {
       const e = backquoteEnd(s, j);
       if (e < 0) return -1;
       j = e - 1;
+    } else if (
+      c === "\n" ||
+      (c === "#" && /[\s(]/.test(s[j - 1] ?? " ")) ||
+      (c === "<" && s[j + 1] === "<") ||
+      (/^case(?![A-Za-z0-9_])/.test(s.slice(j)) && !/[A-Za-z0-9_]/.test(s[j - 1] ?? " "))
+    ) {
+      return -1;
     } else if (c === "(") {
       depth++;
     } else if (c === ")" && --depth === 0) {

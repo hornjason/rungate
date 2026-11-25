@@ -135,5 +135,17 @@ describe("#2802: a quoted leading assignment is read, spaces and all", () => {
     expect(executedHookPath("$(which bun) /x/A.hook.ts")).toBeNull();
     // Inside single quotes it is plain text.
     expect(executedHookPath("T='$(a b' bun /x/A.hook.ts")).toBe("/x/A.hook.ts");
+    // What the scanner does not model reads as no hook, never as a guess (security review of #2815):
+    // a ) in a comment, a case pattern, a heredoc, a newline inside the body.
+    for (const command of [
+      "T=$(echo # ) bun /x/A.hook.ts",
+      "T=$(case x in a) echo;; esac) bun /x/A.hook.ts",
+      "T=$(cat <<E\nx\nE\n) bun /x/A.hook.ts",
+      "T=$(echo a\n) bun /x/A.hook.ts",
+    ]) {
+      expect(executedHookPath(command), command).toBeNull();
+    }
+    // A word merely containing "case" or a # inside a word is still read.
+    expect(executedHookPath("T=$(showcase x#y) bun /x/A.hook.ts")).toBe("/x/A.hook.ts");
   });
 });
