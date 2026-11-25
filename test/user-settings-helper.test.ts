@@ -249,8 +249,8 @@ describe("#2810: no error message leaves the helper, and the count is the census
 
 // #2813: what crosses the boundary is listed, field by field, and checked.
 describe("#2813: every field of every verdict is on the helper's allow-list", () => {
-  /** Every string a planted settings document holds, as values and keys: what must not cross. */
-  const plantedText = (): string[] => {
+  /** Every string a planted settings document holds, as values and keys, whole and in space-separated pieces. */
+  const plantedPieces = (): string[] => {
     const out: string[] = [];
     const walk = (v: unknown): void => {
       if (typeof v === "string") out.push(v);
@@ -266,11 +266,33 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
     // stated exception: a resolved path, or the directory a registration
     // reaches its hook through, crosses by design. The JSON vocabulary of the
     // files is no value.
-    const pieces = out.flatMap(t => [t, ...t.split(/\s+/)]);
-    return [...new Set(pieces)].filter(
-      t => t.length >= 6 && !t.startsWith("/") && !["PreToolUse", "command", "matcher"].includes(t),
-    );
+    return [...new Set(out.flatMap(t => [t, ...t.split(/\s+/)]))];
   };
+  /** What free text may not hold: each planted piece past the floor below. */
+  const plantedText = (): string[] =>
+    plantedPieces().filter(t => t.length >= 6 && !t.startsWith("/") && !["PreToolUse", "command", "matcher"].includes(t));
+  /**
+   * Short text in the planted documents that is no secret: the settings
+   * format's keys, the matcher, the names the fixture gives its env entries,
+   * and the words of its commands. A substring check on any of them would
+   * fire on every census reading. A planted piece the floor skips must be one
+   * of these, carry the PLANTED marker (every result is checked for it at any
+   * length, above), or be a path to a planted hook.
+   */
+  const NOT_SECRET = new Set<string>([
+    "hooks", "PreToolUse", "matcher", "type", "command", "env", // the format
+    "Bash", // the matcher
+    "X_DIR", "OTHER", // env names; their values carry the marker or are the hook directory
+    "bun", "echo", "sh", "-c", '"bun', "b", // command words, and a piece of the quoted "a b gho_…" value
+  ]);
+  const unaccountedPieces = (pieces: string[]): string[] =>
+    pieces.filter(
+      t =>
+        !plantedText().includes(t) &&
+        !PLANTED.test(t) &&
+        !NOT_SECRET.has(t) &&
+        !(t.startsWith("/") && (t.endsWith(".hook.ts") || t === hookDir)),
+    );
   const SCOPES = new Set<string>(REGISTRATION_SCOPES);
   const noPlanted = (v: string) => plantedText().every(t => !v.includes(t));
   // The stated exception: where a registration resolves to is what the census
@@ -334,6 +356,17 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
   test("the planted documents hold the text the check looks for", () => {
     // Without this, every noPlanted check below holds because nothing was planted.
     expect(plantedText().filter(t => PLANTED.test(t)).length).toBeGreaterThanOrEqual(5);
+  });
+
+  test("every planted piece the free-text check skips is marked, a word of the format, or a hook path (#2819 review)", () => {
+    // The floor exists because a substring check on "bun" or "Bash" fires on
+    // the census's own words. A short or path-shaped secret is caught by the
+    // marker instead, so a planted value without it goes red here rather
+    // than slipping past both checks.
+    expect(unaccountedPieces(plantedPieces())).toEqual([]);
+    expect(unaccountedPieces(["gho_x", "a1b2c", "/abc123secret"])).toEqual(["gho_x", "a1b2c", "/abc123secret"]);
+    // A path-shaped value carrying the marker is accounted for: the whole-result checks see it.
+    expect(unaccountedPieces(["/gho_planted2792"])).toEqual([]);
   });
 
   test("each function's result carries only listed fields, each holding a value its field allows", () => {
