@@ -73,7 +73,7 @@
  * the confident-and-wrong path this file exists to stop.
  */
 
-import { executedHookPath } from "./hook-trees";
+import { hookFileKind, mayNameHook, readWholeLine } from "./hook-trees";
 import {
   type RegistrationScope,
   type ScopeReading,
@@ -89,6 +89,7 @@ import {
  * `.claude/rungate/hooks.json` is scaffolded into the project settings and
  * has the same reach.
  */
+
 const PROJECT_DIR_SCOPES: RegistrationScope[] = [
   "project-settings",
   "project-local-settings",
@@ -217,6 +218,26 @@ export function resolvePath(
   env: Record<string, string[]>,
   projectDir: string | null,
 ): Resolution {
+  const e = expandVariables(raw, env, projectDir);
+  if (e.kind === "unresolved") return e;
+  const expanded = e.text;
+  if (!expanded.startsWith("/")) {
+    return {
+      kind: "unresolved",
+      reason:
+        `${expanded} is not absolute, so which directory it names depends on the working ` +
+        `directory of whatever spawns the hook`,
+    };
+  }
+  return { kind: "resolved", path: normalize(expanded) };
+}
+
+/** Each variable in `raw` replaced by its one value, or why one could not be (#2828: shared by a path and a run file's name). */
+function expandVariables(
+  raw: string,
+  env: Record<string, string[]>,
+  projectDir: string | null,
+): { kind: "expanded"; text: string } | { kind: "unresolved"; reason: string } {
   const unresolved: string[] = [];
   const expanded = raw.replace(VAR, (whole, braced?: string, bare?: string) => {
     const name = braced ?? bare ?? "";
@@ -244,15 +265,27 @@ export function resolvePath(
   });
 
   if (unresolved.length > 0) return { kind: "unresolved", reason: unresolved.join("; ") };
-  if (!expanded.startsWith("/")) {
-    return {
-      kind: "unresolved",
-      reason:
-        `${expanded} is not absolute, so which directory it names depends on the working ` +
-        `directory of whatever spawns the hook`,
-    };
-  }
-  return { kind: "resolved", path: normalize(expanded) };
+  return { kind: "expanded", text: expanded };
+}
+
+/**
+ * The file a read line runs, with any variable in its NAME expanded (#2828):
+ * `${AGENTGRIT_BIN}` names a program a census can read only once the
+ * variable is. Null when such a variable is not defined once in a scope this
+ * run read, or its value holds whitespace, which the shell would split, or a
+ * `$`, which it would not expand again.
+ */
+function runFile(
+  word: string,
+  env: Record<string, string[]>,
+  projectDir: string | null,
+): { path: string; name: string } | null {
+  const cut = word.lastIndexOf("/") + 1;
+  if (!word.slice(cut).includes("$")) return { path: word, name: word.slice(cut) };
+  const name = expandVariables(word.slice(cut), env, projectDir);
+  if (name.kind === "unresolved" || /[\s$]/.test(name.text)) return null;
+  const path = word.slice(0, cut) + name.text;
+  return { path, name: path.slice(path.lastIndexOf("/") + 1) };
 }
 
 /** Collapse `//`, `/./` and a trailing slash. No `fs`, so no symlink resolution. */
@@ -272,7 +305,7 @@ export interface TargetReading {
   hook: string;
   scope: RegistrationScope;
   command: string;
-  /** The variable the path is reached through, or `"literal"`. */
+  /** The variable the path is reached through, or `"literal"`. A line not read completely is no reading at all, and is a reason instead (#2828). */
   spelling: string;
   target: Target;
   /** The absolute path the registration resolves to, when it resolved. */
@@ -330,13 +363,27 @@ export function registeredTreeCensus(
   const hooksDir = normalize(`${repoRoot}/hooks`);
   const out: TargetReading[] = [];
   let examined = 0;
+  // Per scope, the lines not read completely that may name a hook (#2828).
+  const unreadIn = new Map<string, number>();
 
   for (const reading of readings) {
     const projectDir = PROJECT_DIR_SCOPES.includes(reading.scope) ? repoRoot : null;
     for (const command of reading.commands ?? []) {
-      const raw = executedHookPath(command);
-      if (raw === null) continue;
-      const base = raw.slice(raw.lastIndexOf("/") + 1).replace(/\.hook\.ts$/, "");
+      // A line is read only when it is one command read completely, and the
+      // name of the file it runs can be read once its variables are expanded
+      // (#2828). Any other line that may name a hook is counted for its scope:
+      // no spelling of a hook is recognised, and no command is quoted into a
+      // reason, so no setting crosses into one.
+      const line = readWholeLine(command);
+      const run = line.read ? runFile(line.word, env, projectDir) : null;
+      const kind = run === null ? "unreadable" : hookFileKind(run.name);
+      if (kind === "unreadable") {
+        if (mayNameHook(command)) unreadIn.set(reading.scope, (unreadIn.get(reading.scope) ?? 0) + 1);
+        continue;
+      }
+      if (kind === "other" || run === null) continue;
+      const raw = run.path;
+      const base = run.name.replace(/\.hook\.ts$/, "");
       if (!owned.includes(base)) continue;
 
       examined++;
@@ -377,6 +424,13 @@ export function registeredTreeCensus(
     }
   }
 
+  for (const [scope, n] of unreadIn) {
+    reasons.push(
+      `${n} ${n === 1 ? "registration" : "registrations"} in ${scope} could not be read completely, and ` +
+        `may name a hook, so which hook runs, and in which tree, could not be read. A line not read is not ` +
+        `this repo's copy; it is no reading at all`,
+    );
+  }
   const unresolved = out.filter(r => r.target === "unresolved");
   for (const r of unresolved) reasons.push(r.detail);
   if (examined === 0) {
