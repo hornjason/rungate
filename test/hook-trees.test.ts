@@ -118,39 +118,47 @@ describe("#2802: a quoted leading assignment is read, spaces and all", () => {
     expect(executedHookPath('bun "/x/a dir/A.hook.ts"')).toBeNull();
   });
 
-  test("#2815: a command substitution is part of its word, spaces, nesting and quotes included (review, round 3)", () => {
-    for (const command of [
-      "TOKEN=$(cat ~/.token) bun /x/A.hook.ts",
-      "TOKEN=`cat x y` bun /x/A.hook.ts",
-      'T="$(a "b c")" bun /x/A.hook.ts',
-      "T=$(a $(b c) \")\") bun /x/A.hook.ts",
-      "T=$((1 + 2)) bun /x/A.hook.ts",
-    ]) {
-      expect(executedHookPath(command), command).toBe("/x/A.hook.ts");
+  test("#2815: a line is read only when every character is accounted for; anything else reads as no hook (review, round 4)", () => {
+    // Accepted: plain words, quotes, escapes, and a parameter written $NAME or ${NAME}.
+    for (const [command, path] of [
+      ["bun ${D}/A.hook.ts", "${D}/A.hook.ts"],
+      ["bun $D/A.hook.ts", "$D/A.hook.ts"],
+      ['bun "${D}/A.hook.ts"', "${D}/A.hook.ts"],
+      ["T=$X bun /x/A.hook.ts", "/x/A.hook.ts"],
+      // Single-quoted or escaped, the same characters are plain text.
+      ["T='$(a b' bun /x/A.hook.ts", "/x/A.hook.ts"],
+      ["T=\\$\\(x\\) bun /x/A.hook.ts", "/x/A.hook.ts"],
+      ["bun /x/A.hook.ts --k=a,b:c@d%e+f", "/x/A.hook.ts"],
+    ] as const) {
+      expect(executedHookPath(command), command).toBe(path);
     }
-    // One left open is an open quote: nothing runs.
-    expect(executedHookPath("TOKEN=$(cat x bun /x/A.hook.ts")).toBeNull();
-    expect(executedHookPath("TOKEN=`cat x bun /x/A.hook.ts")).toBeNull();
-    // A substitution standing for the command word is not read as an interpreter.
-    expect(executedHookPath("$(which bun) /x/A.hook.ts")).toBeNull();
-    // Inside single quotes it is plain text.
-    expect(executedHookPath("T='$(a b' bun /x/A.hook.ts")).toBe("/x/A.hook.ts");
-    // What the scanner does not model reads as no hook, never as a guess (security review of #2815):
-    // a ) in a comment, a case pattern, a heredoc, a newline inside the body.
     for (const command of [
-      "T=$(echo # ) bun /x/A.hook.ts",
-      "T=$(echo;# ) bun /x/A.hook.ts",
-      "T=$(echo|# ) bun /x/A.hook.ts",
-      "T=$(echo&# ) bun /x/A.hook.ts",
-      "T=$(echo>#x ) bun /x/A.hook.ts",
-      "T=$(case x in a) echo;; esac) bun /x/A.hook.ts",
-      "T=$(cat <<E\nx\nE\n) bun /x/A.hook.ts",
-      "T=$(echo a\n) bun /x/A.hook.ts",
+      // Substitution and arithmetic, quoted or not: round 3 read these, and this withdraws it.
+      "TOKEN=$(cat ~/.token) bun /x/A.hook.ts",
+      "TOKEN=`cat x` bun /x/A.hook.ts",
+      'T="$(a b)" bun /x/A.hook.ts',
+      'T="`a`" bun /x/A.hook.ts',
+      "T=$((1 + 2)) bun /x/A.hook.ts",
+      // Every other expansion: ANSI-C and locale quoting, positional and special parameters, operators.
+      "bun $'/x/A.hook.ts'",
+      'bun $"/x/A.hook.ts"',
+      "T=$1 bun /x/A.hook.ts",
+      "T=${X:-y} bun /x/A.hook.ts",
+      "T=${#X} bun /x/A.hook.ts",
+      // Characters outside the plain set: tilde, globs, braces, redirection, a subshell, history.
+      "bun ~/x/A.hook.ts",
+      "bun /x/*.hook.ts",
+      "bun /x/A?.hook.ts",
+      "bun /x/[A].hook.ts",
+      "bun /x/{A,B}.hook.ts",
+      "bun /x/A.hook.ts 2>/dev/null",
+      "(bun /x/A.hook.ts)",
+      "bun /x/A.hook.ts!",
+      // The rest of the line is held to the same set.
+      "bun /x/A.hook.ts; echo $(date)",
+      "bun /x/A.hook.ts --name $(echo x # y)",
     ]) {
       expect(executedHookPath(command), command).toBeNull();
     }
-    // A word merely containing "case" or a # inside a word is still read.
-    expect(executedHookPath("T=$(showcase x#y) bun /x/A.hook.ts")).toBe("/x/A.hook.ts");
-    expect(executedHookPath("T=$(echo $#) bun /x/A.hook.ts")).toBe("/x/A.hook.ts");
   });
 });

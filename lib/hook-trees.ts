@@ -188,103 +188,49 @@ interface ShellWord {
 }
 
 /**
- * The words of a command line's first command, read the way a POSIX shell
- * reads them, or null when the line leaves a quote open (#2802, #2815 review).
+ * A character a word may hold unquoted: the closed set this reader accounts
+ * for. Anything outside it, and outside the quoting, escape, separator,
+ * comment and parameter rules below, makes the line read as no hook
+ * (#2815 review, round 4).
+ */
+const PLAIN = /[A-Za-z0-9_\-./=:@%+,#]/;
+
+/** The length of a `$NAME` or `${NAME}` at `i`, or 0 for any other use of `$`. */
+function parameterLength(s: string, i: number): number {
+  const m = /^\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)/.exec(s.slice(i));
+  return m === null ? 0 : m[0].length;
+}
+
+/**
+ * The words of a command line's first command, or null when the line holds
+ * anything this reader does not account for (#2802, #2815 review).
  *
- * One reader for every quoting question, replacing a regex for leading
- * assignments, a whitespace split for everything after them, and a separate
- * scan for open quotes. Each of #2815's review rounds found the three
- * disagreeing about one input or another.
+ * It accepts, and refuses everything else: rounds 1 to 3 of #2815's review
+ * each found one more shell construct a general reader misread, so a path is
+ * read only when every character of its line is accounted for. A refusal is
+ * the loud direction, a registration read as unregistered; a guess can be
+ * the silent one.
  *
- * - Outside quotes, whitespace ends a word, a backslash escapes the next
- *   character, and `'` or `"` opens a quote.
+ * - Outside quotes, a word holds characters of `PLAIN`, a space or tab ends
+ *   it, a backslash escapes the next character, and `'` or `"` opens a quote.
  * - Inside single quotes nothing is special until the closing quote.
  * - Inside double quotes a backslash escapes `"`, `\`, `$` or a backquote,
- *   and is kept before anything else.
+ *   and is kept before anything else. A backquote is refused.
+ * - Quoted or not, `$` is accepted only as `$NAME` or `${NAME}`, kept as
+ *   written, which is how generated registrations name their directory.
+ *   Command substitution, arithmetic, `$'…'` and every other expansion are
+ *   refused.
  * - A backslash before a newline, quoted or not, is a line continuation: both
- *   go, as in the shell (#2815 review, round 3).
- * - An unquoted `;`, `|` or `&` ends the first command. A `#` that starts a
- *   word starts a comment, to the end of its line. A `#` inside a word is
+ *   go, as in the shell.
+ * - An unquoted `;`, `|` or `&` ends the first command. A `#` that starts
+ *   a word starts a comment, to the end of its line; a `#` inside a word is
  *   part of it.
- * - The rest of the first line is scanned for an open quote, past the first
- *   command: the shell parses a line before it runs any of it, so a quote
- *   left open there means nothing runs. An unquoted newline ends the scan,
- *   since the shell runs a line before it reads the next (#2815 review,
- *   round 3).
- * - A command substitution, `$(…)` or backquotes, quoted or not, is part of
- *   the word it sits in, nested parentheses and quotes included, so a space
- *   inside it ends no word. One left open is an open quote: nothing runs
- *   (#2815 review, round 3).
+ * - The rest of the first line is held to the same rules, because the shell
+ *   parses a line before it runs any of it: a quote left open there, or a
+ *   construct this reader does not account for, means no hook is read. An
+ *   unquoted newline ends the scan, since the shell runs a line before it
+ *   reads the next.
  */
-/**
- * The index just past a backquoted substitution opened at `open`, or -1 when
- * it is never closed.
- */
-function backquoteEnd(s: string, open: number): number {
-  for (let j = open + 1; j < s.length; j++) {
-    if (s[j] === "\\") j++;
-    else if (s[j] === "`") return j + 1;
-  }
-  return -1;
-}
-
-/**
- * The index just past a `$(…)` whose `(` is at `open`, or -1 when it is
- * never closed. Quotes, nested substitutions and backquotes inside it are
- * skipped whole, so a parenthesis inside them does not count.
- *
- * Fail closed on what it does not model (security review of #2815): a
- * comment (a `#` after a blank or an operator character; `$#` and a `#`
- * inside a word are not one), a heredoc, a `case` pattern or a newline inside the body can each
- * hold a `)` that closes nothing, so any of them reads as -1, a line that
- * runs no hook, rather than a guess at where the substitution ends.
- */
-function substitutionEnd(s: string, open: number): number {
-  let depth = 1;
-  for (let j = open + 1; j < s.length; j++) {
-    const c = s[j]!;
-    if (c === "\\") {
-      j++;
-    } else if (c === "'") {
-      const k = s.indexOf("'", j + 1);
-      if (k < 0) return -1;
-      j = k;
-    } else if (c === '"') {
-      let k = j + 1;
-      for (; k < s.length && s[k] !== '"'; k++) {
-        if (s[k] === "\\") k++;
-        else if (s[k] === "$" && s[k + 1] === "(") {
-          const e = substitutionEnd(s, k + 1);
-          if (e < 0) return -1;
-          k = e - 1;
-        } else if (s[k] === "`") {
-          const e = backquoteEnd(s, k);
-          if (e < 0) return -1;
-          k = e - 1;
-        }
-      }
-      if (k >= s.length) return -1;
-      j = k;
-    } else if (c === "`") {
-      const e = backquoteEnd(s, j);
-      if (e < 0) return -1;
-      j = e - 1;
-    } else if (
-      c === "\n" ||
-      (c === "#" && /[\s;|&()<>]/.test(s[j - 1] ?? " ")) ||
-      (c === "<" && s[j + 1] === "<") ||
-      (/^case(?![A-Za-z0-9_])/.test(s.slice(j)) && !/[A-Za-z0-9_]/.test(s[j - 1] ?? " "))
-    ) {
-      return -1;
-    } else if (c === "(") {
-      depth++;
-    } else if (c === ")" && --depth === 0) {
-      return j + 1;
-    }
-  }
-  return -1;
-}
-
 function shellWords(command: string): ShellWord[] | null {
   const words: ShellWord[] = [];
   let text = "";
@@ -300,25 +246,26 @@ function shellWords(command: string): ShellWord[] | null {
   };
   for (let i = 0; i < command.length; i++) {
     const c = command[i]!;
-    // A substitution, outside quotes or inside double ones, is taken whole.
-    if (quote !== "'" && ((c === "$" && command[i + 1] === "(") || c === "`")) {
-      const e = c === "`" ? backquoteEnd(command, i) : substitutionEnd(command, i + 1);
-      if (e < 0) return null;
-      inWord = true;
-      text += command.slice(i, e);
-      raw += command.slice(i, e);
-      i = e - 1;
-      continue;
-    }
     if (quote === "'") {
       raw += c;
       if (c === "'") quote = null;
       else text += c;
       continue;
     }
+    if (c === "$") {
+      // Outside quotes or inside double ones: a plain parameter, or a refusal.
+      const n = parameterLength(command, i);
+      if (n === 0) return null;
+      inWord = true;
+      text += command.slice(i, i + n);
+      raw += command.slice(i, i + n);
+      i += n - 1;
+      continue;
+    }
     if (quote === '"') {
       raw += c;
       if (c === '"') quote = null;
+      else if (c === "`") return null;
       else if (c === "\\" && command[i + 1] === "\n") {
         raw += "\n";
         i++;
@@ -354,12 +301,14 @@ function shellWords(command: string): ShellWord[] | null {
     } else if (c === ";" || c === "|" || c === "&") {
       end();
       collecting = false;
-    } else if (/\s/.test(c)) {
+    } else if (c === " " || c === "\t") {
       end();
-    } else {
+    } else if (PLAIN.test(c)) {
       inWord = true;
       text += c;
       raw += c;
+    } else {
+      return null;
     }
   }
   if (quote !== null) return null;
