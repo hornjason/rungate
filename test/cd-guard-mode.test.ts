@@ -95,6 +95,15 @@ function run(cwd: string, command: string, env: Record<string, string> = {}) {
   return { stdout, stderr: r.stderr ?? "", decision, status: r.status };
 }
 
+/**
+ * The JSON string values in a settings document that name `TopLevelCdGuard`,
+ * each with its quotes. A match cannot cross a quote, so it never reaches
+ * another value, even in a one-line file (#2786).
+ */
+function cdGuardRegistrations(src: string): string[] {
+  return src.match(/"[^"]*TopLevelCdGuard[^"]*"/g) ?? [];
+}
+
 const OFFENDING = "cd /tmp && ls";
 const ALLOWED = "git -C /tmp status";
 
@@ -282,7 +291,24 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
     const user = join(homedir(), ".claude", "settings.json");
     let src: string;
     try { src = readFileSync(user, "utf-8"); } catch { return; } // no user settings here (CI)
-    expect(src, "~/.claude/settings.json registers TopLevelCdGuard — not done by this branch")
-      .not.toContain("TopLevelCdGuard");
+    // Asserts on the string values that name the guard, never the whole file:
+    // a failing `not.toContain` prints its whole subject, and this file holds
+    // the machine's tokens in `env` (#2786).
+    expect(cdGuardRegistrations(src), "~/.claude/settings.json registers TopLevelCdGuard — not done by this branch")
+      .toEqual([]);
+  });
+
+  test("#2786: AC-11's reading holds only the values naming the guard, never the file's other values", () => {
+    const registration = "bun ${PAI_HOOKS_DIR}/TopLevelCdGuard.hook.ts";
+    const doc = {
+      env: { GH_TOKEN: "gho_planted2786", OTHER_KEY: "sk-planted2786" },
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: registration }] }] },
+    };
+    for (const src of [JSON.stringify(doc, null, 2), JSON.stringify(doc)]) {
+      const hits = cdGuardRegistrations(src);
+      expect(hits).toEqual([`"${registration}"`]);
+      expect(hits.join("\n")).not.toContain("planted2786");
+    }
+    expect(cdGuardRegistrations(JSON.stringify({ env: { GH_TOKEN: "gho_planted2786" } }))).toEqual([]);
   });
 });
