@@ -27,6 +27,7 @@ import {
   buildBoardFlowWorkflow,
 } from "../lib/scaffold/board-flow-workflow";
 import { buildBoardReadyGateScript, NO_BOARD_REFUSAL } from "../lib/scaffold/board-ready-workflow";
+import { PROJECT_TOKEN_SECRET } from "../lib/scaffold/human-steps";
 import { OWNED_FILES } from "../lib/scaffold/owned-files";
 import { workflowCensus } from "../lib/scaffold/workflow-census";
 
@@ -156,6 +157,10 @@ describe("#2837: the gate names the secret it reads", () => {
     const gate = steps().find(s => s.id === "gate")!;
     const secret = /secrets\.([A-Z_]+)/.exec(gate.env?.GH_TOKEN ?? "")?.[1];
     expect(secret, "the gate reads no secret").toBeDefined();
+    // Pinned to the secret the setup steps tell a consumer to set (review
+    // round 2 of #2840): a gate and warning both renamed to a secret nobody
+    // sets agree with each other and still read an empty token on every run.
+    expect(secret).toBe(PROJECT_TOKEN_SECRET);
     const warning = gate.run!.split("\n").find(l => l.includes("::warning::"))!;
     expect(warning, "the warning names a secret nothing reads").toContain(`${secret} is not set`);
   });
