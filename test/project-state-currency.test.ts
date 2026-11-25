@@ -34,7 +34,7 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 import { localCalendarDay } from "../lib/local-calendar-day";
-import { PROJECT_STATE_ZONE, sessionsAheadOfStamp } from "../lib/project-state-shape";
+import { PROJECT_STATE_ZONE, selectRecentSessions, sessionsAheadOfStamp } from "../lib/project-state-shape";
 
 const ROOT = join(import.meta.dir, "..");
 const STATE = join(ROOT, "project-state.json");
@@ -365,9 +365,15 @@ describe("project-state currency", () => {
     expect(sessionsAheadOfStamp(st("2026-11-26", "2026-11-25 session 106 (gist)"), "record")).toEqual([]);
     expect(sessionsAheadOfStamp(st(undefined, "2026-11-25"), "record")[0]).toContain("not a calendar day");
     expect(sessionsAheadOfStamp(st("2026-11-25", "session 106"), "record")[0]).toContain("starts with no calendar day");
-    // #2807 review: a timestamp is a day followed by T, not a refusal.
-    expect(sessionsAheadOfStamp(st("2026-11-25", "2026-11-25T14:00 session 106"), "record")).toEqual([]);
+    // #2807 review, round 3: dates are read with the renderer's own reader, so
+    // a date the handoff would call undated is refused here, not accepted.
+    expect(sessionsAheadOfStamp(st("2026-11-25", "2026-11-25T14:00 session 106"), "record")[0]).toContain("starts with no calendar day");
+    expect(selectRecentSessions([{ date: "2026-11-25T14:00 session 106" }], 3).undated).toHaveLength(1);
     expect(sessionsAheadOfStamp(st("2026-11-25", "2026-11-251 session 106"), "record")[0]).toContain("starts with no calendar day");
+    // A top-level session that is not an object is named, not thrown on.
+    for (const bad of ["2026-11-25", 5, null, []]) {
+      expect(sessionsAheadOfStamp({ updated: "2026-11-25", session: bad }, "record")[0], JSON.stringify(bad)).toContain("not an object with a date");
+    }
     // #2807 review, round 2: every entry in sessions[] is read, not only the top-level session.
     const entries = sessionsAheadOfStamp(st("2026-11-25", "2026-11-25", ["2026-11-26 session 107", "2999-01-01 session 105", "undated"]), "record");
     expect(entries.map(r => r.split(" is dated")[0])).toEqual(["sessions[0]", "sessions[1]"]);

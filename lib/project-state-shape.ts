@@ -340,9 +340,10 @@ export const PROJECT_STATE_ZONE = "America/New_York";
  * 2026-11-25, the UTC day, which hides every merge on the day in between from
  * the currency comparison.
  *
- * Every date is read: the top-level `session`, which must start with a day,
- * and each `sessions[]` entry that does. An entry with no day is left to the
- * renderer, which already ranks it below every dated one (#2807 review).
+ * Every date is read, with the renderer's own reader: the top-level
+ * `session`, which must start with a day, and each `sessions[]` entry that
+ * does. An entry with no day is left to the renderer, which already ranks it
+ * below every dated one (#2807 review).
  *
  * `caller` decides the remedy the reason names. The writer has just stamped
  * today, so for it the only way out is re-dating the session. On a committed
@@ -350,12 +351,15 @@ export const PROJECT_STATE_ZONE = "America/New_York";
  * The writer and the currency test both call this: one decider.
  */
 export function sessionsAheadOfStamp(state: unknown, caller: "writer" | "record"): string[] {
-  // A date may be followed by anything but another digit: `2026-11-25 session 106`, `2026-11-25T14:00`.
+  // The renderer's own reader, `ISO_DATE`, so a date this check accepts is
+  // one `selectRecentSessions` ranks, and one it rejects is one the renderer
+  // calls undated (#2807 review, round 3: a second, looser reader let a
+  // timestamped session pass here and vanish from the handoff).
   const day = (v: unknown): string | null => {
-    const m = typeof v === "string" ? /^(\d{4}-\d{2}-\d{2})(?!\d)/.exec(v) : null;
-    return m ? m[1]! : null;
+    const m = typeof v === "string" ? ISO_DATE.exec(v) : null;
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
   };
-  const st = (state ?? {}) as { updated?: unknown; session?: { date?: unknown } | null; sessions?: unknown };
+  const st = (state ?? {}) as { updated?: unknown; session?: unknown; sessions?: unknown };
   const stamp = day(st.updated);
   if (stamp === null) return [`updated is ${JSON.stringify(st.updated)}, which is not a calendar day`];
   const remedy =
@@ -363,9 +367,13 @@ export function sessionsAheadOfStamp(state: unknown, caller: "writer" | "record"
       ? `updated was stamped just now, so the session's date is ahead of the day: it is typed by hand, so date it by the day in ${PROJECT_STATE_ZONE} it was written.`
       : `Either updated is stale: run \`bun scripts/update-project-state.ts\`, which stamps the day it runs in ${PROJECT_STATE_ZONE}. Or, if it still reads ${stamp}, the date was typed ahead of the day: date it by the day in ${PROJECT_STATE_ZONE} it was written.`;
   const out: string[] = [];
-  if (st.session !== undefined && st.session !== null && "date" in st.session) {
-    const d = day(st.session.date);
-    if (d === null) out.push(`the newest session's date is ${JSON.stringify(st.session.date)}, which starts with no calendar day`);
+  // A session that is not an object is named, not thrown on (#2807 review).
+  if (st.session !== undefined && (st.session === null || typeof st.session !== "object" || Array.isArray(st.session))) {
+    out.push(`the top-level session is ${JSON.stringify(st.session)}, not an object with a date`);
+  } else if (st.session !== undefined && "date" in st.session) {
+    const date = (st.session as { date?: unknown }).date;
+    const d = day(date);
+    if (d === null) out.push(`the newest session's date is ${JSON.stringify(date)}, which starts with no calendar day`);
     else if (d > stamp) out.push(`the newest session is dated ${d} and updated reads ${stamp}. ${remedy}`);
   }
   if (Array.isArray(st.sessions)) {
