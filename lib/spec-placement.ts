@@ -290,6 +290,23 @@ export interface PlacementReading {
   criteria: string[];
 }
 
+/**
+ * Each id stated in more than one criterion block, with the line of every
+ * block. A placement is given by id, so it cannot say which of two same-id
+ * blocks it belongs to; the reading and the converter both refuse one through
+ * this (#2788, #2794 review).
+ */
+export function repeatedCriterionIds(parsed: { id: string; line: number }[]): { id: string; lines: number[] }[] {
+  const at = new Map<string, number[]>();
+  for (const c of parsed) at.set(c.id, [...(at.get(c.id) ?? []), c.line]);
+  return [...at].filter(([, lines]) => lines.length > 1).map(([id, lines]) => ({ id, lines }));
+}
+
+/** The one sentence a repeated id is refused with, by the reading and the converter alike. */
+function repeatedIdReason(r: { id: string; lines: number[] }): string {
+  return `${r.id} is stated in ${r.lines.length} criterion blocks (lines ${r.lines.join(", ")}); a placement given by id cannot say which one it belongs to`;
+}
+
 export function placementReading(content: string): PlacementReading {
   const parsed = parseCriteria(content);
   const criteria = parsed.map(c => c.id);
@@ -323,6 +340,7 @@ export function placementReading(content: string): PlacementReading {
       );
     }
   }
+  for (const r of repeatedCriterionIds(parsed)) reasons.push(repeatedIdReason(r));
   if (criteria.length === 0) {
     reasons.push("the spec states no criteria — nothing to place, which is not the same as placed");
   }
@@ -410,7 +428,8 @@ export type PlacementConversion =
  * Decision 5): each id the table lists becomes a `placement:` line at the end
  * of its criterion's block, beside `needs:` and `proved-by:`, and the table
  * loses its criteria column. Refused, with nothing returned to write, when
- * {@link placementConversionDiff} finds anything the conversion would change.
+ * {@link placementConversionDiff} finds anything the conversion would change,
+ * or when the spec states one id in two criterion blocks (#2788).
  */
 export function convertPlacement(content: string): PlacementConversion {
   const table = parsePlacementTable(content);
@@ -422,6 +441,11 @@ export function convertPlacement(content: string): PlacementConversion {
   }
 
   const criteria = parseCriteria(content);
+  // A placement given by id cannot say which of two same-id blocks it belongs
+  // to, and the before/after comparison is keyed by id, so it would not see
+  // the second block go unplaced (#2788).
+  const repeated = repeatedCriterionIds(criteria);
+  if (repeated.length > 0) return { refusal: repeated.map(r => `${repeatedIdReason(r)}, so state it once first`) };
   const lines = content.split("\n");
   const after = new Map<number, string[]>();
   let written = 0;

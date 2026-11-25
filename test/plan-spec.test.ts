@@ -1043,11 +1043,42 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
     expect("refusal" in c ? c.refusal.join("\n") : JSON.stringify(c)).toMatch(/line \d+ .*reader skips/);
   });
 
-  test("a spec stating one id twice converts, and the count compares criteria with criteria", () => {
+  test("placementConversionDiff compares criteria with criteria when a spec states one id twice", () => {
     const spec = plant({ criteria: ["CRC-A1", "CRC-A2", "CRC-A1"], rows: [["**Phase 1**", "CRC-A1, CRC-A2"]] });
     expect(placementConversionDiff(spec, spec)).toEqual([]);
     const dropped = spec.replace("- [ ] CRC-A1: criterion number 3\n", "");
     expect(placementConversionDiff(spec, dropped)).toContain("the spec would state 2 criteria, not 3");
+  });
+
+  // #2788: a placement given by id cannot say which of two same-id blocks it belongs to.
+  test("a spec stating one id in two criterion blocks is refused, naming the id and both lines", async () => {
+    const spec = plant({ criteria: ["CRC-A1", "CRC-A2", "CRC-A1"], rows: [["**Phase 1**", "CRC-A1, CRC-A2"]] });
+    const c = convertPlacement(spec);
+    expect("refusal" in c ? c.refusal.join("\n") : JSON.stringify(c)).toMatch(/CRC-A1 .*lines 7, 9/);
+    const r = await run(["--convert-placement", "--write"], spec);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(r.stderr).toContain("CRC-A1");
+    expect(r.after).toBe(spec);
+  });
+
+  // #2794 review: the reader, not just the converter, refuses a repeated id.
+  test("placementReading reads a spec stating one id in two criterion blocks as UNMEASURED, naming the id and both lines", () => {
+    const lines = [
+      "# Planted",
+      "",
+      "- [ ] CRC-A1: one",
+      "      placement: Phase 1",
+      "- [ ] CRC-A2: two",
+      "      placement: Phase 1",
+      "- [ ] CRC-A1: three",
+      "",
+    ].join("\n");
+    const table = plant({ criteria: ["CRC-A1", "CRC-A2", "CRC-A1"], rows: [["**Phase 1**", "CRC-A1, CRC-A2"]] });
+    for (const spec of [lines, table]) {
+      const r = placementReading(spec);
+      expect(r.reading).toBe("UNMEASURED");
+      expect(r.unmeasuredReasons.join("\n")).toMatch(/CRC-A1 is stated in 2 criterion blocks \(lines \d+, \d+\)/);
+    }
   });
 
   test("--placement and --convert-placement together are refused", async () => {
