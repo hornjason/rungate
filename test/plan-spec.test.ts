@@ -998,11 +998,12 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
 
   // A meanings column that names criteria would read as a second table of
   // them once the criteria column is gone; the convergence spec's does.
-  test("both of rungate's placed specs convert, in memory, with nothing refused", () => {
+  // #2767 converted both with this command, so each now has nothing to convert.
+  test("both of rungate's placed specs are converted: nothing is left to convert and nothing is refused", () => {
     for (const name of ["SPEC-TO-BOARD-PIPELINE-SPEC.md", "CODE-REVIEW-CONVERGENCE-SPEC.md"]) {
       const c = convertPlacement(readFileSync(join(REPO, "specs", name), "utf-8"));
       expect("refusal" in c ? c.refusal : [], name).toEqual([]);
-      expect("after" in c, name).toBe(true);
+      expect("nothing" in c, name).toBe(true);
     }
   });
 

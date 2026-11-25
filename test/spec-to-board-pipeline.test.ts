@@ -453,12 +453,8 @@ describe("SC-2806: a criterion's placement is read from the line beneath it (ADR
     expect(parsePlacementRows(TABLE)).toEqual(parsePlacementTable(TABLE));
     expect(parsePlacementRows(TABLE).map(r => [r.placement, r.ids])).toEqual([["Phase 1", ["SC-1"]], ["Done", ["SC-2"]]]);
     expect(placementReading(TABLE).reading).toBe("MEASURED");
-    // Both of rungate's placed specs are still tables, and read as tables.
-    for (const name of ["SPEC-TO-BOARD-PIPELINE-SPEC.md", "CODE-REVIEW-CONVERGENCE-SPEC.md"]) {
-      const content = readFileSync(join(ROOT, "specs", name), "utf-8");
-      expect(parseCriteria(content).some(c => c.placements.length > 0), name).toBe(false);
-      expect(parsePlacementRows(content), name).toEqual(parsePlacementTable(content));
-    }
+    // rungate's own two placed specs were tables here until #2767 converted
+    // them; test/spec-placement-merge.test.ts (SC-2809) now asserts they are not.
   });
 
   test("a table that lists a criterion beside a placement line is UNMEASURED, naming the spec's two sources", () => {

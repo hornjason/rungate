@@ -90,5 +90,6 @@ body:
         ```
 
         The milestone is the phase, and which phase a criterion belongs to is
-        decided in the spec's *Phase placement* table — not here. See
-        `docs/adr/ADR-003-spec-to-tracker-mapping.md`.
+        decided by the `placement:` line beneath that criterion in the spec —
+        not here. See `docs/adr/ADR-003-spec-to-tracker-mapping.md` and
+        `docs/adr/ADR-026-placement-travels-with-its-criterion.md`.

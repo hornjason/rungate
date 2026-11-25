@@ -415,69 +415,90 @@ check proving it can fail against this file and not against a fixture.
 
 - [ ] CRC-A1: The agent is given something runnable and must show the output, not assert completion.
       needs: run
+      placement: Phase 4
 - [ ] CRC-A2: A fresh-context subagent reviews the diff before the PR opens.
       needs: run
+      placement: Phase 4
 - [ ] CRC-A3: `CLAUDE.md` is short, states stack/conventions/goals/non-goals, and points elsewhere for detail.
       needs: test
+      placement: Phase 4
 - [ ] CRC-A4: The reviewer flags code breaking a `CLAUDE.md` convention, AND changes that make a line in it out of date.
       needs: test
+      placement: Phase 3
 - [x] CRC-A5: `REVIEW.md` exists per owned area, written by code owners. (shipped, #1167)
       needs: test
       proved-by: test/ai-review-conventions.test.ts (AC-C10) — 371 pass, 0 fail, 2026-10-28
       fingerprint: ec46dbf8
+      placement: Done
 - [x] CRC-A6: A check reports whether the reviewer actually followed `REVIEW.md`. (shipped, #1233/#1246)
       needs: test
       proved-by: test/ai-review-conventions.test.ts (AC-C1..AC-C9b) — 371 pass, 0 fail, 2026-10-28
       fingerprint: ebeaeab9
+      placement: Done
 - [x] CRC-A7: `REVIEW.md` caps the nits, lists paths to skip, demands file-and-line evidence rather than a guess from a name, and requires a summary that starts with a count and says plainly when there is nothing to fix.
       needs: test
       proved-by: test/ai-review-conventions.test.ts, the `#1653` describes (A7-1..A7-10) — 10 pass, 0 fail, 2026-11-19, on the PR that closes #1653: each of REVIEW.md's four sections is asserted on its own, the prompt's payload shape carries `review_summary` (the slot the fourth clause needed), and the adjudicator reads the summary's leading count back against the findings it lists, as a notice that decides nothing. Six mutations each turn a case red: the summary section dropped, the prompt slot dropped, the count compare made constant, the numeral cut to one digit, a summary reading invented for an unreadable payload, the nit cap's number removed.
       fingerprint: 0ee9df2d
+      placement: Phase 3
 - [ ] CRC-A8: **Fix at the source.** When the reviewer keeps flagging the same thing, the repair goes into the skill, a lint rule, or an instruction file — not into another finding.
       needs: test
+      placement: Phase 4
 
 ### Layer 2 — AI review on every PR
 
 - [ ] CRC-B1: The reviewer reads the diff against the whole repo **and the PR's stated intent**.
       needs: test
+      placement: Phase 3
 - [ ] CRC-B2: On a bug fix, the reviewer looks for the root cause.
       needs: test
+      placement: Phase 3
 - [ ] CRC-B3: **Several agents look for bugs at the same time** (parallel generation). **Not an unqualified good here, and the qualification is CRC-B4's, pointed the other way.** The reviewer is a *sampled* instrument, so N generators are N draws and they raise recall and the false-positive rate together. Measured on run `39962683401`: two attempts on merge commit `99d50fc`, both at round 5, with the tree, the head, the prompt and the model all held fixed, returned **BLOCKED then CLEAN** — and the blocking finding was false, claiming a routing row that was present at the reviewed head. So the disagreement a second draw buys has already been observed arriving in the costly direction. Under the source's priority that trade is worth taking; under ours it is not, because CRC-M8 is inverted here by declared decision and a false block costs a remedy commit, a CI round, a review round and an agent's whole context. **Parallel generation without CRC-B4's quorum behind it is therefore strictly worse than one generator** — it is N chances to block on a false positive with nothing filtering them — so this criterion is not adoptable before CRC-B4, and adopting it first would be measurable harm rather than partial progress.
       needs: measurement
+      placement: Phase 2
 - [ ] CRC-B4: **A separate group of agents votes on each finding**, and it is surfaced only if enough agree it is real. The ledger records **every verifier's individual vote** and **whether the verifiers disagreed**, both as first-class fields written at decision time. Without them every threshold except the one actually used is permanently UNMEASURED, and re-running to recover the votes re-samples the thing being measured. **A reading the mechanism produces whether or not it works does not satisfy this criterion.** Measured: the deployed filing path takes no votes at all — a regex over the title and set arithmetic over symptom keys, with no clock, model or network — so a variance control over it reports a single distinct outcome set, zero variance, by construction, and the reading that looks most like success is the signature of the failure mode. **Nor does a reading that varies for a reason other than the mechanism under test** — name the mechanism the reading is of, not only the number it produced. Where the flattering reading is available by construction, the criterion names what would distinguish it from the real thing, or declares itself UNMEASURED.
       needs: test
+      placement: Phase 2
 - [x] CRC-B5: Findings that are only **style, diagnostics or cleanup** are dropped.
       needs: test
       proved-by: test/issue-filing-gate.test.ts (WIRING + the DROPPED_CATEGORY rows) — 371 pass, 0 fail, 2026-10-28
       fingerprint: 44bbb6ba
+      placement: Done
 - [ ] CRC-B6: The filters are **A/B tested** against real PRs before being kept, **with variance bounded**. The reviewer is a sampled instrument, so two verdicts on the same code are two draws; an A/B that does not account for that is comparing noise.
       needs: measurement
+      placement: Phase 2
 - [x] CRC-B7: Surviving findings are **sorted by severity** and tagged **Important / Nit / Pre-existing**, so a pre-existing bug does not read as the author's fault. (shipped, #1587)
       needs: test
       waived-reason: #1567 records that nobody has run a finding through the live path and observed a demotion, so the tagging is NOT verified end to end
       waived-by: rayford (agent; not countersigned by jason)
       waived-until: 2026-12-31
+      placement: Phase 1
 - [ ] CRC-B8: **Every finding is answered** — fixed, or resolved with a stated reason. A finding is never silently dropped and never becomes a tracker item by default.
       needs: test
+      placement: Phase 4
 - [x] CRC-B9: Review depth is configurable per repo as **Quick / Standard / Deep**.
       needs: test
       proved-by: test/ai-review-turn-budget.test.ts "CRC-B9: review depth is configurable per repo as Quick, Standard or Deep (#1655)"
       fingerprint: 7c018e50
+      placement: Phase 3
 
 ### Layer 3 — security review
 
 - [ ] CRC-C1: Security review is a separate automated pass.
       needs: test
+      placement: Phase 6
 - [ ] CRC-C2: A PR cannot merge while any bug-review or security-review finding is open.
       needs: test
+      placement: Phase 6
 - [x] CRC-C3: A false positive clears by closing the thread with a short reason.
       needs: test
       proved-by: test/ai-review-threads.test.ts, the `CRC-C3` describe (`-t CRC-C3`, 6 pass, 0 fail, 2026-11-18, on the PR that closes #2306): a thread the review opened and somebody resolved with no reply is named on the conversation once per thread, on the next review round; `PROTECT-2` binds the half that blocks the merge.
       fingerprint: 9836ba62
+      placement: Phase 0
 - [x] CRC-C4: A finding clears on its own if a later commit fixes it.
       needs: test
       proved-by: test/ai-review-workflow.test.ts (AC-3b) — 371 pass, 0 fail, 2026-10-28
       fingerprint: c4bf24ad
+      placement: Done
 
 ### Layer 5 — human approval scaled by risk
 
@@ -485,67 +506,92 @@ check proving it can fail against this file and not against a fixture.
       needs: test
       proved-by: test/risk-tier.test.ts "CRC-E1: the tiers are written down — low none, medium one, high two" — 371 pass, 0 fail, 2026-10-28
       fingerprint: a0fed192
+      placement: Done
 - [x] CRC-E2: **The change sets the tier, not the author** — a classifier reads the change. (shipped, #1437)
       needs: test
       proved-by: test/risk-tier.test.ts "CRC-E2: the CHANGE sets the tier, not the author" — 371 pass, 0 fail, 2026-10-28
       fingerprint: 5de29c3d
+      placement: Done
 - [ ] CRC-E3: A **second classifier** asks whether this change needs another person even when its tier says no.
       needs: test
+      placement: Phase 5
 - [x] CRC-E4: Owner-listed sensitive paths and **any CI workflow file** always require a human. (shipped, #1437)
       needs: test
       proved-by: test/risk-tier.test.ts "CRC-E4: any CI workflow file, and any owner path, always needs a human" — 371 pass, 0 fail, 2026-10-28
       fingerprint: e0c4546a
+      placement: Done
 - [ ] CRC-E5: Only trusted authors get the lighter paths.
       needs: test
+      placement: Blocked — needs a second person
 - [ ] CRC-E6: **An agent's approval never counts as a person's.**
       needs: test
+      placement: Blocked — needs a second person
 - [ ] CRC-E7: Whoever prompted the change counts as one of the required reviewers.
       needs: test
+      placement: Blocked — needs a second person
 - [ ] CRC-E8: **An approval covers one specific commit**; new commits the system cannot vouch for dismiss it.
       needs: test
+      placement: Blocked — needs a second person
 - [ ] CRC-E9: Tiers **start strict and loosen with evidence**.
       needs: measurement
+      placement: Phase 5
 
 ### Layer 6/7 — merge, release, detection
 
 - [ ] CRC-F1: A merge queue re-runs every check against main with the change applied.
       needs: test
+      placement: Not adopted — deliberate
 - [ ] CRC-F2: New behaviour ships behind a flag, internal users first.
       needs: test
+      placement: Phase 6
 - [ ] CRC-F3: One-step rollback exists and is exercised.
       needs: test
+      placement: Phase 6
 - [ ] CRC-F4: Incident reviews ask **which layer should have caught it**.
       needs: review
+      placement: Phase 6
 - [ ] CRC-F5: Circuit breakers tighten approval when revert/incident rates move. *(the source names this as an admitted gap on their side; we adopt it as a target, not a copy)*
       needs: measurement
+      placement: Phase 6
 
 ### Measurement — how we know any of this works
 
 - [ ] CRC-M1: **Incidents are an eval.** Past incident-causing PRs, with fix-forwards and reverts, form a case set.
       needs: review
+      placement: Phase 5
 - [ ] CRC-M2: Each case is **expert-confirmed** — a human who knows the code confirms the bug and where it lived.
       needs: review
+      placement: Phase 5
 - [ ] CRC-M3: **Every new incident adds a case.**
       needs: review
+      placement: Phase 5
 - [ ] CRC-M4: Any change to the reviewer's prompts, tools or model is **rescored against the whole set**.
       needs: test
+      placement: Phase 5
 - [ ] CRC-M5: The eval runs **daily**; a change that raises the score is kept, one that does not is dropped.
       needs: run
+      placement: Phase 5
 - [ ] CRC-M6: **Noise is measured by what people do with the comments**, in four buckets: fixed it / said it was wrong / said it was intentional / decided it didn't matter.
       needs: measurement
+      placement: Phase 5
 - [ ] CRC-M7: A **clean-PR control** counts how often the reviewer reports something that would have led to a harmful change. (exists, `evals/ai-review-control/`)
       needs: measurement
+      placement: Phase 5
 - [ ] CRC-M8: Priority order is stated and enforced: **catching real bugs first, cutting review rounds second.**
       needs: measurement
+      placement: Not adopted — deliberate
 - [ ] CRC-M9: Human-time metrics tracked — approvals per PR (median and p95), human comments, time waiting on a person.
       needs: measurement
+      placement: Blocked — needs a second person
 - [ ] CRC-M10: **Revert and incident rates are the guardrail.** If they rise, human time was moved, not saved.
       needs: measurement
+      placement: Phase 5
 - [x] CRC-M11: Rounds-to-pass is tracked alongside recall. (shipped, #1441/#1448)
       needs: measurement
       waived-reason: #1592 records that the metric counts run ATTEMPTS while this sentence says ROUNDS, so what is tracked is not what is claimed
       waived-by: rayford (agent; not countersigned by jason)
       waived-until: 2026-12-31
+      placement: Phase 5
 
 Increment 1 of *The current loop* above. These four are a set: each one alone leaves the
 unreadable rate exactly where it is.
@@ -557,6 +603,7 @@ unreadable rate exactly where it is.
       "unmeasured" is the defect this criterion exists to remove: it is the state that
       reads as "nothing wrong" to every consumer of the number.
       needs: test
+      placement: Phase 5
 - [ ] CRC-M13: **Whether the reviewer READ anything is recorded, separately from whether
       it WROTE anything.** `lib/review-execution-reading.ts` already computes
       `toolCallsByName` and `NO_TOOL_CALLS`; it is wired into the advisory reviewer only,
@@ -566,12 +613,14 @@ unreadable rate exactly where it is.
       when the library can compute it. A reading nothing invokes is not a reading.
       Satisfying this needs the reader published as a CLI command, hence a release.
       needs: test
+      placement: Phase 5
 - [ ] CRC-M14: **Every reading names the published version it was taken under.** CI pins
       `bunx rungate@<version>`, so a merged change to `lib/` is dormant until a release
       while a merged workflow change is live immediately. A reading that does not say
       which published version produced it cannot be attributed to a configuration, and
       an unattributable reading is what O1 and O2 above are made of.
       needs: test
+      placement: Phase 5
 - [ ] CRC-M15: **The staleness check reads contents, not a version string.**
       `lib/distribution-standing.ts` makes **two** comparisons on **two different
       fields**, and neither reads an artefact. `standing.published` — the version a
@@ -590,6 +639,7 @@ unreadable rate exactly where it is.
       behind a green check. Met when a package whose version is acceptable and whose
       contents differ from the tree is refused, by name.
       needs: test
+      placement: Phase 6
 
 ### Convergence — the non-convergent review failure
 
@@ -600,20 +650,26 @@ showed **~59%** of what the reviewer kept flagging was code present at its first
       needs: test
       proved-by: test/ai-review-rounds-step.test.ts (AC-S1..AC-S5) — 371 pass, 0 fail, 2026-10-28
       fingerprint: 72c24240
+      placement: Done
 - [ ] CRC-N2: **Diff-only re-review** after the first few passes.
       needs: test
+      placement: Phase 1
 - [x] CRC-N3: **Flag the class of bug**, so the author fixes every instance rather than one line.
       needs: test
       proved-by: test/ai-review-population-declared.test.ts "CRC-N3: the class is flagged, counted by its own search, and held open until its population is answered" — both halves through the deciders CI runs: the adjudicator re-counts a class by the search it names and refuses a count that search contradicts, and a class thread blocks the merge until a person states its population. And test/ai-review-ledger-step.test.ts "CRC-N3: the ledger keeps a finding's class size, and says when there was none". The rate over real rounds: 29 of 45 judged findings counted their class by a search that ran (docs/research/crc-n3-population-rate.md, #2463). Ticked by `sync-sc-status --only CRC-N3` (#2544).
       fingerprint: 4c6865a5
+      placement: Phase 1
 - [x] CRC-N4: **No repeats** of advisory findings already posted; a blocking finding is re-reported until it is fixed.
       needs: test
       proved-by: test/ai-review-carry-forward.test.ts, and test/ai-review-suppression.test.ts "CRC-N4: an advisory finding already posted is not reported again; a blocking one is re-reported until it is fixed" (3 pass, 0 fail, 2026-11-21, #2552) through the deployed reader `readAiReviewFindings` with the production gate. An advisory raised again at a place an earlier round posted is not reported and is named as suppressed, also when reworded, because the key is the file and the cited line's text (#1168). A blocking repeat is re-reported and blocks on every round it is raised, against a history that grows by one thread a round. *Until it is fixed* is the carry step's half, and its witness is test/ai-review-carry-forward.test.ts AC-C2: a prior finding whose cited line is unchanged is carried to the reviewer to re-report, and one whose line has changed is dropped, with that row as the control against a walker that carries everything. Three hand mutations, each caught: the subtraction removed (2 fail), the blocking exemption removed (1), the anchor-only match removed (1). AS-1b and AS-2b in the same file hold the first two as executed mutants. Live: CI runs `bunx rungate@0.8.42 ai-review-findings` with the carry step's thread list, and suppression has shipped in every release since 0.8.5. Across the 60 most recent ai-review runs (2026-11-20 to 2026-11-21) it suppressed nothing and never read the history as unmeasured, and the multi-round pull requests read in that window carried no cross-round advisory repeat for it to drop. Reworded by Jason on 2026-11-21 to the behaviour the deviation below records. Ticked by `sync-sc-status --only CRC-N4` (#2552)
       fingerprint: dd9a4c9f
+      placement: Phase 1
 - [ ] CRC-N5: Review agents run **nightly over existing code**.
       needs: run
+      placement: Phase 6
 - [ ] CRC-N6: **A fixed defect stays fixed.** A finding must not be re-raised from text that merely DESCRIBES it — a docblock quoting the code that was removed, or prose narrating what the bug used to be.
       needs: test
+      placement: Phase 2
 
 Their result, which is our target: pass-after-one-round 65% → 78%; five-or-more rounds
 8.9% → 1.5%; mean reviews to pass 2.08 → 1.32.
@@ -1173,14 +1229,19 @@ holding 174 rounds.
 
 - [ ] CRC-H1: Direction, taste and scope — whether to build it at all.
       needs: review
+      placement: Not observable here
 - [ ] CRC-H2: Risky code — billing, auto-updater, CI workflows.
       needs: review
+      placement: Phase 6
 - [ ] CRC-H3: Architecture that sets a pattern others copy.
       needs: review
+      placement: Not observable here
 - [ ] CRC-H4: Reading the evidence. **"If you can't say what the checks would miss, ask for a real review rather than a quick approval."**
       needs: review
+      placement: Not observable here
 - [ ] CRC-H5: Owning the outcome — a person is accountable for every change that ships, whoever typed it.
       needs: review
+      placement: Not observable here
 
 ## What an unticked box means here
 
@@ -2036,7 +2097,7 @@ what is missing is a security check to require, which is CRC-C1. Placing
 them earlier would order the plan by how important security sounds rather
 than by the criterion this plan's order actually uses.
 
-### Phase placement — every criterion has exactly one home
+### What each placement means
 
 Added 2026-10-28, because the phase sections above name some criteria and
 not others, and a criterion in no phase is unreadable as anything: *nobody
@@ -2061,19 +2122,19 @@ Three of the values below are not phases, and that is deliberate. Forcing
 phase would state a plan for work that cannot start, which is the failure
 CRC-E8's withdrawal from Phase 0 already records once.
 
-| Placement | Criteria | What the value means |
-|---|---|---|
-| **Phase 0** | CRC-C3 | settings, no engineering — the one of the original three that survived contact. E8 is withdrawn and F1 is contested, so both are placed outside every phase, below |
-| **Phase 1** | CRC-B7, CRC-N2, CRC-N3, CRC-N4, CRC-N7 | stop the repeats |
-| **Phase 2** | CRC-B3, CRC-B4, CRC-B6, CRC-N6, CRC-B10, CRC-B11, CRC-B12, CRC-B13 | stop the false findings |
-| **Phase 3** | CRC-A4, CRC-A7, CRC-B1, CRC-B2, CRC-B9 | what the reviewer is told |
-| **Phase 4** | CRC-A1, CRC-A2, CRC-A3, CRC-A8, CRC-B8 | findings get answered, repeats fixed at the source |
-| **Phase 5** | CRC-E3, CRC-E9, CRC-M1, CRC-M2, CRC-M3, CRC-M4, CRC-M5, CRC-M6, CRC-M7, CRC-M10, CRC-M11, CRC-M12, CRC-M13, CRC-M14, CRC-M16, CRC-M17, CRC-M19 | the instruments |
-| **Phase 6** | CRC-C1, CRC-C2, CRC-F2, CRC-F3, CRC-F4, CRC-F5, CRC-H2, CRC-M15, CRC-N5, CRC-F6 | release and detection — nothing here moves rounds-to-pass |
-| **Done** | CRC-A5, CRC-A6, CRC-B5, CRC-C4, CRC-E1, CRC-E2, CRC-E4, CRC-N1 | ticked and bound. Not *no work ever again* — CRC-B7 and CRC-M11 are also ticked and are **not** here, because an open issue contradicts each |
-| **Blocked — needs a second person** | CRC-E5, CRC-E6, CRC-E7, CRC-E8, CRC-M9 | one account plus `enforce_admins: true` means an approval cannot exist, so E6 and M9 are **vacuous rather than unbuilt** — there is nothing to count. The blocker is CRC-E8's withdrawal, which Phase 0 records. E8 itself sits here because requiring an approval it cannot get would deadlock the repository |
-| **Not observable here** | CRC-H1, CRC-H3, CRC-H4, CRC-H5 | statements about human judgement. *A mechanism exists; this repository cannot observe it* above says why: nothing distinguishes them being honoured from them being ignored |
-| **Not adopted — deliberate** | CRC-M8, CRC-F1, CRC-M18 | **CRC-M18:** retired by ADR-025 (#2651) with the trial reviewer whose byte budget it measured; *Deliberately not adopted* above holds the reason and its record. **CRC-F1:** *Contested* above records the standing as "PROTECT-1 wins", and Phase 0 gives the conditions for revisiting it: merge queues become available, or open pull requests stay at two or fewer. It stays in the *Contested* audit section, because the repository still gives both instructions. **CRC-M8:** *Deliberately not adopted* above holds exactly this one. Its order is inverted **on purpose** — `MISSED` and `FIRED` are weighted equally because nobody absorbs the noise here — and the deviations table gives the revisit condition: *a human is reading the findings again, or the cost of a false block falls*. **The first draft of this table put it in Phase 5**, which read as *pending work, blocked on the instruments*, and invented a second revisit condition the document does not hold. That is the two-spellings failure arriving inside the table built to end it; the reviewer caught it on #1647 |
+| Placement | What the value means |
+|---|---|
+| **Phase 0** | settings, no engineering — the one of the original three that survived contact. E8 is withdrawn and F1 is contested, so both are placed outside every phase, below |
+| **Phase 1** | stop the repeats |
+| **Phase 2** | stop the false findings |
+| **Phase 3** | what the reviewer is told |
+| **Phase 4** | findings get answered, repeats fixed at the source |
+| **Phase 5** | the instruments |
+| **Phase 6** | release and detection — nothing here moves rounds-to-pass |
+| **Done** | ticked and bound. Not *no work ever again* — CRC-B7 and CRC-M11 are also ticked and are **not** here, because an open issue contradicts each |
+| **Blocked — needs a second person** | one account plus `enforce_admins: true` means an approval cannot exist, so E6 and M9 are **vacuous rather than unbuilt** — there is nothing to count. The blocker is CRC-E8's withdrawal, which Phase 0 records. E8 itself sits here because requiring an approval it cannot get would deadlock the repository |
+| **Not observable here** | statements about human judgement. *A mechanism exists; this repository cannot observe it* above says why: nothing distinguishes them being honoured from them being ignored |
+| **Not adopted — deliberate** | **CRC-M18:** retired by ADR-025 (#2651) with the trial reviewer whose byte budget it measured; *Deliberately not adopted* above holds the reason and its record. **CRC-F1:** *Contested* above records the standing as "PROTECT-1 wins", and Phase 0 gives the conditions for revisiting it: merge queues become available, or open pull requests stay at two or fewer. It stays in the *Contested* audit section, because the repository still gives both instructions. **CRC-M8:** *Deliberately not adopted* above holds exactly this one. Its order is inverted **on purpose** — `MISSED` and `FIRED` are weighted equally because nobody absorbs the noise here — and the deviations table gives the revisit condition: *a human is reading the findings again, or the cost of a false block falls*. **The first draft of this table put it in Phase 5**, which read as *pending work, blocked on the instruments*, and invented a second revisit condition the document does not hold. That is the two-spellings failure arriving inside the table built to end it; the reviewer caught it on #1647 |
 
 **This table is the placement, and the phase sections above are its
 reasons.** Two spellings of one fact drift apart — this document says so
@@ -3018,35 +3079,45 @@ Recorded because each one invalidates a naive reading of the criteria above.
       needs: test
       proved-by: test/ai-review-waiver-disarm.test.ts (AC-1b, AC-1e, AC-5) — 38 pass, 0 fail; test/verify-merge-ref.test.ts (#1571 / CRC-F6) — 112 pass, 0 fail, 2026-11-16
       fingerprint: e1fa585f
+      placement: Phase 6
 - [ ] CRC-M16: lib/ai-review-rounds.ts contains [repairedPastStepBack] — a pull request repaired a fourth time after the round-three step-back is reported, distinguishable from one whose author re-scoped
       needs: measurement
+      placement: Phase 5
 - [x] CRC-N7: lib/scaffold/ai-review-findings.ts contains [populationDeclared] — a review finding tagged as a class cannot be resolved until the author states the population — N sites, M defective — and the search that found them
       needs: test
       proved-by: test/ai-review-population-declared.test.ts
       fingerprint: dd5e26d5
+      placement: Phase 1
 - [x] CRC-M17: every AI review prints which changed files it saw only at their base version — count and list, explicit zero included (shipped, #2215, #2218)
       needs: test
       proved-by: test/ai-review-finding-scope.test.ts (#1887 / CRC-M17) — 22 pass, 0 fail, 2026-11-15
       fingerprint: 959482a1
+      placement: Phase 5
 - [ ] CRC-M18: lib/review-execution-reading.ts contains [reviewCoverage] — a diff over the reviewer's budget is still reviewed, and the reading states coverage as n of m files read rather than a standing DIFF_TRUNCATED
       needs: measurement
+      placement: Not adopted — deliberate
 - [x] CRC-B10: The generated AI review runs on `AI_REVIEW_MODEL`, which is Haiku 5.5, unless the consumer's config names an exact model.
       needs: test
       proved-by: test/ai-review-model-alias.test.ts "CRC-B10: the generated AI review defaults to Haiku 5.5"
       fingerprint: af4b2b34
+      placement: Phase 2
 - [x] CRC-B11: Each AI review round is three separate reviewer invocations, and the round's findings are their union with duplicates removed; no finding is dropped for being raised by one run.
       needs: test
       proved-by: test/ai-review-three-runs.test.ts "CRC-B11: three reviewer invocations, then one merge, in the generated job"
       fingerprint: 29523c99
+      placement: Phase 2
 - [x] CRC-B12: The generated AI review passes the job's own token to the review action, so a consumer runs it without installing the Claude GitHub App.
       needs: test
       proved-by: test/ai-review-credentialed-job.test.ts "CRC-B12: the review action is handed the job's own token, so no Claude GitHub App is needed"
       fingerprint: ac7c066d
+      placement: Phase 2
 - [x] CRC-B13: docs/guides/AI-REVIEW.md states every credential the generated job resolves, who pays for each, the per-pull-request cost on the default model, and that a tree with no credential spends nothing.
       needs: test
       proved-by: test/agents-md-refs.test.ts "CRC-B13: the consumer AI review guide says what the job resolves, who pays, what a pull request costs, and that no credential spends nothing"
       fingerprint: 24845144
+      placement: Phase 2
 - [x] CRC-M19: CRC-M18 is retired, and the diff-budget script it named is deleted. The reading module CRC-M13 needs is kept.
       needs: test
       proved-by: test/review-execution-reading.test.ts "CRC-M19: CRC-M18 is retired with its diff-budget script, and the census half stays"
       fingerprint: d457c8f2
+      placement: Phase 5

@@ -34,7 +34,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { PLACEMENT_HEADING, parsePlacementRows } from "../lib/spec-placement";
+import { PLACEMENT_HEADING, PLACEMENT_MEANINGS_HEADING, parsePlacementRows } from "../lib/spec-placement";
 
 const REPO = join(import.meta.dir, "..");
 const SPEC = "specs/CODE-REVIEW-CONVERGENCE-SPEC.md";
@@ -1057,9 +1057,15 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: every criterion has exactly one
   // disagreement between what the test polices and what the command creates
   // would be invisible from both sides, and the command is the one that
   // writes to GitHub.
+  // Since #2767 the spec places each criterion with a `placement:` line
+  // beneath it, and the table keeps only the meanings, under their own
+  // heading (ADR-026). `parsePlacementRows` reads either form, so the planted
+  // table below still runs the same reader.
   const rows = (src: string): { placement: string; ids: string[] }[] => {
-    expect(src.includes(HEADING), `the placement section is gone or renamed — rename it here too`)
-      .toBe(true);
+    expect(
+      src.includes(HEADING) || src.includes(PLACEMENT_MEANINGS_HEADING),
+      `neither the placement table nor its meanings section is here — rename it here too`,
+    ).toBe(true);
     return parsePlacementRows(src);
   };
 
@@ -1089,8 +1095,7 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: every criterion has exactly one
     expect(
       declared.filter(id => !placed.includes(id)),
       `criteria with NO phase. The backlog is built from this document and an unplaced ` +
-        `criterion reads as finished. Add each to a row of the placement table — ` +
-        `"${HEADING.replace("### ", "")}".`,
+        `criterion reads as finished. Give each a \`placement: Phase N\` line beneath it.`,
     ).toEqual([]);
     expect(
       placed.filter((id, i) => placed.indexOf(id) !== i),
