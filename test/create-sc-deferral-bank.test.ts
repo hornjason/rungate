@@ -15,6 +15,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { bankAfterAppend, writeDeferralBank, writeSpecWithBank } from "../lib/finding-promotion";
+import { behavioralStatement, formatSCLine, placeScLine } from "../lib/create-sc";
 import { writeSpec } from "../lib/write-spec";
 import { KNOWN_UNDECLARED_WRITES, trackedWriteSites } from "../scripts/contract-parity";
 import { execFileSync } from "child_process";
@@ -75,6 +76,41 @@ describe("bankAfterAppend: the bank after a criterion is appended", () => {
   test("a deferred spec missing from the bank, or with no bank at all, refuses", () => {
     expect(bankAfterAppend(bank("specs/ELSEWHERE.md", 2), "specs/FIX.md", before, after).ok).toBe(false);
     expect(bankAfterAppend(null, "specs/FIX.md", before, after).ok).toBe(false);
+  });
+});
+
+/**
+ * #2845: a behavioural criterion create-sc places is one more criterion to
+ * the bank, wherever in the spec it lands, so `--behavioral` moves the bank
+ * through the same `bankAfterAppend` call a pattern write does.
+ */
+describe("#2845: the bank counts a placed behavioural criterion", () => {
+  test("a deferred spec with a section after its criteria moves its bank by one", () => {
+    const before = spec(true, [9001, 9002]) + "\n## Notes\n\nProse after the criteria.\n";
+    const after = placeScLine(before, formatSCLine(9003, behavioralStatement("X happens")));
+    expect(after.indexOf("SC-9003")).toBeLessThan(after.indexOf("## Notes"));
+    const r = bankAfterAppend(bank("specs/FIX.md", 2), "specs/FIX.md", before, after);
+    expect(r.ok).toBe(true);
+    expect(JSON.parse((r as { text: string }).text).deferred).toEqual([
+      { path: "specs/OTHER.md", criteria: 3 },
+      { path: "specs/FIX.md", criteria: 3 },
+    ]);
+  });
+});
+
+/**
+ * #2846 (review round 5): the bank and the check that compares it with a spec
+ * (`board-snapshot`) read a spec through one reader, `placementReading`, on
+ * the same raw text. create-sc hands the bank exactly that text, so the two
+ * cannot disagree about a spec create-sc wrote, CRLF included. That
+ * `parseCriteria` reads no criterion in a CRLF spec is older than this change
+ * and belongs to every reader, so it is its own issue.
+ */
+describe("#2846: create-sc hands the bank the raw text its check reads", () => {
+  test("the CLI gives bankAfterAppend the spec as read and as written, with nothing normalised in between", () => {
+    const cli = readFileSync(join(ROOT, "scripts", "create-sc.ts"), "utf-8");
+    expect(cli).toContain("bankAfterAppend(bankRead, specKey, content, newContent)");
+    expect(cli, "a caller-side view the check does not share").not.toMatch(/bankAfterAppend\([^)]*asLf/);
   });
 });
 

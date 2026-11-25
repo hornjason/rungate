@@ -31,6 +31,8 @@ import {
   SC_RESERVATIONS_PATH,
 } from "./sc-reservations";
 import { tryLoadRungateConfig } from "./config-loader";
+import { readFences } from "./markdown-fence";
+import { parseCriteria } from "./spec-evidence";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -666,4 +668,118 @@ export function allocateScNumber(
  */
 export function formatSCLine(scNumber: number, statement: string): string {
   return `- [ ] SC-${scNumber}: ${statement}`;
+}
+
+/** What ends a criterion that only running something can prove. */
+export const BEHAVIORAL_MARKER = "(behavioral)";
+
+/**
+ * The statement for `create-sc --behavioral "<sentence>"` (#2845): the
+ * owner's sentence as written, with the marker. No registered pattern takes a
+ * free sentence, so before this an ADR's behavioural criterion was typed by
+ * hand, with its id and its bank move. The tool places the sentence and gives
+ * it an id; it does not write it, so it refuses rather than repairs one it
+ * cannot place as one line.
+ */
+export function behavioralStatement(sentence: string): string {
+  const s = sentence.trim();
+  if (s === "") throw new Error("--behavioral needs the criterion's sentence");
+  if (/[\r\n]/.test(s)) throw new Error("--behavioral takes one line: a criterion is one line in the spec");
+  if (s.endsWith(BEHAVIORAL_MARKER)) throw new Error(`write the sentence without ${BEHAVIORAL_MARKER}; create-sc adds the marker`);
+  return `${s} ${BEHAVIORAL_MARKER}`;
+}
+
+/**
+ * `spec` with `scLine` placed straight after its last criterion's block —
+ * the bullet and the prose, markers and annotations `parseCriteria` reads as
+ * its own — or at the end when it states none (#2845).
+ *
+ * Appending at the end put a new criterion after whatever section followed
+ * the criteria, so ADR-027's line was moved up by hand. A criterion inside a
+ * fenced example is not one to place after: inserting there would write the
+ * new line into the example.
+ *
+ * Nor is the inside of a fence the block itself opened (review round 1 of
+ * #2846): an indented example under the last criterion reads as its
+ * continuation up to the first blank line, which can sit inside the fence, so
+ * when the block ends inside one the line goes after the fence closes.
+ *
+ * Review rounds 2 and 3 of #2846 kept finding one more shape of the same
+ * mistake: a fence, a comment the block left open, a criterion inside a
+ * comment, a `<!--` in a criterion's own code span. So placement reads the
+ * spec the way it renders, once ({@link renderedRegions}): a line is visible
+ * unless a fence or an HTML comment hides it, and the new line goes at the
+ * first boundary after the last visible criterion's block where neither is
+ * open. A fence or comment nothing closes is refused, by line, because no
+ * place after it is visible.
+ *
+ * Line endings are read once, as LF, and written back line by line (review
+ * round 4 of #2846). Every existing line keeps its own ending, and the new
+ * line takes the ending of the line it follows, so a mixed-ending spec
+ * changes by exactly one line. The LF view is placement's alone: the CLI
+ * hands the deferral bank the raw text, the same text and reader its check
+ * (`board-snapshot`) uses, so the two agree. `parseCriteria` reading no
+ * criterion in a CRLF line is a reader-level gap of its own (review round 5).
+ */
+export function placeScLine(spec: string, scLine: string): string {
+  const raw = spec.split("\n");
+  const lines = raw.map(l => (l.endsWith("\r") ? l.slice(0, -1) : l));
+  const text = lines.join("\n");
+  const regions = renderedRegions(lines);
+  if (regions.unclosed !== null) {
+    throw new Error(
+      `the spec opens ${regions.unclosed.what} at line ${regions.unclosed.line} that nothing closes, so nothing after it is visible; close it before a criterion can be placed`,
+    );
+  }
+  const last = parseCriteria(text).filter(c => !regions.hidden[c.line - 1]).at(-1);
+  if (last === undefined) {
+    // The ending of the file's last line break, so an appended line matches it.
+    const lastBreak = spec.lastIndexOf("\n");
+    const eol = lastBreak > 0 && spec[lastBreak - 1] === "\r" ? "\r\n" : "\n";
+    return spec.trimEnd() + eol + scLine + eol;
+  }
+  let at = last.end;
+  while (at < lines.length && regions.openAfter[at - 1]) at++;
+  raw.splice(at, 0, scLine + (raw[at - 1]?.endsWith("\r") ? "\r" : ""));
+  return raw.join("\n");
+}
+
+/**
+ * Which lines of a spec render hidden, and after which lines something stays
+ * open (#2846). `hidden[i]`: line i starts inside a fence or an HTML comment.
+ * `openAfter[i]`: a fence or comment is still open when line i ends. A
+ * comment marker inside an inline code span is code, not a comment, so spans
+ * are dropped before the markers are read. Fences are `readFences`'s to say.
+ */
+export function renderedRegions(lines: readonly string[]): {
+  hidden: boolean[];
+  openAfter: boolean[];
+  unclosed: { what: "a fence" | "an HTML comment"; line: number } | null;
+} {
+  const { roles, unclosedAt } = readFences(lines);
+  if (unclosedAt !== null) return { hidden: [], openAfter: [], unclosed: { what: "a fence", line: unclosedAt + 1 } };
+  const hidden: boolean[] = [];
+  const openAfter: boolean[] = [];
+  let inFence = false;
+  let inComment = false;
+  let commentFrom = 0;
+  lines.forEach((ln, i) => {
+    if (roles[i] !== "prose") {
+      if (roles[i] === "fence") inFence = !inFence;
+      hidden.push(true);
+      openAfter.push(inFence);
+      return;
+    }
+    hidden.push(inComment);
+    const visible = ln.replace(/`[^`]*`/g, "");
+    for (let at = 0; at < visible.length; ) {
+      const next = inComment ? visible.indexOf("-->", at) : visible.indexOf("<!--", at);
+      if (next < 0) break;
+      if (!inComment) commentFrom = i + 1;
+      inComment = !inComment;
+      at = next + (inComment ? 4 : 3);
+    }
+    openAfter.push(inComment);
+  });
+  return { hidden, openAfter, unclosed: inComment ? { what: "an HTML comment", line: commentFrom } : null };
 }

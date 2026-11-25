@@ -1,10 +1,11 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, rmSync } from "fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import { spawnSync } from "child_process";
 import { matchPattern, type ParsedSC } from "../lib/conformity";
 import { buildScRegistry } from "../lib/sc-ids";
-import { nextSCNumber, takenScNumbers } from "../lib/create-sc";
+import { behavioralStatement, formatSCLine, nextSCNumber, placeScLine, takenScNumbers } from "../lib/create-sc";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "create-sc.ts");
@@ -410,4 +411,161 @@ describe("#2067: the spec's own fixture-range mentions are read the way source o
     expect(takenScNumbers(PROSE).has(9999)).toBe(false);
     expect(takenScNumbers(DECLARED).has(9999)).toBe(true);
   });
+});
+
+/**
+ * #2845: ADR-027's two criteria were typed by hand, because `create-sc
+ * --spec` appended after the spec's last section rather than its last
+ * criterion, and could not write a `(behavioral)` criterion at all. It now
+ * places the line after the last criterion's block, and `--behavioral` writes
+ * the owner's sentence through the same allocator and the same bank write.
+ */
+describe("#2845: create-sc places a criterion after the last one, and --behavioral writes one as stated", () => {
+  const SPEC = [
+    "---",
+    "doc-type: spec",
+    "testable: true",
+    "---",
+    "",
+    "# Fixture",
+    "",
+    "## Success Criteria",
+    "",
+    "- [ ] SC-9100: the first fixture criterion",
+    "- [x] SC-9101: the second fixture criterion",
+    "  proved-by: test/fixture.test.ts",
+    "",
+    "## Notes",
+    "",
+    "Prose after the criteria, and an example nobody should insert into:",
+    "",
+    "```md",
+    "- [ ] SC-9199: an example inside a fence",
+    "```",
+    "",
+  ].join("\n");
+  const NEW = "- [ ] SC-9150: the placed line";
+
+  test("the line goes straight after the last criterion's block, above the next section, and nothing else moves", () => {
+    const out = placeScLine(SPEC, NEW);
+    const lines = out.split("\n");
+    expect(lines.indexOf(NEW), "placed somewhere other than after SC-9101's annotation").toBe(lines.indexOf("  proved-by: test/fixture.test.ts") + 1);
+    expect(out.indexOf(NEW)).toBeLessThan(out.indexOf("## Notes"));
+    expect(out.indexOf(NEW), "placed after a fenced example").toBeLessThan(out.indexOf("SC-9199"));
+    expect(out.replace(NEW + "\n", "")).toBe(SPEC);
+  });
+
+  // Review round 1 of #2846: an indented fence under the last criterion reads
+  // as its continuation up to the blank line inside the fence.
+  test("a last criterion whose block opens a fence gets the line after the fence closes", () => {
+    const fenced = ["# S", "", "- [ ] SC-9100: foo", "  ```sh", "  echo a", "", "  echo b", "  ```", "", "## Notes", ""].join("\n");
+    const lines = placeScLine(fenced, NEW).split("\n");
+    expect(lines.indexOf(NEW), "placed inside the example").toBe(lines.lastIndexOf("  ```") + 1);
+  });
+
+  // Review round 2 of #2846: three more places the line must not land.
+  test("a comment the last criterion's block holds open is stepped past", () => {
+    const commented = ["# S", "", "- [ ] SC-9100: foo", "<!-- REVIEW: long note", "continues -->", "", "## Notes", ""].join("\n");
+    const lines = placeScLine(commented, NEW).split("\n");
+    expect(lines.indexOf(NEW), "placed inside the comment").toBe(lines.indexOf("continues -->") + 1);
+  });
+
+  test("a CRLF spec gets the line after its last criterion, and stays CRLF", () => {
+    const crlf = SPEC.replace(/\n/g, "\r\n");
+    const out = placeScLine(crlf, NEW);
+    expect(out.replace(/\r\n/g, ""), "a bare LF was written").not.toContain("\n");
+    expect(out.indexOf(NEW)).toBeLessThan(out.indexOf("## Notes"));
+    expect(out.replace(/\r\n/g, "\n")).toBe(placeScLine(SPEC, NEW));
+  });
+
+  test("a spec with a fence nothing closes is refused, criteria or not, naming the line", () => {
+    const open = ["# S", "", "- [ ] SC-9100: foo", "  ```sh", "  echo a", ""].join("\n");
+    expect(() => placeScLine(open, NEW)).toThrow(/line 4 that nothing closes/);
+    expect(() => placeScLine("# Notes\n\n```md\nexample\n", NEW)).toThrow(/line 3 that nothing closes/);
+  });
+
+  // Review round 3 of #2846: placement reads the spec as it renders.
+  test("a comment marker in a criterion's code span is code, and placement stays beside the criterion", () => {
+    const spec = ["# S", "", "- [ ] SC-9107: the tool writes a `<!--` marker", "  needs: test-x", "", "## Notes", "", "Some text.", "<!-- a note -->", "", "## Later", ""].join("\n");
+    const lines = placeScLine(spec, NEW).split("\n");
+    expect(lines.indexOf(NEW), "walked to a later comment").toBe(lines.indexOf("  needs: test-x") + 1);
+  });
+
+  test("a criterion inside an HTML comment is not the last one, and the line lands after the comment, visible", () => {
+    const spec = ["# S", "", "- [ ] SC-9101: a", "<!--", "- [ ] SC-9102: retired", "-->", "", "## Notes", ""].join("\n");
+    const lines = placeScLine(spec, NEW).split("\n");
+    expect(lines.indexOf(NEW), "placed inside the comment").toBe(lines.indexOf("-->") + 1);
+  });
+
+  // Review round 4 of #2846: endings are kept line by line.
+  test("a mixed-ending spec changes by exactly the placed line, which takes the ending of the line it follows", () => {
+    const mixed = "# S\r\n\n- [ ] SC-9100: a\r\n  needs: x\n\n## Notes\r\n";
+    const out = placeScLine(mixed, NEW);
+    expect(out).toBe("# S\r\n\n- [ ] SC-9100: a\r\n  needs: x\n" + NEW + "\n\n## Notes\r\n");
+    const crlfLast = placeScLine("# S\n\n- [ ] SC-9100: a\r\n\n## Notes\n", NEW);
+    expect(crlfLast).toBe("# S\n\n- [ ] SC-9100: a\r\n" + NEW + "\r\n\n## Notes\n");
+    expect(placeScLine("# Nothing\r\n", NEW)).toBe("# Nothing\r\n" + NEW + "\r\n");
+  });
+
+  test("an HTML comment nothing closes is refused, naming the line", () => {
+    expect(() => placeScLine("# S\n\n- [ ] SC-9100: a\n<!-- never closed\n", NEW)).toThrow(/an HTML comment at line 4 that nothing closes/);
+  });
+
+  test("a spec that states no criterion gets the line at its end, as before", () => {
+    const bare = "---\ndoc-type: spec\n---\n\n# Nothing yet\n\n```md\n- [ ] SC-9198: only an example\n```\n";
+    expect(placeScLine(bare, NEW)).toBe(bare.trimEnd() + "\n" + NEW + "\n");
+  });
+
+  test("behavioralStatement marks one sentence, and refuses an empty, multi-line or already-marked one", () => {
+    expect(behavioralStatement("  X happens  ")).toBe("X happens (behavioral)");
+    expect(formatSCLine(9150, behavioralStatement("X happens"))).toBe("- [ ] SC-9150: X happens (behavioral)");
+    expect(() => behavioralStatement("   ")).toThrow(/sentence/);
+    expect(() => behavioralStatement("X\nhappens")).toThrow(/one line/);
+    expect(() => behavioralStatement("X happens (behavioral)")).toThrow(/adds the marker/);
+  });
+
+  test("the CLI places after the last criterion, and --behavioral is allocated exactly as a pattern write is", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-2845-create-sc-"));
+    try {
+      const a = join(dir, "A-SPEC.md");
+      const b = join(dir, "B-SPEC.md");
+      writeFileSync(a, SPEC);
+      writeFileSync(b, SPEC);
+      const pattern = runCreateSC(["--pattern", "file-exists", "--params", JSON.stringify({ file: "README.md" }), "--spec", a]);
+      expect(pattern.exitCode, pattern.stderr).toBe(0);
+      const behavioral = runCreateSC(["--behavioral", "X happens", "--spec", b]);
+      expect(behavioral.exitCode, behavioral.stderr).toBe(0);
+      const after = (file: string) => {
+        const lines = readFileSync(file, "utf-8").split("\n");
+        return lines[lines.indexOf("  proved-by: test/fixture.test.ts") + 1];
+      };
+      const pa = after(a).match(/^- \[ \] SC-(\d+): .*README\.md/);
+      const pb = after(b).match(/^- \[ \] SC-(\d+): X happens \(behavioral\)$/);
+      expect(pa, `pattern line not placed after the last criterion: ${after(a)}`).not.toBeNull();
+      expect(pb, `behavioral line not placed or not as stated: ${after(b)}`).not.toBeNull();
+      expect(pb![1], "the behavioural write took a different allocator").toBe(pa![1]);
+      expect(readFileSync(b, "utf-8").replace(after(b) + "\n", "")).toBe(SPEC);
+
+      // Review round 1 of #2846: a flag right after --behavioral is not its sentence.
+      const before = readFileSync(b, "utf-8");
+      const noSentence = runCreateSC(["--behavioral", "--spec", b]);
+      expect(noSentence.exitCode).toBe(1);
+      expect(noSentence.stderr).toContain("--behavioral needs the criterion's sentence");
+      expect(readFileSync(b, "utf-8"), "a flag was written as a criterion").toBe(before);
+
+      // Review round 2 of #2846: an unclosed fence is refused before anything is written.
+      const openFence = join(dir, "OPEN-SPEC.md");
+      writeFileSync(openFence, SPEC + "```md\nnever closed\n");
+      const refused = runCreateSC(["--behavioral", "X happens", "--spec", openFence]);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr).toContain("nothing closes");
+      expect(readFileSync(openFence, "utf-8")).toBe(SPEC + "```md\nnever closed\n");
+
+      const both = runCreateSC(["--behavioral", "X happens", "--pattern", "file-exists", "--params", "{}", "--spec", b]);
+      expect(both.exitCode).toBe(1);
+      expect(both.stderr).toContain("--behavioral or --pattern");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

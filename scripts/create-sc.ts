@@ -6,7 +6,13 @@
  *   bun scripts/create-sc.ts --pattern file-exists --params '{"file":"AGENTS.md"}'
  *   bun scripts/create-sc.ts --pattern file-exists --params '{"file":"AGENTS.md"}' --spec specs/MY-SPEC.md
  *   bun scripts/create-sc.ts --pattern file-exists --params '{...}' --spec specs/X.md --owner '#725'
+ *   bun scripts/create-sc.ts --behavioral "<the owner's sentence>" --spec specs/MY-SPEC.md
  *   bun scripts/create-sc.ts --list
+ *
+ * `--spec` places the line straight after the spec's last criterion (#2845).
+ * `--behavioral` writes the sentence as stated, with `(behavioral)`, through
+ * the same allocator and the same bank write as a pattern; it takes no
+ * `--pattern`.
  *
  * `--owner` names the entry in `specs/sc-reservations.json` to allocate from.
  * It defaults to this checkout's branch. An owner holding no block allocates
@@ -17,9 +23,11 @@
 import { readFileSync, existsSync } from "fs";
 import {
   allocateScNumber,
+  behavioralStatement,
   generateSCText,
   listPatterns,
   formatSCLine,
+  placeScLine,
 } from "../lib/create-sc";
 import { readScRegistry } from "./sync-sc-status";
 import { describeReading } from "../lib/sc-id-cross-tree";
@@ -36,9 +44,14 @@ const ROOT = join(import.meta.dir, "..");
 
 const args = process.argv.slice(2);
 
+/**
+ * The value after `--name`, or undefined when there is none. A next token
+ * that is itself a flag is not a value (review round 1 of #2846):
+ * `--behavioral --spec X` wrote "--spec" into the spec as a criterion.
+ */
 function getFlag(name: string): string | undefined {
   const idx = args.indexOf(`--${name}`);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
+  if (idx === -1 || idx + 1 >= args.length || args[idx + 1].startsWith("--")) return undefined;
   return args[idx + 1];
 }
 
@@ -54,8 +67,18 @@ if (hasFlag("list")) {
 }
 
 const patternName = getFlag("pattern");
-if (!patternName) {
+const behavioral = getFlag("behavioral");
+if (hasFlag("behavioral") && behavioral === undefined) {
+  console.error('ERROR: --behavioral needs the criterion\'s sentence after it, as one argument: --behavioral "X happens"');
+  process.exit(1);
+}
+if (patternName && behavioral !== undefined) {
+  console.error("ERROR: give --behavioral or --pattern, not both: a behavioural criterion is written as stated, not from a pattern");
+  process.exit(1);
+}
+if (!patternName && behavioral === undefined) {
   console.error("Usage: bun scripts/create-sc.ts --pattern <name> --params '<json>'");
+  console.error('       bun scripts/create-sc.ts --behavioral "<sentence>"');
   console.error("       bun scripts/create-sc.ts --list");
   process.exit(1);
 }
@@ -74,7 +97,9 @@ if (paramsRaw) {
 
 // Validate and generate
 try {
-  const statement = generateSCText(patternName, params);
+  // The only thing --behavioral changes: everything below, the allocation and
+  // the bank write included, is one path for both (#2845).
+  const statement = behavioral !== undefined ? behavioralStatement(behavioral) : generateSCText(patternName!, params);
   const specPath = getFlag("spec");
 
   if (specPath) {
@@ -126,8 +151,8 @@ try {
       process.exit(1);
     }
 
-    // Append SC line to the end of the file
-    const newContent = content.trimEnd() + "\n" + scLine + "\n";
+    // Straight after the spec's last criterion, or at the end when it has none (#2845).
+    const newContent = placeScLine(content, scLine);
     // A deferred spec's criteria count is banked, and SC-2734 refuses a bank
     // that disagrees with it. Decided BEFORE the spec is written, so a refusal
     // writes neither file. The path is a literal so the spec-write sweep
