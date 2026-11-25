@@ -997,6 +997,7 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
       "bun ${RUNGATE_HOOKS_DIR}/$(printf ProjectStateSync).hook.ts",
       "bun /x/${NOPE}.hook.ts",
       "bun /x/ProjectStateSync.ho${NOPE}.ts",
+      "bun /x/ProjectStateSync.ho$NOPE.ts",
       // A variable whose value the shell would split into two words, the second a hook it only passes.
       "bun /x/${SPLIT}",
       // A program that runs what its arguments say, a file run by a flag, and a hook passed to another hook.
@@ -1071,6 +1072,7 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
       ["echo done; bun /x/Foo.ho\\\nok.ts", true],
       ["echo done; bun /x/Foo.HoOk.ts", true],
       ["echo done; bun /x/${F}", true],
+      ["echo done; bun /x/$F", true],
       ["echo done; bun /x/Foo.h*.ts", true],
       ["echo done; bun /x/Foo.h?ok.ts", true],
       ["echo done; bun /x/Foo.h[o]ok.ts", true],
