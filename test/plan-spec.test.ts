@@ -1061,6 +1061,26 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
     expect(r.after).toBe(spec);
   });
 
+  // #2794 review: the reader, not just the converter, refuses a repeated id.
+  test("placementReading reads a spec stating one id in two criterion blocks as UNMEASURED, naming the id and both lines", () => {
+    const lines = [
+      "# Planted",
+      "",
+      "- [ ] CRC-A1: one",
+      "      placement: Phase 1",
+      "- [ ] CRC-A2: two",
+      "      placement: Phase 1",
+      "- [ ] CRC-A1: three",
+      "",
+    ].join("\n");
+    const table = plant({ criteria: ["CRC-A1", "CRC-A2", "CRC-A1"], rows: [["**Phase 1**", "CRC-A1, CRC-A2"]] });
+    for (const spec of [lines, table]) {
+      const r = placementReading(spec);
+      expect(r.reading).toBe("UNMEASURED");
+      expect(r.unmeasuredReasons.join("\n")).toMatch(/CRC-A1 is stated in 2 criterion blocks \(lines \d+, \d+\)/);
+    }
+  });
+
   test("--placement and --convert-placement together are refused", async () => {
     const r = await run(["--placement", "--convert-placement"], LINES);
     expect(r.code).toBe(REFUSAL_EXIT);
