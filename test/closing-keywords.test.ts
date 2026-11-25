@@ -722,6 +722,10 @@ describe("#605: the states file, which is how the suite drives the CLI offline",
     // Past the safe range a key reads as a different number, or as an exponent (#2821 review).
     expect(() => parseIssueStatesFile('{"1e21":"OPEN"}', "s.json")).toThrow(StateCloseRefused);
     expect(() => parseIssueStatesFile('{"99999999999999999999":"OPEN"}', "s.json")).toThrow(StateCloseRefused);
+    // Two spellings of one issue, in either order, are refused rather than left to file order (#2821 review).
+    for (const f of ['{"1675":"OPEN","#1675":"CLOSED"}', '{"#1675":"CLOSED","1675":"OPEN"}', '{"1675":"OPEN","01675":"CLOSED"}']) {
+      expect(() => parseIssueStatesFile(f, "s.json"), f).toThrow(/names #1675 twice/);
+    }
     expect(() => parseIssueStatesFile("[]", "s.json")).toThrow(StateCloseRefused);
     expect(() => parseIssueStatesFile("{", "s.json")).toThrow(StateCloseRefused);
   });

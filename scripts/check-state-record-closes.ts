@@ -236,14 +236,6 @@ export function closingReferences(
 }
 
 /**
- * The record's declared closures, from whatever shape the record holds them
- * in. `project-state.json` writes an array of numbers; the renderer turns it
- * into the comma-joined string `PROJECT-STATE.md` shows.
- *
- * An entry that is not a number THROWS rather than being dropped, because
- * dropping it would make a typo the cheapest way past the comparison.
- */
-/**
  * The issue number one entry or state-file key names, or null: the rule
  * `issueNumber` in lib/project-state-shape.ts reads, spelled here because this
  * script stays import-free for its mutation battery. Both readers below use
@@ -256,6 +248,14 @@ function issueNumberOf(item: unknown): number | null {
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
 
+/**
+ * The record's declared closures, from whatever shape the record holds them
+ * in. `project-state.json` writes an array of numbers; the renderer turns it
+ * into the comma-joined string `PROJECT-STATE.md` shows.
+ *
+ * An entry that is not a number THROWS rather than being dropped, because
+ * dropping it would make a typo the cheapest way past the comparison.
+ */
 export function parseDeclaredCloses(raw: unknown): number[] {
   if (raw === undefined || raw === null) return [];
   const parts = Array.isArray(raw)
@@ -526,11 +526,20 @@ export function parseIssueStatesFile(raw: string, source: string): IssueStateRea
     throw new StateCloseRefused(`${source} is not a JSON object of issue number to state`);
   }
   const states: Record<number, IssueState> = {};
+  const keyFor = new Map<number, string>();
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
     const n = issueNumberOf(key);
     if (n === null) {
       throw new StateCloseRefused(`${source} holds the key ${JSON.stringify(key)}, which is not an issue number`);
     }
+    // Two spellings of one issue would leave its state to file order (#2821 review).
+    const first = keyFor.get(n);
+    if (first !== undefined) {
+      throw new StateCloseRefused(
+        `${source} names #${n} twice, as ${JSON.stringify(first)} and ${JSON.stringify(key)}, so its state would be whichever comes last`,
+      );
+    }
+    keyFor.set(n, key);
     const state = String(value).toUpperCase();
     if (state !== "OPEN" && state !== "CLOSED" && state !== "UNMEASURED") {
       throw new StateCloseRefused(
