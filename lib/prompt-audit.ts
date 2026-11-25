@@ -51,8 +51,8 @@
  * such finding is the user's, and only harness-owned findings become
  * upstream drafts, so none of them is ever drafted.
  */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { dirname, join, relative, sep } from "path";
 
 import { BRIEF_CONSTRAINTS_SECTION, HARD_CONSTRAINTS_SECTION, readPreservedSection, type SectionSpec } from "./agents-md-sections";
 import { generateScopedRules } from "./generators/agents-md";
@@ -66,6 +66,7 @@ import {
   SURFACE_LINTS,
   USER_SURFACE,
   userLoadsEverySession,
+  probePath,
   type Probe,
   lintRenderedTree,
   readRenderedSurface,
@@ -253,14 +254,28 @@ const userPlaces = (root: string, home: string): PathPlaces => (file, token) => 
   return looksLikeRepoPath(token) ? [join(root, dirname(file), token), join(root, token)] : null;
 };
 
-/** The project's reading of a path: here or not, as `existsSync` says. The user surface passes its own probe, which also tells "unreadable" apart. */
-const projectProbe = (abs: string): Probe => (existsSync(abs) ? { kind: statSync(abs).isDirectory() ? "dir" : "file" } : { kind: "absent" });
+/**
+ * A probe over `root` that names each unreadable path in `unread`. The
+ * project side reads paths with the same `probePath` as the user side
+ * (review round 5 of #2844), so a file in an unsearchable directory is never
+ * reported as missing on either side.
+ */
+function recordingProbe(root: string, unread: string[]): (abs: string) => Probe {
+  return abs => {
+    const p = probePath(abs);
+    if (p.kind === "unreadable") {
+      const entry = `${relative(root, abs).split(sep).join("/")} (${p.code})`;
+      if (!unread.includes(entry)) unread.push(entry);
+    }
+    return p;
+  };
+}
 
 function danglingPathFindings(
   surface: RenderedSurface,
   owners: Map<string, Owner[]>,
   places: PathPlaces = projectPlaces(surface.root),
-  probe: (abs: string) => Probe = projectProbe,
+  probe: (abs: string) => Probe = probePath,
 ): AuditFinding[] {
   const out: AuditFinding[] = [];
   for (const [file, text] of surface.files) {
@@ -318,12 +333,17 @@ const lineOf = (message: string): number | null => {
 /** How many unread paths an UNMEASURED line names before it counts the rest. */
 export const UNREAD_SHOWN = 10;
 
+/** The UNMEASURED line for paths of one surface that could not be read, or null when every one was. */
+function unreadLine(surface: "project" | "user-level", unreadable: readonly string[], prefix: string): string | null {
+  if (unreadable.length === 0) return null;
+  const shown = unreadable.slice(0, UNREAD_SHOWN).map(u => prefix + u).join(", ");
+  const rest = unreadable.length > UNREAD_SHOWN ? `, and ${unreadable.length - UNREAD_SHOWN} more` : "";
+  return `UNMEASURED: ${unreadable.length} ${surface} path(s) could not be read, so nothing under them is in this report: ${shown}${rest}.`;
+}
+
 /** The UNMEASURED line for user-level paths that could not be read, or null when every one was. */
 export function userUnreadLine(unreadable: readonly string[]): string | null {
-  if (unreadable.length === 0) return null;
-  const shown = unreadable.slice(0, UNREAD_SHOWN).map(u => USER_PREFIX + u).join(", ");
-  const rest = unreadable.length > UNREAD_SHOWN ? `, and ${unreadable.length - UNREAD_SHOWN} more` : "";
-  return `UNMEASURED: ${unreadable.length} user-level path(s) could not be read, so nothing under them is in this report: ${shown}${rest}.`;
+  return unreadLine("user-level", unreadable, USER_PREFIX);
 }
 
 /** The user-level findings under `home`, every one the user's, each file named from `~/.claude/`. */
@@ -359,17 +379,23 @@ export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, op
     const line = lineOf(f.message);
     return { lint: f.lint, file: f.file, line, owner: ownerAt(f.file, line), message: f.message };
   });
-  findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners));
-  if (opts.home === undefined) return { root: surface.root, lints: [...PROMPT_AUDIT_LINTS], findings, user: null, unmeasured: [USER_SURFACE_UNREAD] };
+  const projectUnread: string[] = [];
+  findings.push(
+    ...pressureFindings(surface, owners),
+    ...danglingPathFindings(surface, owners, projectPlaces(surface.root), recordingProbe(surface.root, projectUnread)),
+  );
+  const projectLine = unreadLine("project", projectUnread, "");
+  const unmeasured = projectLine === null ? [] : [projectLine];
+  if (opts.home === undefined) return { root: surface.root, lints: [...PROMPT_AUDIT_LINTS], findings, user: null, unmeasured: [...unmeasured, USER_SURFACE_UNREAD] };
   const user = userFindings(opts.home);
   findings.push(...user.findings);
-  const unread = userUnreadLine(user.unreadable);
+  const userLine = userUnreadLine(user.unreadable);
   return {
     root: surface.root,
     lints: [...PROMPT_AUDIT_LINTS],
     findings,
     user: { root: user.root, files: user.files, lints: [...USER_AUDIT_LINTS] },
-    unmeasured: unread === null ? [] : [unread],
+    unmeasured: userLine === null ? unmeasured : [...unmeasured, userLine],
   };
 }
 

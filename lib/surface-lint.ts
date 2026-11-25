@@ -516,7 +516,7 @@ function alwaysLoaded(file: string, text: string): boolean {
 export function staleCounts(opts: { everySession?: (file: string, text: string) => boolean } = {}): SurfaceLint {
   // `everySession` (#2844): which files of THIS surface load into every
   // session. The user-level surface names them from `~/.claude`, where a rule
-  // is `rules/x.md`, not `.claude/rules/x.md`.
+  // is named under `rules/`, not under the project rule directory.
   const loaded = opts.everySession ?? alwaysLoaded;
   return {
     name: "stale-count",

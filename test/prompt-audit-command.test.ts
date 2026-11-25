@@ -472,6 +472,20 @@ describe("#2778: the user-level surface is reported unread by default and linted
     }
   });
 
+  // Review round 5 of #2844: the project side reads paths with the same probe.
+  test("a project file dangling-path cannot stat is named as unread, never reported as missing", () => {
+    if (process.getuid?.() === 0) return; // root searches a mode-600 directory anyway
+    const root = planted(["CLAUDE.md", "Read `notes/guide.md` first."], ["notes/guide.md", "present"]);
+    chmodSync(join(root, "notes"), 0o600);
+    try {
+      const audit = promptAudit(root);
+      expect(audit.findings.filter(f => f.lint === "dangling-path"), "an unreadable file was reported as missing").toEqual([]);
+      expect(audit.unmeasured.join("\n")).toMatch(/UNMEASURED: 1 project path\(s\) could not be read[^\n]*notes\/guide\.md \(EACCES\)/);
+    } finally {
+      chmodSync(join(root, "notes"), 0o755);
+    }
+  });
+
   test("the command says the surface was unread without --user, and lints it with --user, under the HOME it is given", () => {
     const home = fakeHome(["skills/x/SKILL.md", "Read `references/gone.md` first."], ["skills/x/references/here.md", "present"]);
     const run = (args: string[]) =>
