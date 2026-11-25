@@ -2,11 +2,11 @@
 
 **Current phase: Engine — a spec becomes a readable board, with nothing hand-run (ADR-009) — IN PROGRESS**
 
-**Session 105 (2026-11-25)** — ADR-026 is accepted: a criterion's phase is written beneath it, and its first row ships. The forge probe reads all six behaviours live. The filing guards read commands with a bash grammar, and ship.js's shellQuote copy goes to the launch bundle. Waiting on Jason: a waiver for #2756 and a criterion for #2778.
+**Session 106 (2026-11-25)** — ADR-026 is complete: every criterion's phase is a line beneath it, and both engine specs are converted. 0.8.48 shipped the reader before the specs it reads. AC-11 stops printing the user settings file. Waiting on Jason: a waiver for #2756 and a criterion for #2778.
 
-Suite: 14 PRs merged (#2729 to #2777); one release, 0.8.47.
-Issues opened: #2743, #2747, #2749, #2751, #2752, #2757, #2764, #2765, #2766, #2767, #2772, #2778, #2779, #2781
-Issues closed: #1910, #2290, #2488, #2504, #2727, #2728, #2733, #2734, #2737, #2738, #2743, #2747, #2749, #2751, #2752, #2764
+Suite: 9 PRs merged (#2780 to #2799); one release, 0.8.48.
+Issues opened: #2784, #2785, #2786, #2788, #2791, #2792, #2795, #2797, #2800, #2801, #2802
+Issues closed: #2765, #2766, #2767, #2779, #2784, #2786, #2788, #2791, #2795
 
 Read this before anything else. The suite is green under a CLEAN ENVIRONMENT, which is a stronger claim than the one this file made yesterday — run `bun scripts/test-clean-env.ts`, not `bun test`, before believing any gate. Plain `bun test` passes on this machine for reasons that have nothing to do with the code.
 
@@ -100,7 +100,17 @@ Suite: 25/25 SCs done.
 
 ---
 
-**Session 2026-11-25 session 105 (ADR-026 is accepted and its first row ships; the forge probe reads all six behaviours live; the filing guards read commands with a bash grammar):**
+**Session 2026-11-25 session 106 (ADR-026 is complete; 0.8.48 ships the placement reader before the specs it reads; the user settings file stops reaching test output):**
+- MERGED: 9 PRs since session 105 (#2780, #2782, #2787, #2789, #2790, #2793, #2794, #2796, #2799), the last of them (#2799) on 2026-11-25. One release: 0.8.48 (#2793, closing #2791).
+- ADR-026 IS COMPLETE: all four of its rows have shipped. plan-spec prints the placement view and converts a table into placement lines (#2782, closing #2766). Promotion writes a placement line beneath the criterion it adds (#2789, closing #2765, ticking SC-2807). Both engine specs now place each criterion with a line beneath it, converted by the tool, and a merge test shows two branches adding criteria merge cleanly where the table form conflicted (#2790, closing #2767, ticking SC-2809). The converter refuses a spec that states one id in two criterion blocks (#2794, closing #2788). The README, the work-flow guide and the plan-spec summary name the placement line as where a criterion's phase is decided (#2796, closing #2795).
+- A FORMAT CHANGE SHIPS ITS READER FIRST: the pinned CI jobs run published rungate, and 0.8.47 read the converted specs' placement lines as prose (92 stale-evidence findings on #2790). 0.8.48 shipped the reader (#2793), and #2790 merged after it. The order is now a memory: release the reader, then rewrite the tree.
+- THE USER SETTINGS FILE NO LONGER REACHES A TEST'S OUTPUT: AC-11 printed the whole of ~/.claude/settings.json, tokens included, when it failed. It now asserts on a count and prints nothing of the file (#2787, closing #2786). The structural fix, one helper every test reads machine settings through, is open as #2798 (#2792).
+- rungate's own prompt audit is pinned at no harness-owned finding of any lint, proved per lint on a planted render (#2799, closing #2784). The reporting-upstream rule's example path names a directory no tree has (#2780, closing #2779).
+- A CORRECTION: session 105 was dated 2026-11-25, the UTC day, while it was written on the New York evening of 2026-11-24. The currency test compares days in America/New_York, not UTC, so a session dated ahead hides a day of merges. Its date is corrected here, and #2785 makes the writer stamp in that zone and refuses a session dated after its stamp.
+- WAITING ON JASON: #2756 (#2731), the write guard's callee identity, stopped at review round 4 under rule 5 and needs his waiver and a hand merge. #2778 needs a criterion, or a statement that it serves none; it is the last open issue in Engine Phase 7.
+- OPEN: #2798 (#2792, the settings helper, review round 2) and #2785 (one zone for the session record). #2797 (milestone wording and the converter's one-column table) is built. Filed: #2800 (a wording guard), #2801 (session lists checked against git), #2802 (the hook census and quoted assignments).
+
+**Session 2026-11-24 session 105 (ADR-026 is accepted and its first row ships; the forge probe reads all six behaviours live; the filing guards read commands with a bash grammar):**
 - MERGED: 14 PRs since session 104 (#2729, #2735, #2740, #2742, #2744 to #2746, #2748, #2750, #2753 to #2755, #2768, #2777), the last of them (#2777) on 2026-11-24. One release: 0.8.47 (#2748).
 - ADR-026 IS ACCEPTED AND ITS FIRST ROW SHIPS: Jason accepted ADR-026 (#2755, closing #2488). A criterion's phase is a `placement:` line beneath it, and the phase list is printed on demand, never stored. Its four rows were filed into Engine Phase 7 as #2764 to #2767. Row 1 shipped: placement is read from the line beneath each criterion through the one parser every reader uses (#2777, closing #2764), and SC-2806 ticked. Row 3, the printed view and the table converter, is open as #2782 (#2766), and its dry run converts both placed specs with nothing refused. Row 2, promotion writing a placement line (#2765), is built and waits for #2782, because both bank the same ratchet.
 - THE FORGE PROBE READS ALL SIX BEHAVIOURS LIVE: the forge behaviours our tools rest on are probed live, and the tree is held to their inventory (#2750, closing #1910). The two that need a throwaway pull request are probed too (#2768, closing #2749), and SC-2765 ticked. The arm-time row tells arm-time from fire-time with a stale pin GitHub refuses ('expected head oid does not match the current head oid'). Whether the merge compares the pin again when it fires is not observed, and the row says so.
@@ -117,14 +127,4 @@ Suite: 25/25 SCs done.
 - SHIP.JS LOSES THREE MORE HAND COPIES (SC-2775, plan on #2290): ship.run.js carries lib/phase2-decomposition.ts (#2709, closing #2693) and lib/evidence-command-transport.ts (#2732, closing #2730); tests reach shellQuote through one helper (#2739, closing #2736). Wave 7 is split: #2737 moves the last five readers, #2734 moves shellQuote into the bundle, and #2738 then refuses any hand copy and completes SC-2775.
 - IN FLIGHT: #2735 (#2727: the filing guards read a command with a bash grammar, unbash 6.0.5; the primary checkout needs bun install after it lands); #2740 (#2733: a refused evidence command is recorded on the AC); #2737 and #2734 (wave 7).
 - OPEN, for Jason: the review-override ruling on #2726; #2729 (an ai-review.yml edit); #2605 and #2488 as before.
-
-**Session 2026-11-23 session 103 (the engine's acceptance test is ticked; ADR-025 accepted and mostly shipped; ship.js loses two more hand copies; refusal retirement stops trusting an incomplete failed list):**
-- MERGED: 25 PRs since session 102 (#2640 to #2691), the last of them (#2691) on 2026-11-23. Three releases: 0.8.43 (#2660), 0.8.44 (#2665) and 0.8.45 (#2673).
-- THE ENGINE'S ACCEPTANCE TEST IS TICKED: hand-edits' second run opens when the successor gap closed (#2640), the board job takes the hand-edit reading and SC-2625 is ticked (#2644, closing #1722), and a finished engine reads MET when no engine issue is open rather than 0 of 0 (#2646).
-- ADR-025 ACCEPTED, AND MOST OF ITS PLAN SHIPPED: its five criteria and plan (#2643). CRC-M19 retires CRC-M18 with its diff-budget script and keeps the census half (#2653). CRC-B10: the generated AI review defaults to Haiku 5.5 (#2652). CRC-B12: the review action is handed the job's own token, so no Claude GitHub App is needed (#2654). ai-review-merge-drafts merges a round's drafts into one payload (#2656) and names the run a three-run round reports (#2662). The per-run checks count against AI_REVIEW_RUNS (#2670), and a failed review run is not read as a pass when its draft parses (#2679).
-- THE AI REVIEW STEP'S PLUMBING: severityBlocks reads only the severity table's own keys (#2658); the threads command reads the checkout it is told (#2671); the adjudicator runs bunx from a fresh empty directory (#2668); the threads step fails when the published package lacks its command (#2675); an unknown rungate command exits with its own status (#2677).
-- SHIP.JS LOSES TWO MORE HAND COPIES (SC-2775, plan on #2290): every reader of the security-helpers region goes through one helper (#2681, #2683, #2686), and ship.run.js carries lib/workflow-security.ts (#2687) and lib/gate-refusal-currency.ts (#2689) instead of ship.js's copies.
-- REFUSAL RETIREMENT STOPS TRUSTING AN INCOMPLETE FAILED LIST (#2691): a gate report whose failedChecks misses a failing line, names a check by a bare prefix, repeats a name, or fails while naming nothing retires no earlier refusal. It took four review rounds; the fourth named the cause, that the list is re-typed by the gate's agent, and rule 5 stopped the repairs there. The producer fix is #2692.
-- IN FLIGHT: #2692 (the gate writes which checks passed, and a refusal is retired only on that list); #2693 (SC-2775 wave 6a, the phase-2 decomposition copy). #2650 (the AI review guide, CRC-B13) waits on #2674.
-- OPEN, for Jason: merging #2674 (three review runs per round, #1885), which edits ai-review.yml; #2605 and #2488 as before. 0.8.46 follows #2674.
 

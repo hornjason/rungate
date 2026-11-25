@@ -1,5 +1,5 @@
 {
-  "updated": "2026-11-24",
+  "updated": "2026-11-25",
   "priorities": [
     "AN ASSIGNMENT IS A DECLARATION; A PUSHED BRANCH OR AN OPEN PR IS EVIDENCE. Jason's call, 2026-11-09, after he asked how we know an assigned, unblocked issue is actually being worked. MEASURED THAT DAY: six issues were assigned to `hornjason` and ZERO had an open pull request — #1717, #1764, #1885, #1921, #1168 had no pushed work at all, and #1931's only work was commit `3bd05a14` sitting unpushed in a local worktree, invisible to every GitHub reading. WHY THE EXISTING MACHINERY COULD NOT SEE IT, and both halves are working as designed: `whyNotReady` in `lib/board-ready-fanout.ts` returns `somebody has claimed it` for an open, unblocked, ASSIGNED issue, so an assignment removes an issue from the Ready pool; and `scripts/board-status-sweep.ts` releases a claim only after `STALE_CLAIM_DAYS = 7` of silence AND no open PR. The sweep ran six times on 2026-11-09, all success, and correctly left all six alone, because every one of them read 0 to 2 days idle. THE CLOCK IS `updatedAt`, WHICH A COMMENT BUMPS. So writing status notes about an issue is indistinguishable from working it, and a session that claims an issue and then discusses it holds that claim forever. ACTIONS TAKEN 2026-11-09: `rg/1931-census-dirs` pushed so #1931 is visible; the other five claims released with `--remove-assignee`. DO NOT RE-CLAIM AN ISSUE YOU ARE NOT ABOUT TO PUSH A BRANCH FOR. The two fixes this implies are NOT yet built: (1) one function returning WORKING / PARKED / INVISIBLE from PR and branch rather than from the assignee field, read by both the lane-health check and the stale sweep so there is ONE decider; (2) stage item D4, which names unpushed local work in every run.",
     "THE BOARD IS REAL WHERE THE PIPELINE RAN, AND ONLY THERE. Correction of my own framing, 2026-11-09, after Jason challenged it. The CLI did fill this board: `plan-spec` wrote the milestones from the spec's Phase placement table, `plan-issues --decompose` created the issues, `plan-deps` wrote the blocked-by edges. Verified on 2026-11-09 by reading the cards: #1717 carries milestone `Pipeline Phase 6` and names SC-2615, SC-2616 and SC-2617; #1722 carries `Pipeline Phase 9` and names SC-2625. Against that, #1934 and #1935 — both filed by hand on 2026-11-09 — carry NO milestone and name NO criterion. THAT IS THE WHOLE OF WHAT IS UNREAL, and it is already measured rather than argued: board-conformance on 2026-11-09 read spec-placement SHORT at 87 of 1815 and criteria-named SHORT at 41 of 70. MAKING IT REAL IS E1 AND E2, not new tooling: for every testable spec, either plan it through the pipeline or declare it UNPLANNED, and give every open issue a criterion or a declaration that it serves none. Do NOT decompose all 1815 criteria into issues — the UNPLANNED declaration is the intended answer for a spec nobody is shipping. Separately and much smaller: `scripts/work-status.ts` prints the Ready lane with no sort, so two cards appear in array order. The ORDER IS REAL where it is decided — the promoter sorts by phase then age — so this is a display gap, not a board gap, and I overstated it before checking.",
@@ -243,7 +243,20 @@
   ],
   "sessions": [
     {
-      "date": "2026-11-25 session 105 (ADR-026 is accepted and its first row ships; the forge probe reads all six behaviours live; the filing guards read commands with a bash grammar)",
+      "date": "2026-11-25 session 106 (ADR-026 is complete; 0.8.48 ships the placement reader before the specs it reads; the user settings file stops reaching test output)",
+      "items": [
+        "MERGED: 9 PRs since session 105 (#2780, #2782, #2787, #2789, #2790, #2793, #2794, #2796, #2799), the last of them (#2799) on 2026-11-25. One release: 0.8.48 (#2793, closing #2791).",
+        "ADR-026 IS COMPLETE: all four of its rows have shipped. plan-spec prints the placement view and converts a table into placement lines (#2782, closing #2766). Promotion writes a placement line beneath the criterion it adds (#2789, closing #2765, ticking SC-2807). Both engine specs now place each criterion with a line beneath it, converted by the tool, and a merge test shows two branches adding criteria merge cleanly where the table form conflicted (#2790, closing #2767, ticking SC-2809). The converter refuses a spec that states one id in two criterion blocks (#2794, closing #2788). The README, the work-flow guide and the plan-spec summary name the placement line as where a criterion's phase is decided (#2796, closing #2795).",
+        "A FORMAT CHANGE SHIPS ITS READER FIRST: the pinned CI jobs run published rungate, and 0.8.47 read the converted specs' placement lines as prose (92 stale-evidence findings on #2790). 0.8.48 shipped the reader (#2793), and #2790 merged after it. The order is now a memory: release the reader, then rewrite the tree.",
+        "THE USER SETTINGS FILE NO LONGER REACHES A TEST'S OUTPUT: AC-11 printed the whole of ~/.claude/settings.json, tokens included, when it failed. It now asserts on a count and prints nothing of the file (#2787, closing #2786). The structural fix, one helper every test reads machine settings through, is open as #2798 (#2792).",
+        "rungate's own prompt audit is pinned at no harness-owned finding of any lint, proved per lint on a planted render (#2799, closing #2784). The reporting-upstream rule's example path names a directory no tree has (#2780, closing #2779).",
+        "A CORRECTION: session 105 was dated 2026-11-25, the UTC day, while it was written on the New York evening of 2026-11-24. The currency test compares days in America/New_York, not UTC, so a session dated ahead hides a day of merges. Its date is corrected here, and #2785 makes the writer stamp in that zone and refuses a session dated after its stamp.",
+        "WAITING ON JASON: #2756 (#2731), the write guard's callee identity, stopped at review round 4 under rule 5 and needs his waiver and a hand merge. #2778 needs a criterion, or a statement that it serves none; it is the last open issue in Engine Phase 7.",
+        "OPEN: #2798 (#2792, the settings helper, review round 2) and #2785 (one zone for the session record). #2797 (milestone wording and the converter's one-column table) is built. Filed: #2800 (a wording guard), #2801 (session lists checked against git), #2802 (the hook census and quoted assignments)."
+      ]
+    },
+    {
+      "date": "2026-11-24 session 105 (ADR-026 is accepted and its first row ships; the forge probe reads all six behaviours live; the filing guards read commands with a bash grammar)",
       "items": [
         "MERGED: 14 PRs since session 104 (#2729, #2735, #2740, #2742, #2744 to #2746, #2748, #2750, #2753 to #2755, #2768, #2777), the last of them (#2777) on 2026-11-24. One release: 0.8.47 (#2748).",
         "ADR-026 IS ACCEPTED AND ITS FIRST ROW SHIPS: Jason accepted ADR-026 (#2755, closing #2488). A criterion's phase is a `placement:` line beneath it, and the phase list is printed on demand, never stored. Its four rows were filed into Engine Phase 7 as #2764 to #2767. Row 1 shipped: placement is read from the line beneath each criterion through the one parser every reader uses (#2777, closing #2764), and SC-2806 ticked. Row 3, the printed view and the table converter, is open as #2782 (#2766), and its dry run converts both placed specs with nothing refused. Row 2, promotion writing a placement line (#2765), is built and waits for #2782, because both bank the same ratchet.",
@@ -1356,43 +1369,33 @@
     }
   ],
   "session": {
-    "number": 105,
+    "number": 106,
     "date": "2026-11-25",
-    "suite": "14 PRs merged (#2729 to #2777); one release, 0.8.47.",
-    "summary": "ADR-026 is accepted: a criterion's phase is written beneath it, and its first row ships. The forge probe reads all six behaviours live. The filing guards read commands with a bash grammar, and ship.js's shellQuote copy goes to the launch bundle. Waiting on Jason: a waiver for #2756 and a criterion for #2778.",
+    "suite": "9 PRs merged (#2780 to #2799); one release, 0.8.48.",
+    "summary": "ADR-026 is complete: every criterion's phase is a line beneath it, and both engine specs are converted. 0.8.48 shipped the reader before the specs it reads. AC-11 stops printing the user settings file. Waiting on Jason: a waiver for #2756 and a criterion for #2778.",
     "issues_created": [
-      2743,
-      2747,
-      2749,
-      2751,
-      2752,
-      2757,
-      2764,
+      2784,
+      2785,
+      2786,
+      2788,
+      2791,
+      2792,
+      2795,
+      2797,
+      2800,
+      2801,
+      2802
+    ],
+    "issues_closed": [
       2765,
       2766,
       2767,
-      2772,
-      2778,
       2779,
-      2781
-    ],
-    "issues_closed": [
-      1910,
-      2290,
-      2488,
-      2504,
-      2727,
-      2728,
-      2733,
-      2734,
-      2737,
-      2738,
-      2743,
-      2747,
-      2749,
-      2751,
-      2752,
-      2764
+      2784,
+      2786,
+      2788,
+      2791,
+      2795
     ]
   },
   "stages": [
