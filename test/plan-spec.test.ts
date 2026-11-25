@@ -1148,6 +1148,27 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
     expect(wrote.after).not.toContain(PLACEMENT_MEANINGS_HEADING);
   });
 
+  // #2804 review, round 2: rows a placement line cannot carry refuse, by line.
+  test("#2797: a row listing no criterion, or other text in its criteria cell, refuses the conversion", async () => {
+    const empty = TWO_COLUMN.replace("| **Phase 2** | CRC-A3 |", "| **Phase 2** | CRC-A3 |\n| **Phase 4** | |");
+    const c1 = convertPlacement(empty);
+    expect("refusal" in c1 ? c1.refusal.join("\n") : JSON.stringify(c1)).toMatch(/line \d+: Phase 4 lists no criterion/);
+    const note = TWO_COLUMN.replace("| **Phase 2** | CRC-A3 |", "| **Phase 2** | CRC-A3 (see the note) |");
+    const c2 = convertPlacement(note);
+    expect("refusal" in c2 ? c2.refusal.join("\n") : JSON.stringify(c2)).toMatch(/line \d+: the criteria cell holds text that is not a criterion id/);
+    // A second table under the heading, carrying meanings in the cell the reader reads.
+    const second = TWO_COLUMN.replace("| **Phase 2** | CRC-A3 |\n", "| **Phase 2** | CRC-A3 |\n\n| Placement | Meaning |\n|---|---|\n| Phase 1 | does x |\n");
+    const c3 = convertPlacement(second);
+    expect("refusal" in c3 ? c3.refusal.join("\n") : JSON.stringify(c3)).toMatch(/lists no criterion/);
+    // Nothing is written through the command either.
+    const r = await run(["--convert-placement", "--write"], empty);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(r.after).toBe(empty);
+    // Bold, commas and backticks around ids are not other text.
+    const styled = TWO_COLUMN.replace("| **Phase 1** | CRC-A1, CRC-A2 |", "| **Phase 1** | `CRC-A1`, **CRC-A2** |");
+    expect("after" in convertPlacement(styled)).toBe(true);
+  });
+
   // #2804 review: the usage text says both outcomes, not only the retitle.
   test("#2797: the usage text says a placements-only table is removed and one with meanings is retitled", async () => {
     const r = await run([], TWO_COLUMN);

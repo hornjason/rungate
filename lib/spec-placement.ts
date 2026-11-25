@@ -431,7 +431,8 @@ export type PlacementConversion =
  * loses its criteria column. A table left with no column but its placements
  * is removed (#2797). Refused, with nothing returned to write, when
  * {@link placementConversionDiff} finds anything the conversion would change,
- * or when the spec states one id in two criterion blocks (#2788).
+ * when the spec states one id in two criterion blocks (#2788), or when a row
+ * lists no criterion or holds other text in its criteria cell (#2804 review).
  */
 export function convertPlacement(content: string): PlacementConversion {
   const table = parsePlacementTable(content);
@@ -449,6 +450,21 @@ export function convertPlacement(content: string): PlacementConversion {
   const repeated = repeatedCriterionIds(criteria);
   if (repeated.length > 0) return { refusal: repeated.map(r => `${repeatedIdReason(r)}, so state it once first`) };
   const lines = content.split("\n");
+  // A row a placement line cannot carry is refused by line, before anything
+  // is written (#2804 review): one listing no criterion would vanish from the
+  // milestones, since a line sits beneath a criterion; and text in the
+  // criteria cell that is not a criterion id would go with the column.
+  // `placementConversionDiff` compares criteria, so it sees neither.
+  const unplaceable = table.flatMap(r => {
+    const cell = lines[r.line - 1]!.split("|")[2] ?? "";
+    const rest = cell.replace(/\b[A-Z]+(?:-[A-Z]?\d+)+\b/g, "").replace(/[\s,;*`]/g, "");
+    if (r.ids.length === 0) {
+      return [`line ${r.line}: ${r.placement || "a row"} lists no criterion; a placement line sits beneath a criterion, so converting would drop the phase from the milestones. Place a criterion in it or remove the row first`];
+    }
+    if (rest !== "") return [`line ${r.line}: the criteria cell holds text that is not a criterion id, which dropping the column would lose. Move it out of the table first`];
+    return [];
+  });
+  if (unplaceable.length > 0) return { refusal: unplaceable };
   const after = new Map<number, string[]>();
   let written = 0;
   for (const r of table) {
