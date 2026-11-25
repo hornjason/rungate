@@ -54,10 +54,11 @@
 import { afterAll, describe, test, expect } from "bun:test";
 import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
-import { homedir, tmpdir } from "os";
+import { tmpdir } from "os";
 import { join } from "path";
 import { CD_GUARD_DEFAULT_MODE, CD_GUARD_MODE_VAR, cdGuardMode } from "../lib/top-level-cd";
 import { isHarnessProject } from "../lib/harness-project";
+import { liveUserSettingsMentions, settingsMentions } from "./helpers/user-settings";
 
 const ROOT = join(import.meta.dir, "..");
 const HOOK = join(ROOT, "hooks", "TopLevelCdGuard.hook.ts");
@@ -107,50 +108,20 @@ function run(cwd: string, command: string, env: Record<string, string> = {}) {
 }
 
 /**
- * The user settings file's text, or null when it does not exist. Absence is the
- * only reading that skips AC-11: an unreadable file is an error, never a pass
- * (#2787 review).
+ * AC-11's assertion, as a function its own test drives on planted files, so
+ * reverting it to an assertion that prints its subject turns that test red
+ * (#2792). It takes a count, never the file: `settingsMentions` counts the
+ * string values and keys naming the guard over the RAW file, so a
+ * registration the census cannot parse, one nested in an unexpected shape, or
+ * an `env` value naming the guard all count (#2798 review). `null` is a
+ * machine with no user settings (CI).
  */
-function userSettingsText(path: string): string | null {
-  try {
-    return readFileSync(path, "utf-8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw e;
-  }
+function assertNoUserRegistration(count: number | null): void {
+  if (count === null) return;
+  expect(count, "~/.claude/settings.json registers TopLevelCdGuard — not done by this branch").toBe(0);
 }
 
-/**
- * How many string values and keys in a settings document name
- * `TopLevelCdGuard`. A count, and nothing else: each earlier version printed
- * something read from the file (the whole file, then a value, then a key), and
- * this file holds the machine's tokens. A number cannot carry one (#2786,
- * #2787 review). Read as JSON, so an escaped quote is part of its value. A file
- * that is not JSON is counted by a plain text search.
- */
-function cdGuardRegistrations(src: string): number {
-  let doc: unknown;
-  try {
-    doc = JSON.parse(src);
-  } catch {
-    return src.includes("TopLevelCdGuard") ? 1 : 0;
-  }
-  let n = 0;
-  const walk = (v: unknown): void => {
-    if (typeof v === "string") {
-      if (v.includes("TopLevelCdGuard")) n++;
-    } else if (Array.isArray(v)) {
-      v.forEach(walk);
-    } else if (v !== null && typeof v === "object") {
-      for (const [k, x] of Object.entries(v)) {
-        if (k.includes("TopLevelCdGuard")) n++;
-        walk(x);
-      }
-    }
-  };
-  walk(doc);
-  return n;
-}
+const GUARD = "TopLevelCdGuard";
 
 const OFFENDING = "cd /tmp && ls";
 const ALLOWED = "git -C /tmp status";
@@ -336,14 +307,9 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
     // Stated as a reading rather than a promise. If a future change
     // registers it at user level this arm says so on the author's machine
     // and is simply absent on a runner — recorded as a limit, not hidden.
-    const user = join(homedir(), ".claude", "settings.json");
-    const src = userSettingsText(user);
-    if (src === null) return; // no user settings here (CI)
-    // Asserts on the string values that name the guard, never the whole file:
-    // a failing `not.toContain` prints its whole subject, and this file holds
-    // the machine's tokens in `env` (#2786).
-    expect(cdGuardRegistrations(src), "~/.claude/settings.json registers TopLevelCdGuard — not done by this branch")
-      .toBe(0);
+    // A count, never the file: a failing `not.toContain` prints its whole
+    // subject (#2786), and the count is taken inside the helper (#2792).
+    assertNoUserRegistration(liveUserSettingsMentions(GUARD));
   });
 
   test("#2786: AC-11's reading counts where the guard is registered, and its failure prints no text from the file", () => {
@@ -351,36 +317,56 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
       env: { GH_TOKEN: "gho_planted2786", OTHER_KEY: "sk-planted2786", ...env },
       hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command }] }] },
     });
-    const registered = [
+    const registered: unknown[] = [
       doc("bun ${PAI_HOOKS_DIR}/TopLevelCdGuard.hook.ts"),
       // #2787 review: a path quoted for spaces puts escaped quotes in the value.
       doc('bun "/Users/x/My Hooks/TopLevelCdGuard.hook.ts"'),
       // A token in the same command string as the guard.
       doc("GITHUB_TOKEN=gho_planted2786 bun ${X}/TopLevelCdGuard.hook.ts"),
       doc('echo "gho_planted2786 TopLevelCdGuard"'),
+      // #2798 review: a quoted assignment the census's whitespace parse cannot read.
+      doc('TOKEN="a b gho_planted2786" bun /Users/x/hooks/TopLevelCdGuard.hook.ts'),
+      // #2798 review: a command on the group itself, outside its hooks list.
+      { env: { GH_TOKEN: "gho_planted2786" }, hooks: { PreToolUse: [{ matcher: "Bash", command: "bun /x/TopLevelCdGuard.hook.ts" }] } },
       // #2787 review: tokens as keys, one naming the guard and one above a value
       // that does, including a key of letters alone.
       { env: { "echo gho_planted2786 TopLevelCdGuard": "1" } },
       { env: { a: "1", gho_planted2786: "bun TopLevelCdGuard.hook.ts" } },
       { env: { PLANTEDLETTERSONLY: "bun TopLevelCdGuard.hook.ts" } },
     ];
-    for (const d of registered) {
-      for (const src of [JSON.stringify(d, null, 2), JSON.stringify(d)]) {
-        expect(cdGuardRegistrations(src), src).toBe(1);
-        // The failure AC-11 would print, captured: a count, and no text of the file.
+    const home = mkdtempSync(join(tmpdir(), "rg-2786-home-"));
+    try {
+      mkdirSync(join(home, ".claude"), { recursive: true });
+      const user = join(home, ".claude", "settings.json");
+      // The whole chain AC-11 takes: a file on disk, counted by the helper,
+      // asserted by AC-11's own function, its failure captured.
+      const asserted = (src: string): { count: number | null; printed: string } => {
+        writeFileSync(user, src);
+        const count = settingsMentions(user, GUARD);
         let printed = "";
         try {
-          expect(cdGuardRegistrations(src), "registers TopLevelCdGuard").toBe(0);
+          assertNoUserRegistration(count);
         } catch (e) {
           printed = String((e as Error).message);
         }
-        expect(printed).toContain("registers TopLevelCdGuard");
-        expect(printed).not.toMatch(/planted2786|PLANTEDLETTERSONLY/i);
+        return { count, printed };
+      };
+      for (const d of registered) {
+        for (const src of [JSON.stringify(d, null, 2), JSON.stringify(d)]) {
+          const { count, printed } = asserted(src);
+          expect(count, "a planted registration was not counted").toBe(1);
+          expect(printed).toContain("registers TopLevelCdGuard");
+          expect(printed).not.toMatch(/planted2786|PLANTEDLETTERSONLY/i);
+        }
       }
+      expect(asserted(JSON.stringify({ env: { GH_TOKEN: "gho_planted2786" } })).count).toBe(0);
+      // A file that is not JSON still counts as registered.
+      expect(asserted('{ "env": { "GH_TOKEN": "gho_planted2786" }, "x": "TopLevelCdGuard"').count).toBe(1);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
-    expect(cdGuardRegistrations(JSON.stringify({ env: { GH_TOKEN: "gho_planted2786" } }))).toBe(0);
-    // A file that is not JSON still counts as registered.
-    expect(cdGuardRegistrations('{ "env": { "GH_TOKEN": "gho_planted2786" }, "x": "TopLevelCdGuard"')).toBe(1);
+    // No user settings at all is CI's machine, and asserts nothing.
+    expect(settingsMentions(join(home, ".claude", "settings.json"), GUARD)).toBeNull();
   });
 
   // #2787 review: a hook that never ran reads exactly like a silent one.
@@ -388,8 +374,4 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
     expect(() => run(harnessed("dir"), ALLOWED, { PATH: "/nonexistent-path-2787" })).toThrow();
   });
 
-  test("#2787: AC-11's settings read is absent only when the file does not exist; any other error is thrown", () => {
-    expect(userSettingsText(join(tmp(), "absent.json"))).toBeNull();
-    expect(() => userSettingsText(tmp())).toThrow(); // a directory: EISDIR, not absence
-  });
 });

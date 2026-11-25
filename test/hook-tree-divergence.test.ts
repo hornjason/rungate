@@ -140,7 +140,6 @@
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
 
 import { loadRungateConfig } from "../lib/config-loader";
@@ -149,13 +148,11 @@ import {
   type ScopeReading,
   IncompleteScopeReadingError,
   REGISTRATION_SCOPES,
-  readRegistrationScopes,
-  settingsScopePaths,
 } from "../lib/hook-scopes";
+import { homePath, liveTreeCensus, liveWrongTree } from "./helpers/user-settings";
 import {
   type EnvReading,
   pathSpelling,
-  readEnvScopes,
   registeredTreeCensus,
   resolvePath,
   settingsEnv,
@@ -270,7 +267,7 @@ const FOREIGN_SPELLING_RATCHET: string[] = ["RUNGATE_HOOKS_DIR", "PAI_HOOKS_DIR"
  * without deleting this entry in the same commit fails.
  */
 
-const PAI_HOOKS = join(homedir(), ".pai", "hooks");
+const PAI_HOOKS = homePath(".pai", "hooks");
 const RUNGATE_HOOKS = join(ROOT, "hooks");
 
 /** `readdirSync`, with an unreadable directory reported as `null` rather than `[]`. */
@@ -289,27 +286,6 @@ function ownedHooks(): string[] {
     .map(n => n.replace(/\.hook\.ts$/, ""));
 }
 
-/**
- * Every settings document this run can read, with the scopes it could not
- * named.
- *
- * The scope list is `settingsScopePaths`', not this file's. It used to be a
- * three-entry literal here, and #910 is what a second opinion about which
- * scopes exist costs: a census read a different, narrower set and reported
- * confident absence. `~/.claude/settings.local.json` was missing from this
- * list and is on the author's machine.
- */
-function readableScopes(): { docs: string[]; names: string[]; missing: string[] } {
-  const docs: string[] = [];
-  const names: string[] = [];
-  const missing: string[] = [];
-  for (const { scope, path } of settingsScopePaths(ROOT, homedir())) {
-    if (!existsSync(path)) { missing.push(scope); continue; }
-    docs.push(readFileSync(path, "utf-8"));
-    names.push(scope);
-  }
-  return { docs, names, missing };
-}
 
 const PAI_DOC = (name: string) =>
   JSON.stringify({
@@ -509,22 +485,23 @@ describe("#713 SC-2: which TREE a registration names, which nothing else asks", 
     // readable, so this makes a real claim on a runner; the machine scopes
     // are folded in when they exist and the scopes that were read are
     // asserted, so a run that could read nothing cannot pass quietly.
-    const { docs, names, missing } = readableScopes();
+    // Through the settings helper (#2792): it reads every scope
+    // `settingsScopePaths` lists, raw, runs `wrongTreeViolations` over their
+    // commands, and returns the violations with each command withheld. The
+    // scope list is still `settingsScopePaths`', not this file's: #910 is
+    // what a second opinion about which scopes exist costs.
+    const owned = ownedHooks();
+    expect(owned.length, "this repo owns no hooks, so the scan compares nothing").toBeGreaterThan(10);
+    const { read: names, missing, commands, violations: v } = liveWrongTree(ROOT, owned);
     expect(
       names,
       `no settings scope was readable (missing: ${missing.join(", ")}), so this read nothing`,
     ).toContain("project-settings");
-
-    const commands = settingsCommands(docs);
     expect(
-      commands.length,
+      commands,
       `${names.join(", ")} parsed to zero hook commands — the reading is empty, not clean`,
     ).toBeGreaterThan(0);
 
-    const owned = ownedHooks();
-    expect(owned.length, "this repo owns no hooks, so the scan compares nothing").toBeGreaterThan(10);
-
-    const v = wrongTreeViolations(owned, commands);
     expect(
       v,
       `these hooks are owned by this repo and wired to another tree's copy:\n` +
@@ -1166,8 +1143,6 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
     // than skip it. On a runner `~/.claude/settings.json` does not exist, the
     // reading is UNMEASURED, and the refusal is asserted. On a machine that
     // has one, the ratchet holds the line in both directions.
-    const readIfPresent = (p: string): string | null =>
-      existsSync(p) ? readFileSync(p, "utf-8") : null;
     const registry = (loadRungateConfig(ROOT) as { hooks: { command?: string }[] }).hooks.map(h =>
       String(h?.command ?? h),
     );
@@ -1181,12 +1156,9 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
       10,
     );
 
-    const census = registeredTreeCensus(
-      owned,
-      readRegistrationScopes(ROOT, homedir(), readIfPresent, registry),
-      readEnvScopes(ROOT, homedir(), readIfPresent),
-      ROOT,
-    );
+    // Through the settings helper (#2792): the census on the raw scopes,
+    // every reading's command withheld.
+    const census = liveTreeCensus(ROOT, registry, owned);
 
     if (census.reading === "UNMEASURED") {
       expect(

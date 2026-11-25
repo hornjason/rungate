@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
 
 import { loadRungateConfig } from "../lib/config-loader";
 import {
-  hookRegistration,
-  readRegistrationScopes,
-  type ScopeReading,
-} from "../lib/hook-scopes";
+  liveCommandsNaming,
+  liveHookRegistration,
+  liveScopeReadability,
+  liveUserSettingsPath,
+} from "./helpers/user-settings";
 import { settingsCommands } from "../lib/hook-trees";
 
 // SPEC-REF: HOOK-ARCHITECTURE-SPEC.md § Design Decisions
@@ -54,20 +54,13 @@ import { settingsCommands } from "../lib/hook-trees";
 
 const repoRoot = join(__dirname, "..");
 const projectSettingsPath = join(repoRoot, ".claude", "settings.json");
-const userSettingsPath = join(homedir(), ".claude", "settings.json");
+const userSettingsPath = liveUserSettingsPath();
 
 const SLOT_HOOKS = ["TestSuiteGuard.hook.ts", "TestSuiteRelease.hook.ts"];
 
-/** Every scope, with the ones not on this machine named rather than dropped. */
-function liveScopeReadings(): ScopeReading[] {
-  return readRegistrationScopes(
-    repoRoot,
-    homedir(),
-    p => (existsSync(p) ? readFileSync(p, "utf-8") : null),
-    (loadRungateConfig(repoRoot) as { hooks: { command?: string }[] }).hooks.map(
-      h => h.command ?? "",
-    ),
-  );
+/** The registry's commands, the census's fifth scope. */
+function registry(): string[] {
+  return (loadRungateConfig(repoRoot) as { hooks: { command?: string }[] }).hooks.map(h => h.command ?? "");
 }
 
 describe("#67-A: slot hooks are registered machine-wide, not per-project", () => {
@@ -98,37 +91,33 @@ describe("#67-A / #910: the user-scope registration, reported rather than skippe
     const name = hook.replace(/\.hook\.ts$/, "");
 
     test(`${name} is not UNREGISTERED under a reading of every scope`, () => {
-      const readings = liveScopeReadings();
       // This is the assertion #898's census contradicted and #910 shipped
       // without. It holds on a runner too: with `~/.claude/settings.json`
       // absent the verdict is `unmeasured`, which is reported and is not
       // `unregistered`. The previous `skipIf` made the same run report a
-      // green tick for a case that never executed.
-      const r = hookRegistration(name, readings);
+      // green tick for a case that never executed. Read through the settings
+      // helper, which returns the verdict and never a command (#2792).
+      const r = liveHookRegistration(repoRoot, registry(), name);
       expect(r.verdict, `${name}: ${r.detail}`).not.toBe("unregistered");
     });
 
     test(`${name}: the user scope is read, or named as unread`, () => {
-      const readings = liveScopeReadings();
-      const user = readings.find(r => r.scope === "user-settings")!;
-      const userCommands = user.commands;
-      if (userCommands === null) {
+      const user = liveScopeReadability(repoRoot, registry()).find(r => r.scope === "user-settings")!;
+      if (!user.readable) {
         expect(
           user.unreadable,
           "the user scope is unreadable and gave no reason, so nobody can tell whether it was " +
             "tried",
         ).toBeTruthy();
-        expect(hookRegistration(name, readings).unreadable).toContain("user-settings");
+        expect(liveHookRegistration(repoRoot, registry(), name).unreadable).toContain("user-settings");
         return;
       }
       // Two registrations means two slots taken for one suite, so this stays
-      // an exact count rather than a floor.
-      expect(
-        userCommands.filter(c => c.includes(hook)),
-        `${hook} is registered ${userCommands.filter(c => c.includes(hook)).length} times in ` +
-          `${userSettingsPath}`,
-      ).toHaveLength(1);
-      expect(hookRegistration(name, readings).registeredIn).toContain("user-settings");
+      // an exact count rather than a floor. A count, never the commands: the
+      // file holds the machine's tokens (#2792).
+      const count = liveCommandsNaming(repoRoot, registry(), "user-settings", hook);
+      expect(count, `${hook} is registered ${count} times in ${userSettingsPath}`).toBe(1);
+      expect(liveHookRegistration(repoRoot, registry(), name).registeredIn).toContain("user-settings");
     });
   }
 });

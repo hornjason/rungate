@@ -126,7 +126,9 @@ function safeViolation(v: TreeViolation): TreeViolation {
   const detail =
     v.tree === "unparsed"
       ? "a registration names this hook without executing it, so its tree cannot be read"
-      : `a registration executes this hook from the ${v.tree} tree`;
+      : v.tree === "pai"
+        ? "a registration executes this hook from the .pai tree, which holds the superseded copy"
+        : "a registration executes this hook through a path naming neither tree's variable, so which copy runs cannot be read";
   return { hook: v.hook, tree: v.tree, command: COMMAND_WITHHELD, detail };
 }
 
@@ -157,8 +159,8 @@ export function wrongTreeAt(
 
 /** A target reading with its command withheld and a detail that names none. */
 function safeTarget(r: TargetReading): TargetReading {
-  const where = r.resolved === null ? "did not resolve" : `resolves to ${r.resolved}`;
-  return { ...r, command: COMMAND_WITHHELD, detail: `${r.hook} [${r.scope}] through ${r.spelling} ${where}` };
+  const where = r.resolved === null ? "which did not resolve" : `which resolves to ${r.resolved}`;
+  return { ...r, command: COMMAND_WITHHELD, detail: `through ${r.spelling}, ${where}` };
 }
 
 /**

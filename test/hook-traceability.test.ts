@@ -1,17 +1,9 @@
 import { describe, test, expect } from "bun:test";
 import { readFileSync, readdirSync, existsSync } from "fs";
-import { homedir } from "os";
 import { join, resolve } from "path";
 import { loadRungateConfig } from "../lib/config-loader";
-import {
-  hookRegistration,
-  readRegistrationScopes,
-  registrationCensus,
-  settingsScopePaths,
-  unplacedHooks,
-  type HookRegistration,
-  type ScopeReading,
-} from "../lib/hook-scopes";
+import { hookRegistration, type HookRegistration } from "../lib/hook-scopes";
+import { liveRegistrationCensus, liveScopeReadability, liveUnplacedHooks } from "./helpers/user-settings";
 import { commandNamesHook, executedHookFile } from "../lib/hook-trees";
 import { remedyMessage } from "../lib/check-remedy";
 
@@ -122,28 +114,16 @@ const unregisteredDeclaration = (file: string): string | null =>
   unregisteredDeclarationIn(readFileSync(join(HARNESS_ROOT, "hooks", file), "utf-8"));
 
 /**
- * Every scope that can register a hook, read for real, with the ones that are
- * not on this machine NAMED rather than dropped.
- *
- * The scope list and the assembly are `lib/hook-scopes.ts`'s, not this
- * file's: a census with its own idea of which scopes exist is how #898 came
- * to read one.
+ * The census over every hook file on disk, across every scope that can
+ * register a hook, with the ones not on this machine NAMED rather than
+ * dropped. Read through the settings helper (#2792), which runs the census on
+ * the raw scopes and returns verdicts only, so no machine settings text
+ * reaches this file. The scope list and the assembly are still
+ * `lib/hook-scopes.ts`'s: a census with its own idea of which scopes exist is
+ * how #898 came to read one.
  */
-function liveScopeReadings(): ScopeReading[] {
-  return readRegistrationScopes(HARNESS_ROOT, homedir(), readIfPresent, registryCommands());
-}
-
-/** `readFileSync`, with an absent file reported as `null` rather than `""`. */
-function readIfPresent(path: string): string | null {
-  return existsSync(path) ? readFileSync(path, "utf-8") : null;
-}
-
-/** The census over every hook file on disk. */
 function liveCensus(): HookRegistration[] {
-  return registrationCensus(
-    HOOK_FILES.map(f => f.replace(/\.hook\.ts$/, "")),
-    liveScopeReadings(),
-  );
+  return liveRegistrationCensus(HARNESS_ROOT, registryCommands(), HOOK_FILES.map(f => f.replace(/\.hook\.ts$/, "")));
 }
 
 describe("#898: the four hook positions agree, named rather than counted", () => {
@@ -223,20 +203,20 @@ describe("#898: the four hook positions agree, named rather than counted", () =>
     // this arm can reach is a file with no registry entry at all — which is
     // invisible to `reconcile` and is exactly the state `ProjectStateSync`
     // and `TestSuiteRelease` were in when #898 declared them unregistered.
-    const repoOwned = new Set(
-      settingsScopePaths(HARNESS_ROOT, homedir())
-        .filter(s => s.ownership === "repo")
-        .map(s => s.scope),
+    // The repo-owned scopes are the ones `settingsScopePaths` marks `repo`,
+    // and the registry; the helper picks them and reads them raw (#2792).
+    const placement = liveUnplacedHooks(
+      HARNESS_ROOT,
+      registryCommands(),
+      HOOK_FILES.map(f => f.replace(/\.hook\.ts$/, "")),
+      HOOK_FILES.filter(unregisteredDeclaration).map(f => f.replace(/\.hook\.ts$/, "")),
     );
-    repoOwned.add("repo-registry");
-
-    const readings = liveScopeReadings().filter(r => repoOwned.has(r.scope));
     expect(
-      readings.length,
+      placement.repoScopes.map(r => r.scope).sort(),
       "no repo-owned scope was read, so this arm compared nothing",
-    ).toBe(repoOwned.size);
+    ).toEqual(["project-local-settings", "project-settings", "repo-registry"]);
     expect(
-      readings.every(r => r.commands !== null),
+      placement.repoScopes.every(r => r.readable),
       "a repo-owned scope read as unreadable — it is committed, so this is not an absence",
     ).toBe(true);
 
@@ -246,13 +226,7 @@ describe("#898: the four hook positions agree, named rather than counted", () =>
         .map(e => e.name),
     );
 
-    const unplaced = unplacedHooks({
-      hooks: HOOK_FILES.map(f => f.replace(/\.hook\.ts$/, "")),
-      repoReadings: readings,
-      declaredUnregistered: HOOK_FILES.filter(unregisteredDeclaration).map(f =>
-        f.replace(/\.hook\.ts$/, ""),
-      ),
-    }).map(h => `${h}.hook.ts`);
+    const unplaced = placement.unplaced.map(h => `${h}.hook.ts`);
 
     expect(
       unplaced,
@@ -316,7 +290,7 @@ describe("#898: the four hook positions agree, named rather than counted", () =>
     // runner `~/.claude/settings.json` does not exist, so every hook
     // registered only there lands here — and this case asserts the refusal
     // fired rather than letting CI pass over the subject.
-    const readings = liveScopeReadings();
+    const readability = liveScopeReadability(HARNESS_ROOT, registryCommands());
     const census = liveCensus();
 
     expect(
@@ -324,11 +298,11 @@ describe("#898: the four hook positions agree, named rather than counted", () =>
       "the census did not answer for every hook file on disk",
     ).toEqual(HOOK_FILES.map(f => f.replace(/\.hook\.ts$/, "")).sort());
     expect(
-      readings.filter(r => r.commands !== null).length,
+      readability.filter(r => r.readable).length,
       "no scope was readable at all, so this census compared nothing",
     ).toBeGreaterThan(0);
 
-    const unreadable = readings.filter(r => r.commands === null).map(r => r.scope);
+    const unreadable = readability.filter(r => !r.readable).map(r => r.scope);
     const unmeasured = census.filter(c => c.verdict === "unmeasured");
 
     if (unreadable.length === 0) {

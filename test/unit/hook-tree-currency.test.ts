@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "child_process";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,7 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "fs";
-import { homedir, tmpdir } from "os";
+import { tmpdir } from "os";
 import { join } from "path";
 import {
   type GitResult,
@@ -17,12 +16,12 @@ import {
   type SpawnGit,
   currencyReportLines,
   directoryCurrency,
-  readRegistrationCurrency,
   registrationCurrency,
   spawnGitRunner,
 } from "../../lib/hook-tree-currency";
 import { GIT_ISOLATION_CONFIG, GIT_ISOLATION_ENV } from "../../lib/git-isolation";
 import type { TargetTreeCensus, TargetReading } from "../../lib/hook-target-tree";
+import { liveRegistrationCurrency } from "../helpers/user-settings";
 
 /**
  * #1216 — a hook registration resolves to a working tree N commits behind
@@ -475,8 +474,6 @@ describe("#1216: the mechanism has a production caller", () => {
     // Machine state, and the case that makes CI witness the subject rather
     // than skip it. On a runner `~/.claude/settings.json` does not exist and
     // the reading is UNMEASURED; the refusal is what is asserted there.
-    const readIfPresent = (p: string): string | null =>
-      existsSync(p) ? readFileSync(p, "utf-8") : null;
     const registry = JSON.parse(
       readFileSync(join(REPO_ROOT, ".claude", "rungate", "hooks.json"), "utf-8"),
     ) as { command?: string }[];
@@ -489,11 +486,11 @@ describe("#1216: the mechanism has a production caller", () => {
       .filter(n => n.endsWith(".hook.ts"))
       .map(n => n.replace(/\.hook\.ts$/, ""));
 
-    const r = readRegistrationCurrency({
+    // Through the helper, so the machine's settings reach this case reduced to
+    // the hook files and path variables the census reads (#2798 review).
+    const r = liveRegistrationCurrency({
       repoRoot: REPO_ROOT,
-      home: homedir(),
       base: BASE,
-      readFile: readIfPresent,
       ownedHooks: owned,
       registryCommands: registry.map(h => String(h?.command ?? h)),
       git: realGit,
