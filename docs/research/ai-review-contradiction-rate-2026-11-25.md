@@ -6,7 +6,7 @@ updated: 2026-11-25
 governs: "#1186's measurement of ai-review CONTRADICTION outcomes, a BLOCK verdict over findings none of which block, read from CI annotations 2026-10-20 to 2026-11-25"
 ---
 
-# AI review contradictions, measured: 4 in 3,780 runs, none since 2026-11-05
+# AI review contradictions, measured: 4 in 3,773 runs, none since 2026-11-05
 
 #1186 asked which input varies when `ai-review` returns `BLOCK` while its own
 payload says no finding blocks. When it was filed on 2026-10-22, that outcome
@@ -32,6 +32,7 @@ attempts, so a contradiction a re-run cleared is still counted.
 | 2026-11-03 to 11-09 | 618 | 1, on 11-05 |
 | 2026-11-10 to 11-16 | 735 | 0 |
 | 2026-11-17 to 11-25 | 1,000 (1,007 attempts) | 0 |
+| **total** | **3,773** | **4** |
 
 Over the last window, the 117 failed runs were 88 blocking findings, 15
 population replies owed, 12 unmeasured reviews and 2 reviewers that modified the
@@ -51,17 +52,20 @@ CLEAN`. Run 39796394689 was cleared the same way by its third attempt. The clean
 attempts' payload files did not survive the runner; their outcome annotations
 did.
 
-## The varying input is the reviewer's verdict word
+## What varied: the payload, and in the one printed case, the verdict word
 
 The adjudicator is a pure function of the payload, and it gave two outcomes for
-one diff, so the payload differed between the two attempts. The one
-contradiction whose findings were printed shows how: two findings, both
-`medium`, under a `BLOCK` verdict. The reviewer stamped its judgement of the
-approach as the verdict while writing every finding below blocking. Nothing was
-misread, and the reading did not vary.
+one diff, so the payload differed between the two attempts. That much is
+measured. What in the payload differed is measured for one contradiction only:
+run 42108890208 printed two findings, both `medium`, under a `BLOCK` verdict,
+so there the verdict word disagreed with the severities beneath it. The clean
+attempts' payloads were not kept, so whether their findings also differed, or
+only the verdict, cannot be read. The three 10-22 contradictions printed counts
+only, and are consistent with the same shape without showing it.
 
-The rate fell from about 6 in 20 runs to 1 in roughly 2,800 runs after 10-22,
-and to 0 in the 2,742 runs since 11-05. This record does not tie the fall to
+The rate fell from about 6 in 20 runs to 1 in the 2,803 runs from 10-27 to
+11-25. The one was on 11-05, and none came after it: not in the rest of that
+week, and not in the 1,735 runs from 11-10 to 11-25. This record does not tie the fall to
 one change. The prompt line telling the reviewer that its verdict does not
 decide whether the run blocks was already present on 10-22 (#800). The check
 that compares the verdict with the findings moved ahead of CRC-B7's demotion of
