@@ -9,7 +9,7 @@ updated: 2026-11-25
 
 ## Status
 
-**Proposed, 2026-11-25.** Jason chose this direction on 2026-11-25, after an audit of the guard ("Shrink via ADR"). Filed as #2841. He merges this ADR. Still open for him: the wording of SC-2810 and SC-2811 below.
+**Proposed, 2026-11-25.** Jason chose this direction on 2026-11-25, after an audit of the guard ("Shrink via ADR"). Filed as #2841. He merges this ADR. Still open for him: the wording of SC-2810 and SC-2811, quoted under Criteria.
 
 ## Context
 
@@ -42,12 +42,14 @@ updated: 2026-11-25
 
 ## Decision
 
-The guard catches accidents and says so. It refuses a shell command that writes a protected artifact. It also refuses an interpreter body that names one beside a declared write verb, wherever it points. It reads no program to find out where that program writes. Reads, and the sanctioned `writeWorkflowState` repair, stay allowed. Plain shell writes into a scratch directory stay exempt, decided by the target's real directory. The module shrinks to 2,000 lines or fewer.
+Nothing in the guard changes when this ADR merges. The first row's pull request makes decisions 2 and 3 true, and the second row's makes SC-2810 true.
+
+Once both rows ship, the guard catches accidents and says so. It refuses a shell command that writes a protected artifact. It also refuses an interpreter body that names one beside a declared write verb, wherever it points. It reads no program to find out where that program writes. Reads, and the sanctioned `writeWorkflowState` repair, stay allowed. Plain shell writes into a scratch directory stay exempt, decided by the target's real directory. The module shrinks to the size SC-2810 states.
 
 ## Decisions
 
 1. **The guard is an accident guard, not a boundary — Jason, 2026-11-25.** A userland reader of command text cannot stop an agent running as the files' owner, and the code already admits it, but only in the `WRITE_INTENT` docblock. The cut writes it into the hook's docblock (`hooks/BashWriteGuard.hook.ts`) and into the BashWriteGuard row of `specs/HOOK-ARCHITECTURE-SPEC.md`, and leaves no comment claiming more.
-2. **Program-body reading and the interpreter scratch exemption are deleted — Jason, 2026-11-25.** No real command uses the exemption, and every review of it found a bypass. What goes:
+2. **Program-body reading and the interpreter scratch exemption are deleted, in the first row's pull request — Jason, 2026-11-25.** No real command uses the exemption, and every review of it found a bypass. What goes:
    - `bodyTargets`, `callWrites`, the assignment and tuple readers, `codeMask` and the write-callee identity;
    - `lib/interpreter-calls.ts`, once nothing imports it.
 3. **An interpreter body that names a protected artifact beside a declared write verb is refused, wherever it points.** This is the write-intent window (`writesNear`, reading `WRITE_INTENT`), with the scratch exemption in front of it removed. It refuses only when a declared write verb is near the name, so a read of `workflow-state.json` stays allowed. So does the repair the harness prints, `bun -e … writeWorkflowState('…/workflow-state.json', …)`: the arm's docblock records why it must, and `test/bash-write-guard.test.ts` pins it.
@@ -80,10 +82,12 @@ The guard catches accidents and says so. It refuses a shell command that writes 
 
 ## Criteria
 
-Written in `specs/HOOK-ARCHITECTURE-SPEC.md`, reserved in `specs/sc-reservations.json`:
+Written in `specs/HOOK-ARCHITECTURE-SPEC.md` by `create-sc`, reserved in `specs/sc-reservations.json`. Quoted here once so the wording can be approved; the size limit is stated nowhere else in this record.
 
-- SC-2810: `lib/bash-write-guard.ts` is between [100] and [2000] lines. The shell reader alone is about 1,350 lines, so this is about half of today's file.
-- SC-2811: An interpreter body that names a protected artifact beside a declared write verb is refused by the bash write guard whatever directory it names (behavioral).
+- SC-2810: lib/bash-write-guard.ts is between [100] and [2000] lines
+- SC-2811: An interpreter body that names a protected artifact beside a declared write verb is refused by the bash write guard whatever directory it names (behavioral)
+
+The shell reader alone is about 1,350 lines, so SC-2810's bound is about half of today's file.
 
 ## Decomposition
 
@@ -92,4 +96,4 @@ The first row's pull request also says `Fixes` for #2705, #2731 and #2772. Their
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
 | SC-2811 | The write guard drops program-body reading and the interpreter scratch exemption | lib/bash-write-guard.ts, lib/interpreter-calls.ts, test/bash-write-guard.test.ts, test/interpreter-calls.test.ts | — | — |
-| SC-2810 | The write guard is cut to an accident guard of at most two thousand lines | lib/bash-write-guard.ts, test/bash-write-guard.test.ts, hooks/BashWriteGuard.hook.ts, specs/HOOK-ARCHITECTURE-SPEC.md | — | The write guard drops program-body reading and the interpreter scratch exemption |
+| SC-2810 | The write guard is cut to the size SC-2810 states | lib/bash-write-guard.ts, test/bash-write-guard.test.ts, hooks/BashWriteGuard.hook.ts, specs/HOOK-ARCHITECTURE-SPEC.md | — | The write guard drops program-body reading and the interpreter scratch exemption |
