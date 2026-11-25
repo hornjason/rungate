@@ -89,32 +89,32 @@ export interface AdrAcceptedWorkflowOptions {
  * The first step's script on a merge-triggered run (#2842). The merge
  * workflow completes about three times a push in a consumer, and each run did
  * a full-depth checkout and set up bun before anything asked whether it had
- * merged. This decides `go` first, from three readings:
+ * merged. This decides `go` first, from one reading: whether the default
+ * branch's head differs from the head of this workflow's newest successful
+ * run, so that something reached main since the last placement.
  *
- * - the triggering run concluded `success`, so it may have merged;
- * - it ran for this repository, not a fork's head;
- * - the default branch's head differs from this workflow's newest successful
- *   run, so something reached main since the last placement.
+ * It reads nothing else, on purpose (review round 1 of #2847). A skipped run
+ * still concludes success, and its head becomes the next run's range base
+ * (`--accepted-since-last-run`). So any skip while main has moved hides
+ * every merge in between. The triggering run's conclusion is not evidence
+ * either: a merge lands, then a later step fails, and the run concludes
+ * `failure` with the merge on main. Nor is a fork's head: the job runs this
+ * repository's own workflow file, and the board step's actor check is the
+ * gate on who may write the board. Only "main has not moved" is safe to
+ * skip, because a success at that head moves the base nowhere.
  *
  * A reading the API could not give is not "nothing merged": `go` stays
- * true and the run does today's full work, which is idempotent. Only a
- * definite answer skips it.
+ * true and the run does today's full work, which is idempotent.
  */
 export function buildMergedGateScript(): string {
   return [
     `go=true`,
-    `if [ "$CONCLUSION" != "success" ]; then`,
-    `  echo "The merge workflow concluded '$CONCLUSION', so it merged nothing."; go=false`,
-    `elif [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then`,
-    `  echo "The merge workflow ran for $HEAD_REPO, not $GITHUB_REPOSITORY, so its run is not trusted to have merged here."; go=false`,
-    `else`,
-    `  main=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha) || main=""`,
-    `  last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${ADR_ACCEPTED_WORKFLOW_FILE}/runs?status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""') || last=""`,
-    `  if [ -z "$main" ]; then`,
-    `    echo "::notice::The head of $GITHUB_REF_NAME could not be read, so whether anything merged is UNMEASURED; running the full placement."`,
-    `  elif [ -n "$last" ] && [ "$main" = "$last" ]; then`,
-    `    echo "Nothing reached $GITHUB_REF_NAME since this workflow last succeeded at $last."; go=false`,
-    `  fi`,
+    `main=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha) || main=""`,
+    `last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${ADR_ACCEPTED_WORKFLOW_FILE}/runs?status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""') || last=""`,
+    `if [ -z "$main" ]; then`,
+    `  echo "::notice::The head of $GITHUB_REF_NAME could not be read, so whether anything merged is UNMEASURED; running the full placement."`,
+    `elif [ -n "$last" ] && [ "$main" = "$last" ]; then`,
+    `  echo "Nothing reached $GITHUB_REF_NAME since this workflow last succeeded at $last."; go=false`,
     `fi`,
     `echo "go=$go" >> "$GITHUB_OUTPUT"`,
   ].join("\n");
@@ -183,8 +183,6 @@ export function buildAdrAcceptedWorkflow(opts: AdrAcceptedWorkflowOptions): stri
         if: \${{ github.event_name == 'workflow_run' }}
         env:
           GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-          CONCLUSION: \${{ github.event.workflow_run.conclusion }}
-          HEAD_REPO: \${{ github.event.workflow_run.head_repository.full_name }}
         run: |
 ${buildMergedGateScript().split("\n").map(l => `          ${l}`).join("\n")}`;
   const fetchStep =

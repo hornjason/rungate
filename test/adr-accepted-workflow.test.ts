@@ -645,7 +645,7 @@ describe("#2842: the merge trigger's name is checked, kept current, and a run th
 
   // The failure matrix, written before the gate: each row runs the real
   // script under bash with a stand-in gh that logs its calls.
-  describe("the gate decides go from three readings, and an unread one never skips the work", () => {
+  describe("the gate skips only when main has not moved, and an unread answer never skips the work", () => {
     const run = (env: Record<string, string>, gh: { main?: string; last?: string; fail?: boolean }) => {
       const dir = mkdtempSync(join(tmpdir(), "rg-2842-gate-"));
       try {
@@ -664,7 +664,7 @@ describe("#2842: the merge trigger's name is checked, kept current, and a run th
         chmodSync(join(dir, "gh"), 0o755);
         const r = spawnSync("bash", ["-e", "-c", buildMergedGateScript()], {
           encoding: "utf-8",
-          env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_REPOSITORY: "o/r", GITHUB_REF_NAME: "main", CONCLUSION: "success", HEAD_REPO: "o/r", ...env },
+          env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_REPOSITORY: "o/r", GITHUB_REF_NAME: "main", ...env },
         });
         return { status: r.status, stdout: r.stdout, go: readFileSync(out, "utf-8").trim(), calls: existsSync(log) ? readFileSync(log, "utf-8") : "" };
       } finally {
@@ -672,13 +672,19 @@ describe("#2842: the merge trigger's name is checked, kept current, and a run th
       }
     };
 
-    test("a merge run that did not succeed merged nothing, and the API is not asked", () => {
+    // Review round 1 of #2847: a skipped run still concludes success and its
+    // head becomes the next range base, so a skip while main moved hides the
+    // merge. A merge can land before a later step of the merge workflow fails.
+    test("a merge workflow that concluded failure after main moved still runs: the merge may have landed first", () => {
       const r = run({ CONCLUSION: "failure" }, { main: "a", last: "b" });
-      expect([r.status, r.go, r.calls]).toEqual([0, "go=false", ""]);
+      expect([r.status, r.go]).toEqual([0, "go=true"]);
     });
-    test("a merge run for another repository's head is not trusted to have merged here", () => {
+    test("a run started by a fork's pull request still runs when main moved: the job is this repository's own file", () => {
       const r = run({ HEAD_REPO: "fork/r" }, { main: "a", last: "b" });
-      expect([r.status, r.go, r.calls]).toEqual([0, "go=false", ""]);
+      expect([r.status, r.go]).toEqual([0, "go=true"]);
+    });
+    test("the gate reads only main and this workflow's last success, nothing about the triggering run", () => {
+      expect(buildMergedGateScript()).not.toMatch(/CONCLUSION|HEAD_REPO|workflow_run\./);
     });
     test("nothing reached main since the last successful placement: skip", () => {
       expect(run({}, { main: "abc", last: "abc" }).go).toBe("go=false");
