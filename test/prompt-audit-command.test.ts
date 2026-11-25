@@ -495,6 +495,22 @@ describe("#2778: the user-level surface is reported unread by default and linted
     expect(audit.unmeasured.join("\n")).toContain(`${USER_PREFIX}skills/x/refs/gone.md (ENOENT)`);
   });
 
+  // Review round 7 of #2844: a home-rooted name keeps its own root.
+  test("an unreadable path under ~/ outside .claude is named from ~/, not from ~/.claude/", () => {
+    if (process.getuid?.() === 0) return; // root reads a mode-000 directory anyway
+    const home = fakeHome(["skills/x/SKILL.md", "Read `~/notes/guide.md` first."]);
+    mkdirSync(join(home, "notes"));
+    writeFileSync(join(home, "notes", "guide.md"), "present\n");
+    chmodSync(join(home, "notes"), 0o000);
+    try {
+      const unread = promptAudit(rendered, undefined, { home }).unmeasured.join("\n");
+      expect(unread).toContain("~/notes/guide.md (EACCES)");
+      expect(unread).not.toContain("~/.claude/~/");
+    } finally {
+      chmodSync(join(home, "notes"), 0o755);
+    }
+  });
+
   test("the disclosure says which user files load every session and which load when used", () => {
     expect(USER_SURFACE_UNREAD).toContain(`Claude Code loads ${USER_PREFIX}CLAUDE.md and ${USER_PREFIX}rules/ into every session here, and the rest when they are used.`);
   });

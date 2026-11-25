@@ -340,7 +340,10 @@ export const UNREAD_SHOWN = 10;
 /** The UNMEASURED line for paths of one surface that could not be read, or null when every one was. */
 function unreadLine(surface: "project" | "user-level", unreadable: readonly string[], prefix: string): string | null {
   if (unreadable.length === 0) return null;
-  const shown = unreadable.slice(0, UNREAD_SHOWN).map(u => prefix + u).join(", ");
+  // A name the reader already rooted at home (`~/notes`) or the filesystem is
+  // shown as it is; only a name under the surface's own root gets the prefix
+  // (review round 7 of #2844).
+  const shown = unreadable.slice(0, UNREAD_SHOWN).map(u => (/^(~\/|\/)/.test(u) ? u : prefix + u)).join(", ");
   const rest = unreadable.length > UNREAD_SHOWN ? `, and ${unreadable.length - UNREAD_SHOWN} more` : "";
   return `UNMEASURED: ${unreadable.length} ${surface} path(s) could not be read, so nothing under them is in this report: ${shown}${rest}.`;
 }
