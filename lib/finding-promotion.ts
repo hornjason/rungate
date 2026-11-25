@@ -52,7 +52,8 @@ import { allocateScNumber, formatSCLine } from "./create-sc";
 import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf } from "./issue-shape";
 import { fenceOpening, readFences } from "./markdown-fence";
 import type { ScRegistry } from "./sc-ids";
-import { declaresDeferred, parsePlacementRows, placementReading } from "./spec-placement";
+import { declaresDeferred, parsePlacementRows, placementLines, placementReading } from "./spec-placement";
+import { parseCriteria } from "./spec-evidence";
 
 /** The issue a finding was filed as. The shape `criteriaNamedBy` reads. */
 export interface PromotableIssue {
@@ -684,17 +685,7 @@ export function specWithCriterion(
   } else if (last === -1) {
     text = `${specText.trimEnd()}\n${line}\n`;
   } else {
-    let at = last + 1;
-    // Past the criterion's indented proof lines AND any note directly under
-    // it, such as a `<!-- REVIEW: … -->` line: both belong to that criterion,
-    // and a new line between them moves the note onto the wrong one (#2107).
-    while (
-      at < lines.length &&
-      (/^\s+\S/.test(lines[at]!) || /^<!--.*-->\s*$/.test(lines[at]!)) &&
-      !ANY_CRITERION_LINE.test(lines[at]!)
-    ) {
-      at++;
-    }
+    const at = pastBlock(lines, last + 1);
     text = [...lines.slice(0, at), line, ...lines.slice(at)].join("\n");
   }
   if (phase !== null) {
@@ -708,7 +699,9 @@ export function specWithCriterion(
         why: `${id} is already placed in ${elsewhere.placement}; a criterion has one phase, so move it by editing the table`,
       };
     }
-    const placed = withPhase(text, id, phase);
+    // ADR-026: a spec of placement lines takes one beneath the criterion; a
+    // spec with a table takes the id in its row, as before (SC-2807).
+    const placed = placementLines(text).length > 0 ? withPlacementLine(text, id, phase) : withPhase(text, id, phase);
     if (placed === null) {
       return { ok: false, refusal: "PHASE_ROW_ABSENT", why: `this spec's Phase placement table has no row for Phase ${phase}` };
     }
@@ -723,6 +716,39 @@ export function specWithCriterion(
     };
   }
   return { ok: true, text };
+}
+
+/**
+ * The index just past the block that starts at `at`: a criterion's indented
+ * proof lines AND any note directly under it, such as a `<!-- REVIEW: … -->`
+ * line, both belong to it, and a new line between them moves the note onto
+ * the wrong criterion (#2107).
+ */
+function pastBlock(lines: string[], at: number): number {
+  while (
+    at < lines.length &&
+    (/^\s+\S/.test(lines[at]!) || /^<!--.*-->\s*$/.test(lines[at]!)) &&
+    !ANY_CRITERION_LINE.test(lines[at]!)
+  ) {
+    at++;
+  }
+  return at;
+}
+
+/**
+ * The spec with `placement: Phase N` at the end of `id`'s block, beside its
+ * `needs:` and `proved-by:`, and no other line changed (ADR-026 Decision 4,
+ * SC-2807). Unchanged when the criterion already says so; a different phase
+ * is refused before this is reached.
+ */
+function withPlacementLine(specText: string, id: string, phase: number): string {
+  const c = parseCriteria(specText).find(x => x.id === id);
+  if (!c) return specText;
+  if (c.placements.some(p => p.value.replaceAll("*", "").trim() === `Phase ${phase}`)) return specText;
+  // Where the block ends is parseCriteria's `end`, the reading the placement
+  // converter uses, so the two writers put the line in one place.
+  const lines = specText.split("\n");
+  return [...lines.slice(0, c.end), `      placement: Phase ${phase}`, ...lines.slice(c.end)].join("\n");
 }
 
 /** The spec with `id` added to its `Phase N` placement row, or null when there is no such row. */

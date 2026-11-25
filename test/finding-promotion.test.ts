@@ -51,7 +51,7 @@ import {
 import { NAMES_NONE, criterionAnswer } from "../lib/board-mirror";
 import { ISSUE_SECTIONS, headingFor, headingOccurrencesOf, missingSections } from "../lib/issue-shape";
 import { buildScRegistry } from "../lib/sc-ids";
-import { placementReading } from "../lib/spec-placement";
+import { placementReading, placementsById } from "../lib/spec-placement";
 import { DEFERRAL_BANK } from "../scripts/board-snapshot";
 
 const SOURCE = join(import.meta.dir, "..", "lib", "finding-promotion.ts");
@@ -1945,5 +1945,78 @@ describe("#2107: three edges of the new flags", () => {
     const lines = out.text.split("\n");
     expect(lines[lines.indexOf(line) - 1]).toStartWith("<!-- REVIEW:");
     expect(lines[lines.indexOf(line) - 2]).toStartWith("- [ ] SC-9001:");
+  });
+});
+
+/**
+ * Covers SC-2807 (SPEC-TO-BOARD-PIPELINE-SPEC.md; ADR-026 row 2).
+ *
+ * In a spec that places its criteria with `placement:` lines, `--phase N`
+ * writes one beneath the criterion it adds and changes no other line. In a
+ * spec that still has a Phase placement table, it appends to the table row as
+ * before, and writes no placement line.
+ */
+describe("SC-2807: --phase writes a placement line in a spec that uses them, and the table row otherwise", () => {
+  const LINES_SPEC = [
+    "---",
+    "doc-type: spec",
+    "testable: true",
+    "governs: a fixture of placement lines",
+    "---",
+    "",
+    "# Lines",
+    "",
+    "## Success Criteria",
+    "",
+    "- [ ] SC-9001: lib/fixture.ts contains [alpha] — the fixture states something",
+    "      placement: Phase 1",
+    "- [ ] SC-9002: lib/fixture.ts contains [beta] — and something else",
+    "      needs: test",
+    "      placement: Phase 2",
+    "",
+    "## Notes",
+    "",
+    "Prose after the criteria.",
+    "",
+  ].join("\n");
+  const line = "- [ ] SC-9010: lib/x.ts contains [x] — new";
+
+  test("the new criterion gets `placement: Phase N` beneath it, and no other line of the spec changes", () => {
+    const out = specWithCriterion(LINES_SPEC, line, "SC-9010", 2);
+    expect(out.ok, out.ok ? "" : out.why).toBe(true);
+    if (!out.ok) return;
+    const before = LINES_SPEC.split("\n");
+    const after = out.text.split("\n");
+    const at = after.indexOf(line);
+    expect(at).toBeGreaterThan(0);
+    expect(after[at + 1]).toBe("      placement: Phase 2");
+    expect([...after.slice(0, at), ...after.slice(at + 2)]).toEqual(before);
+    expect(placementsById(out.text).get("SC-9010")).toBe("Phase 2");
+    expect(placementReading(out.text).reading).toBe("MEASURED");
+    expect(placementReading(out.text).unplaced).toEqual([]);
+  });
+
+  test("a criterion already placed is refused in another phase, and its own phase changes nothing", () => {
+    const present = "- [ ] SC-9001: lib/fixture.ts contains [alpha] — the fixture states something";
+    const moved = specWithCriterion(LINES_SPEC, present, "SC-9001", 2);
+    expect(moved.ok).toBe(false);
+    if (!moved.ok) expect(moved.refusal).toBe("ALREADY_PLACED");
+    const again = specWithCriterion(LINES_SPEC, present, "SC-9001", 1);
+    expect(again.ok).toBe(true);
+    if (again.ok) expect(again.text).toBe(LINES_SPEC);
+  });
+
+  test("a spec of placement lines refuses a new criterion with no phase", () => {
+    const out = specWithCriterion(LINES_SPEC, line, "SC-9010", null);
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.refusal).toBe("PHASE_REQUIRED");
+  });
+
+  test("a spec with a Phase placement table gets the id in its row, and no placement line", () => {
+    const out = specWithCriterion(PLANNED_SPEC, line, "SC-9010", 2);
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.text).toContain("| **Phase 2** | SC-9002, SC-9010 |");
+    expect(out.text).not.toMatch(/^\s+placement:/m);
   });
 });
