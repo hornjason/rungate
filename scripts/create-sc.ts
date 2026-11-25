@@ -44,9 +44,14 @@ const ROOT = join(import.meta.dir, "..");
 
 const args = process.argv.slice(2);
 
+/**
+ * The value after `--name`, or undefined when there is none. A next token
+ * that is itself a flag is not a value (review round 1 of #2846):
+ * `--behavioral --spec X` wrote "--spec" into the spec as a criterion.
+ */
 function getFlag(name: string): string | undefined {
   const idx = args.indexOf(`--${name}`);
-  if (idx === -1 || idx + 1 >= args.length) return undefined;
+  if (idx === -1 || idx + 1 >= args.length || args[idx + 1].startsWith("--")) return undefined;
   return args[idx + 1];
 }
 
@@ -63,6 +68,10 @@ if (hasFlag("list")) {
 
 const patternName = getFlag("pattern");
 const behavioral = getFlag("behavioral");
+if (hasFlag("behavioral") && behavioral === undefined) {
+  console.error('ERROR: --behavioral needs the criterion\'s sentence after it, as one argument: --behavioral "X happens"');
+  process.exit(1);
+}
 if (patternName && behavioral !== undefined) {
   console.error("ERROR: give --behavioral or --pattern, not both: a behavioural criterion is written as stated, not from a pattern");
   process.exit(1);

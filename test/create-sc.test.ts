@@ -455,6 +455,14 @@ describe("#2845: create-sc places a criterion after the last one, and --behavior
     expect(out.replace(NEW + "\n", "")).toBe(SPEC);
   });
 
+  // Review round 1 of #2846: an indented fence under the last criterion reads
+  // as its continuation up to the blank line inside the fence.
+  test("a last criterion whose block opens a fence gets the line after the fence closes", () => {
+    const fenced = ["# S", "", "- [ ] SC-9100: foo", "  ```sh", "  echo a", "", "  echo b", "  ```", "", "## Notes", ""].join("\n");
+    const lines = placeScLine(fenced, NEW).split("\n");
+    expect(lines.indexOf(NEW), "placed inside the example").toBe(lines.lastIndexOf("  ```") + 1);
+  });
+
   test("a spec that states no criterion gets the line at its end, as before", () => {
     const bare = "---\ndoc-type: spec\n---\n\n# Nothing yet\n\n```md\n- [ ] SC-9198: only an example\n```\n";
     expect(placeScLine(bare, NEW)).toBe(bare.trimEnd() + "\n" + NEW + "\n");
@@ -489,6 +497,13 @@ describe("#2845: create-sc places a criterion after the last one, and --behavior
       expect(pb, `behavioral line not placed or not as stated: ${after(b)}`).not.toBeNull();
       expect(pb![1], "the behavioural write took a different allocator").toBe(pa![1]);
       expect(readFileSync(b, "utf-8").replace(after(b) + "\n", "")).toBe(SPEC);
+
+      // Review round 1 of #2846: a flag right after --behavioral is not its sentence.
+      const before = readFileSync(b, "utf-8");
+      const noSentence = runCreateSC(["--behavioral", "--spec", b]);
+      expect(noSentence.exitCode).toBe(1);
+      expect(noSentence.stderr).toContain("--behavioral needs the criterion's sentence");
+      expect(readFileSync(b, "utf-8"), "a flag was written as a criterion").toBe(before);
 
       const both = runCreateSC(["--behavioral", "X happens", "--pattern", "file-exists", "--params", "{}", "--spec", b]);
       expect(both.exitCode).toBe(1);

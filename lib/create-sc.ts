@@ -698,12 +698,19 @@ export function behavioralStatement(sentence: string): string {
  * the criteria, so ADR-027's line was moved up by hand. A criterion inside a
  * fenced example is not one to place after: inserting there would write the
  * new line into the example.
+ *
+ * Nor is the inside of a fence the block itself opened (review round 1 of
+ * #2846): an indented example under the last criterion reads as its
+ * continuation up to the first blank line, which can sit inside the fence, so
+ * when the block ends inside one the line goes after the fence closes.
  */
 export function placeScLine(spec: string, scLine: string): string {
   const lines = spec.split("\n");
   const { roles } = readFences(lines);
   const last = parseCriteria(spec).filter(c => roles[c.line - 1] === "prose").at(-1);
   if (last === undefined) return spec.trimEnd() + "\n" + scLine + "\n";
-  lines.splice(last.end, 0, scLine);
+  let at = last.end;
+  if (roles[at - 1] !== "prose") while (at < lines.length && roles[at] !== "prose") at++;
+  lines.splice(at, 0, scLine);
   return lines.join("\n");
 }

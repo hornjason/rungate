@@ -1,8 +1,8 @@
 ---
 doc-type: code-map
 status: generated
-updated: 2026-11-20
-scanned-at-sha: 904b121d
+updated: 2026-11-25
+scanned-at-sha: ae7a3ea5
 generator: rungate/scripts/generate-code-map.ts
 ---
 
@@ -23,7 +23,7 @@ row as orientation, not as a fact about your working tree.
 | Metric | Count |
 |--------|-------|
 | Source directories | 14 |
-| Dependencies | 3 |
+| Dependencies | 4 |
 | Dev dependencies | 2 |
 | API routes | 0 |
 | React components | 0 |
