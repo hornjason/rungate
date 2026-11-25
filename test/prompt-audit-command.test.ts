@@ -111,8 +111,9 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
   });
 
   // #2779: an example path in a rendered rule names no directory any tree has,
-  // so rungate's own audit comes back clean on rungate, where `lib/scaffold/`
-  // exists. A real file would dangle in every consumer with that directory.
+  // so rungate's own audit reports no harness-owned dangling-path finding on
+  // rungate, where `lib/scaffold/` exists. A real file would dangle in every
+  // consumer with that directory. This pins that one lint, not the whole audit.
   test("rungate's own tree has no harness-owned dangling-path finding", () => {
     expect(promptAudit(ROOT).findings.filter(f => f.lint === "dangling-path" && f.owner === "harness").map(f => `${f.file}: ${f.message}`)).toEqual([]);
   });
