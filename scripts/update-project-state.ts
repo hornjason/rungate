@@ -384,6 +384,12 @@ if (parsed !== null && typeof parsed === "object" && "stages" in parsed) {
  * run, and it writes nothing. A difference names its first line.
  */
 if (CHECK) {
+  // The writer creates a missing markdown; a check has nothing to compare (#2827 review).
+  if (!existsSync(STATE_MD)) {
+    console.error(`project-state: ${STATE_MD} does not exist, so there is no markdown to compare with project-state.json.`);
+    console.error(`project-state: render it with \`bun scripts/update-project-state.ts\` from the primary checkout. Nothing was written.`);
+    process.exit(PROJECT_STATE_REFUSE_EXIT);
+  }
   const committed = readFileSync(STATE_MD, "utf-8");
   const rendered = render(parsed as ProjectState) + "\n";
   if (committed === rendered) {

@@ -189,6 +189,13 @@ describe("update-project-state", () => {
     // Nothing written: both files are as they were.
     expect(readFileSync(STATE_MD, "utf-8")).toBe(mdBefore);
     expect(readFileSync(STATE_JSON, "utf-8")).toBe(jsonBefore);
+    // A missing markdown is a named refusal, not a crash, and is not created (#2827 review).
+    rmSync(STATE_MD);
+    const missing = check();
+    expect(missing.status, missing.out).not.toBe(0);
+    expect(missing.out).toContain("does not exist, so there is no markdown to compare");
+    expect(missing.out).not.toContain("ENOENT");
+    expect(existsSync(STATE_MD)).toBe(false);
   });
 
   test("generates markdown from JSON", () => {
