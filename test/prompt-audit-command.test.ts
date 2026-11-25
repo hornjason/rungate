@@ -13,7 +13,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -21,6 +21,7 @@ import {
   PRESSURE_FLOOR,
   PROMPT_AUDIT_LINTS,
   USER_AUDIT_LINTS,
+  USER_PREFIX,
   formatAudit,
   generatedNames,
   lineOwners,
@@ -353,6 +354,49 @@ describe("#2778: the user-level surface is reported unread by default and linted
     const audit = promptAudit(rendered, undefined, { home });
     expect(audit.user?.files).toBe(2);
     expect(audit.findings.map(f => `${f.owner} ${f.lint} ${f.file}`)).toEqual(["user dangling-path ~/.claude/skills/linked/SKILL.md"]);
+  });
+
+  // Review round 1 of #2844: `throwIfNoEntry` covers ENOENT only, so a link
+  // loop, a path through a file or an unreadable directory threw and the run
+  // printed no report. Each is now named as unread, and the rest is linted.
+  test("a link loop, a path through a file and an unreadable directory are named as unread, and the rest is still linted", () => {
+    const home = fakeHome(["skills/ok/SKILL.md", "Read `references/gone.md` first."], ["skills/ok/references/here.md", "present"], ["skills/file", "a plain file"]);
+    const skills = join(home, ".claude", "skills");
+    symlinkSync("self", join(skills, "self"));
+    symlinkSync("b", join(skills, "a"));
+    symlinkSync("a", join(skills, "b"));
+    symlinkSync(join(skills, "file", "inside"), join(skills, "through-a-file"));
+    mkdirSync(join(skills, "locked"));
+    writeFileSync(join(skills, "locked", "SKILL.md"), "hidden\n");
+    chmodSync(join(skills, "locked"), 0o000);
+    try {
+      const audit = promptAudit(rendered, undefined, { home });
+      expect(audit.findings.map(f => `${f.owner} ${f.lint} ${f.file}`)).toEqual(["user dangling-path ~/.claude/skills/ok/SKILL.md"]);
+      const unread = audit.unmeasured.join("\n");
+      expect(unread).toMatch(/^UNMEASURED: \d+ user-level path\(s\) could not be read/);
+      for (const name of ["skills/self", "skills/a", "skills/b", "skills/through-a-file"]) expect(unread, name).toContain(`${USER_PREFIX}${name}`);
+      // Root reads a mode-000 directory anyway, so the refusal is asserted only where it can happen.
+      if (process.getuid?.() !== 0) expect(unread).toContain(`${USER_PREFIX}skills/locked`);
+      expect(formatAudit(audit)).toContain(audit.unmeasured[0]);
+    } finally {
+      chmodSync(join(skills, "locked"), 0o755);
+    }
+  });
+
+  test("node_modules and dot-directories under a skill are not read: no session loads them", () => {
+    const linked = mkdtempSync(join(scratch, "linked-checkout-"));
+    writeFileSync(join(linked, "SKILL.md"), "A skill.\n");
+    for (const dir of ["node_modules/pkg", ".git/notes"]) {
+      mkdirSync(join(linked, dir), { recursive: true });
+      writeFileSync(join(linked, dir, "README.md"), PRESSURE + "\n");
+    }
+    const home = fakeHome(["CLAUDE.md", "Hello."]);
+    mkdirSync(join(home, ".claude", "skills"));
+    symlinkSync(linked, join(home, ".claude", "skills", "tool"));
+    const audit = promptAudit(rendered, undefined, { home });
+    expect(audit.user?.files).toBe(2);
+    expect(audit.findings).toEqual([]);
+    expect(audit.unmeasured).toEqual([]);
   });
 
   test("the command says the surface was unread without --user, and lints it with --user, under the HOME it is given", () => {

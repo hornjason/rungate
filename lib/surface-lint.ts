@@ -17,7 +17,7 @@
  * (SC-2805) unchanged.
  */
 
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 
 import { resolveConfig } from "./config-loader";
@@ -119,28 +119,75 @@ export const USER_SURFACE_FILES = ["CLAUDE.md"] as const;
 /** The user-level directories whose `*.md` files are the rest of it, relative to `~/.claude`. */
 export const USER_SURFACE_DIRS = ["agents", "skills", "commands"] as const;
 
+/** The user-level surface as read: the files, and every path that could not be read, with why. */
+export interface UserSurface extends RenderedSurface {
+  /** Paths relative to `~/.claude`, each with the error code that stopped it, e.g. `skills/a (ELOOP)`. */
+  readonly unreadable: readonly string[];
+}
+
+/**
+ * Directory entries no session loads: a linked checkout's `node_modules`,
+ * and dot-directories such as `.git`. Measured on one machine on
+ * 2026-11-25 (review round 1 of #2844): 132 of 928 `.md` files under
+ * `~/.claude`'s agents, skills and commands sat in one linked skill's
+ * `node_modules`, and each would have been reported as the user's own.
+ */
+function neverLoaded(name: string): boolean {
+  return name === "node_modules" || name.startsWith(".");
+}
+
+/** The error code an fs call failed with, or its message when it has none. */
+function codeOf(e: unknown): string {
+  return (e as NodeJS.ErrnoException).code ?? (e as Error).message;
+}
+
 /**
  * Every `.md` file under `dir`, following symlinks. A user's skills are often
  * links into another checkout, and Claude Code loads them through the link,
  * so a walk that skipped links would read less than a session loads. Each
- * directory is entered once by its real path, so a link cycle ends.
+ * directory is entered once by its real path, so a cycle through directories
+ * ends.
+ *
+ * An entry that cannot be read is named in `unreadable` and skipped, never
+ * dropped silently and never allowed to end the walk: a link to itself
+ * (ELOOP), a path through a file (ENOTDIR), an unreadable directory (EACCES)
+ * and a dangling link (ENOENT) are each one path the report says it did not
+ * read (review round 1 of #2844).
  */
-function mdInFollowingLinks(root: string, dir: string): string[] {
+function mdInFollowingLinks(root: string, dir: string, unreadable: string[]): string[] {
   const out: string[] = [];
   const entered = new Set<string>();
+  const tryFs = <T>(rel: string, read: () => T): T | undefined => {
+    try {
+      return read();
+    } catch (e) {
+      unreadable.push(`${rel} (${codeOf(e)})`);
+      return undefined;
+    }
+  };
   const walk = (abs: string, rel: string): void => {
-    const real = realpathSync(abs);
-    if (entered.has(real)) return;
+    const real = tryFs(rel, () => realpathSync(abs));
+    if (real === undefined || entered.has(real)) return;
     entered.add(real);
-    for (const name of readdirSync(abs).sort((x, y) => x.localeCompare(y))) {
-      const at = join(abs, name);
-      const st = statSync(at, { throwIfNoEntry: false });
-      if (st?.isDirectory()) walk(at, `${rel}/${name}`);
+    const names = tryFs(rel, () => readdirSync(abs));
+    for (const name of (names ?? []).sort((x, y) => x.localeCompare(y))) {
+      if (neverLoaded(name)) continue;
+      const st = tryFs(`${rel}/${name}`, () => statSync(join(abs, name)));
+      if (st?.isDirectory()) walk(join(abs, name), `${rel}/${name}`);
       else if (st?.isFile() && name.endsWith(".md")) out.push(`${rel}/${name}`);
     }
   };
+  // An absent surface directory loads nothing and is not a failure to read.
+  // Anything else lstat refuses is (EACCES on `~/.claude`, say).
   const at = join(root, dir);
-  if (statSync(at, { throwIfNoEntry: false })?.isDirectory()) walk(at, dir);
+  try {
+    lstatSync(at);
+  } catch (e) {
+    if (codeOf(e) !== "ENOENT") unreadable.push(`${dir} (${codeOf(e)})`);
+    return out;
+  }
+  const st = tryFs(dir, () => statSync(at));
+  if (st?.isDirectory()) walk(at, dir);
   return out;
 }
 
@@ -148,14 +195,23 @@ function mdInFollowingLinks(root: string, dir: string): string[] {
  * The user-level surface under `<home>/.claude`, keyed relative to that
  * directory, read and never written. rungate rendered none of it, so it is
  * not refused for lacking a scaffold's markers: a home with no `.claude` is
- * an empty surface, and the caller reports how many files it read.
+ * an empty surface, and the caller reports how many files it read and which
+ * paths it could not.
  */
-export function readUserSurface(home: string): RenderedSurface {
+export function readUserSurface(home: string): UserSurface {
   const root = join(resolve(home), ".claude");
   const files = new Map<string, string>();
-  for (const f of USER_SURFACE_FILES) if (existsSync(join(root, f))) files.set(f, readFileSync(join(root, f), "utf-8"));
-  for (const d of USER_SURFACE_DIRS) for (const f of mdInFollowingLinks(root, d)) files.set(f, readFileSync(join(root, f), "utf-8"));
-  return { root, files };
+  const unreadable: string[] = [];
+  const read = (rel: string): void => {
+    try {
+      files.set(rel, readFileSync(join(root, rel), "utf-8"));
+    } catch (e) {
+      unreadable.push(`${rel} (${codeOf(e)})`);
+    }
+  };
+  for (const f of USER_SURFACE_FILES) if (existsSync(join(root, f))) read(f);
+  for (const d of USER_SURFACE_DIRS) for (const f of mdInFollowingLinks(root, d, unreadable)) read(f);
+  return { root, files, unreadable };
 }
 
 /** A surface file, or any file that exists inside the rendered root. */

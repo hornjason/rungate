@@ -292,8 +292,19 @@ const lineOf = (message: string): number | null => {
   return m ? Number(m[1]) : null;
 };
 
+/** How many unread paths an UNMEASURED line names before it counts the rest. */
+export const UNREAD_SHOWN = 10;
+
+/** The UNMEASURED line for user-level paths that could not be read, or null when every one was. */
+export function userUnreadLine(unreadable: readonly string[]): string | null {
+  if (unreadable.length === 0) return null;
+  const shown = unreadable.slice(0, UNREAD_SHOWN).map(u => USER_PREFIX + u).join(", ");
+  const rest = unreadable.length > UNREAD_SHOWN ? `, and ${unreadable.length - UNREAD_SHOWN} more` : "";
+  return `UNMEASURED: ${unreadable.length} user-level path(s) could not be read, so nothing under them is in this report: ${shown}${rest}.`;
+}
+
 /** The user-level findings under `home`, every one the user's, each file named from `~/.claude/`. */
-function userFindings(home: string): { root: string; files: number; findings: AuditFinding[] } {
+function userFindings(home: string): { root: string; files: number; findings: AuditFinding[]; unreadable: readonly string[] } {
   const surface = readUserSurface(home);
   const owners = new Map<string, Owner[]>();
   for (const [file, text] of surface.files) owners.set(file, new Array(text.split("\n").length).fill("user"));
@@ -301,7 +312,7 @@ function userFindings(home: string): { root: string; files: number; findings: Au
     lint.check(surface).map(f => ({ lint: lint.name, file: f.file, line: lineOf(f.message), owner: "user" as const, message: f.message })),
   );
   findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners, userPlaces(surface.root, home)));
-  return { root: surface.root, files: surface.files.size, findings: findings.map(f => ({ ...f, file: USER_PREFIX + f.file })) };
+  return { root: surface.root, files: surface.files.size, findings: findings.map(f => ({ ...f, file: USER_PREFIX + f.file })), unreadable: surface.unreadable };
 }
 
 /**
@@ -329,7 +340,14 @@ export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, op
   if (opts.home === undefined) return { root: surface.root, lints: [...PROMPT_AUDIT_LINTS], findings, user: null, unmeasured: [USER_SURFACE_UNREAD] };
   const user = userFindings(opts.home);
   findings.push(...user.findings);
-  return { root: surface.root, lints: [...PROMPT_AUDIT_LINTS], findings, user: { root: user.root, files: user.files, lints: [...USER_AUDIT_LINTS] }, unmeasured: [] };
+  const unread = userUnreadLine(user.unreadable);
+  return {
+    root: surface.root,
+    lints: [...PROMPT_AUDIT_LINTS],
+    findings,
+    user: { root: user.root, files: user.files, lints: [...USER_AUDIT_LINTS] },
+    unmeasured: unread === null ? [] : [unread],
+  };
 }
 
 // ── Upstream drafts ────────────────────────────────────────────────────────
