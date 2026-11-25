@@ -37,7 +37,7 @@ updated: 2026-11-25
   - The hook calls `decideBashWrite`.
   - `lib/issue-create-override.ts` imports `interpreterPrograms`.
   - SC-2750 pins `heredocReach` in the file.
-  - Nothing else imports it.
+  - No other source file imports it. Two test files do: `test/bash-write-guard.test.ts`, and `test/heredoc-filing-reach.test.ts`, which also reads `interpreterPrograms` and `stripHeredocs`.
 - **Local verdicts do not decide merges today.** `ship.mode` is `direct` (`.claude/rules/ship-workflow.md`). Merges are decided by the required CI checks.
 
 ## Decision
