@@ -325,7 +325,7 @@ export function placementReading(content: string): PlacementReading {
   }
   if (lines.length > 0 && parsePlacementTable(content).some(r => r.ids.length > 0)) {
     reasons.push(
-      `this spec places criteria both ways: its \`${PLACEMENT_HEADING}\` table lists criteria, and ` +
+      `this spec places criteria both ways: its older placement table (\`${PLACEMENT_HEADING}\`) lists criteria, and ` +
         `${lines[0]!.id} has a \`placement:\` line at line ${lines[0]!.line}. Two sources for one fact ` +
         `will disagree, so keep one`,
     );
@@ -439,7 +439,7 @@ export type PlacementConversion =
 export function convertPlacement(content: string): PlacementConversion {
   const table = parsePlacementTable(content);
   if (!table.some(r => r.ids.length > 0)) {
-    return { nothing: `no \`${PLACEMENT_HEADING}\` table lists a criterion, so there is nothing to convert` };
+    return { nothing: `no older placement table (\`${PLACEMENT_HEADING}\`) lists a criterion, so there is nothing to convert` };
   }
   if (placementLines(content).length > 0) {
     return { refusal: ["this spec already has placement lines beside a table that lists criteria; keep one source before converting"] };
@@ -547,7 +547,7 @@ export function convertPlacement(content: string): PlacementConversion {
   if (unread.length > 0) {
     return {
       refusal: [
-        `line ${unread.join(", ")} of the \`${PLACEMENT_HEADING}\` table: rows the placement reader skips (one not starting "| ", or one starting "| Placement" that is not the header), so converting would drop their criteria unseen; fix them first`,
+        `line ${unread.join(", ")} of the older placement table (\`${PLACEMENT_HEADING}\`): rows the placement reader skips (one not starting "| ", or one starting "| Placement" that is not the header), so converting would drop their criteria unseen; fix them first`,
       ],
     };
   }
