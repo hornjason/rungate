@@ -34,7 +34,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { PLACEMENT_HEADING, PLACEMENT_MEANINGS_HEADING, parsePlacementRows } from "../lib/spec-placement";
+import { PLACEMENT_MEANINGS_HEADING, parsePlacementRows } from "../lib/spec-placement";
 
 const REPO = join(import.meta.dir, "..");
 const SPEC = "specs/CODE-REVIEW-CONVERGENCE-SPEC.md";
@@ -582,31 +582,6 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: the prose around the table cann
     seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
     thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16,
     seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
-  };
-
-  /**
-   * Each `### Phase N — …` section's text, keyed by phase number.
-   *
-   * The LAST section must stop at the placement table, not at the end of the
-   * document. The first version of this ended it at `### Exit conditions`,
-   * which sits after the table — so Phase 6's "prose" contained every row of
-   * the table and the case reported 38 violations, every one an artefact. An
-   * instrument that swallows the thing it is comparing against reports total
-   * disagreement, which is at least loud; the same slip one boundary smaller
-   * would have reported a believable number.
-   */
-  const phaseSections = (src: string): Map<number, string> => {
-    const out = new Map<number, string>();
-    const heads = [...src.matchAll(/^#{2,4} Phase (\d+)\b.*$/gm)];
-    const stops = [src.indexOf(`\n${PLACEMENT_HEADING}`), src.indexOf("\n### Exit conditions")]
-      .filter(i => i > 0);
-    heads.forEach((h, i) => {
-      const start = h.index! + h[0].length;
-      const after = i + 1 < heads.length ? heads[i + 1].index! : src.length;
-      const end = Math.min(after, ...stops.filter(s => s > start));
-      out.set(Number(h[1]), src.slice(start, end));
-    });
-    return out;
   };
 
   test("a `**<Word> more belong here**` count equals the ids that sentence then names", () => {

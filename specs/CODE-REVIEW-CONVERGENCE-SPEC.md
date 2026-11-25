@@ -1958,9 +1958,9 @@ So Phase 0 is **one setting applied, one CONTESTED, one withdrawn**:
 
 CRC-F1 (`strict: true`), CRC-C3 (`required_conversation_resolution`), CRC-E8
 (`required_pull_request_reviews` with `dismiss_stale_reviews`). Minutes, by
-the owner. **The placement table below follows this**: CRC-C3 is the only
-one it places in Phase 0, CRC-E8 sits under *Blocked — needs a second
-person*, and CRC-F1 under *Not adopted — deliberate*. They are first because two further criteria — CRC-E6 and CRC-M9 —
+the owner. **The placement lines follow this**: CRC-C3 is the only one
+placed in Phase 0, CRC-E8 is placed *Blocked — needs a second person*, and
+CRC-F1 *Not adopted — deliberate*. They are first because two further criteria — CRC-E6 and CRC-M9 —
 are **vacuous rather than unbuilt** until they land: there is no approval to
 count, so nothing can be built that counts one.
 
@@ -2114,8 +2114,9 @@ CRC-M3, CRC-M4 and CRC-M5 because Phase 5 writes the four of them as one
 slash-joined run headed by CRC-M1, in which the last three ids never appear
 whole and no word-boundary match can see them. The true figure was **32 placed, 29
 unplaced**. A detector whose two errors point in opposite directions returns
-a believable number, which is why the table below is a declaring position
-with a test over it rather than another scan of the prose.
+a believable number, which is why each criterion's placement is a declaring
+position, a `placement:` line beneath it with a test over it, rather than
+another scan of the prose.
 
 Three of the values below are not phases, and that is deliberate. Forcing
 *"needs a second person"* or *"nothing here can observe it"* into a numbered
@@ -2131,17 +2132,18 @@ CRC-E8's withdrawal from Phase 0 already records once.
 | **Phase 4** | findings get answered, repeats fixed at the source |
 | **Phase 5** | the instruments |
 | **Phase 6** | release and detection — nothing here moves rounds-to-pass |
-| **Done** | ticked and bound. Not *no work ever again* — CRC-B7 and CRC-M11 are also ticked and are **not** here, because an open issue contradicts each |
+| **Done** | ticked and bound. Not *no work ever again* — CRC-B7 and CRC-M11 are also ticked and are **not** placed here, because an open issue contradicts each |
 | **Blocked — needs a second person** | one account plus `enforce_admins: true` means an approval cannot exist, so E6 and M9 are **vacuous rather than unbuilt** — there is nothing to count. The blocker is CRC-E8's withdrawal, which Phase 0 records. E8 itself sits here because requiring an approval it cannot get would deadlock the repository |
 | **Not observable here** | statements about human judgement. *A mechanism exists; this repository cannot observe it* above says why: nothing distinguishes them being honoured from them being ignored |
 | **Not adopted — deliberate** | **CRC-M18:** retired by ADR-025 (#2651) with the trial reviewer whose byte budget it measured; *Deliberately not adopted* above holds the reason and its record. **CRC-F1:** *Contested* above records the standing as "PROTECT-1 wins", and Phase 0 gives the conditions for revisiting it: merge queues become available, or open pull requests stay at two or fewer. It stays in the *Contested* audit section, because the repository still gives both instructions. **CRC-M8:** *Deliberately not adopted* above holds exactly this one. Its order is inverted **on purpose** — `MISSED` and `FIRED` are weighted equally because nobody absorbs the noise here — and the deviations table gives the revisit condition: *a human is reading the findings again, or the cost of a false block falls*. **The first draft of this table put it in Phase 5**, which read as *pending work, blocked on the instruments*, and invented a second revisit condition the document does not hold. That is the two-spellings failure arriving inside the table built to end it; the reviewer caught it on #1647 |
 
-**This table is the placement, and the phase sections above are its
-reasons.** Two spellings of one fact drift apart — this document says so
+**The `placement:` line beneath each criterion is the placement; this table
+says what each value means, and the phase sections above are the reasons**
+(ADR-026). Two spellings of one fact drift apart — this document says so
 about measurements and it is just as true of a list — so when they disagree,
-this table is wrong until it is fixed, not the other way round, and
-`test/code-review-convergence-spec.test.ts` refuses any criterion that is
-missing from it, listed twice, or listed under a value not in the first
+the placement lines are wrong until they are fixed, not the other way round,
+and `test/code-review-convergence-spec.test.ts` refuses any criterion with
+no placement line, placed twice, or placed under a value not in the first
 column above.
 
 **What it does NOT do is create 29 issues.** A placement is a label on work

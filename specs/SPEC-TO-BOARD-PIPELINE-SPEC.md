@@ -495,7 +495,7 @@ Step 4 of ADR-003, the step nothing performed. Measured 2026-10-29: 42 of the
 ### Phase 2 — the order is data
 
 AGENTS.md rule 4. Edges exist for the phases a spec places; the gap is specs
-with no placement table, which is Phase 4.
+that place nothing, which is Phase 4.
 
 ### Phase 3 — the board tells the truth
 
@@ -509,8 +509,9 @@ Phase 9 cannot, because its subject is a spec the engine did not write.
 
 ### Phase 4 — every spec is planned
 
-Until a spec has a placement table, `plan-spec` makes it no milestones and
-the board cannot place its criteria. This is the widest gap by count.
+Until a spec places its criteria — a `placement:` line beneath each, or a
+placement table — `plan-spec` makes it no milestones and the board cannot
+place its criteria. This is the widest gap by count.
 
 ### Phase 5 — the loop closes
 
