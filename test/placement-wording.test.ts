@@ -66,9 +66,21 @@ interface Passage {
 
 /** A string literal's text, through `as const`, `satisfies` and parentheses, or null. */
 function stringValue(node: ts.Expression): string | null {
-  let n: ts.Expression = node;
-  while (ts.isAsExpression(n) || ts.isSatisfiesExpression(n) || ts.isParenthesizedExpression(n)) n = n.expression;
+  const n = unwrapped(node);
   return ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) ? n.text : null;
+}
+
+/**
+ * An expression past every wrapper that leaves its value as it is: parentheses,
+ * `as`, `satisfies` and `!`. The one unwrap every reader here uses, so no two
+ * of them disagree about one input (#2823 review, round 3).
+ */
+function unwrapped(node: ts.Node): ts.Node {
+  let n = node;
+  while (ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isSatisfiesExpression(n) || ts.isNonNullExpression(n)) {
+    n = n.expression;
+  }
+  return n;
 }
 
 /** Each top-level `const NAME = "…"` of a source, by name; only exported ones when asked. */
@@ -122,10 +134,9 @@ export function stringConstants(path: string, source: string): Map<string, strin
  * parentheses, `as` and `satisfies` (#2823 review). Null for any other value.
  */
 export function constantValue(node: ts.Node, constants: Map<string, string>): string | null {
-  let n: ts.Node = node;
-  while (ts.isNonNullExpression(n) || ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isSatisfiesExpression(n)) {
-    n = n.expression;
-  }
+  const n = unwrapped(node);
+  // An interpolated literal is its own text (#2823 review, round 3).
+  if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) return n.text;
   if (ts.isIdentifier(n)) return constants.get(n.text) ?? null;
   if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression)) return constants.get(`${n.expression.text}.${n.name.text}`) ?? null;
   return null;
@@ -146,11 +157,7 @@ export function sourceStrings(path: string, source: string, constants: Map<strin
   const at = (node: ts.Node) => file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
   // A name holding a known string constant reads as its value (#2816); any other value reads as X.
   const value = (node: ts.Node): string | null => constantValue(node, constants);
-  const bare = (node: ts.Node): ts.Node => {
-    let n = node;
-    while (ts.isParenthesizedExpression(n)) n = n.expression;
-    return n;
-  };
+  const bare = unwrapped;
   const literal = (outer: ts.Node): string | null => {
     const node = bare(outer);
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
@@ -381,6 +388,10 @@ describe("#2800: user-facing text names a placement table only as the older form
       "const g = `the ${(PLACEMENT_HEADING)} table decides`;",
       "const h = `the ${PLACEMENT_HEADING as string} table decides`;",
       "const i = `the ${sp.PLACEMENT_HEADING} table decides`;",
+      // One unwrap for every reader, and an interpolated literal is its text (#2823 review, round 3).
+      "const j = `the ${\"placement\"} table decides`;",
+      "const k = \"UNMEASURED: the spec's placement \" + (\"table could not be read.\" as string);",
+      "const l = \"UNMEASURED: the spec's placement \" + (\"table could not be read.\" satisfies string);",
     ].join("\n");
     const found = sourceStrings(at, source, stringConstants(at, source)).flatMap(p =>
       sentencesNamingTable(p.text).map(s => `${p.line}: ${s}`),
@@ -393,12 +404,19 @@ describe("#2800: user-facing text names a placement table only as the older form
       "11: the ### Phase placement table decides",
       "12: the ### Phase placement table decides",
       "13: the ### Phase placement table decides",
+      "14: the placement table decides",
+      "15: UNMEASURED: the spec's placement table could not be read.",
+      "16: UNMEASURED: the spec's placement table could not be read.",
     ]);
-    // Without the constants, the same source shows the guard none of them.
-    expect(sourceStrings(at, source).flatMap(p => sentencesNamingTable(p.text))).toEqual([]);
+    // Without the constants, the same source shows the guard only the sentences built from literals.
+    expect(sourceStrings(at, source).flatMap(p => sentencesNamingTable(p.text).map(s => `${p.line}: ${s}`))).toEqual([
+      "14: the placement table decides",
+      "15: UNMEASURED: the spec's placement table could not be read.",
+      "16: UNMEASURED: the spec's placement table could not be read.",
+    ]);
   });
 
-  test("#2816: every interpolation of PLACEMENT_HEADING in lib/ and scripts/ resolves, however it is spelled", () => {
+  test("#2816: every interpolation that names PLACEMENT_HEADING in lib/ and scripts/ resolves", () => {
     // Read from the syntax, not one spelling of it (#2823 review): each template
     // span or `+` part whose expression mentions the name must resolve.
     const sites: string[] = [];
