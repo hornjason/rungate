@@ -107,15 +107,6 @@ function run(cwd: string, command: string, env: Record<string, string> = {}) {
 }
 
 /**
- * Where a settings document names `TopLevelCdGuard`: the path of each string
- * value that does, such as `hooks.PreToolUse[0].hooks[0].command`, and never
- * the value. A command can carry a token beside the guard's name, and this file
- * holds the machine's tokens, so a failure prints positions only (#2786).
- * Read as JSON, so an escaped quote is part of its value. A file that is not
- * JSON but names the guard reads as one registration, described without
- * quoting any of it.
- */
-/**
  * The user settings file's text, or null when it does not exist. Absence is the
  * only reading that skips AC-11: an unreadable file is an error, never a pass
  * (#2787 review).
@@ -129,33 +120,36 @@ function userSettingsText(path: string): string | null {
   }
 }
 
-function cdGuardRegistrations(src: string): string[] {
+/**
+ * How many string values and keys in a settings document name
+ * `TopLevelCdGuard`. A count, and nothing else: each earlier version printed
+ * something read from the file (the whole file, then a value, then a key), and
+ * this file holds the machine's tokens. A number cannot carry one (#2786,
+ * #2787 review). Read as JSON, so an escaped quote is part of its value. A file
+ * that is not JSON is counted by a plain text search.
+ */
+function cdGuardRegistrations(src: string): number {
   let doc: unknown;
   try {
     doc = JSON.parse(src);
   } catch {
-    return src.includes("TopLevelCdGuard") ? ["(not JSON) the file names TopLevelCdGuard"] : [];
+    return src.includes("TopLevelCdGuard") ? 1 : 0;
   }
-  const out: string[] = [];
-  const walk = (v: unknown, path: string): void => {
+  let n = 0;
+  const walk = (v: unknown): void => {
     if (typeof v === "string") {
-      if (v.includes("TopLevelCdGuard")) out.push(path || "(the whole document)");
+      if (v.includes("TopLevelCdGuard")) n++;
     } else if (Array.isArray(v)) {
-      v.forEach((x, i) => walk(x, `${path}[${i}]`));
+      v.forEach(walk);
     } else if (v !== null && typeof v === "object") {
-      Object.entries(v).forEach(([k, x], i) => {
-        // A key is printed only when it is letters alone, as settings keys
-        // are; any other is named by its position, so a token that sits in
-        // a key never reaches the output (#2787 review).
-        const seg = /^[A-Za-z]+$/.test(k) ? k : `{key ${i}}`;
-        const at = path ? `${path}.${seg}` : seg;
-        if (k.includes("TopLevelCdGuard")) out.push(`${at} (a key)`);
-        walk(x, at);
-      });
+      for (const [k, x] of Object.entries(v)) {
+        if (k.includes("TopLevelCdGuard")) n++;
+        walk(x);
+      }
     }
   };
-  walk(doc, "");
-  return out;
+  walk(doc);
+  return n;
 }
 
 const OFFENDING = "cd /tmp && ls";
@@ -349,41 +343,44 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
     // a failing `not.toContain` prints its whole subject, and this file holds
     // the machine's tokens in `env` (#2786).
     expect(cdGuardRegistrations(src), "~/.claude/settings.json registers TopLevelCdGuard — not done by this branch")
-      .toEqual([]);
+      .toBe(0);
   });
 
-  test("#2786: AC-11's reading names where the guard is registered, and prints no value from the file", () => {
-    const at = "hooks.PreToolUse[0].hooks[0].command";
-    const doc = (command: string) => ({
-      env: { GH_TOKEN: "gho_planted2786", OTHER_KEY: "sk-planted2786" },
+  test("#2786: AC-11's reading counts where the guard is registered, and its failure prints no text from the file", () => {
+    const doc = (command: string, env: Record<string, string> = {}) => ({
+      env: { GH_TOKEN: "gho_planted2786", OTHER_KEY: "sk-planted2786", ...env },
       hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command }] }] },
     });
-    const registrations = [
-      "bun ${PAI_HOOKS_DIR}/TopLevelCdGuard.hook.ts",
+    const registered = [
+      doc("bun ${PAI_HOOKS_DIR}/TopLevelCdGuard.hook.ts"),
       // #2787 review: a path quoted for spaces puts escaped quotes in the value.
-      'bun "/Users/x/My Hooks/TopLevelCdGuard.hook.ts"',
+      doc('bun "/Users/x/My Hooks/TopLevelCdGuard.hook.ts"'),
       // A token in the same command string as the guard.
-      "GITHUB_TOKEN=gho_planted2786 bun ${X}/TopLevelCdGuard.hook.ts",
-      'echo "gho_planted2786 TopLevelCdGuard"',
+      doc("GITHUB_TOKEN=gho_planted2786 bun ${X}/TopLevelCdGuard.hook.ts"),
+      doc('echo "gho_planted2786 TopLevelCdGuard"'),
+      // #2787 review: tokens as keys, one naming the guard and one above a value
+      // that does, including a key of letters alone.
+      { env: { "echo gho_planted2786 TopLevelCdGuard": "1" } },
+      { env: { a: "1", gho_planted2786: "bun TopLevelCdGuard.hook.ts" } },
+      { env: { PLANTEDLETTERSONLY: "bun TopLevelCdGuard.hook.ts" } },
     ];
-    for (const command of registrations) {
-      for (const src of [JSON.stringify(doc(command), null, 2), JSON.stringify(doc(command))]) {
-        const hits = cdGuardRegistrations(src);
-        expect(hits, command).toEqual([at]);
-        expect(hits.join("\n"), command).not.toContain("planted2786");
+    for (const d of registered) {
+      for (const src of [JSON.stringify(d, null, 2), JSON.stringify(d)]) {
+        expect(cdGuardRegistrations(src), src).toBe(1);
+        // The failure AC-11 would print, captured: a count, and no text of the file.
+        let printed = "";
+        try {
+          expect(cdGuardRegistrations(src), "registers TopLevelCdGuard").toBe(0);
+        } catch (e) {
+          printed = String((e as Error).message);
+        }
+        expect(printed).toContain("registers TopLevelCdGuard");
+        expect(printed).not.toMatch(/planted2786|PLANTEDLETTERSONLY/i);
       }
     }
-    expect(cdGuardRegistrations(JSON.stringify({ env: { GH_TOKEN: "gho_planted2786" } }))).toEqual([]);
-    // #2787 review: a key is printed only when it is letters alone; any other key
-    // is named by its position, so a token in a key never reaches the output.
-    const inKey = cdGuardRegistrations(JSON.stringify({ env: { "echo gho_planted2786 TopLevelCdGuard": "1" } }));
-    expect(inKey).toEqual(["env.{key 0} (a key)"]);
-    const aboveIt = cdGuardRegistrations(JSON.stringify({ env: { a: "1", gho_planted2786: "bun TopLevelCdGuard.hook.ts" } }));
-    expect(aboveIt).toEqual(["env.{key 1}"]);
-    // A file that is not JSON still reads as registered, and prints nothing of itself.
-    const broken = cdGuardRegistrations('{ "env": { "GH_TOKEN": "gho_planted2786" }, "x": "TopLevelCdGuard"');
-    expect(broken.length).toBe(1);
-    expect(broken.join("\n")).not.toContain("planted2786");
+    expect(cdGuardRegistrations(JSON.stringify({ env: { GH_TOKEN: "gho_planted2786" } }))).toBe(0);
+    // A file that is not JSON still counts as registered.
+    expect(cdGuardRegistrations('{ "env": { "GH_TOKEN": "gho_planted2786" }, "x": "TopLevelCdGuard"')).toBe(1);
   });
 
   // #2787 review: a hook that never ran reads exactly like a silent one.
