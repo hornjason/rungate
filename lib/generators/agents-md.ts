@@ -855,7 +855,7 @@ without two declarations, so write them first:
 
 It also refuses a body that names no repository path and no function,
 because those are what it checks for duplicates on. Write at least one
-path with its directory (\`lib/scaffold/emit.ts\`), or a camelCase or
+path with its directory (\`lib/<area>/<file>.ts\`), or a camelCase or
 snake_case function name in backticks. A command alone, such as
 \`bunx rungate scaffold .\`, names neither.
 
