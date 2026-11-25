@@ -38,13 +38,18 @@ Over the last window, the 117 failed runs were 88 blocking findings, 15
 population replies owed, 12 unmeasured reviews and 2 reviewers that modified the
 tree.
 
-The four annotations, verbatim. The three from 10-22 ran under rungate 0.7.0,
-which predates #1185's printing of the findings, so only the counts survive:
+The four annotations' opening sentences, verbatim. The three from 10-22 ran
+under rungate 0.7.0, which predates #1185's printing of the findings, so only
+the counts survive:
 
 - run 39765961279, attempt 1, commit `a87913b`: *The AI review's verdict "BLOCK" contradicts its own payload: 0 of 1 finding(s) block.*
 - run 39795440261, attempt 1, commit `2a0effd`: the same sentence.
 - run 39796394689, attempt 1, commit `47e1045`: the same sentence.
-- run 42108890208, attempt 1, commit `5e4d56f`: *0 of 2 finding(s) block.* Both findings are `medium` at one line of `scripts/board-walkthrough.ts`. One is a cleanup-ordering defect; the other says the round budget is spent and the same defect has survived since round 3.
+- run 42108890208, attempt 1, commit `5e4d56f`: *The AI review's verdict "BLOCK" contradicts its own payload: 0 of 2 finding(s) block.* The two findings it then prints are both `medium`, at one line of `scripts/board-walkthrough.ts`. One is a cleanup-ordering defect; the other says the round budget is spent and the same defect has survived since round 3.
+
+`lib/scaffold/ai-review-findings.ts` cites run 39770912983 as showing the
+same shape. It is not counted here: its one attempt's annotations record
+`BLOCKED`, with one `high` finding in `lib/launch-base.ts`.
 
 Run 39795440261 is a pair on one commit: attempt 1 is the contradiction, and
 attempt 2, 23 minutes later on `2a0effd`, logged `ai-review findings outcome:
@@ -63,9 +68,12 @@ attempts' payloads were not kept, so whether their findings also differed, or
 only the verdict, cannot be read. The three 10-22 contradictions printed counts
 only, and are consistent with the same shape without showing it.
 
-The rate fell from about 6 in 20 runs to 1 in the 2,803 runs from 10-27 to
-11-25. The one was on 11-05, and none came after it: not in the rest of that
-week, and not in the 1,735 runs from 11-10 to 11-25. This record does not tie the fall to
+This census finds 3 contradictions on 10-22, 1 in the 2,803 runs from 10-27
+to 11-25, and none after the one on 11-05: not in the rest of that week, and
+not in the 1,735 runs from 11-10 to 11-25. The issue's "about 6 of 20" came
+from a different sample, its author's last 20 runs at filing, and this census
+finds only 3 that day, so how far the rate fell from that figure is not
+measured here. That it is now zero is. This record does not tie the fall to
 one change. The prompt line telling the reviewer that its verdict does not
 decide whether the run blocks was already present on 10-22 (#800). The check
 that compares the verdict with the findings moved ahead of CRC-B7's demotion of
