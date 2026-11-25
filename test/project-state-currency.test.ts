@@ -34,7 +34,7 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 import { localCalendarDay } from "../lib/local-calendar-day";
-import { PROJECT_STATE_ZONE, selectRecentSessions, sessionAheadOfStamp } from "../lib/project-state-shape";
+import { PROJECT_STATE_ZONE, readSession, selectRecentSessions, sessionAheadOfStamp } from "../lib/project-state-shape";
 
 const ROOT = join(import.meta.dir, "..");
 const STATE = join(ROOT, "project-state.json");
@@ -93,19 +93,36 @@ function isShallow(): boolean {
 }
 
 const state = JSON.parse(readFileSync(STATE, "utf-8"));
-const latestDate: string = state.session?.date ?? "";
+// The day the newest session carries, read by `readSession` as every other
+// caller reads it: a date the writer accepts, such as "2026-11-25 session 7",
+// reaches the window arithmetic as its day, not as the whole text (#2814 review).
+export const newestDay = (st: { session?: unknown }): string => readSession(st.session).day ?? "";
+const latestDate: string = newestDay(state);
 
 /**
- * The session number an entry in `sessions[]` declares, or `null`.
+ * The session number an entry in `sessions[]` declares, or `null`, as
+ * `readSession` reads it: the renderer ranks by the same reading (#2809).
  *
  * The array's `date` carries both, as `"2026-11-02 session 73"`. Null
  * rather than 0 when no number is spelled: a missing number and session
  * zero are different facts, and the caller reports them differently.
  */
-export function sessionNumberIn(date: unknown): number | null {
-  if (typeof date !== "string") return null;
-  const m = /\bsession\s+(\d+)\b/i.exec(date);
-  return m ? Number(m[1]) : null;
+const entryNumber = (entry: unknown): number | null => readSession(entry).number;
+
+/**
+ * The number `sessions[0]` declares, and where the highest number sits: the
+ * two readings the headline case compares, both through {@link entryNumber}.
+ * One function, so a case can hold them to the renderer's reading of
+ * `session 32b` (#2814 review).
+ */
+export function headlineNumbers(sessions: readonly unknown[]): { newest: number | null; highest: { at: number; n: number } } {
+  const numbered = sessions
+    .map((s, at) => ({ at, n: entryNumber(s) }))
+    .filter((r): r is { at: number; n: number } => r.n !== null);
+  return {
+    newest: entryNumber(sessions[0]),
+    highest: numbered.reduce((best, r) => (r.n > best.n ? r : best), { at: -1, n: -1 }),
+  };
 }
 
 /**
@@ -214,6 +231,15 @@ function prsLandedAfter(dateStr: string): string[] | null {
 }
 
 describe("project-state currency", () => {
+  test("#2814: the newest session reaches the window arithmetic as its day, whatever follows it", () => {
+    // The writer accepts "YYYY-MM-DD session N" for the top-level session; the
+    // whole text is no day, and the window arithmetic refuses it.
+    const st = { session: { number: 7, date: "2026-11-25 session 7" } };
+    expect(newestDay(st)).toBe("2026-11-25");
+    expect(() => windowStart(newestDay(st))).not.toThrow();
+    expect(() => windowStart("2026-11-25 session 7")).toThrow();
+  });
+
   test("the file names a latest session with a date", () => {
     expect(latestDate, "project-state.json has no session.date — nothing to compare against").toMatch(
       /^\d{4}-\d{2}-\d{2}/,
@@ -227,8 +253,15 @@ describe("project-state currency", () => {
   // Stage B was B1 and B3, two sessions after B4, B5 and B6 were ticked. The
   // renderer takes the headline from one and the body from the other, so the
   // same document contradicted itself and neither half was wrong on its own.
+  test("#2809: the headline case reads session numbers as the renderer ranks them", () => {
+    // `session 32b` is 32 to the renderer; a reader of its own read it as nothing.
+    const sessions = [{ date: "2026-11-25 session 32b" }, { date: "2026-11-24 session 31" }, { date: "undated" }];
+    expect(headlineNumbers(sessions)).toEqual({ newest: 32, highest: { at: 0, n: 32 } });
+    for (const s of sessions) expect(entryNumber(s), s.date).toBe(readSession(s).number);
+  });
+
   test("the headline session is the newest one in the history", () => {
-    const newest = sessionNumberIn(state.sessions?.[0]?.date);
+    const { newest, highest } = headlineNumbers(state.sessions ?? []);
     expect(
       newest,
       `sessions[0].date is ${JSON.stringify(state.sessions?.[0]?.date)} and spells no session number. ` +
@@ -243,13 +276,6 @@ describe("project-state currency", () => {
     // guard that fires on the wrong half and sends the fixer to the wrong
     // file. So the ordering is asserted rather than assumed. Round 2 of
     // #1711.
-    const numbered: { at: number; n: number }[] = (state.sessions ?? [])
-      .map((s: { date?: unknown }, at: number) => ({ at, n: sessionNumberIn(s?.date) }))
-      .filter((r: { n: number | null }) => r.n !== null);
-    const highest = numbered.reduce(
-      (best: { at: number; n: number }, r: { at: number; n: number }) => (r.n > best.n ? r : best),
-      { at: -1, n: -1 },
-    );
     expect(
       highest.at,
       `sessions[${highest.at}] carries the highest session number (${highest.n}) but the array is read ` +

@@ -45,7 +45,7 @@ export function projectStateViolations(raw: unknown): string[] {
     } else {
       doc.sessions.forEach((s, i) => {
         const at = `sessions[${i}]`;
-        if (s === null || typeof s !== "object" || Array.isArray(s)) {
+        if (!readSession(s).object) {
           out.push(`${at} is not an object`);
           return;
         }
@@ -116,7 +116,7 @@ export function projectStateViolations(raw: unknown): string[] {
   // and a half-written session renders "Session undefined (undefined)".
   if ("session" in doc && doc.session !== undefined && doc.session !== null) {
     const s = doc.session;
-    if (typeof s !== "object" || Array.isArray(s)) {
+    if (!readSession(s).object) {
       out.push(`session is ${Array.isArray(s) ? "an array" : typeof s}, expected an object`);
     } else {
       const e = s as Record<string, unknown>;
@@ -203,10 +203,10 @@ export interface SessionSelection<T> {
    /**
    * Entries whose `date` does not begin with an ISO date.
    *
-   * They are NOT excluded — they rank below every dated entry, in array
-   * order, which is the only information left about them and is exactly
-   * what the old renderer used for everything. A project whose dates are
-   * all free-form therefore renders exactly as it did before.
+   * They are NOT excluded — they rank below every dated entry, by the
+   * session number they spell and then later index first, which is all
+   * that is left to order them by (#2814 review: this said "in array
+   * order", which stopped being true when the number tier was added).
    *
    * They are reported by name, because an entry nobody can order is a
    * thing worth saying out loud: it will be outranked by any dated entry,
@@ -230,6 +230,37 @@ const SESSION_NUMBER = /\bsession\s+(\d+)/i;
 
 /** Ranks below every real session number. No session is numbered below 1. */
 const UNNUMBERED = -1;
+
+/** What one session entry is, as {@link readSession} reads it. */
+export interface SessionReading {
+  /** A non-null object that is not an array: the only shape a session entry has. */
+  object: boolean;
+  /** The calendar day its `date` starts with, read by {@link ISO_DATE}; null when it starts with none. */
+  day: string | null;
+  /** Its `number` field when that is a number, else the number spelled after "session" in its `date`; null when neither is. */
+  number: number | null;
+}
+
+/**
+ * What a session entry is and what day it carries, read once (#2809).
+ *
+ * The shape check, the renderer, the stamp check, the writer and the currency
+ * test each decided this their own way: #2807's review rounds found null, a
+ * non-object session, a timestamped date and `sessions[]` entries read
+ * differently by one or another. Each now calls this, and
+ * `test/project-state-shape.test.ts` runs them all over the same inputs.
+ */
+export function readSession(entry: unknown): SessionReading {
+  const object = entry !== null && typeof entry === "object" && !Array.isArray(entry);
+  const e = object ? (entry as { date?: unknown; number?: unknown }) : {};
+  const day = typeof e.date === "string" ? ISO_DATE.exec(e.date) : null;
+  const spelled = typeof e.date === "string" ? SESSION_NUMBER.exec(e.date) : null;
+  return {
+    object,
+    day: day ? `${day[1]}-${day[2]}-${day[3]}` : null,
+    number: typeof e.number === "number" ? e.number : spelled ? Number(spelled[1]) : null,
+  };
+}
 
 /**
  * The `limit` NEWEST sessions, chosen by date (#572).
@@ -288,17 +319,15 @@ export function selectRecentSessions<T extends { date: string }>(
 ): SessionSelection<T> {
   const undated: T[] = [];
   const ranked = sessions.map((s, i) => {
-    const date = s.date ?? "";
-    const m = ISO_DATE.exec(date);
-    if (m === null) undated.push(s);
-    const n = SESSION_NUMBER.exec(date);
+    const r = readSession(s);
+    if (r.day === null) undated.push(s);
     // An undated entry sorts below every dated one. `""` is less than any
     // ISO date, so the comparison needs no second branch — and a branch
     // that exists only for the empty case is a branch no fixture reaches.
     // That still holds with the number tier below it: the date is compared
     // first, so no session number can promote an undated entry past a dated
     // one. Asserted, not reasoned about, in test/project-state-shape.test.ts.
-    return { s, key: m === null ? "" : m[0], seq: n === null ? UNNUMBERED : Number(n[1]), i };
+    return { s, key: r.day ?? "", seq: r.number ?? UNNUMBERED, i };
   });
   ranked.sort((a, b) =>
     a.key !== b.key ? (a.key < b.key ? 1 : -1) : a.seq !== b.seq ? b.seq - a.seq : b.i - a.i,
@@ -345,17 +374,14 @@ export function projectStateDay(at: Date = new Date()): string {
  * was written on the New York evening of 2026-11-24 and typed as 2026-11-25,
  * the UTC day, which hid every merge of that evening from the currency
  * comparison. Only a date AHEAD of the stamp can be seen this way: one typed
- * by the UTC day and written after New York midnight passes. One reader of
- * what a session is, and the writer producing the date, are #2809.
+ * by the UTC day and written after New York midnight passes; the writer
+ * refuses that one, since it holds the session to the day it runs (#2809).
  *
- * Both days are read with the renderer's `ISO_DATE`, so a date this reads is
- * one the handoff ranks, and a timestamped date is undated to both.
+ * Both days are read by {@link readSession}, so a date this reads is one the
+ * handoff ranks, and a timestamped date is undated to both.
  */
 export function sessionAheadOfStamp(updated: unknown, sessionDate: unknown): string | null {
-  const day = (v: unknown): string | null => {
-    const m = typeof v === "string" ? ISO_DATE.exec(v) : null;
-    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
-  };
+  const day = (v: unknown): string | null => readSession({ date: v }).day;
   const stamp = day(updated);
   const session = day(sessionDate);
   if (stamp === null) return `updated is ${JSON.stringify(updated)}, which is not a calendar day`;
@@ -366,6 +392,49 @@ export function sessionAheadOfStamp(updated: unknown, sessionDate: unknown): str
     `\`bun scripts/update-project-state.ts\`, which stamps the day it runs in ${PROJECT_STATE_ZONE}. Or, if it ` +
     `still reads ${stamp}, the date was typed ahead of the day: date it by the day in ${PROJECT_STATE_ZONE} it was written.`
   );
+}
+
+/**
+ * Why the writer must not write this record's session dates, one reason each;
+ * empty when it may (#2809). `today` is the day the writer runs, in
+ * {@link PROJECT_STATE_ZONE}: what it has just stamped `updated` with.
+ *
+ * A session's date is typed by hand. The top-level session is the one being
+ * written, so it is held to `today`, the day the writer runs. That is all
+ * the writer can see: it has no record of when the date was typed. So a date
+ * typed by the UTC day is refused when the writer runs before New York
+ * midnight, a day ahead, and passes when it runs after midnight on the typed
+ * day (#2814 review). The writer runs on every pre-commit in the primary
+ * checkout, so it refuses on any run on a later day than the session, edit
+ * or not, and the hook then stages nothing. An entry in
+ * `sessions[]` dated after `today` was typed ahead; one with no day is left
+ * to the renderer, which already names it. Every date is read by
+ * {@link readSession}. Run after {@link projectStateViolations}, which has
+ * refused a session that is not an object.
+ */
+export function sessionDatingViolations(state: { session?: unknown; sessions?: unknown }, today: string): string[] {
+  const out: string[] = [];
+  const top = readSession(state.session);
+  if (top.object) {
+    const date = (state.session as { date?: unknown }).date;
+    if (top.day === null) {
+      out.push(`the session's date is ${JSON.stringify(date)}, which starts with no calendar day; date it ${today}`);
+    } else if (top.day !== today) {
+      out.push(
+        `the session is dated ${top.day}, and today in ${PROJECT_STATE_ZONE} is ${today}. A session is dated the day ` +
+          `it is written: date it ${today}, or record today's work as a new session.`,
+      );
+    }
+  }
+  if (Array.isArray(state.sessions)) {
+    state.sessions.forEach((entry, i) => {
+      const r = readSession(entry);
+      if (r.day !== null && r.day > today) {
+        out.push(`sessions[${i}] is dated ${r.day}, after today (${today}) in ${PROJECT_STATE_ZONE}: it was typed ahead of the day it was written`);
+      }
+    });
+  }
+  return out;
 }
 
 /** The priorities to render, and how many were left in the json. Pure. */
