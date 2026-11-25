@@ -139,6 +139,10 @@ describe("#2802: a quoted leading assignment is read, spaces and all", () => {
     // a ) in a comment, a case pattern, a heredoc, a newline inside the body.
     for (const command of [
       "T=$(echo # ) bun /x/A.hook.ts",
+      "T=$(echo;# ) bun /x/A.hook.ts",
+      "T=$(echo|# ) bun /x/A.hook.ts",
+      "T=$(echo&# ) bun /x/A.hook.ts",
+      "T=$(echo>#x ) bun /x/A.hook.ts",
       "T=$(case x in a) echo;; esac) bun /x/A.hook.ts",
       "T=$(cat <<E\nx\nE\n) bun /x/A.hook.ts",
       "T=$(echo a\n) bun /x/A.hook.ts",
@@ -147,5 +151,6 @@ describe("#2802: a quoted leading assignment is read, spaces and all", () => {
     }
     // A word merely containing "case" or a # inside a word is still read.
     expect(executedHookPath("T=$(showcase x#y) bun /x/A.hook.ts")).toBe("/x/A.hook.ts");
+    expect(executedHookPath("T=$(echo $#) bun /x/A.hook.ts")).toBe("/x/A.hook.ts");
   });
 });

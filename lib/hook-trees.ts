@@ -234,7 +234,8 @@ function backquoteEnd(s: string, open: number): number {
  * skipped whole, so a parenthesis inside them does not count.
  *
  * Fail closed on what it does not model (security review of #2815): a
- * comment, a heredoc, a `case` pattern or a newline inside the body can each
+ * comment (a `#` after a blank or an operator character; `$#` and a `#`
+ * inside a word are not one), a heredoc, a `case` pattern or a newline inside the body can each
  * hold a `)` that closes nothing, so any of them reads as -1, a line that
  * runs no hook, rather than a guess at where the substitution ends.
  */
@@ -270,7 +271,7 @@ function substitutionEnd(s: string, open: number): number {
       j = e - 1;
     } else if (
       c === "\n" ||
-      (c === "#" && /[\s(]/.test(s[j - 1] ?? " ")) ||
+      (c === "#" && /[\s;|&()<>]/.test(s[j - 1] ?? " ")) ||
       (c === "<" && s[j + 1] === "<") ||
       (/^case(?![A-Za-z0-9_])/.test(s.slice(j)) && !/[A-Za-z0-9_]/.test(s[j - 1] ?? " "))
     ) {
