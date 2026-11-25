@@ -68,6 +68,14 @@ export interface RuleDecision {
 /** The frontmatter key carrying the sha of the body the harness last wrote. */
 export const PROVENANCE_KEY = "generated-sha";
 
+/**
+ * The one command that takes the generator's version of a preserved rule
+ * file, once the file is deleted (#2835). Named in the scaffold's PRESERVED
+ * line and in prompt-audit's note on a file written before the stamp, so the
+ * two tools give a consumer the same way out.
+ */
+export const ACCEPT_GENERATED_RULE = "rungate scaffold . --fix";
+
 const FRONTMATTER = /^---\n([\s\S]*?)\n---\n/;
 
 /**

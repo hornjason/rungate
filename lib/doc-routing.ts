@@ -68,6 +68,15 @@ export interface DocRoutingRow {
 /**
  * The marker that makes an undiscoverable document visible. It leads the row
  * so a reader scanning the first column sees the gap without reading on.
+ *
+ * **One row per document, kept on purpose (#2835).** Folding the rows into
+ * one line was weighed when a consumer's routing rule carried about forty of
+ * them. Each row names the file that needs a `governs:` line, and a folded
+ * line would either drop that name or carry a list that is the same rows in
+ * one cell. Each row also says the document exists, which is the point of the
+ * marker (above). The always-loaded cost is the consumer's to remove, one file
+ * at a time: add `governs:` to the document, or `routing: exclude` (or
+ * `status: archived`) to take it out of the table.
  */
 export const NO_GOVERNS_MARKER = "NO GOVERNS FIELD —";
 

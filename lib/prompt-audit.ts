@@ -27,11 +27,14 @@
  * Decided per line, from what the scaffold writes:
  *
  * - `AGENTS.md`: rungate's, except under `## Hard Constraints`.
- * - A rule or command rungate writes: rungate's, except under
- *   `## Project-owned`. It is rungate's if it carries the `generated-sha`
- *   stamp, or if its name is one rungate's generator writes: scaffolds before
- *   the stamp wrote the same files unstamped, and their text is still
- *   rungate's. Any other rule is hand-written.
+ * - A rule or command: rungate's, except under `## Project-owned`, exactly
+ *   when its `generated-sha` stamp still covers its text (`stampCovers`).
+ *   That is the reading `scaffold --fix` writes from, so a file this calls
+ *   rungate's is one the scaffold rewrites, and one it calls the project's is
+ *   one the scaffold preserves (#2835). A file with no stamp, a pre-stamp
+ *   scaffold's output included, is the project's. When such a file has a name
+ *   the generator writes, its findings say how to take the generator's
+ *   version (`ACCEPT_GENERATED_RULE`).
  * - A brief whose name has a template in rungate's `templates/agent-briefs/`:
  *   rungate's, except under `## Project Constraints`.
  * - Everything else, `CLAUDE.md` included: the consumer's.
@@ -58,7 +61,7 @@ import { BRIEF_CONSTRAINTS_SECTION, HARD_CONSTRAINTS_SECTION, readPreservedSecti
 import { generateScopedRules } from "./generators/agents-md";
 import type { ProjectScan } from "./generators/types";
 import { readFences } from "./markdown-fence";
-import { PROVENANCE_KEY } from "./rule-provenance";
+import { ACCEPT_GENERATED_RULE, declaredSha, stampCovers } from "./rule-provenance";
 import { PROJECT_OWNED_SECTION } from "./scaffold/marked-section";
 import { OWNED_FILES } from "./scaffold/owned-files";
 import {
@@ -133,9 +136,31 @@ export function generatedNames(): { rules: Set<string>; commands: Set<string> } 
 
 let names: ReturnType<typeof generatedNames> | null = null;
 
-function stamped(text: string): boolean {
-  const fm = text.match(/^---\n([\s\S]*?)\n---/);
-  return fm !== null && new RegExp(`^${PROVENANCE_KEY}:`, "m").test(fm[1]);
+/**
+ * Whether `file` is a rule or command the generator writes, by name. It
+ * decides no owner (#2835): it only says a file the scaffold preserves may be
+ * a pre-stamp scaffold's output, which deleting and re-scaffolding replaces.
+ */
+export function hasGeneratedName(file: string): boolean {
+  names ??= generatedNames();
+  const name = file.slice(file.lastIndexOf("/") + 1);
+  if (file === `.claude/rules/${name}`) return names.rules.has(name);
+  if (file === `.claude/commands/${name}`) return names.commands.has(name);
+  return false;
+}
+
+/**
+ * What a project-owned finding adds when its file has a generated name and no
+ * stamp at all: the scaffold preserves it, and here is the way out. A file
+ * whose stamp no longer covers it was edited after rungate wrote it, so
+ * deleting it would discard the edit; that one gets no note.
+ */
+export function preStampNote(file: string, text: string): string | null {
+  if (!hasGeneratedName(file) || declaredSha(text) !== null) return null;
+  return (
+    `it has the name of a file rungate generates and no generated-sha stamp, so it may predate the stamp; ` +
+    `the scaffold keeps it as yours. To take the generator's version, delete it and re-run \`${ACCEPT_GENERATED_RULE}\``
+  );
 }
 
 /**
@@ -153,10 +178,10 @@ export function lineOwners(file: string, text: string, packageRoot: string = PAC
   };
   if (file === "AGENTS.md") return harnessExcept(HARD_CONSTRAINTS_SECTION);
   if (file.startsWith(".claude/rules/") || file.startsWith(".claude/commands/")) {
-    names ??= generatedNames();
-    const name = file.slice(file.lastIndexOf("/") + 1);
-    const generated = file.startsWith(".claude/rules/") ? names.rules.has(name) && file === `.claude/rules/${name}` : names.commands.has(name) && file === `.claude/commands/${name}`;
-    return stamped(text) || generated ? harnessExcept(PROJECT_OWNED_SECTION) : all("consumer");
+    // #2835: the scaffold's own reading. A stamp that covers the text is
+    // rungate's; no stamp, or a stamp the text has moved away from, is the
+    // project's, which is what `decideRuleWrite` preserves.
+    return stampCovers(text) === null ? all("consumer") : harnessExcept(PROJECT_OWNED_SECTION);
   }
   if (file.startsWith(".claude/agents/")) {
     const name = file.slice(file.lastIndexOf("/") + 1);

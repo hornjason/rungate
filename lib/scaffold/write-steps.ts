@@ -17,7 +17,7 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, isAbsolute, join, relative, sep } from "path";
 import { ADR_TEMPLATE_PATH, NO_TEST_COMMAND_WHY, processFiles, WORK_LOOP_COMMAND_PATH } from "./process-files";
-import { decideRuleWrite } from "../rule-provenance";
+import { ACCEPT_GENERATED_RULE, decideRuleWrite } from "../rule-provenance";
 import { isHarnessItself } from "../harness-identity";
 import { testCommandDecision } from "../test-command";
 import { configLocation, resolveConfig } from "../config-loader";
@@ -347,7 +347,7 @@ export function writeProcessFiles(projectPath: string, actions: string[], templa
     const existing = existsSync(target) ? readFileSync(target, "utf-8") : null;
     const decision = decideRuleWrite(existing, file.content);
     if (decision.action === "preserve") {
-      actions.push(`PRESERVED: ${file.path} (${decision.reason}) — generator output withheld; delete the file and re-run to accept it`);
+      actions.push(`PRESERVED: ${file.path} (${decision.reason}) — generator output withheld; to accept it, delete the file and re-run \`${ACCEPT_GENERATED_RULE}\``);
       continue;
     }
     writeFileSync(target, decision.content!);
