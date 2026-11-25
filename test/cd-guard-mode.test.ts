@@ -89,10 +89,67 @@ function run(cwd: string, command: string, env: Record<string, string> = {}) {
     timeout: 30000,
     env: { ...process.env, ...env },
   });
+  // A hook that never ran, crashed or printed something unreadable looks
+  // exactly like a silent one, and every silence arm would pass on it. The hook
+  // exits 0 on every rung, so anything else is a failure to run (#2787 review).
+  if (r.error) throw new Error(`the hook did not run: ${r.error.message}`);
+  if (r.status !== 0) throw new Error(`the hook exited ${r.status ?? r.signal}: ${r.stderr}`);
   const stdout = (r.stdout ?? "").trim();
   let decision: string | undefined;
-  try { decision = stdout ? JSON.parse(stdout).decision : undefined; } catch {}
+  if (stdout) {
+    try {
+      decision = JSON.parse(stdout).decision;
+    } catch {
+      throw new Error(`the hook printed something that is not JSON: ${stdout}`);
+    }
+  }
   return { stdout, stderr: r.stderr ?? "", decision, status: r.status };
+}
+
+/**
+ * The user settings file's text, or null when it does not exist. Absence is the
+ * only reading that skips AC-11: an unreadable file is an error, never a pass
+ * (#2787 review).
+ */
+function userSettingsText(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+}
+
+/**
+ * How many string values and keys in a settings document name
+ * `TopLevelCdGuard`. A count, and nothing else: each earlier version printed
+ * something read from the file (the whole file, then a value, then a key), and
+ * this file holds the machine's tokens. A number cannot carry one (#2786,
+ * #2787 review). Read as JSON, so an escaped quote is part of its value. A file
+ * that is not JSON is counted by a plain text search.
+ */
+function cdGuardRegistrations(src: string): number {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(src);
+  } catch {
+    return src.includes("TopLevelCdGuard") ? 1 : 0;
+  }
+  let n = 0;
+  const walk = (v: unknown): void => {
+    if (typeof v === "string") {
+      if (v.includes("TopLevelCdGuard")) n++;
+    } else if (Array.isArray(v)) {
+      v.forEach(walk);
+    } else if (v !== null && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) {
+        if (k.includes("TopLevelCdGuard")) n++;
+        walk(x);
+      }
+    }
+  };
+  walk(doc);
+  return n;
 }
 
 const OFFENDING = "cd /tmp && ls";
@@ -280,9 +337,59 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
     // registers it at user level this arm says so on the author's machine
     // and is simply absent on a runner — recorded as a limit, not hidden.
     const user = join(homedir(), ".claude", "settings.json");
-    let src: string;
-    try { src = readFileSync(user, "utf-8"); } catch { return; } // no user settings here (CI)
-    expect(src, "~/.claude/settings.json registers TopLevelCdGuard — not done by this branch")
-      .not.toContain("TopLevelCdGuard");
+    const src = userSettingsText(user);
+    if (src === null) return; // no user settings here (CI)
+    // Asserts on the string values that name the guard, never the whole file:
+    // a failing `not.toContain` prints its whole subject, and this file holds
+    // the machine's tokens in `env` (#2786).
+    expect(cdGuardRegistrations(src), "~/.claude/settings.json registers TopLevelCdGuard — not done by this branch")
+      .toBe(0);
+  });
+
+  test("#2786: AC-11's reading counts where the guard is registered, and its failure prints no text from the file", () => {
+    const doc = (command: string, env: Record<string, string> = {}) => ({
+      env: { GH_TOKEN: "gho_planted2786", OTHER_KEY: "sk-planted2786", ...env },
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command }] }] },
+    });
+    const registered = [
+      doc("bun ${PAI_HOOKS_DIR}/TopLevelCdGuard.hook.ts"),
+      // #2787 review: a path quoted for spaces puts escaped quotes in the value.
+      doc('bun "/Users/x/My Hooks/TopLevelCdGuard.hook.ts"'),
+      // A token in the same command string as the guard.
+      doc("GITHUB_TOKEN=gho_planted2786 bun ${X}/TopLevelCdGuard.hook.ts"),
+      doc('echo "gho_planted2786 TopLevelCdGuard"'),
+      // #2787 review: tokens as keys, one naming the guard and one above a value
+      // that does, including a key of letters alone.
+      { env: { "echo gho_planted2786 TopLevelCdGuard": "1" } },
+      { env: { a: "1", gho_planted2786: "bun TopLevelCdGuard.hook.ts" } },
+      { env: { PLANTEDLETTERSONLY: "bun TopLevelCdGuard.hook.ts" } },
+    ];
+    for (const d of registered) {
+      for (const src of [JSON.stringify(d, null, 2), JSON.stringify(d)]) {
+        expect(cdGuardRegistrations(src), src).toBe(1);
+        // The failure AC-11 would print, captured: a count, and no text of the file.
+        let printed = "";
+        try {
+          expect(cdGuardRegistrations(src), "registers TopLevelCdGuard").toBe(0);
+        } catch (e) {
+          printed = String((e as Error).message);
+        }
+        expect(printed).toContain("registers TopLevelCdGuard");
+        expect(printed).not.toMatch(/planted2786|PLANTEDLETTERSONLY/i);
+      }
+    }
+    expect(cdGuardRegistrations(JSON.stringify({ env: { GH_TOKEN: "gho_planted2786" } }))).toBe(0);
+    // A file that is not JSON still counts as registered.
+    expect(cdGuardRegistrations('{ "env": { "GH_TOKEN": "gho_planted2786" }, "x": "TopLevelCdGuard"')).toBe(1);
+  });
+
+  // #2787 review: a hook that never ran reads exactly like a silent one.
+  test("#2787: a hook that did not run is an error, so no silence arm can pass on a dead hook", () => {
+    expect(() => run(harnessed("dir"), ALLOWED, { PATH: "/nonexistent-path-2787" })).toThrow();
+  });
+
+  test("#2787: AC-11's settings read is absent only when the file does not exist; any other error is thrown", () => {
+    expect(userSettingsText(join(tmp(), "absent.json"))).toBeNull();
+    expect(() => userSettingsText(tmp())).toThrow(); // a directory: EISDIR, not absence
   });
 });
