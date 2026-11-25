@@ -136,7 +136,9 @@ export function constantValue(node: ts.Node, constants: Map<string, string>): st
  * line. Comments are not nodes, so none is read. A `+` chain holding a
  * literal is read as one passage, the sentence a user sees, with `X` where
  * a value goes (#2812 review: a sentence split across two literals was read
- * as two halves, neither naming the table).
+ * as two halves, neither naming the table). Parentheses are see-through: a
+ * parenthesised literal or sub-chain is part of the sentence, and a template
+ * in a chain still has the strings inside its spans read (#2823 review).
  */
 export function sourceStrings(path: string, source: string, constants: Map<string, string> = new Map()): Passage[] {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
@@ -144,7 +146,13 @@ export function sourceStrings(path: string, source: string, constants: Map<strin
   const at = (node: ts.Node) => file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
   // A name holding a known string constant reads as its value (#2816); any other value reads as X.
   const value = (node: ts.Node): string | null => constantValue(node, constants);
-  const literal = (node: ts.Node): string | null => {
+  const bare = (node: ts.Node): ts.Node => {
+    let n = node;
+    while (ts.isParenthesizedExpression(n)) n = n.expression;
+    return n;
+  };
+  const literal = (outer: ts.Node): string | null => {
+    const node = bare(outer);
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
     // An interpolation stands for a value, so its place keeps the sentence whole.
     if (ts.isTemplateExpression(node))
@@ -153,19 +161,31 @@ export function sourceStrings(path: string, source: string, constants: Map<strin
   };
   const plus = (node: ts.Node): node is ts.BinaryExpression =>
     ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken;
+  /** The node a chain member sits in, past any parentheses. */
+  const holder = (node: ts.Node): ts.Node => {
+    let n = node.parent;
+    while (n !== undefined && ts.isParenthesizedExpression(n)) n = n.parent;
+    return n;
+  };
   const visit = (node: ts.Node): void => {
-    if (plus(node) && !plus(node.parent)) {
+    if (plus(node) && !plus(holder(node))) {
       const parts: ts.Node[] = [];
       const flatten = (n: ts.Node): void => {
-        if (plus(n)) {
-          flatten(n.left);
-          flatten(n.right);
+        const b = bare(n);
+        if (plus(b)) {
+          flatten(b.left);
+          flatten(b.right);
         } else parts.push(n);
       };
       flatten(node);
       if (parts.some(p => literal(p) !== null)) {
         out.push({ line: at(node), text: parts.map(p => literal(p) ?? value(p) ?? "X").join("") });
-        for (const p of parts) if (literal(p) === null) visit(p);
+        for (const p of parts) {
+          const b = bare(p);
+          if (literal(p) === null) visit(p);
+          // A template's own spans can hold strings a user reads.
+          else if (ts.isTemplateExpression(b)) for (const span of b.templateSpans) visit(span.expression);
+        }
         return;
       }
     }
@@ -333,12 +353,19 @@ describe("#2800: user-facing text names a placement table only as the older form
       // A sentence split across a + chain is read whole (#2812 review).
       "const d = \"UNMEASURED: the spec's placement \" + \"table could not be read.\";",
       "const e = `${x}: the placement ` + y + \" table decides\";",
+      // Parentheses are see-through, and a template in a chain has its spans read (#2823 review).
+      "const f = \"UNMEASURED: the spec's placement \" + (\"table could not be read.\");",
+      "const g = (\"UNMEASURED: the spec's placement \" + \"table\") + \" could not be read.\";",
+      "const h = \"Run: \" + `${ok ? \"the placement table decides\" : \"\"}`;",
     ].join("\n");
     const found = sourceStrings("planted.ts", source).flatMap(p => sentencesNamingTable(p.text).map(s => `${p.line}: ${s}`));
     expect(found).toEqual([
       "3: the placement table decides",
       "4: X's placement table could not be read",
       "6: UNMEASURED: the spec's placement table could not be read.",
+      "8: UNMEASURED: the spec's placement table could not be read.",
+      "9: UNMEASURED: the spec's placement table could not be read.",
+      "10: the placement table decides",
     ]);
   });
 
