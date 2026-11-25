@@ -17,7 +17,7 @@
  * (SC-2805) unchanged.
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 
 import { resolveConfig } from "./config-loader";
@@ -109,6 +109,53 @@ export function readRenderedSurface(root: string): RenderedSurface {
   for (const f of SURFACE_FILES) if (existsSync(join(abs, f))) files.set(f, readFileSync(join(abs, f), "utf-8"));
   for (const d of SURFACE_DIRS) for (const f of mdIn(abs, d)) files.set(f, readFileSync(join(abs, f), "utf-8"));
   return { root: abs, files };
+}
+
+// ── #2778: the user-level surface ─────────────────────────────────────────
+
+/** The user-level files Claude Code loads into every session, relative to `~/.claude`. */
+export const USER_SURFACE_FILES = ["CLAUDE.md"] as const;
+
+/** The user-level directories whose `*.md` files are the rest of it, relative to `~/.claude`. */
+export const USER_SURFACE_DIRS = ["agents", "skills", "commands"] as const;
+
+/**
+ * Every `.md` file under `dir`, following symlinks. A user's skills are often
+ * links into another checkout, and Claude Code loads them through the link,
+ * so a walk that skipped links would read less than a session loads. Each
+ * directory is entered once by its real path, so a link cycle ends.
+ */
+function mdInFollowingLinks(root: string, dir: string): string[] {
+  const out: string[] = [];
+  const entered = new Set<string>();
+  const walk = (abs: string, rel: string): void => {
+    const real = realpathSync(abs);
+    if (entered.has(real)) return;
+    entered.add(real);
+    for (const name of readdirSync(abs).sort((x, y) => x.localeCompare(y))) {
+      const at = join(abs, name);
+      const st = statSync(at, { throwIfNoEntry: false });
+      if (st?.isDirectory()) walk(at, `${rel}/${name}`);
+      else if (st?.isFile() && name.endsWith(".md")) out.push(`${rel}/${name}`);
+    }
+  };
+  const at = join(root, dir);
+  if (statSync(at, { throwIfNoEntry: false })?.isDirectory()) walk(at, dir);
+  return out;
+}
+
+/**
+ * The user-level surface under `<home>/.claude`, keyed relative to that
+ * directory, read and never written. rungate rendered none of it, so it is
+ * not refused for lacking a scaffold's markers: a home with no `.claude` is
+ * an empty surface, and the caller reports how many files it read.
+ */
+export function readUserSurface(home: string): RenderedSurface {
+  const root = join(resolve(home), ".claude");
+  const files = new Map<string, string>();
+  for (const f of USER_SURFACE_FILES) if (existsSync(join(root, f))) files.set(f, readFileSync(join(root, f), "utf-8"));
+  for (const d of USER_SURFACE_DIRS) for (const f of mdInFollowingLinks(root, d)) files.set(f, readFileSync(join(root, f), "utf-8"));
+  return { root, files };
 }
 
 /** A surface file, or any file that exists inside the rendered root. */

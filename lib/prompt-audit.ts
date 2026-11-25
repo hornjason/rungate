@@ -38,6 +38,18 @@
  *
  * The section readers are the scaffold's own (`readPreservedSection`), so the
  * audit and the re-scaffold cannot disagree about where a section ends.
+ *
+ * ## The user-level surface (#2778)
+ *
+ * Claude Code also loads `~/.claude/CLAUDE.md` and the user's agents, skills
+ * and commands into every session. A default run does not read them and says
+ * so in `unmeasured`, so a short project list never reads as the whole
+ * surface being clean. With `home` given (`--user`), four lints run over them
+ * read-only: `template-artifact`, `stale-count`, `pressure-density` and
+ * `dangling-path`. `dangling-read-target` is left out: a user file names
+ * project paths that exist in some project and not under `~/.claude`. Every
+ * such finding is the user's, and only harness-owned findings become
+ * upstream drafts, so none of them is ever drafted.
  */
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -49,9 +61,20 @@ import { readFences } from "./markdown-fence";
 import { PROVENANCE_KEY } from "./rule-provenance";
 import { PROJECT_OWNED_SECTION } from "./scaffold/marked-section";
 import { OWNED_FILES } from "./scaffold/owned-files";
-import { PACKAGE_ROOT, SURFACE_LINTS, lintRenderedTree, readRenderedSurface, type RenderedSurface } from "./surface-lint";
+import {
+  PACKAGE_ROOT,
+  SURFACE_LINTS,
+  USER_SURFACE_DIRS,
+  lintRenderedTree,
+  readRenderedSurface,
+  readUserSurface,
+  staleCounts,
+  templateArtifacts,
+  type RenderedSurface,
+} from "./surface-lint";
 
-export type Owner = "consumer" | "harness";
+/** `user`: a file under `~/.claude`, read only with `--user` (#2778). */
+export type Owner = "consumer" | "harness" | "user";
 
 export interface AuditFinding {
   lint: string;
@@ -67,7 +90,14 @@ export interface PromptAudit {
   /** Every lint that ran, by name, so an empty finding list says what was checked. */
   lints: string[];
   findings: AuditFinding[];
+  /** The user-level surface that was read, or null when it was not (#2778). */
+  user: { root: string; files: number; lints: string[] } | null;
+  /** Each part of what agents load that this run did not read, as an UNMEASURED line. */
+  unmeasured: string[];
 }
+
+/** Where user-level findings say they are, so they never read as project files. */
+export const USER_PREFIX = "~/.claude/";
 
 // ── Ownership ──────────────────────────────────────────────────────────────
 
@@ -152,7 +182,7 @@ function pressureFindings(surface: RenderedSurface, owners: Map<string, Owner[]>
     const lines = text.split("\n");
     const { roles } = readFences(lines);
     const own = owners.get(file)!;
-    for (const owner of ["harness", "consumer"] as const) {
+    for (const owner of ["harness", "consumer", "user"] as const) {
       let marks = 0, words = 0, first: number | null = null;
       const tally = new Map<string, number>();
       lines.forEach((ln, i) => {
@@ -189,7 +219,39 @@ export function looksLikeRepoPath(token: string): boolean {
   return /^[\w.-]+(?:\/[\w.-]+)+\.[A-Za-z0-9]{1,6}$/.test(token);
 }
 
-function danglingPathFindings(surface: RenderedSurface, owners: Map<string, Owner[]>): AuditFinding[] {
+/**
+ * A `~/`-rooted path in a user-level file, as the part after `~/`, or null
+ * when the token is not one (#2778). A user's files name `~/.claude/...`
+ * where a project's name a repository path, so the leading dot the project
+ * reading skips is allowed here; a `..` segment is not.
+ */
+export function homeRelativePath(token: string): string | null {
+  if (!token.startsWith("~/")) return null;
+  const rest = token.slice(2);
+  if (/[*?{}<>$|@:\\]/.test(rest) || rest.split("/").includes("..")) return null;
+  return /^[\w.-]+(?:\/[\w.-]+)+\.[A-Za-z0-9]{1,6}$/.test(rest) ? rest : null;
+}
+
+/**
+ * Where a token could point, absolute, or null when it is not a path this
+ * surface reads. The finding needs one of those places' directory to exist
+ * and none of them to hold the file.
+ */
+type PathPlaces = (file: string, token: string) => string[] | null;
+
+const projectPlaces = (root: string): PathPlaces => (_file, token) => (looksLikeRepoPath(token) ? [join(root, token)] : null);
+
+/**
+ * A user file's path is relative to its own directory (a skill naming its
+ * `references/`) or to `~/.claude`, and a `~/` path is relative to home.
+ */
+const userPlaces = (root: string, home: string): PathPlaces => (file, token) => {
+  const rest = homeRelativePath(token);
+  if (rest !== null) return [join(home, rest)];
+  return looksLikeRepoPath(token) ? [join(root, dirname(file), token), join(root, token)] : null;
+};
+
+function danglingPathFindings(surface: RenderedSurface, owners: Map<string, Owner[]>, places: PathPlaces = projectPlaces(surface.root)): AuditFinding[] {
   const out: AuditFinding[] = [];
   for (const [file, text] of surface.files) {
     const lines = text.split("\n");
@@ -197,10 +259,10 @@ function danglingPathFindings(surface: RenderedSurface, owners: Map<string, Owne
     lines.forEach((ln, i) => {
       if (roles[i] !== "prose") return;
       for (const [, token] of ln.matchAll(BACKTICKED)) {
-        if (!looksLikeRepoPath(token)) continue;
-        const parent = join(surface.root, dirname(token));
-        if (!existsSync(parent) || !statSync(parent).isDirectory()) continue;
-        if (existsSync(join(surface.root, token))) continue;
+        const at = places(file, token);
+        if (at === null) continue;
+        if (!at.some(p => existsSync(dirname(p)) && statSync(dirname(p)).isDirectory())) continue;
+        if (at.some(p => existsSync(p))) continue;
         out.push({
           lint: "dangling-path", file, line: i + 1, owner: owners.get(file)![i],
           message: `line ${i + 1} names \`${token}\`; its directory exists and the file does not`,
@@ -215,12 +277,42 @@ function danglingPathFindings(surface: RenderedSurface, owners: Map<string, Owne
 
 export const PROMPT_AUDIT_LINTS: readonly string[] = [...SURFACE_LINTS.map(l => l.name), "pressure-density", "dangling-path"];
 
+/** The surface lints that also run over the user-level files (#2778). */
+const USER_SURFACE_LINTS = [templateArtifacts(), staleCounts()];
+export const USER_AUDIT_LINTS: readonly string[] = [...USER_SURFACE_LINTS.map(l => l.name), "pressure-density", "dangling-path"];
+
+/** What a default run says about the user-level files it did not read. */
+export const USER_SURFACE_UNREAD =
+  `UNMEASURED: the user-level surface (${USER_PREFIX}CLAUDE.md and ${USER_PREFIX}{${USER_SURFACE_DIRS.join(",")}}) was not read, ` +
+  "and Claude Code loads it into every session here. Run with --user to lint it; nothing there is written.";
+
+/** The line a surface lint's message starts with, or null. */
+const lineOf = (message: string): number | null => {
+  const m = message.match(/^line (\d+)\b/);
+  return m ? Number(m[1]) : null;
+};
+
+/** The user-level findings under `home`, every one the user's, each file named from `~/.claude/`. */
+function userFindings(home: string): { root: string; files: number; findings: AuditFinding[] } {
+  const surface = readUserSurface(home);
+  const owners = new Map<string, Owner[]>();
+  for (const [file, text] of surface.files) owners.set(file, new Array(text.split("\n").length).fill("user"));
+  const findings: AuditFinding[] = USER_SURFACE_LINTS.flatMap(lint =>
+    lint.check(surface).map(f => ({ lint: lint.name, file: f.file, line: lineOf(f.message), owner: "user" as const, message: f.message })),
+  );
+  findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners, userPlaces(surface.root, home)));
+  return { root: surface.root, files: surface.files.size, findings: findings.map(f => ({ ...f, file: USER_PREFIX + f.file })) };
+}
+
 /**
  * Run every lint over the rendered surface under `root` and give each finding
  * an owner. Throws `NotRenderedSurface` for a tree rungate has not scaffolded:
  * nothing was measured, and an empty list would say otherwise.
+ *
+ * With `home`, the user-level files under `<home>/.claude` are linted too,
+ * read-only; without it, `unmeasured` says they were not read (#2778).
  */
-export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT): PromptAudit {
+export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, opts: { home?: string } = {}): PromptAudit {
   const surface = readRenderedSurface(root);
   const owners = new Map<string, Owner[]>();
   for (const [file, text] of surface.files) owners.set(file, lineOwners(file, text, packageRoot));
@@ -230,12 +322,14 @@ export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT): P
     return line === null ? (own.includes("harness") ? "harness" : "consumer") : own[line - 1] ?? "consumer";
   };
   const findings: AuditFinding[] = lintRenderedTree(root, SURFACE_LINTS).map(f => {
-    const m = f.message.match(/^line (\d+)\b/);
-    const line = m ? Number(m[1]) : null;
+    const line = lineOf(f.message);
     return { lint: f.lint, file: f.file, line, owner: ownerAt(f.file, line), message: f.message };
   });
   findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners));
-  return { root: surface.root, lints: [...PROMPT_AUDIT_LINTS], findings };
+  if (opts.home === undefined) return { root: surface.root, lints: [...PROMPT_AUDIT_LINTS], findings, user: null, unmeasured: [USER_SURFACE_UNREAD] };
+  const user = userFindings(opts.home);
+  findings.push(...user.findings);
+  return { root: surface.root, lints: [...PROMPT_AUDIT_LINTS], findings, user: { root: user.root, files: user.files, lints: [...USER_AUDIT_LINTS] }, unmeasured: [] };
 }
 
 // ── Upstream drafts ────────────────────────────────────────────────────────
@@ -300,13 +394,22 @@ export function writeUpstreamBodies(bodies: Map<string, string>, outDir: string)
   return written;
 }
 
-/** The terminal report: rungate's findings first, then the consumer's. */
+/**
+ * The terminal report: rungate's findings first, then the consumer's, then
+ * the user's when their files were read, then what was not read.
+ */
 export function formatAudit(audit: PromptAudit): string {
   const lines = [`prompt-audit: ${audit.findings.length} finding(s) from ${audit.lints.length} lints (${audit.lints.join(", ")}) over ${audit.root}`];
-  for (const owner of ["harness", "consumer"] as const) {
+  const heading: Record<Owner, string> = {
+    harness: "rungate wrote this text; report it upstream",
+    consumer: "this project's own text; fix it here",
+    user: audit.user === null ? "" : `your own files under ${audit.user.root}, ${audit.user.files} read by ${audit.user.lints.join(", ")}; fix them there, never upstream`,
+  };
+  for (const owner of audit.user === null ? (["harness", "consumer"] as const) : (["harness", "consumer", "user"] as const)) {
     const fs = audit.findings.filter(f => f.owner === owner);
-    lines.push("", owner === "harness" ? `harness-owned (${fs.length}): rungate wrote this text; report it upstream` : `consumer-owned (${fs.length}): this project's own text; fix it here`);
+    lines.push("", `${owner}-owned (${fs.length}): ${heading[owner]}`);
     for (const f of fs) lines.push(`  [${f.lint}] ${f.file}: ${f.message}`);
   }
+  for (const u of audit.unmeasured) lines.push("", u);
   return lines.join("\n");
 }

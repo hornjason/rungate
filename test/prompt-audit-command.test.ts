@@ -13,13 +13,15 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 import {
   PRESSURE_FLOOR,
   PROMPT_AUDIT_LINTS,
+  USER_AUDIT_LINTS,
+  formatAudit,
   generatedNames,
   lineOwners,
   looksLikeRepoPath,
@@ -268,5 +270,104 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     expect(refused.status).toBe(2);
     expect(refused.stderr).toContain("UNMEASURED");
     expect(refused.stdout).not.toContain("finding(s)");
+  });
+});
+
+/**
+ * #2778: Claude Code loads the user-level `~/.claude` CLAUDE.md, agents,
+ * skills and commands into every session, and the project audit never read
+ * them. A default run now says so; `--user` lints them, read-only, as the
+ * user's own findings, and none of them is ever drafted upstream.
+ */
+describe("#2778: the user-level surface is reported unread by default and linted read-only with --user", () => {
+  /** A fake home whose `.claude` holds each `[path, text]`. */
+  function fakeHome(...files: [string, string][]): string {
+    const home = mkdtempSync(join(scratch, "home-"));
+    for (const [rel, text] of files) {
+      const at = join(home, ".claude", rel);
+      mkdirSync(join(at, ".."), { recursive: true });
+      writeFileSync(at, text + "\n");
+    }
+    return home;
+  }
+
+  /** Every file under `dir` with its bytes, so a run that wrote anything shows up as a difference. */
+  function snapshot(dir: string): string[] {
+    return (readdirSync(dir, { recursive: true }) as string[]).sort().map(f => {
+      const at = join(dir, f);
+      return statSync(at).isFile() ? `${f}\n${readFileSync(at, "utf-8")}` : f;
+    });
+  }
+
+  test("a default run reads none of it and says the user-level surface was not read", () => {
+    const audit = promptAudit(rendered);
+    expect(audit.user).toBeNull();
+    expect(audit.unmeasured).toHaveLength(1);
+    expect(audit.unmeasured[0]).toMatch(/^UNMEASURED: the user-level surface .* was not read/);
+    expect(formatAudit(audit)).toContain(audit.unmeasured[0]);
+    expect(formatAudit(audit)).not.toContain("user-owned");
+  });
+
+  test("--user finds a skill naming a missing file, by either spelling, as the user's own, and drafts nothing upstream", () => {
+    const home = fakeHome(
+      ["skills/x/SKILL.md", "Read `references/gone.md` first.\nThen `~/.claude/skills/x/also-gone.md`.\nAnd `references/here.md`, which is there.\nAnd `nowhere/example.md`, a directory nobody has."],
+      ["skills/x/references/here.md", "present"],
+    );
+    const before = snapshot(home);
+    const audit = promptAudit(rendered, undefined, { home });
+    expect(audit.user).toEqual({ root: join(home, ".claude"), files: 2, lints: [...USER_AUDIT_LINTS] });
+    expect(audit.unmeasured).toEqual([]);
+    expect(audit.findings.map(f => `${f.owner} ${f.lint} ${f.file}:${f.line}`)).toEqual([
+      "user dangling-path ~/.claude/skills/x/SKILL.md:1",
+      "user dangling-path ~/.claude/skills/x/SKILL.md:2",
+    ]);
+    expect(upstreamBodies(audit).size).toBe(0);
+    expect(snapshot(home)).toEqual(before);
+  });
+
+  test("--user runs pressure-density, stale-count and template-artifact over the user's files too, and keeps the project's owners", () => {
+    const home = fakeHome(
+      ["CLAUDE.md", `${PRESSURE}\n\nThere are 12 agents here.`],
+      ["agents/helper.md", "Read ${SOURCE_DIRS} first."],
+      ["commands/go.md", "Go."],
+    );
+    const root = planted([".claude/agents/marcus.md", "Read ${SOURCE_DIRS}."]);
+    const audit = promptAudit(root, undefined, { home });
+    expect(audit.findings.map(f => `${f.owner} ${f.lint} ${f.file}`).sort()).toEqual([
+      "harness template-artifact .claude/agents/marcus.md",
+      "user pressure-density ~/.claude/CLAUDE.md",
+      "user stale-count ~/.claude/CLAUDE.md",
+      "user template-artifact ~/.claude/agents/helper.md",
+    ]);
+    expect([...upstreamBodies(audit, "rungate 9.9.9, read for this test").keys()]).toEqual(["template-artifact"]);
+    expect(upstreamBodies(audit, "rungate 9.9.9, read for this test").get("template-artifact")).not.toContain("helper.md");
+  });
+
+  test("a skills directory reached through a symlink is read like any other", () => {
+    const home = fakeHome(["CLAUDE.md", "Hello."]);
+    const elsewhere = mkdtempSync(join(scratch, "linked-skill-"));
+    mkdirSync(join(elsewhere, "references"));
+    writeFileSync(join(elsewhere, "SKILL.md"), "Read `references/gone.md` first.\n");
+    mkdirSync(join(home, ".claude", "skills"));
+    symlinkSync(elsewhere, join(home, ".claude", "skills", "linked"));
+    const audit = promptAudit(rendered, undefined, { home });
+    expect(audit.user?.files).toBe(2);
+    expect(audit.findings.map(f => `${f.owner} ${f.lint} ${f.file}`)).toEqual(["user dangling-path ~/.claude/skills/linked/SKILL.md"]);
+  });
+
+  test("the command says the surface was unread without --user, and lints it with --user, under the HOME it is given", () => {
+    const home = fakeHome(["skills/x/SKILL.md", "Read `references/gone.md` first."], ["skills/x/references/here.md", "present"]);
+    const run = (args: string[]) =>
+      spawnSync("bun", [join(ROOT, "bin", "rungate.ts"), "prompt-audit", ...args], { cwd: rendered, encoding: "utf-8", env: { ...process.env, HOME: home } });
+    const plain = run([]);
+    expect(plain.status, plain.stderr).toBe(0);
+    expect(plain.stdout).toContain("UNMEASURED: the user-level surface");
+    expect(plain.stdout).not.toContain("user-owned");
+    const user = run(["--user"]);
+    expect(user.status, user.stderr).toBe(0);
+    expect(user.stdout).not.toContain("UNMEASURED: the user-level surface");
+    expect(user.stdout).toContain("user-owned (1)");
+    expect(user.stdout).toContain("[dangling-path] ~/.claude/skills/x/SKILL.md: line 1 names `references/gone.md`");
+    expect(user.stdout).toContain("No harness-owned finding");
   });
 });
