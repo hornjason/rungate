@@ -419,7 +419,8 @@ export function placementConversionDiff(before: string, after: string): string[]
 }
 
 export type PlacementConversion =
-  | { after: string; written: number }
+  /** `meanings`: whether the table kept a column of meanings, or was removed because none was left (#2797). */
+  | { after: string; written: number; meanings: "kept" | "removed" }
   | { nothing: string }
   | { refusal: string[] };
 
@@ -427,7 +428,8 @@ export type PlacementConversion =
  * A spec's `### Phase placement` table moved into placement lines (ADR-026
  * Decision 5): each id the table lists becomes a `placement:` line at the end
  * of its criterion's block, beside `needs:` and `proved-by:`, and the table
- * loses its criteria column. Refused, with nothing returned to write, when
+ * loses its criteria column. A table left with no column but its placements
+ * is removed (#2797). Refused, with nothing returned to write, when
  * {@link placementConversionDiff} finds anything the conversion would change,
  * or when the spec states one id in two criterion blocks (#2788).
  */
@@ -485,6 +487,25 @@ export function convertPlacement(content: string): PlacementConversion {
     if (cells.length >= 3) cells.splice(2, 1);
     lines[i] = cells.join("|");
   }
+  // A table whose only column was its placements says nothing once they move
+  // into lines: a one-column list of values under "What each placement means"
+  // means nothing. It goes, and the heading with it when nothing else is left
+  // under it; prose the author wrote there keeps its heading (#2797).
+  let meanings: "kept" | "removed" = "kept";
+  const rows: number[] = [];
+  for (let i = start + 1; start >= 0 && i < lines.length; i++) {
+    if (/^#{1,3} /.test(lines[i]!)) break;
+    if (lines[i]!.startsWith("|")) rows.push(i);
+  }
+  const oneColumn = (l: string): boolean => l.replace(/^\|/, "").replace(/\|\s*$/, "").split("|").length === 1;
+  if (rows.length > 0 && rows.every(i => oneColumn(lines[i]!))) {
+    meanings = "removed";
+    for (const i of rows) lines[i] = REMOVED;
+    let end = start + 1;
+    while (end < lines.length && !/^#{1,3} /.test(lines[end]!)) end++;
+    const rest = lines.slice(start + 1, end).filter(l => l !== REMOVED);
+    if (rest.every(l => l.trim() === "")) for (let i = start; i < end; i++) lines[i] = REMOVED;
+  }
   if (unread.length > 0) {
     return {
       refusal: [
@@ -495,13 +516,19 @@ export function convertPlacement(content: string): PlacementConversion {
 
   const out: string[] = [];
   lines.forEach((line, i) => {
-    out.push(line);
+    // A blank line straight after a removed run, where one already stands, is
+    // the removal's double; every other line is kept as written.
+    const doubled = i > 0 && lines[i - 1] === REMOVED && line.trim() === "" && (out.at(-1) ?? "").trim() === "";
+    if (line !== REMOVED && !doubled) out.push(line);
     out.push(...(after.get(i) ?? []));
   });
   const converted = out.join("\n");
   const diff = placementConversionDiff(content, converted);
-  return diff.length > 0 ? { refusal: diff } : { after: converted, written };
+  return diff.length > 0 ? { refusal: diff } : { after: converted, written, meanings };
 }
+
+/** A line {@link convertPlacement} removes, as a marker no spec line can equal. */
+const REMOVED = "\u0000removed";
 
 /** What one spec's planning state is, across the whole tree — SC-2611. */
 export type PlacementState = "PLANNED" | "UNPLANNED" | "NO_CRITERIA" | "UNREADABLE";
@@ -981,6 +1008,16 @@ export interface MilestoneAction {
    * meaningless — and misleading — when the title did not move.
    */
   action: "create" | "rename" | "update" | "unchanged";
+  /**
+   * Set on an `unchanged` milestone whose description is exactly
+   * {@link previousMilestoneBody}: the title and the criteria list are right,
+   * and only the sentence naming where they come from is the older one.
+   * `plan-spec --write` rewrites it. It stays `unchanged` so the live
+   * `milestones` reading, which counts `unchanged` phases, does not go short
+   * on every pull request while published releases and this tree disagree on
+   * the sentence (#2797).
+   */
+  reword?: true;
   /** Set for everything but `create`: the live milestone this matched. */
   existing?: { number: number; title: string; description: string | null };
 }
@@ -1018,6 +1055,26 @@ export interface LiveMilestone {
  * one question (`.claude/rules/checks-must-be-able-to-fail.md`).
  */
 export function milestoneBody(criteria: string[]): string {
+  return `${criteria.length} criteria: ${criteria.join(", ")}\n\n${MILESTONE_SOURCE}`;
+}
+
+/**
+ * Where a milestone's criteria come from, said so a reader is sent to the
+ * thing that decides them: since ADR-026 that is the `placement:` line beneath
+ * each criterion, and an older spec's table is still read (#2797).
+ */
+const MILESTONE_SOURCE =
+  "Derived from each criterion's placement in the spec — its `placement:` line, or an older spec's Phase placement table — by `rungate plan-spec`. Edit the spec, not this.";
+
+/**
+ * The description every milestone carried before #2797, which sent the reader
+ * to the table. Read, never written: a live milestone holding exactly this,
+ * with the current criteria list, is `unchanged` and marked
+ * {@link MilestoneAction.reword}, so the new sentence reaches the board through
+ * a release and the next `plan-spec --write`, with no pull request going red
+ * in between.
+ */
+export function previousMilestoneBody(criteria: string[]): string {
   return `${criteria.length} criteria: ${criteria.join(", ")}\n\nDerived from the spec's Phase placement table by \`rungate plan-spec\`. Edit the table, not this.`;
 }
 
@@ -1110,12 +1167,15 @@ export function milestonePlan(
       // list on a phase whose heading text did not move — see
       // `LiveMilestone.description`.
       const titleMoved = existing.title !== title;
-      const bodyMoved = existing.description !== milestoneBody(criteria);
+      const older = existing.description === previousMilestoneBody(criteria);
+      const bodyMoved = existing.description !== milestoneBody(criteria) && !older;
+      const action = titleMoved ? "rename" : bodyMoved ? "update" : "unchanged";
       return {
         title,
         phase,
         criteria,
-        action: titleMoved ? "rename" : bodyMoved ? "update" : "unchanged",
+        action,
+        ...(action === "unchanged" && older ? { reword: true as const } : {}),
         existing,
       };
     });

@@ -468,20 +468,6 @@ A criterion in no phase is unreadable as anything: *nobody has reached it*,
 *it cannot start* and *it is finished* all render as absence, and the backlog
 is built from this document.
 
-| Placement |
-|---|
-| **Phase 0** |
-| **Phase 1** |
-| **Phase 2** |
-| **Phase 3** |
-| **Phase 4** |
-| **Phase 5** |
-| **Phase 6** |
-| **Phase 7** |
-| **Phase 8** |
-| **Phase 9** |
-| **Phase 10** |
-
 ### Phase 0 — the transform refuses
 
 Every step reports UNMEASURED rather than an empty reading. Mostly true

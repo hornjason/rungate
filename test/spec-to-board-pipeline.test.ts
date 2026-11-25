@@ -132,7 +132,7 @@ function mainBase(): { used: number[]; blocks: Block[] } | null {
 
 /** The spec this suite is about, named where a scanner can see the claim. */
 describe("SPEC-TO-BOARD-PIPELINE-SPEC.md is readable by the pipeline it governs", () => {
-  test("it states criteria, and they are the ones the placement table places", () => {
+  test("it states criteria, and they are the ones its placement lines place", () => {
     const stated = parseCriteria(SPEC).map(c => c.id);
     expect(stated.length, "the spec states no criteria, so it governs nothing").toBeGreaterThan(0);
 
