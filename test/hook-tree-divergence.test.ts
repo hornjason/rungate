@@ -970,6 +970,20 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
       expect(wrongTreeViolations(["Foo"], [command]).map(v => v.tree), command).toEqual(["unparsed"]);
     }
   });
+  test("#2826: a hook file whose name is built from a variable makes the reading UNMEASURED, beside a clean one", () => {
+    const env = envs({ "user-settings": { RUNGATE_HOOKS_DIR: `${REPO}/hooks`, HOOK: "ProjectStateSync" } });
+    for (const command of ["bun ${RUNGATE_HOOKS_DIR}/${HOOK}.hook.ts", "bun /x/$HOOK.hook.ts", "bun /x/pre-${HOOK}.hook.ts --flag=1"]) {
+      const census = registeredTreeCensus(["ProjectStateSync"], cmds({ "user-settings": [RG("ProjectStateSync"), command] }), env, REPO);
+      expect(census.reading, command).toBe("UNMEASURED");
+      expect(census.inRepo.map(r => r.hook), command).toEqual(["ProjectStateSync"]);
+      expect(census.unmeasuredReasons.join(" "), command).toContain("whose name is built from a variable");
+      expect(census.unmeasuredReasons.join(" "), command).not.toContain(command);
+    }
+    // A variable only in the directory leaves the name readable: that is the ordinary path, still clean.
+    const clean = registeredTreeCensus(["ProjectStateSync"], cmds({ "user-settings": [RG("ProjectStateSync")] }), env, REPO);
+    expect(clean.reading).toBe("MEASURED");
+  });
+
   test("AC-R3: a variable nothing defines is UNRESOLVED, never 'this repo'", () => {
     // Fail-open one. An undefined variable is the state CI is in, and the
     // tempting reading is that `${RUNGATE_HOOKS_DIR}` obviously means the

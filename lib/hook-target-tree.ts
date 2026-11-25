@@ -89,6 +89,9 @@ import {
  * `.claude/rungate/hooks.json` is scaffolded into the project settings and
  * has the same reach.
  */
+/** A path segment ending `.hook.ts` whose name holds a `$`: a hook file named by a variable (#2826 review). */
+const VARIABLE_HOOK_FILE = /(?:^|[\/\s"'=])[^\/\s"'=]*\$[^\/\s"'=]*\.hook\.ts(?![A-Za-z0-9_-])/;
+
 const PROJECT_DIR_SCOPES: RegistrationScope[] = [
   "project-settings",
   "project-local-settings",
@@ -356,6 +359,14 @@ export function registeredTreeCensus(
             `so which tree that registration runs could not be read. A registration not read is not this ` +
             `repo's copy; it is no reading at all`,
         });
+      }
+      // A hook file whose NAME is built from a variable names no hook this census
+      // can read, owned or not: a reason, so the reading is not clean (#2826 review).
+      if (raw === null && VARIABLE_HOOK_FILE.test(command) && !owned.some(h => mentionsHook(command, h))) {
+        reasons.push(
+          `a registration in ${reading.scope} executes a hook file whose name is built from a variable, so ` +
+            `which hook it runs, and in which tree, could not be read`,
+        );
       }
       if (raw === null || executed === null) continue;
       const base = executed;

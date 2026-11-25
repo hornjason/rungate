@@ -168,7 +168,8 @@ export function settingsCommands(docs: string[]): string[] {
  * (measured: 0 of 19), which is why the bare-flag refusal costs nothing
  * today and is the safe default for whatever is added tomorrow.
  *
- * `wrongTreeViolations` below deliberately still SELECTS by substring, and
+ * `wrongTreeViolations` below deliberately still SELECTS by name wherever it
+ * sits in the string (`mentionsHook`: the name at a boundary, anywhere), and
  * #981 is why: the error directions are opposite there, so a narrow parse
  * could silently stop reporting a hook genuinely wired to the superseded
  * tree. What #981 changed is that a selected string is now CLASSIFIED by this
@@ -418,7 +419,7 @@ export interface TreeViolation {
  * question that already has one. The input this binding alone can see is a
  * registration that EXISTS and points at the superseded copy.
  *
- * ## Why SELECTION is still a substring, and the fix was NOT `executedHookFile`
+ * ## Why SELECTION is still by name anywhere in the string, and the fix was NOT `executedHookFile`
  *
  * #981 is the issue, and it exists because the cheap generalisation —
  * *"#976 replaced the substring with the argv parse in `hook-scopes.ts`, do
@@ -429,8 +430,10 @@ export interface TreeViolation {
  * | `hookRegistration` (#976) | a hook that is NOT registered reads as registered — a guard reporting clean about its own subject, #910's defect | a real registration reads as absent → `unregistered` → **loud** |
  * | here | a violation that is not real → an investigation → **loud** | a hook genuinely wired to the superseded tree **silently stops being reported**, which is #713 entire |
  *
- * So selection keeps the substring and nothing is ever dropped for failing to
- * parse. What changed is that a selected string is now CLASSIFIED by the argv
+ * So selection keeps reading the name wherever it sits, through `mentionsHook`,
+ * and nothing is ever dropped for failing to parse. The one narrowing is that
+ * the name starts at a boundary, so `Foo` is not selected by `OtherFoo.hook.ts`
+ * (#2826 review): that is about which name it is, not where it sits. What changed is that a selected string is now CLASSIFIED by the argv
  * parse, in three readings instead of two:
  *
  * | reading | what it means |
