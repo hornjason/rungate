@@ -20,7 +20,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
@@ -604,5 +604,31 @@ describe("#1955: every flag a command's script requires appears in its usage", (
     const broken = cmd.usage.replaceAll(`--${flags[0]} `, "");
     expect(broken, `removing --${flags[0]} did not change the usage string`).not.toBe(cmd.usage);
     expect(broken.includes(`--${flags[0]}`)).toBe(false);
+  });
+});
+
+/**
+ * #2834: `rungate <command> --help` prints that command's registry entry and
+ * runs nothing. Each script used to decide for itself what `--help` meant:
+ * `create-spec` took it as a spec title and wrote `specs/HELP-SPEC.md` into
+ * a consumer's repository, and `sync-sc-status` once ticked every criterion
+ * on it (#2078). Swept over the registry, so a command added later is covered
+ * without anyone remembering to add it here.
+ */
+describe("#2834: <command> --help runs nothing, for every registered command", () => {
+  const names = Object.keys(CLI_COMMANDS);
+  test("the sweep has a population", () => {
+    expect(names.length).toBeGreaterThan(10);
+  });
+  test.each(names.flatMap(name => [[name, "--help"], [name, "-h"]]))("%s %s prints its usage, exits 0 and writes nothing", (name, flag) => {
+    const scratch = mkdtempSync(join(tmpdir(), "rungate-cli-help-"));
+    try {
+      const r = spawnSync("bun", [join(ROOT, "bin", "rungate.ts"), name, flag], { encoding: "utf-8", cwd: scratch, timeout: 60_000 });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain(CLI_COMMANDS[name]!.usage);
+      expect(readdirSync(scratch), `${name} ${flag} wrote into the directory it was run from`).toEqual([]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
   });
 });
