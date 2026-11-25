@@ -6,19 +6,28 @@
  * AC-11 printed the whole file on failure; three review rounds then found three
  * more ways file text reached the output. The census suites cannot work from a
  * count — they compare which hook files each scope registers and resolve
- * `${VAR}` paths through `env` — so the helper keeps exactly what they read: the
- * hook commands and the variables those commands reference. Everything else
- * never reaches a test, so no assertion can print it.
+ * `${VAR}` paths through `env` merged across scopes — so the helper keeps
+ * exactly what they read: the hook files the commands execute, and every
+ * variable some scope's hook path references. Everything else never reaches a
+ * test, so no assertion can print it.
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, relative } from "path";
 import { readRegistrationScopes, settingsScopePaths } from "../lib/hook-scopes";
-import { readEnvScopes } from "../lib/hook-target-tree";
-import { executedHookPath } from "../lib/hook-trees";
-import { homeSettingsReads, NO_HOOK_FILE, reduceCommand, redactSettings, settingsReader } from "./helpers/user-settings";
+import { mergeEnv, readEnvScopes, resolvePath } from "../lib/hook-target-tree";
+import { executedHookPath, settingsCommands } from "../lib/hook-trees";
+import {
+  homePath,
+  homeSettingsReads,
+  NO_HOOK_FILE,
+  REDUCED_EVENT,
+  reduceCommand,
+  redactSettings,
+  settingsReader,
+} from "./helpers/user-settings";
 
 const ROOT = join(import.meta.dir, "..");
 
@@ -47,12 +56,14 @@ const PLANTED = {
 
 describe("#2792: the helper keeps what the census reads and nothing else", () => {
   test("redactSettings keeps each hook's executed file and the variables it references, and nothing else", () => {
-    const out = redactSettings(JSON.stringify(PLANTED, null, 2));
+    const out = redactSettings(JSON.stringify(PLANTED, null, 2), new Set(["RUNGATE_HOOKS_DIR"]));
     expect(out).not.toMatch(/planted2792/);
     const doc = JSON.parse(out);
     expect(doc.env).toEqual({ RUNGATE_HOOKS_DIR: "/srv/rungate/hooks" });
     expect(Object.keys(doc).sort()).toEqual(["env", "hooks"]);
-    const commands = doc.hooks.PreToolUse[0].hooks.map((h: { command: string }) => h.command);
+    // No event name or matcher survives; only the reduced commands, in order.
+    expect(Object.keys(doc.hooks)).toEqual([REDUCED_EVENT]);
+    const commands = doc.hooks[REDUCED_EVENT][0].hooks.map((h: { command: string }) => h.command);
     expect(commands).toEqual([
       "bun ${RUNGATE_HOOKS_DIR}/TopLevelCdGuard.hook.ts",
       "bun /srv/x/Other.hook.ts",
@@ -63,6 +74,23 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
     // The census reads the same hook file from each reduced command as from the original.
     for (const h of PLANTED.hooks.PreToolUse[0]!.hooks) {
       expect(executedHookPath(reduceCommand(h.command))).toBe(executedHookPath(h.command));
+    }
+  });
+
+  test("the census finds the same hook files in the copy as in the original, whatever shape nests them", () => {
+    // #2798 review: a command on the group itself, outside its hooks list, is
+    // one the census's walk takes. So is one a level deeper than today's schema.
+    const shapes = [
+      PLANTED,
+      { hooks: { PreToolUse: [{ matcher: "Bash", command: "bun /x/TopLevelCdGuard.hook.ts" }] } },
+      { hooks: { Stop: [{ hooks: [{ nested: { command: "bun ${H}/Deep.hook.ts" } }] }] } },
+      { hooks: { "gho_planted2792": [{ hooks: [{ type: "command", command: "bun /x/KeyNamed.hook.ts" }] }] } },
+    ];
+    for (const shape of shapes) {
+      const src = JSON.stringify(shape);
+      const out = redactSettings(src, new Set(["H"]));
+      expect(out).not.toMatch(/planted2792/);
+      expect(settingsCommands([out]).map(executedHookPath)).toEqual(settingsCommands([src]).map(executedHookPath));
     }
   });
 
@@ -93,6 +121,84 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
       rmSync(repo, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  test("every hook path resolves the same through the copies as through the originals, across scopes", () => {
+    // #2798 review: the census merges `env` across every scope before it
+    // resolves a path, so a variable one file defines and another file's hook
+    // reads must keep its value, and one two files define must keep both. A
+    // generated battery, because the defect sits in which scope holds what:
+    // each case spreads definitions and references across all four scopes.
+    let seed = 2798;
+    const rand = (): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const pick = <T,>(xs: T[]): T => xs[Math.floor(rand() * xs.length)]!;
+    const VARS = ["A", "B", "C"];
+    const kinds = new Map<string, number>();
+    let crossScope = 0;
+    for (let i = 0; i < 200; i++) {
+      const repo = mkdtempSync(join(tmpdir(), "rg-2798-repo-"));
+      const home = mkdtempSync(join(tmpdir(), "rg-2798-home-"));
+      try {
+        mkdirSync(join(repo, ".claude"), { recursive: true });
+        mkdirSync(join(home, ".claude"), { recursive: true });
+        const definedIn = new Map<string, Set<number>>();
+        const readIn = new Map<string, Set<number>>();
+        settingsScopePaths(repo, home).forEach(({ path }, scope) => {
+          if (rand() < 0.15) return; // absent
+          // The committed scope is in git and read verbatim, so only the others carry a token.
+          const env: Record<string, string> = scope === 0 ? {} : { GH_TOKEN: "gho_planted2798" };
+          for (const v of VARS) {
+            if (rand() < 0.35) {
+              env[v] = pick(["/v1", "/v2"]);
+              (definedIn.get(v) ?? definedIn.set(v, new Set()).get(v)!).add(scope);
+            }
+          }
+          const commands = Array.from({ length: Math.floor(rand() * 3) }, (_, k) => {
+            const v = pick([...VARS, "literal"]);
+            if (v !== "literal") (readIn.get(v) ?? readIn.set(v, new Set()).get(v)!).add(scope);
+            return v === "literal" ? `bun /lit/H${k}.hook.ts` : `bun ${"$"}{${v}}/hooks/H${k}.hook.ts`;
+          });
+          const nested = rand() < 0.5;
+          const hooks = nested
+            ? { PreToolUse: [{ matcher: "Bash", hooks: commands.map(command => ({ type: "command", command })) }] }
+            : { PreToolUse: commands.map(command => ({ matcher: "Bash", command })) };
+          writeFileSync(path, JSON.stringify({ env, hooks }));
+        });
+        for (const [v, readers] of readIn) {
+          const defs = definedIn.get(v) ?? new Set<number>();
+          if ([...defs].some(d => ![...readers].includes(d))) crossScope++;
+        }
+        const raw = (p: string): string | null => (existsSync(p) ? readFileSync(p, "utf-8") : null);
+        const copy = settingsReader(repo, home);
+        const original = readRegistrationScopes(repo, home, raw, []);
+        const reduced = readRegistrationScopes(repo, home, copy, []);
+        expect(JSON.stringify([reduced, readEnvScopes(repo, home, copy)])).not.toMatch(/planted2798/);
+        const files = (rs: typeof original) => rs.map(r => r.commands?.map(executedHookPath) ?? null);
+        expect(files(reduced), `case ${i}: a scope's hook files differ`).toEqual(files(original));
+        const envOriginal = mergeEnv(readEnvScopes(repo, home, raw));
+        const envReduced = mergeEnv(readEnvScopes(repo, home, copy));
+        for (const p of files(original).flat()) {
+          if (p === null || p === undefined) continue;
+          const want = resolvePath(p, envOriginal, null);
+          const kind = want.kind === "resolved" ? "resolved" : /defined \d+ times/.test(want.reason) ? "twice" : "undefined";
+          kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
+          expect(resolvePath(p, envReduced, null), `case ${i}: ${p} resolves differently through the copies`).toEqual(want);
+        }
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+        rmSync(home, { recursive: true, force: true });
+      }
+    }
+    // The battery reached every outcome the defect could change, and the axis it sits on.
+    expect(kinds.get("resolved") ?? 0).toBeGreaterThan(10);
+    expect(kinds.get("twice") ?? 0).toBeGreaterThan(10);
+    expect(kinds.get("undefined") ?? 0).toBeGreaterThan(10);
+    expect(crossScope).toBeGreaterThan(50);
   });
 
   test("a machine-owned file that is not JSON throws without quoting it, and only absence reads as null", () => {
@@ -126,7 +232,7 @@ describe("#2792: no test reads a machine settings scope except through the helpe
       return statSync(p).isDirectory() ? files(p) : /\.ts$/.test(name) ? [p] : [];
     });
 
-  test("every call that passes homedir() to a settings reader, or builds join(homedir(), \".claude\"), is the helper's", () => {
+  test("no file under test/ but the helper hands home to a call, or builds a home path to a settings file", () => {
     const helper = join(ROOT, "test", "helpers", "user-settings.ts");
     const hits = files(join(ROOT, "test"))
       .filter(f => f !== helper)
@@ -148,12 +254,42 @@ describe("#2792: no test reads a machine settings scope except through the helpe
       'const pai = join(homedir(), ".pai", "hooks");',
     ].join("\n");
     expect(homeSettingsReads(planted)).toEqual([2, 3, 8, 9]);
+    // #2798 review: each shape the earlier call-name list missed, by line.
+    const missed: [string, number[]][] = [
+      ['import path from "path";\nconst u = path.join(homedir(), ".claude", "settings.json");', [2]],
+      ['readFileSync(join(homedir(), ".claude/settings.json"));', [1]],
+      ['resolve(homedir(), ".claude", "settings.local.json");', [1]],
+      ["mod.readRegistrationScopes(ROOT, homedir(), read, []);", [1]],
+      ["readRegistrationCurrency({ repoRoot: R, home: homedir(), readFile: r });", [1]],
+      ["const home = os.homedir();\nf({ home });", [2]],
+      ['const p = `${homedir()}/.claude/settings.json`;', [1]],
+      ['const p = homedir() + "/.claude/" + "settings.json";', [1]],
+      ['const d = join(homedir(), ".claude");\nreadFileSync(join(d, "settings.json"));', [2]],
+      ["readEnvScopes(R, join(homedir()), read);", [1]],
+      ['import { homedir as h } from "os";\nreadEnvScopes(R, h(), read);', [2]],
+      ["const { HOME: H } = process.env;\nsettingsScopePaths(R, H!);", [2]],
+      ["readEnvScopes(R, Bun.env.HOME!, read);", [1]],
+      ['const c = homePath(".claude");\nreadFileSync(join(c, "settings.json"));', [2]],
+    ];
+    for (const [src, lines] of missed) expect(homeSettingsReads(src), src).toEqual(lines);
+    // An assertion comparing to home, a home path that is not a settings file,
+    // and a command string naming one are not reads.
+    expect(homeSettingsReads("expect(x).toBe(homedir());\nexpect(y).not.toEqual(process.env.HOME);")).toEqual([]);
+    expect(homeSettingsReads('const PAI = homePath(".pai", "hooks");\nreaddirSync(PAI);\njoin(homedir(), ".pai", "hooks");')).toEqual([]);
+    expect(homeSettingsReads('const c = `echo x > ${process.env.HOME}/.claude/hooks/X.hook.ts`;')).toEqual([]);
     // A home directory held in a variable, or read from the environment, is still home.
     expect(homeSettingsReads("const h = homedir();\nreadRegistrationScopes(R, h, read, []);")).toEqual([2]);
     expect(homeSettingsReads("const h = process.env.HOME!;\nreadEnvScopes(R, h, read);")).toEqual([2]);
     expect(homeSettingsReads('const h = process.env["HOME"]!;\nsettingsScopePaths(R, h);')).toEqual([2]);
     // A source that never reaches home may drive the readers over planted directories.
     expect(homeSettingsReads('readRegistrationScopes("/repo", "/home", () => null, []);')).toEqual([]);
+  });
+
+  test("homePath names a path under home, never home itself or a settings file", () => {
+    expect(() => homePath()).toThrow();
+    expect(() => homePath(".claude", "settings.json")).toThrow();
+    expect(() => homePath(".claude", "settings.local.json")).toThrow();
+    expect(homePath(".pai", "hooks").endsWith(join(".pai", "hooks"))).toBe(true);
   });
 
   test("settingsScopePaths still names the scopes the helper treats as machine state", () => {

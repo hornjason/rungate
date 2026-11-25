@@ -6,8 +6,10 @@
  * until #2787, and three review rounds found three more ways file text reached
  * the output. Making each assertion careful about what it prints fixed one
  * site per round. This makes it structural: a machine-owned scope is reduced,
- * on read, to what the census suites use — the hook commands and the `env`
- * keys those commands reference — and nothing else ever reaches a test.
+ * on read, to what the census suites use — the hook files the commands execute,
+ * and the `env` keys some scope's hook path references — and nothing else ever
+ * reaches a test. AC-11, which asks a wider question than the census, gets a
+ * count taken over the raw file instead, never the file.
  *
  * `test/user-settings-helper.test.ts` refuses any other reader in `test/`.
  */
@@ -18,7 +20,8 @@ import { join } from "path";
 import ts from "typescript";
 import { readRegistrationScopes, settingsScopePaths, type ScopeReading } from "../../lib/hook-scopes";
 import { readEnvScopes, type EnvReading } from "../../lib/hook-target-tree";
-import { executedHookPath } from "../../lib/hook-trees";
+import { readRegistrationCurrency, type RegistrationCurrency } from "../../lib/hook-tree-currency";
+import { executedHookPath, settingsCommands } from "../../lib/hook-trees";
 
 /** A variable a path reads: `${NAME}` or `$NAME`. */
 const VAR_REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
@@ -37,58 +40,91 @@ export function reduceCommand(command: string): string {
   return path === null ? NO_HOOK_FILE : `bun ${path}`;
 }
 
-/** `hooks` rebuilt from an allowlist: each event's groups, their `matcher`, and each hook's `type` and reduced `command`. */
-function reduceHooks(hooks: unknown): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  if (hooks === null || typeof hooks !== "object" || Array.isArray(hooks)) return out;
-  for (const [event, groups] of Object.entries(hooks as Record<string, unknown>)) {
-    if (!Array.isArray(groups)) continue;
-    out[event] = groups
-      .filter((g): g is Record<string, unknown> => g !== null && typeof g === "object")
-      .map(g => ({
-        ...(typeof g.matcher === "string" ? { matcher: g.matcher } : {}),
-        hooks: (Array.isArray(g.hooks) ? g.hooks : [])
-          .filter((h): h is Record<string, unknown> => h !== null && typeof h === "object" && typeof h.command === "string")
-          .map(h => ({ type: typeof h.type === "string" ? h.type : "command", command: reduceCommand(h.command as string) })),
-      }));
-  }
-  return out;
+/** The one key the reduced `hooks` block carries. No event name, matcher or key of the original survives. */
+export const REDUCED_EVENT = "reduced";
+
+/**
+ * Every command the census finds under `hooks`, found by the census's own walk
+ * (`settingsCommands`, which takes a `command` at any depth), each reduced,
+ * in the same order. Nothing the census does not read is kept: no event name,
+ * no matcher, no key. So the census reads the same hook files from the copy
+ * as from the original, whatever shape the original nests them in.
+ */
+function reduceHooks(doc: string): Record<string, unknown> {
+  const hooks = settingsCommands([doc]).map(command => ({ type: "command", command: reduceCommand(command) }));
+  return { [REDUCED_EVENT]: [{ hooks }] };
 }
+
+/** Each variable a reduced command's hook path reads. */
+function pathVariables(commands: string[]): string[] {
+  return commands.flatMap(c => [...c.matchAll(VAR_REF)].map(m => (m[1] ?? m[2])!));
+}
+
+const NOT_JSON = "a machine settings file is not JSON, so it was not read; nothing of it is printed here";
 
 /**
  * A settings document rebuilt from an allowlist, never redacted in place:
  * `hooks` with each command reduced to the hook file it executes, and the
- * `env` keys those hook paths reference. Throws, quoting nothing, when the
+ * `env` keys named in `referenced`. Throws, quoting nothing, when the
  * document is not JSON.
+ *
+ * `referenced` is every variable a hook path reads in ANY scope, not only this
+ * document's (#2798 review). The census merges `env` across scopes before it
+ * resolves a path, so a variable one file defines and another file's hook
+ * reads must keep its value, and a variable two files define must keep both,
+ * or a refusal ("defined 2 times") turns into a clean reading.
  *
  * The limit, stated: a variable a hook path does read is kept, value and all,
  * because resolving the path needs it.
  */
-export function redactSettings(src: string): string {
-  let doc: { hooks?: unknown; env?: Record<string, unknown> };
+export function redactSettings(src: string, referenced: ReadonlySet<string>): string {
+  let doc: { env?: unknown };
   try {
     doc = JSON.parse(src);
   } catch {
-    throw new Error("a machine settings file is not JSON, so it was not read; nothing of it is printed here");
+    throw new Error(NOT_JSON);
   }
-  const hooks = reduceHooks(doc.hooks);
-  const paths = JSON.stringify(hooks);
-  const referenced = new Set([...paths.matchAll(VAR_REF)].map(m => (m[1] ?? m[2])!));
+  const hooks = reduceHooks(src);
   const env: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(doc.env ?? {})) if (referenced.has(k)) env[k] = v;
+  const given = doc?.env;
+  if (given !== null && typeof given === "object" && !Array.isArray(given)) {
+    for (const [k, v] of Object.entries(given as Record<string, unknown>)) if (referenced.has(k)) env[k] = v;
+  }
   return JSON.stringify({ hooks, env }, null, 2);
+}
+
+/**
+ * Every variable a hook path reads, across every scope document given. A
+ * document that is absent, unreadable or not JSON adds nothing here; reading
+ * it through {@link settingsReader} is what refuses it.
+ */
+export function referencedVariables(paths: string[]): Set<string> {
+  const out = new Set<string>();
+  for (const path of paths) {
+    let commands: string[];
+    try {
+      commands = settingsCommands([readFileSync(path, "utf-8")]).map(reduceCommand);
+    } catch {
+      continue; // its own read through settingsReader throws or reads null
+    }
+    for (const v of pathVariables(commands)) out.add(v);
+  }
+  return out;
 }
 
 /**
  * A `readFile` for `readRegistrationScopes` and `readEnvScopes`, and for any
  * direct read of a settings scope. The committed project scope is returned
  * verbatim, because it is in git. Every other path, machine-owned or the
- * gitignored project-local one, is returned through {@link redactSettings}.
+ * gitignored project-local one, is returned through {@link redactSettings},
+ * keeping every variable any of the four scopes' hook paths reads.
  * An absent file is `null`; any other read error is thrown, never read as
  * absence.
  */
 export function settingsReader(repoRoot: string, home: string): (path: string) => string | null {
-  const committed = settingsScopePaths(repoRoot, home).find(s => s.scope === "project-settings")!.path;
+  const scopes = settingsScopePaths(repoRoot, home);
+  const committed = scopes.find(s => s.scope === "project-settings")!.path;
+  const referenced = referencedVariables(scopes.map(s => s.path));
   return path => {
     let src: string;
     try {
@@ -97,7 +133,7 @@ export function settingsReader(repoRoot: string, home: string): (path: string) =
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw e;
     }
-    return path === committed ? src : redactSettings(src);
+    return path === committed ? src : redactSettings(src, referenced);
   };
 }
 
@@ -116,6 +152,13 @@ export function liveEnvScopes(repoRoot: string): EnvReading[] {
   return readEnvScopes(repoRoot, homedir(), liveSettingsReader(repoRoot));
 }
 
+/** `readRegistrationCurrency` over this machine, every machine-owned scope redacted on read. */
+export function liveRegistrationCurrency(
+  input: Omit<Parameters<typeof readRegistrationCurrency>[0], "home" | "readFile">,
+): RegistrationCurrency {
+  return readRegistrationCurrency({ ...input, home: homedir(), readFile: liveSettingsReader(input.repoRoot) });
+}
+
 /** Where this machine's settings scopes live. Paths only; nothing is read. */
 export function liveScopePaths(repoRoot: string): ReturnType<typeof settingsScopePaths> {
   return settingsScopePaths(repoRoot, homedir());
@@ -126,34 +169,104 @@ export function liveUserSettingsPath(): string {
   return join(homedir(), ".claude", "settings.json");
 }
 
-/** The user-scope settings file on this machine, redacted, or null when absent. */
-export function liveUserSettings(repoRoot: string): string | null {
-  return liveSettingsReader(repoRoot)(liveUserSettingsPath());
+/**
+ * How many string values and keys in a settings document contain `needle`.
+ * A count, and nothing else: each earlier AC-11 printed something read from
+ * the file (the whole file, then a value, then a key), and the file holds the
+ * machine's tokens. A number cannot carry one (#2786, #2787 review). Read as
+ * JSON, so an escaped quote is part of its value; a document that is not JSON
+ * counts 1 when its text contains `needle` anywhere.
+ *
+ * Taken over the RAW document, because the question it serves is wider than
+ * the census's: a registration the census cannot parse, a command nested in a
+ * shape nobody expected, or an `env` value naming the hook all count (#2798
+ * review). The reduced copy would hide each of them.
+ */
+export function countMentions(src: string, needle: string): number {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(src);
+  } catch {
+    return src.includes(needle) ? 1 : 0;
+  }
+  let n = 0;
+  const walk = (v: unknown): void => {
+    if (typeof v === "string") {
+      if (v.includes(needle)) n++;
+    } else if (Array.isArray(v)) {
+      v.forEach(walk);
+    } else if (v !== null && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) {
+        if (k.includes(needle)) n++;
+        walk(x);
+      }
+    }
+  };
+  walk(doc);
+  return n;
+}
+
+/** {@link countMentions} over the file at `path`, or null when it is absent. Any other read error is thrown. */
+export function settingsMentions(path: string, needle: string): number | null {
+  let src: string;
+  try {
+    src = readFileSync(path, "utf-8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+  return countMentions(src, needle);
+}
+
+/** {@link settingsMentions} over this machine's user-scope settings file. */
+export function liveUserSettingsMentions(needle: string): number | null {
+  return settingsMentions(liveUserSettingsPath(), needle);
 }
 
 /** A path under the home directory that is not a settings file, such as `~/.pai/hooks`. */
 export function homePath(...segments: string[]): string {
+  if (segments.length === 0) throw new Error("homePath names a path under the home directory, never the directory itself");
   if (segments[0] === ".claude" && /^settings(\.local)?\.json$/.test(segments[1] ?? "")) {
     throw new Error("a settings file under ~/.claude is read through the settings readers above");
   }
   return join(homedir(), ...segments);
 }
 
-const SETTINGS_READERS = new Set(["readRegistrationScopes", "readEnvScopes", "settingsScopePaths"]);
+/** A settings file's name, as the tail of a path a source builds. */
+const SETTINGS_FILE = /(^|\/)settings(\.local)?\.json$/;
+
+/** Calls that build a path rather than read one. */
+const PATH_BUILDERS = new Set(["join", "resolve"]);
 
 /**
- * The lines of a TypeScript source, outside this helper, that read a machine
- * settings scope directly: a call to `readRegistrationScopes`, `readEnvScopes`
- * or `settingsScopePaths` given the home directory, or a `join` from the home
- * directory to `.claude/settings.json` or `.claude/settings.local.json`. "The home directory" is
- * `homedir()`, `os.homedir()`, `process.env.HOME`, or a variable initialised
- * from one of them, so holding it in a `const` first does not hide the read.
- * Parsed with the TypeScript compiler, so a call split across lines is one
- * call. A call over planted directories is not a read of this machine.
+ * The lines of a TypeScript source, outside this helper, that can reach a
+ * machine settings scope without it. Parsed with the TypeScript compiler, so a
+ * call split across lines is one call, and `path.join` is `join`.
+ *
+ * Two readings, kept apart because they need different evidence (#2798 review,
+ * which found the earlier call-name list missed `path.join`, a one-literal
+ * path, `resolve`, and a reader taking home in an options object):
+ *
+ * - **Home handed to a call.** Any call given the home directory itself, as an
+ *   argument or as a property of an object-literal argument, except a path
+ *   builder and an assertion matcher. A function that takes home is one that
+ *   reads under it; which ones read settings is not a list this can keep
+ *   current, so it refuses them all and the helper offers live wrappers.
+ * - **A home path ending at a settings file.** A `join` or `resolve`, a
+ *   template literal, or a `+` concatenation, rooted at home or at a variable
+ *   built from home, whose literal text ends in `settings.json` or
+ *   `settings.local.json`, however the segments are split.
+ *
+ * "Home" is `homedir()`, `os.homedir()`, `process.env.HOME`, `homePath(...)`,
+ * or a variable initialised from one of them. A call over planted directories
+ * reaches neither reading.
  */
 export function homeSettingsReads(source: string): number[] {
   const file = ts.createSourceFile("x.ts", source, ts.ScriptTarget.Latest, true);
+  /** Variables holding the home directory itself. */
   const homeVars = new Set<string>();
+  /** Variables holding a path under it. */
+  const rootedVars = new Set<string>();
   const unwrap = (n: ts.Node): ts.Node => {
     let e = n;
     while (ts.isNonNullExpression(e) || ts.isParenthesizedExpression(e) || ts.isAsExpression(e)) e = e.expression;
@@ -162,40 +275,114 @@ export function homeSettingsReads(source: string): number[] {
     }
     return e;
   };
+  const calleeName = (c: ts.CallExpression): string | null => {
+    const e = c.expression;
+    if (ts.isIdentifier(e)) return e.text;
+    if (ts.isPropertyAccessExpression(e)) return e.name.text;
+    return null;
+  };
+  const literal = (n: ts.Node): string | null => (ts.isStringLiteralLike(n) ? n.text : null);
+  const isEnv = (n: ts.Node): boolean => ["process.env", "Bun.env"].includes(n.getText(file));
+  /** Names `homedir` is imported under: `import { homedir as h } from "os"`. */
+  const homedirNames = new Set(["homedir"]);
+  for (const st of file.statements) {
+    if (!ts.isImportDeclaration(st) || !st.importClause?.namedBindings || !ts.isNamedImports(st.importClause.namedBindings)) continue;
+    for (const el of st.importClause.namedBindings.elements) if ((el.propertyName ?? el.name).text === "homedir") homedirNames.add(el.name.text);
+  }
+  /** The home directory itself. */
   const isHome = (raw: ts.Node): boolean => {
     const n = unwrap(raw);
     if (ts.isCallExpression(n)) {
-      const c = n.expression;
-      return (ts.isIdentifier(c) && c.text === "homedir") || (ts.isPropertyAccessExpression(c) && c.name.text === "homedir");
+      const name = calleeName(n);
+      if (name !== null && homedirNames.has(name)) return true;
+      // join(homedir()) is still home.
+      return name !== null && PATH_BUILDERS.has(name) && n.arguments.length > 0 && n.arguments.every(isHome);
     }
-    if (ts.isPropertyAccessExpression(n)) return n.name.text === "HOME" && n.expression.getText(file) === "process.env";
-    if (ts.isElementAccessExpression(n)) {
-      return n.expression.getText(file) === "process.env" && ts.isStringLiteral(n.argumentExpression) && n.argumentExpression.text === "HOME";
-    }
+    // `process.env.HOME`, `Bun.env.HOME`, and `os.userInfo().homedir`.
+    if (ts.isPropertyAccessExpression(n)) return (n.name.text === "HOME" && isEnv(n.expression)) || n.name.text === "homedir";
+    if (ts.isElementAccessExpression(n)) return isEnv(n.expression) && literal(n.argumentExpression) === "HOME";
     return ts.isIdentifier(n) && homeVars.has(n.text);
   };
-  const collect = (n: ts.Node): void => {
-    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && isHome(n.initializer)) homeVars.add(n.name.text);
-    ts.forEachChild(n, collect);
+  /** Home, or a path built under it. */
+  const isRooted = (raw: ts.Node): boolean => {
+    const n = unwrap(raw);
+    if (isHome(n)) return true;
+    if (ts.isIdentifier(n)) return rootedVars.has(n.text);
+    if (ts.isCallExpression(n)) {
+      const name = calleeName(n);
+      if (name === "homePath") return true;
+      return name !== null && PATH_BUILDERS.has(name) && n.arguments.length > 0 && isRooted(n.arguments[0]!);
+    }
+    if (ts.isTemplateExpression(n)) return n.templateSpans.length > 0 && n.head.text === "" && isRooted(n.templateSpans[0]!.expression);
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken) return isRooted(n.left);
+    return false;
   };
-  collect(file);
-  const lines: number[] = [];
+  // To a fixed point, so a variable built from a variable built from home is rooted too.
+  for (let grew = true; grew; ) {
+    grew = false;
+    const collect = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
+        const name = n.name.text;
+        if (!homeVars.has(name) && isHome(n.initializer)) { homeVars.add(name); grew = true; }
+        if (!rootedVars.has(name) && isRooted(n.initializer)) { rootedVars.add(name); grew = true; }
+      }
+      // `const { HOME } = process.env`, under any local name.
+      if (ts.isVariableDeclaration(n) && ts.isObjectBindingPattern(n.name) && n.initializer && isEnv(unwrap(n.initializer))) {
+        for (const el of n.name.elements) {
+          const key = el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : ts.isIdentifier(el.name) ? el.name.text : null;
+          if (key === "HOME" && ts.isIdentifier(el.name) && !homeVars.has(el.name.text)) {
+            homeVars.add(el.name.text);
+            rootedVars.add(el.name.text);
+            grew = true;
+          }
+        }
+      }
+      ts.forEachChild(n, collect);
+    };
+    collect(file);
+  }
+  /** Whether a call is an assertion matcher on an `expect(...)` chain. */
+  const isMatcher = (c: ts.CallExpression): boolean => {
+    let e: ts.Node = c.expression;
+    while (ts.isPropertyAccessExpression(e) || ts.isCallExpression(e)) {
+      if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && e.expression.text === "expect") return true;
+      e = ts.isPropertyAccessExpression(e) ? e.expression : e.expression;
+    }
+    return false;
+  };
+  const endsAtSettings = (parts: (string | null)[]): boolean =>
+    SETTINGS_FILE.test(parts.filter((p): p is string => p !== null).join("/").replace(/\/+/g, "/"));
+  const lines = new Set<number>();
+  const flag = (n: ts.Node) => lines.add(file.getLineAndCharacterOfPosition(n.getStart()).line + 1);
   const visit = (n: ts.Node): void => {
-    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) {
-      const name = n.expression.text;
-      const args = n.arguments;
-      const readsSettings = SETTINGS_READERS.has(name) && args.some(isHome);
-      const literals = args.slice(1).map(x => (ts.isStringLiteral(x) ? x.text : null));
-      const joinsClaude =
-        name === "join" &&
-        args.length >= 2 &&
-        isHome(args[0]!) &&
-        literals.includes(".claude") &&
-        literals.some(x => x === "settings.json" || x === "settings.local.json");
-      if (readsSettings || joinsClaude) lines.push(file.getLineAndCharacterOfPosition(n.getStart()).line + 1);
+    if (ts.isCallExpression(n)) {
+      const name = calleeName(n);
+      const args = [...n.arguments];
+      if (name !== null && PATH_BUILDERS.has(name)) {
+        if (args.length > 0 && isRooted(args[0]!) && endsAtSettings(args.slice(1).map(literal))) flag(n);
+      } else if (!isMatcher(n)) {
+        const handsHome = args.some(
+          a =>
+            isHome(a) ||
+            (ts.isObjectLiteralExpression(a) &&
+              a.properties.some(
+                p =>
+                  (ts.isPropertyAssignment(p) && isHome(p.initializer)) ||
+                  (ts.isShorthandPropertyAssignment(p) && homeVars.has(p.name.text)),
+              )),
+        );
+        if (handsHome) flag(n);
+      }
+    }
+    if (ts.isTemplateExpression(n) && isRooted(n)) {
+      if (endsAtSettings([n.templateSpans.map(sp => sp.literal.text).join("")])) flag(n);
+    }
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken && isRooted(n.left)) {
+      const right = unwrap(n.right);
+      if (endsAtSettings([literal(right)])) flag(n);
     }
     ts.forEachChild(n, visit);
   };
   visit(file);
-  return lines;
+  return [...lines].sort((a, b) => a - b);
 }
