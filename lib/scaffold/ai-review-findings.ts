@@ -1738,6 +1738,62 @@ export function populationOwedRefusal(owed: readonly string[]): string {
 }
 
 /**
+ * CRC-B8 (#2832): which earlier finding threads no person has answered.
+ *
+ * A finding is answered by a reply: "fixed in <sha>", or a stated reason for
+ * not fixing it. Resolving a thread with no reply is the silent drop the
+ * criterion forbids. The words are not judged, only that a person wrote some.
+ *
+ * Only threads the poster wrote are read, told by the key marker, so a
+ * person's own review comment is not this rule's. A class thread is left to
+ * CRC-N7 (`populationOwed`), whose reply must also state the population, so
+ * one thread is never refused twice. Read thread by thread, as CRC-N7 is: a
+ * thread whose replies were not carried is unknown, and only it.
+ */
+export type FindingsUnansweredReading =
+  | { status: "MEASURED"; unanswered: string[] }
+  | { status: "UNMEASURED"; reason: string };
+
+export const UNANSWERED_REPLIES_NOT_READ =
+  "carried no replies, so whether a person answered them cannot be read";
+
+export function findingsUnanswered(threads: readonly PopulationThread[]): FindingsUnansweredReading {
+  const unanswered: string[] = [];
+  let findings = 0;
+  let unread = 0;
+  for (const t of threads) {
+    if (threadKeyFrom(t.body) === null || threadPopulationFrom(t.body) !== null) continue;
+    findings++;
+    if (t.replies === undefined) {
+      unread++;
+      continue;
+    }
+    if (t.replies.some(r => !r.bot)) continue;
+    const first = String(t.body).split("\n")[0]!.replace(/^\*\*[^*]+\*\* — /, "");
+    unanswered.push(`"${first.length > 160 ? `${first.slice(0, 157)}...` : first}"`);
+  }
+  if (unanswered.length === 0 && unread > 0) {
+    return { status: "UNMEASURED", reason: `${unread} of ${findings} finding thread(s) ${UNANSWERED_REPLIES_NOT_READ}` };
+  }
+  return { status: "MEASURED", unanswered };
+}
+
+/** The annotation title an unanswered finding is refused under (CRC-B8). */
+export const AI_REVIEW_FINDING_UNANSWERED_TITLE = "AI review finding unanswered";
+/** The title the unanswered reading's UNMEASURED state is named under. */
+export const AI_REVIEW_FINDING_UNANSWERED_UNMEASURED_TITLE = "AI review finding unanswered UNMEASURED";
+
+/** The refusal's one sentence, naming every unanswered thread. */
+export function findingsUnansweredRefusal(unanswered: readonly string[]): string {
+  return (
+    `${unanswered.length} finding(s) from an earlier round have no reply from a person: ` +
+    `${unanswered.join("; ")}. Every finding is answered, fixed or given a reason, and a thread ` +
+    `resolved with no reply answers nothing (CRC-B8). Reply on each thread, saying what fixed it ` +
+    `or why it stays, then re-run this check.`
+  );
+}
+
+/**
  * Recover the key a thread was posted under, or `null`.
  *
  * `null` means THIS THREAD CANNOT BE SHOWN TO BE A REPEAT, and every way of
@@ -3085,13 +3141,19 @@ export function main(
   // by the wrapper from the carry step's thread list. `null` when no list is
   // plumbed — nothing is asked, and nothing is claimed to have been.
   owed: PopulationOwedReading | null = null,
+  // CRC-B8 (#2832): which earlier finding threads no person answered, from
+  // the same thread list. `null` when no list is plumbed, as for `owed`.
+  unanswered: FindingsUnansweredReading | null = null,
 ): number {
   const read = readArgv(argv, suppress, citedLines, lineCounts);
-  // A population owed refuses a round that would otherwise pass. It decides
-  // through the outcome, so the outcome line and the exit code still agree.
+  // A population owed, or a finding unanswered, refuses a round that would
+  // otherwise pass. Each decides through the outcome, so the outcome line and
+  // the exit code still agree.
   const owing = owed !== null && owed.status === "MEASURED" && owed.owed.length > 0 ? owed.owed : null;
+  const silent =
+    unanswered !== null && unanswered.status === "MEASURED" && unanswered.unanswered.length > 0 ? unanswered.unanswered : null;
   const reading: AiReviewFindingsReading =
-    owing !== null && read.outcome === "CLEAN" ? { ...read, outcome: "BLOCKED" } : read;
+    (owing !== null || silent !== null) && read.outcome === "CLEAN" ? { ...read, outcome: "BLOCKED" } : read;
 
   // CRC-B4, AFTER the reading and feeding nothing back into it.
   //
@@ -3202,6 +3264,15 @@ export function main(
       `::warning title=${AI_REVIEW_POPULATION_OWED_UNMEASURED_TITLE}::${escapeAnnotation(
         `Whether earlier class findings had their population stated is UNMEASURED: ${owed.reason}. ` +
           `Nothing was refused for it.`,
+      )}`,
+    );
+  }
+  if (silent !== null) {
+    console.error(`::error title=${AI_REVIEW_FINDING_UNANSWERED_TITLE}::${escapeAnnotation(findingsUnansweredRefusal(silent))}`);
+  } else if (unanswered !== null && unanswered.status === "UNMEASURED") {
+    console.log(
+      `::warning title=${AI_REVIEW_FINDING_UNANSWERED_UNMEASURED_TITLE}::${escapeAnnotation(
+        `Whether earlier findings were answered is UNMEASURED: ${unanswered.reason}. Nothing was refused for it.`,
       )}`,
     );
   }
