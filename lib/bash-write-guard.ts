@@ -3544,8 +3544,11 @@ export function bodyTargets(body: string): BodyTargets {
   const lits = readLiterals(body);
   // An unterminated literal means every boundary after it is a guess.
   if (!lits) return { targets: [], fragments: [], protectedLiterals: [], unplaceable: [], unreadable: true };
-  /** Every literal span, so the backward walk can step over one. */
-  const spans: [number, number][] = lits.map(l => [l.start, l.end]);
+  // The literal reader only nominates; where a literal stands is read over
+  // every reading of the code, comments included (#2772). The readings are
+  // built at the first carrying literal, since most bodies have none.
+  let read: readonly CodeView[] | null = null;
+  const views = (): readonly CodeView[] => (read ??= READINGS.map(reading => codeMask(body, reading)));
   // Read once per body rather than once per literal: each call realpaths up
   // to six trees, and a body has as many literals as it likes.
   const live = protectedTrees();
@@ -3554,7 +3557,7 @@ export function bodyTargets(body: string): BodyTargets {
     if (where === 'protected') protectedLiterals.push(value);
     if (where === 'unplaceable') unplaceable.push(value);
     if (ALL_PROTECTED.some(p => value.toLowerCase().includes(p.toLowerCase()))) {
-      const pos = standsAlone(body, i, j) ? inWritePosition(body, i, spans) : UNPROVEN;
+      const pos = positionInEveryReading(body, i, j, views());
       if (pos === 'destination') targets.push(value);
       // `argument` is deliberately in neither list — see `inWritePosition`.
       else if (pos === 'unproven') fragments.push(value);
@@ -3761,15 +3764,34 @@ type Position = 'destination' | 'argument' | 'unproven';
 const IS_DESTINATION: Position = 'destination';
 const UNPROVEN: Position = 'unproven';
 
-function inWritePosition(body: string, start: number, spans: [number, number][]): Position {
+/**
+ * Where the literal spanning `[start, end]` stands under every reading of the
+ * body, or `unproven` when two readings disagree (#2772).
+ *
+ * The walks used to read the raw text with only quoted spans stepped over, so
+ * a comma in a Python `#` comment counted as an argument separator while the
+ * identity readers in `calleeShown` read the same comment as nothing. Each
+ * reading here is `codeMask`'s, the one those readers use. A reading that
+ * does not see a literal at these offsets, or whose quotes never close,
+ * places nothing.
+ */
+function positionInEveryReading(body: string, start: number, end: number, views: readonly CodeView[]): Position {
+  const answers = new Set(views.map(view => {
+    if (!view.balanced || !view.literals.some(([open, close]) => open === start && close === end)) return UNPROVEN;
+    return standsAlone(body, start, end, view.mask) ? inWritePosition(body, start, view.mask, views) : UNPROVEN;
+  }));
+  return answers.size === 1 ? [...answers][0] : UNPROVEN;
+}
+
+/** The literal's argument position, read back over one reading's code: literals and comments are stepped over. */
+function inWritePosition(body: string, start: number, mask: Uint8Array, views: readonly CodeView[]): Position {
   let i = start - 1;
   let depth = 0;
   /** Depth-0 commas between the opener and the literal: its argument index. */
   let index = 0;
   while (i >= 0) {
-    const span = spans.find(([s, e]) => i >= s && i <= e);
-    if (span) {
-      i = span[0] - 1;
+    if (mask[i] !== 0) {
+      i--;
       continue;
     }
     const c = body[i];
@@ -3777,8 +3799,8 @@ function inWritePosition(body: string, start: number, spans: [number, number][])
       depth++;
     } else if (c === '(') {
       if (depth === 0) {
-        const callee = calleeBefore(body, i);
-        if (!isWriteCallee(callee) || !calleeShown(body, i)) return UNPROVEN;
+        const callee = calleeBefore(body, i, mask);
+        if (!isWriteCallee(callee) || !calleeShown(body, i, views)) return UNPROVEN;
         return index === destIndexOf(callee) ? IS_DESTINATION : 'argument';
       }
       depth--;
@@ -3805,12 +3827,12 @@ function inWritePosition(body: string, start: number, spans: [number, number][])
   return UNPROVEN;
 }
 
-/** The dotted name immediately in front of an opening parenthesis. */
-function calleeBefore(body: string, openIndex: number): string {
+/** The dotted name immediately in front of an opening parenthesis; given a reading, a comment before the paren is stepped over. */
+function calleeBefore(body: string, openIndex: number, mask?: Uint8Array): string {
   let i = openIndex - 1;
-  while (i >= 0 && WHITESPACE.has(body[i])) i--;
+  while (i >= 0 && (WHITESPACE.has(body[i]) || mask?.[i] === 2)) i--;
   let end = i + 1;
-  while (i >= 0 && /[A-Za-z0-9_$.]/.test(body[i])) i--;
+  while (i >= 0 && /[A-Za-z0-9_$.]/.test(body[i]) && (!mask || mask[i] === 0)) i--;
   return body.slice(i + 1, end);
 }
 
@@ -3843,6 +3865,11 @@ function calleeBefore(body: string, openIndex: number): string {
  *   `sys.modules`, `getattr`, `Object.assign`, any dunder name in code or
  *   in a literal (`shutil.__setattr__`, `__import__`) and their kind bind
  *   names the code never spells (`DYNAMIC_BINDING`).
+ * - **No attribute outside a short list is reached** (`attributeAllowed`),
+ *   after a dot or as a literal key, which JavaScript reads as an attribute.
+ *   `sys._getframe().f_builtins['open'] = f` rebinds `open` by an item
+ *   assignment, and a generator's `gi_frame` reaches the same dict with no
+ *   import at all (#2772).
  * - **No attribute is assigned**, by `=`, an augmented or logical operator
  *   (`&&=`, `??=`), an annotation, a loop target, `as`, or a destructuring
  *   pattern: `shutil.copy = f`, and as surely `os.rename = f`, which
@@ -3863,15 +3890,17 @@ function calleeBefore(body: string, openIndex: number): string {
  *
  * The four readings are `codeMask`'s, because a body's language is not known
  * here: each reads `#` and `/` its own way, and a reading that disagrees is
- * one in which the identity is not shown.
+ * one in which the identity is not shown. The literal's position is read over
+ * the same four (`positionInEveryReading`), so no reader here walks text the
+ * others mask (#2772).
  *
  * Not read: what a module on the allowed list does when it loads is trusted,
  * and a `python3` without `-I` imports a planted `shutil.py` from the working
  * directory. Both are what the body loads, not what it says.
  */
-function calleeShown(body: string, openIndex: number): boolean {
+function calleeShown(body: string, openIndex: number, views: readonly CodeView[]): boolean {
   if (/[`]|\\['"]|'''|"""/.test(body)) return false;
-  return READINGS.every(reading => calleeShownIn(body, openIndex, codeMask(body, reading)));
+  return views.every(view => calleeShownIn(body, openIndex, view));
 }
 
 /**
@@ -3902,6 +3931,66 @@ const JS_MODULES = new Set([...FS_SPECIFIERS, 'path', 'node:path']);
 const DYNAMIC_BINDING =
   /\b(?:globals|vars|locals|setattr|delattr|getattr|exec|eval|builtins|importlib|globalThis|global|Reflect|defineProperty|defineProperties|setPrototypeOf|prototype|constructor|Function)\b|(?<!\bfrom[ \t]+[\w.]+[ \t]+)\bimport\s*\(|\b__\w+__\b|\bObject\s*\.\s*assign\b|\bwith\s*\(|\bimport\s*\*(?!\s*as\b)|\bsys\s*\.\s*(?:modules|path|meta_path|path_hooks)\b/;
 
+/**
+ * The attribute names a body may reach and still be read (#2772): the write
+ * functions `MODULE_WRITES` and `FS_WRITES` name, and the plain names below,
+ * which fixtures use and which reach no scope, frame or loader. An environment variable's name (`os.environ['RG']`,
+ * `process.env.RG`) is all capitals, and no attribute that reaches a scope,
+ * a frame or a loader is.
+ *
+ * `DYNAMIC_BINDING` lists mechanisms one at a time, and each review round of
+ * #2756 found the next: `vm`, `module.constructor`, `import sys as s`, and
+ * then `sys._getframe().f_builtins['open'] = …`, an item assignment into the
+ * builtins dict. A list of what may be reached refuses `f_builtins`,
+ * `f_globals`, `gi_frame` and `_getframe` without naming them. Taking
+ * `sys` off `PY_MODULES` instead would not have: a generator's frame
+ * reaches the same dict with no import at all.
+ */
+const PLAIN_ATTRIBUTES = new Set(['environ', 'env', 'get', 'argv', 'platform', 'flags', 'dev_mode', 'path', 'join', 'basename', 'dirname', 'exists', 'expanduser', 'expandvars', 'makedirs', 'mkdirSync', 'write', 'read', 'close', 'dumps', 'loads', 'stringify', 'parse']);
+
+/** May a body reach this attribute name? */
+function attributeAllowed(name: string): boolean {
+  if (/^[A-Z][A-Z0-9_]*$/.test(name) || PLAIN_ATTRIBUTES.has(name) || FS_WRITES.includes(name)) return true;
+  return Object.values(MODULE_WRITES).some(writes => writes.includes(name));
+}
+
+/**
+ * Is every attribute the code reaches one `attributeAllowed` names? An
+ * attribute follows a dot, or is a literal key after an operand, which
+ * JavaScript reads as an attribute: `module['require']` is `module.require`.
+ */
+function attributesShown(code: string, body: string, view: CodeView): boolean {
+  for (const m of code.matchAll(/\.(?:\s|\\\n)*([A-Za-z_$][\w$]*)/g)) if (!attributeAllowed(m[1])) return false;
+  for (const [open, close] of view.literals) {
+    const key = body.slice(open + 1, close);
+    if (!/^[A-Za-z_$][\w$]*$/.test(key)) continue;
+    const bracket = prevCode(code, open - 1);
+    if (code[bracket] !== '[' || code[nextCode(code, close + 1)] !== ']') continue;
+    const operand = prevCode(code, bracket - 1);
+    if (operand < 0 || !(isIdentChar(code[operand]) || code[operand] === ')' || code[operand] === ']')) continue;
+    if (!attributeAllowed(key)) return false;
+  }
+  return true;
+}
+
+/** A body as one reading's code: every literal and comment offset blanked, newlines kept. */
+function codeOf(body: string, view: CodeView): string {
+  let code = '';
+  for (let k = 0; k < body.length; k++) code += view.mask[k] === 0 || body[k] === '\n' ? body[k] : ' ';
+  return code;
+}
+
+/**
+ * Does every reading of the body import only allowed modules? The import
+ * reader on its own, exported so a test can assert on it (#2772).
+ */
+export function importsAllowedInEveryReading(body: string): boolean {
+  return READINGS.every(reading => {
+    const view = codeMask(body, reading);
+    return importsAllowed(codeOf(body, view), body, view);
+  });
+}
+
 /** Keywords a call may follow and still be a call rather than a definition. */
 const CALL_KEYWORDS = new Set(['return', 'await', 'yield', 'not', 'and', 'or', 'in', 'is', 'if', 'elif', 'else', 'while', 'assert', 'with', 'throw', 'typeof', 'void', 'case', 'do', 'print']);
 
@@ -3913,8 +4002,7 @@ function calleeShownIn(body: string, openIndex: number, view: CodeView): boolean
   for (const [open, close] of view.literals) {
     if (/(?:^|[^A-Za-z0-9_$])(?:[fF][rRbB]?|[rRbB][fF])$/.test(body.slice(Math.max(0, open - 3), open)) && body.slice(open, close).includes('{')) return false;
   }
-  let code = '';
-  for (let k = 0; k < body.length; k++) code += view.mask[k] === 0 || body[k] === '\n' ? body[k] : ' ';
+  const code = codeOf(body, view);
   if (/\\(?!\n)/.test(code)) return false;
   for (const ch of code) {
     if (ch > '\x7e' && ch.normalize('NFKC') !== ch && /[A-Za-z0-9_$]/.test(ch.normalize('NFKC'))) return false;
@@ -3922,6 +4010,7 @@ function calleeShownIn(body: string, openIndex: number, view: CodeView): boolean
   // A dunder named by string reaches what a dunder named in code does.
   if (view.literals.some(([open, close]) => /__\w+__/.test(body.slice(open + 1, close)))) return false;
   if (DYNAMIC_BINDING.test(code)) return false;
+  if (!attributesShown(code, body, view)) return false;
   if (assignsAttribute(code)) return false;
   if (!importsAllowed(code, body, view)) return false;
 
@@ -4148,7 +4237,9 @@ function importsAllowed(code: string, body: string, view: CodeView): boolean {
     return body.slice(lit[0] + 1, lit[1]);
   };
   // JavaScript: `require(<lit>)`, `import … from <lit>`, and a bare `import <lit>`.
-  for (const m of code.matchAll(/(?<![\w$.])require\s*\(/g)) {
+  for (const m of code.matchAll(/(?<![\w$])require\s*\(/g)) {
+    // `module.require('vm')` loads a module as surely as `require('vm')` (#2772).
+    if (code[prevCode(code, (m.index ?? 0) - 1)] === '.') return false;
     // `require('path'.replace('path', 'vm'))` starts with an allowed name.
     const v = onlyLiteral((m.index ?? 0) + m[0].length);
     if (v === null || !JS_MODULES.has(v)) return false;
@@ -4324,15 +4415,19 @@ function importedFrom(code: string, at: number, name: string, requireFs: Require
  * move. `bodyTargets` reporting it as a fragment is asserted in the tests;
  * no verdict claim is made for it, because none was earned.
  */
-function standsAlone(body: string, start: number, end: number): boolean {
+function standsAlone(body: string, start: number, end: number, mask: Uint8Array): boolean {
+  // A comment is stepped over like whitespace (#2772); another literal is
+  // not, so Python's `'a' 'b'` still joins them.
+  const blank = (k: number): boolean => WHITESPACE.has(body[k]) || mask[k] === 2;
   let a = start - 1;
-  while (a >= 0 && WHITESPACE.has(body[a])) a--;
-  if (a >= 0 && !ARG_OPENS.has(body[a])) return false;
+  while (a >= 0 && blank(a)) a--;
+  if (a >= 0 && (mask[a] !== 0 || !ARG_OPENS.has(body[a]))) return false;
 
   let b = end + 1;
   for (;;) {
-    while (b < body.length && WHITESPACE.has(body[b])) b++;
+    while (b < body.length && blank(b)) b++;
     if (b >= body.length) return true;
+    if (mask[b] !== 0) return false;
     const c = body[b];
     if (GROUP_CLOSES.has(c)) {
       b++;

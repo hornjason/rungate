@@ -39,6 +39,7 @@ import { dirname, join, resolve } from "path";
 import {
   bodyTargets,
   decideBashWrite,
+  importsAllowedInEveryReading,
   interpreterPrograms,
   isScratchPath,
   programBody,
@@ -3799,8 +3800,8 @@ describe("#1371 WITNESS: the exemption granted against a value the write never u
       noPlace: ["const CANNOT_PLACE: Placement = 'unplaceable';", "const CANNOT_PLACE: Placement = 'elsewhere';"],
       // The write-position whitelist: every position is a write position.
       noPos: [
-        "function inWritePosition(body: string, start: number, spans: [number, number][]): Position {",
-        "function inWritePosition(body: string, start: number, spans: [number, number][]): Position {\n  return IS_DESTINATION;",
+        "function inWritePosition(body: string, start: number, mask: Uint8Array, views: readonly CodeView[]): Position {",
+        "function inWritePosition(body: string, start: number, mask: Uint8Array, views: readonly CodeView[]): Position {\n  return IS_DESTINATION;",
       ],
       // The destination INDEX: any argument of a recognised write callee is
       // the destination again, which is exactly the pre-#1411 reading.
@@ -3828,8 +3829,8 @@ describe("#1371 WITNESS: the exemption granted against a value the write never u
       // This restores the pre-round-2 `standsAlone` verbatim; the current
       // body is left in place under a dead name so the braces still close.
       noNL: [
-        "function standsAlone(body: string, start: number, end: number): boolean {",
-        `function standsAlone(body: string, start: number, end: number): boolean {
+        "function standsAlone(body: string, start: number, end: number, mask: Uint8Array): boolean {",
+        `function standsAlone(body: string, start: number, end: number, mask: Uint8Array): boolean {
   let a = start - 1;
   while (a >= 0 && (body[a] === ' ' || body[a] === '\\t')) a--;
   if (a >= 0 && body[a] !== '\\n' && !ARG_OPENS.has(body[a])) return false;
@@ -3844,7 +3845,7 @@ describe("#1371 WITNESS: the exemption granted against a value the write never u
     return ARG_CLOSES.has(c);
   }
 }
-function __standsAloneAfter(body: string, start: number, end: number): boolean {`,
+function __standsAloneAfter(body: string, start: number, end: number, mask: Uint8Array): boolean {`,
       ],
     } as const;
 
@@ -5346,5 +5347,70 @@ describe("#2705: a write callee's identity is shown, not assumed from its name",
   ])("an inherited name is no module: %s is refused, not thrown on", (_l, cmd) => {
     expect(() => decideBashWrite(cmd)).not.toThrow();
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+});
+
+/**
+ * #2772: every reader in the exemption reads the same code, and no reflective
+ * attribute reaches the write. The WITNESS rows were each allowed by #2756's
+ * head `11ac203bc`, and each redirects the write when run (the bodies were run
+ * with a neutral file name, since the guard refuses this one).
+ */
+describe("#2772: one reading of the code, and no reflective attribute", () => {
+  const PY = (body: string) => `mkdir -p /tmp/rg2705 && python3 -I -c "${body}"`;
+  const JS = (body: string) => `mkdir -p /tmp/rg2705 && node -e "${body}"`;
+  const T = `/tmp/rg2705/${STATE}`;
+  test.each([
+    // The issue's own two spellings: a builtin rebound by an item assignment
+    // into a dict reached by attribute.
+    ["open rebound through sys._getframe().f_builtins", PY(`import io, os, sys\nsys._getframe().f_builtins['open'] = lambda p, m='r': io.open(os.environ['T'], m)\nopen('${T}', 'w').write('{}')`)],
+    ["open rebound through f_builtins bound to a name", PY(`import io, os, sys\nb = sys._getframe().f_builtins\nb['open'] = lambda p, m='r': io.open(os.environ['T'], m)\nopen('${T}', 'w').write('{}')`)],
+    // No import at all: a generator's frame reaches the same dict, so taking
+    // sys off the allowed imports would not have closed this.
+    ["open rebound through a generator's frame", PY(`import io, os\n(x for x in ()).gi_frame.f_builtins['open'] = lambda p, m='r': io.open(os.environ['T'], m)\nopen('${T}', 'w').write('{}')`)],
+    // JavaScript reads a literal key as an attribute.
+    ["fs reached through module['constructor']", JS(`const f = module['constructor']['_load']('fs'); const real = f.writeFileSync; f['writeFileSync'] = (p, d) => real(process.env.RG, d); require('fs').writeFileSync('${T}', '{}')`)],
+    ["fs reached through module['require']", JS(`const f = module['require']('fs'); const real = f.writeFileSync; f['writeFileSync'] = (p, d) => real(process.env.RG, d); require('fs').writeFileSync('${T}', '{}')`)],
+  ])("WITNESS: %s is refused", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
+  // The position reader steps over a comment the way every other reader does.
+  // Asserted on the reading itself: before #2772 the comma made the literal an
+  // argument, and the decision was held up by another arm.
+  test("a comma in a # comment before the destination leaves it the destination", () => {
+    const body = `import shutil\nshutil.copy('/tmp/rg2705/x',  # from, to\n    '${T}')`;
+    expect(bodyTargets(body)).toMatchObject({ targets: [T], fragments: [], unreadable: false });
+  });
+  // A literal's place is agreed by every reading, or it is not placed: a
+  // `//` is a comment to the JavaScript readings and two divisions to the
+  // others, so the comma inside it is counted by some and not by others.
+  test("two readings that disagree about where a literal stands leave it unproven", () => {
+    const body = `require('fs').copyFileSync( // from, to\n  '/tmp/rg2705/x', '${T}')`;
+    expect(bodyTargets(body)).toMatchObject({ targets: [], fragments: [T] });
+  });
+  test("CONTROL: the same copy with the comment, onto a scratch path, stays exempt", () => {
+    const cmd = PY(`import shutil\nshutil.copy('/tmp/rg2705/x',  # from, to\n    '${T}')`);
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  // The import reader reads a dotted require as a load. Asserted on that reader.
+  test("module.require('vm') is refused by the import reader", () => {
+    expect(importsAllowedInEveryReading(`const v = module.require('vm'); require('fs').writeFileSync('${T}', '{}')`)).toBe(false);
+  });
+  test("a dotted require of an allowed module is refused by the import reader too", () => {
+    // `foo.require` is whatever loader the body put there.
+    expect(importsAllowedInEveryReading(`const fs = module.require('fs'); fs.writeFileSync('${T}', '{}')`)).toBe(false);
+  });
+  test("CONTROL: the import reader allows require('fs')", () => {
+    expect(importsAllowedInEveryReading(`const fs = require('fs'); fs.writeFileSync('${T}', '{}')`)).toBe(true);
+  });
+
+  test.each([
+    // An environment variable's name is no attribute of anything reflective.
+    ["process.env read beside fs.writeFileSync", JS(`const fs = require('fs'); fs.writeFileSync('${T}', JSON.stringify({ run: process.env.RG }))`)],
+    ["os.environ read beside open", PY(`import json, os\nopen('${T}', 'w').write(json.dumps({'run': os.environ['RG']}))`)],
+  ])("CONTROL: %s onto a scratch path stays exempt", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 });
