@@ -113,7 +113,7 @@
 
 import { readFileSync } from "fs";
 
-import { issueList, issueNumber } from "../lib/issue-number";
+import { isIssueListField, issueList, issueNumber } from "../lib/issue-number";
 
 /** The one exit code every refusal travels through. See note 1 above. */
 export const STATE_CLOSES_REFUSE_EXIT = 1;
@@ -510,6 +510,31 @@ export async function fetchIssueStates(
  * comparison. An id simply absent from the file is UNMEASURED, which is a
  * different thing and is handled by the decider, not here.
  */
+/**
+ * The keys of a JSON object's text, in order and with repeats kept.
+ * `JSON.parse` keeps only the last of a repeated key, so a state file naming
+ * one issue twice under one exact key would lose its first state with no
+ * refusal (#2829 review). Called only on text `JSON.parse` has accepted as an
+ * object, so every string token at depth one followed by `:` is a key.
+ */
+export function objectKeysAsWritten(raw: string): string[] {
+  const keys: string[] = [];
+  const colon = /\s*:/y;
+  let depth = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < raw.length && raw[j] !== '"') j += raw[j] === "\\" ? 2 : 1;
+      colon.lastIndex = j + 1;
+      if (depth === 1 && colon.test(raw)) keys.push(JSON.parse(raw.slice(i, j + 1)) as string);
+      i = j;
+    } else if (c === "{" || c === "[") depth++;
+    else if (c === "}" || c === "]") depth--;
+  }
+  return keys;
+}
+
 export function parseIssueStatesFile(raw: string, source: string): IssueStateReading {
   let parsed: unknown;
   try {
@@ -523,7 +548,11 @@ export function parseIssueStatesFile(raw: string, source: string): IssueStateRea
   const states: Record<number, IssueState> = {};
   const entries = Object.entries(parsed as Record<string, unknown>);
   // The keys are an issue list: one list reader refuses a bad key and two spellings of one issue (#2821 review, #2825).
-  const keys = entries.map(([key]) => key);
+  // They are read from the text, as written: JSON.parse keeps only the last of a repeated key (#2829 review).
+  const keys = objectKeysAsWritten(raw);
+  if (new Set(keys).size !== entries.length) {
+    throw new StateCloseRefused(`${source} could not be read key by key: its text and its parse disagree about which keys it holds`);
+  }
   const bad = issueList(keys).violations[0];
   if (bad !== undefined && bad.first === null) {
     throw new StateCloseRefused(`${source} holds the key ${JSON.stringify(bad.item)}, which is not an issue number`);
@@ -600,12 +629,13 @@ export function recordFromState(state: unknown, args: Record<string, string>): S
   if (args["message-file"]) {
     texts.push({ label: "commit message", text: readFileSync(args["message-file"], "utf-8") });
   }
-  // The record holds an array, as the shape check requires: a comma-joined string is the rendered
-  // markdown's form, not the record's, and the renderer refuses it there (#2825).
-  if (typeof s.issues_closed === "string") {
+  // The record holds an array, or no list at all, as the shape check requires: one predicate for
+  // both readers (#2825, #2829 review). A comma-joined string is the rendered markdown's form, not
+  // the record's; `null` and a bare number are no list either.
+  if (!isIssueListField(s.issues_closed)) {
     throw new StateCloseRefused(
-      `the record's issues_closed is the string ${JSON.stringify(s.issues_closed)} — project-state.json holds an array of ` +
-        `issue numbers, and the renderer refuses a comma-separated string as one garbled reference`,
+      `the record's issues_closed is ${JSON.stringify(s.issues_closed)} — project-state.json holds an array of ` +
+        `issue numbers, and the renderer refuses anything else, a comma-separated string included`,
     );
   }
   return { texts, declared: parseDeclaredCloses(s.issues_closed), repo: args.repo ?? null };

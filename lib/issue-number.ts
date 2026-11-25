@@ -39,6 +39,17 @@ export function issueList(items: readonly unknown[]): { numbers: number[]; viola
   return { numbers, violations };
 }
 
+/**
+ * Whether a record's issue-list field holds a list: it is absent, or an array.
+ * A string, `null` or a bare number is not one. The session shape check and
+ * the closures check both ask this, so they cannot disagree about what a list
+ * is (#2829 review: the closures check read `null` as no list and `1675` as
+ * one entry, while the shape check refused both).
+ */
+export function isIssueListField(value: unknown): value is unknown[] | undefined {
+  return value === undefined || Array.isArray(value);
+}
+
 export function issueNumber(item: unknown): number | null {
   const n =
     typeof item === "number" ? item : typeof item === "string" && /^#?\d+$/.test(item) ? Number(item.replace(/^#/, "")) : NaN;

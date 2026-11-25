@@ -28,7 +28,7 @@ import { spawnSync } from "child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { parseDeclaredCloses, parseIssueStatesFile } from "../scripts/check-state-record-closes";
+import { objectKeysAsWritten, parseDeclaredCloses, parseIssueStatesFile, recordFromState } from "../scripts/check-state-record-closes";
 import {
   issueNumber,
   missingStateVerdict,
@@ -37,7 +37,7 @@ import {
   selectRecentSessions,
   sessionAheadOfStamp,
 } from "../lib/project-state-shape";
-import { issueList } from "../lib/issue-number";
+import { isIssueListField, issueList } from "../lib/issue-number";
 
 const REPO = join(import.meta.dir, "..");
 const SCRIPT = join(REPO, "scripts", "update-project-state.ts");
@@ -624,6 +624,7 @@ describe("#2817: one reading of an issue number in a session's lists", () => {
     const pool = [...ITEMS, ...GENERATED.slice(0, 400), "1675", "#1675", "01675", 1675];
     let refused = 0;
     let keyLists = 0;
+    let exactRepeats = 0;
     for (let i = 0; i < 800; i++) {
       const list: unknown[] = Array.from({ length: 1 + next(5) }, () => pool[next(pool.length)]);
       if (next(3) === 0) list.push(list[next(list.length)]); // a repeat, exact or by another spelling
@@ -641,16 +642,18 @@ describe("#2817: one reading of an issue number in a session's lists", () => {
       expect(declaredThrows, JSON.stringify(list)).toBe(answer);
       const strings = list.filter((x): x is string => typeof x === "string");
       if (strings.length > 0) {
-        // A state file's keys are strings, and an object holds one entry per exact key.
-        const keys = [...new Set(strings)];
+        // A state file's keys are strings, written as text so an exact repeat stays in it: an
+        // object would hold one entry per exact key, as JSON.parse does (#2829 review).
         keyLists++;
+        if (new Set(strings).size < strings.length) exactRepeats++;
+        const text = `{${strings.map(k => `${JSON.stringify(k)}: "OPEN"`).join(", ")}}`;
         let fileThrows = false;
         try {
-          parseIssueStatesFile(JSON.stringify(Object.fromEntries(keys.map(k => [k, "OPEN"]))), "s.json");
+          parseIssueStatesFile(text, "s.json");
         } catch {
           fileThrows = true;
         }
-        expect(fileThrows, JSON.stringify(keys)).toBe(issueList(keys).violations.length > 0);
+        expect(fileThrows, text).toBe(issueList(strings).violations.length > 0);
       }
       if (answer) refused++;
     }
@@ -658,6 +661,40 @@ describe("#2817: one reading of an issue number in a session's lists", () => {
     expect(refused).toBeGreaterThan(100);
     expect(refused).toBeLessThan(800);
     expect(keyLists).toBeGreaterThan(50);
+    // Some state files repeat one exact key, the case JSON.parse alone cannot see.
+    expect(exactRepeats).toBeGreaterThanOrEqual(5);
+  });
+
+  test("#2829: the shape check and the closures check agree on what a list is", () => {
+    for (const value of [null, 1675, "1675", "#1675, #1676", {}, true, [1675], [], undefined]) {
+      const doc = good() as any;
+      doc.session = { number: 1, date: "d", summary: "s", suite: "t", ...(value === undefined ? {} : { issues_closed: value }) };
+      const shapeRefuses = projectStateViolations(doc).some(v => v.startsWith("session.issues_closed"));
+      let recordRefuses = false;
+      try {
+        recordFromState({ session: doc.session }, {});
+      } catch {
+        recordRefuses = true;
+      }
+      expect(recordRefuses, JSON.stringify(value)).toBe(shapeRefuses);
+      expect(isIssueListField(value), JSON.stringify(value)).toBe(!shapeRefuses);
+    }
+  });
+
+  test("#2829: a state file's keys are read as written, repeats kept, over generated JSON", () => {
+    let seed = 2829;
+    const next = (k: number) => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed % k;
+    };
+    // Values that hold quotes, colons, braces and escapes, so a key is told from a value by position alone.
+    const values: unknown[] = ["CLOSED", 'a "quoted": {x}', "back\\slash\"", { "k": ["v", { "n": "1:2" }] }, [1, "2", { "3": "}" }], null, 7];
+    for (let i = 0; i < 400; i++) {
+      const keys = Array.from({ length: 1 + next(6) }, () => [`${next(30)}`, `#${next(30)}`, `k:${next(3)}`, `"q${next(3)}"`][next(4)]!);
+      const indent = ["", " ", "\n  ", "\t"][next(4)]!;
+      const text = `{${keys.map(k => `${indent}${JSON.stringify(k)}${[":", " : ", "\n:"][next(3)]}${JSON.stringify(values[next(values.length)])}`).join(",")}${indent}}`;
+      expect(objectKeysAsWritten(text), text).toEqual(keys);
+    }
   });
 
   test("the closures check reads each entry the same way", () => {

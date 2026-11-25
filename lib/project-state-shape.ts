@@ -25,7 +25,7 @@
  * hand-edited file wants the whole list, and a validator that stops at the
  * first finding turns one bad edit into four round-trips.
  */
-import { issueList, issueNumber } from "./issue-number";
+import { isIssueListField, issueList, issueNumber } from "./issue-number";
 import { localCalendarDay } from "./local-calendar-day";
 
 // The shape check refuses what `issueNumber` refuses, and the renderer prints
@@ -143,7 +143,7 @@ export function projectStateViolations(raw: unknown): string[] {
       for (const k of ["issues_created", "issues_closed"]) {
         if (!(k in e) || e[k] === undefined) continue;
         const v = e[k];
-        if (!Array.isArray(v)) {
+        if (!isIssueListField(v)) {
           out.push(
             `session.${k} is ${JSON.stringify(v)}, expected an array of issue numbers — ` +
               `a comma-separated string renders as one garbled reference`,
@@ -151,7 +151,7 @@ export function projectStateViolations(raw: unknown): string[] {
           continue;
         }
         // A list naming one issue twice would render it twice (#2821 review); one list reader (#2825).
-        for (const x of issueList(v).violations) {
+        for (const x of issueList(v ?? []).violations) {
           out.push(
             x.first === null
               ? `session.${k}[${x.index}] is ${JSON.stringify(x.item)}, expected an issue number`
