@@ -423,6 +423,8 @@ describe("#2292 / SC-2781: re-scaffold writes the current value of an authored p
       "on.pull_request.branches": "withdrawn-when-absent",
       "on.pull_request.types": "asserted-when-emitted",
       "on.issues.types": "asserted-when-emitted",
+      // #2842: the merge workflow's name, which board.mergeWorkflow can change.
+      "on.workflow_run.workflows": "asserted-when-emitted",
     });
   });
 

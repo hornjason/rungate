@@ -7,7 +7,7 @@
  * Extracted per SCAFFOLD-DECOMPOSITION-SPEC to keep scaffold-project.ts
  * as orchestrator-only (under 200 lines).
  */
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync } from "fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, statSync } from "fs";
 import { readdirSorted } from "../readdir-sorted";
 import { fileExtensions } from "../file-extensions";
 import { join, basename, dirname, relative, resolve, sep } from "path";
@@ -4648,7 +4648,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     const names: string[] = [];
     const unreadable: string[] = [];
     const dir = join(root, ".github", "workflows");
-    for (const f of existsSync(dir) ? readdirSync(dir).filter(n => /\.ya?ml$/.test(n)).sort() : []) {
+    for (const f of existsSync(dir) ? readdirSorted(dir).filter(n => /\.ya?ml$/.test(n)) : []) {
       try {
         const name = (Bun.YAML.parse(readFileSync(join(dir, f), "utf-8")) as { name?: unknown } | null)?.name;
         if (typeof name === "string") names.push(name);
