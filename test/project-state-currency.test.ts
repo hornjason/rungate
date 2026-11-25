@@ -29,7 +29,7 @@
  * Covers SC-751, SC-752 of GATE-CONTRACTS-SPEC.md.
  */
 import { describe, test, expect } from "bun:test";
-import { execFileSync } from "child_process";
+import { execFileSync, spawnSync } from "child_process";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
@@ -428,7 +428,10 @@ describe("project-state currency", () => {
 
   test("the generated markdown matches the json it is generated from", () => {
     // The two drifting is the other way this misleads: a correct json and a
-    // markdown rendered from an older one.
+    // markdown rendered from an older one. Before #2818 this asserted only that
+    // the markdown mentions the newest session's day, so a priority, phase or
+    // session item changed in the json alone passed. Now the writer renders the
+    // record as recorded, writing nothing, and the whole render is compared.
     const md = readFileSync(join(ROOT, "PROJECT-STATE.md"), "utf-8");
     expect(existsSync(join(ROOT, "PROJECT-STATE.md"))).toBe(true);
     expect(
@@ -436,6 +439,9 @@ describe("project-state currency", () => {
       `PROJECT-STATE.md does not mention ${latestDate}, the latest session in project-state.json. ` +
         `Run \`bun scripts/update-project-state.ts\` — the markdown is generated, never hand-edited.`,
     ).toBe(true);
+    const r = spawnSync("bun", [join(ROOT, "scripts", "update-project-state.ts"), "--check"], { cwd: ROOT, encoding: "utf-8" });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain("is a render of project-state.json as recorded");
   });
 
   test("#766: the window the real comparison reads is not empty", () => {
