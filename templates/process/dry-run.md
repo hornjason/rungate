@@ -41,7 +41,7 @@ none, say so and stop.
      is one — submodules are not supported here. Otherwise `<checkout>` is what it
      printed with the trailing `/.git` removed. From a
      linked worktree that names the main checkout, never the worktree — the
-     same `--git-common-dir` question `repoRootFrom` in `lib/paths.ts` asks.
+     same `--git-common-dir` question rungate's own repo-root lookup asks.
      Use that path below and in step 2.
    - `git -C "<checkout>" fetch origin main`. If the fetch fails, stop and run nothing else:
      the count below would read a stale ref and could say zero.
