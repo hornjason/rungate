@@ -703,7 +703,7 @@ export function specWithCriterion(
     // spec with a table takes the id in its row, as before (SC-2807).
     const placed = placementLines(text).length > 0 ? withPlacementLine(text, id, phase) : withPhase(text, id, phase);
     if (placed === null) {
-      return { ok: false, refusal: "PHASE_ROW_ABSENT", why: `this spec's Phase placement table has no row for Phase ${phase}` };
+      return { ok: false, refusal: "PHASE_ROW_ABSENT", why: `this spec is placed by the older Phase placement table, which has no row for Phase ${phase}` };
     }
     text = placed;
   }

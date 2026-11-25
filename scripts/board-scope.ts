@@ -35,7 +35,7 @@ export interface SpecScope {
   tracked: boolean;
   criteria: number;
   ticked: number;
-  placementTable: boolean;
+  placed: boolean;
   /** Why the `board:` declaration could not be taken as written, by name — empty when it could. */
   boardProblems: string[];
   /** The generator a `generated-by:` copy names: listed, never counted as not tracked. */
@@ -96,7 +96,7 @@ export function boardScope(root: string, only?: string): { specs: SpecScope[] } 
       boardProblems: [...board.problems, ...board.unknownKeys.map(k => `\`board.${k}\` is not a key the engine knows`)],
       criteria: criteria.length,
       ticked: criteria.filter(c => c.ticked).length,
-      placementTable: parsePlacementRows(text).length > 0,
+      placed: parsePlacementRows(text).length > 0,
       ...(derived.status === "derived" ? { generated: derived.generator } : {}),
       hints: criteria.filter(c => !c.ticked).map(c => ({ id: c.id, hint: onboardingHint(c.id, path, isClaimed, declaredBy) })),
     });
@@ -119,7 +119,7 @@ export function formatScope(specs: readonly SpecScope[], named = false): string 
   }
   for (const s of specs.filter(x => shown(x) && x.generated === undefined)) {
     const state = s.tracked ? `tracked (${s.scope})` : `NOT TRACKED (${s.scope})`;
-    lines.push(`${s.path} — ${state}: ${s.criteria} criteria, ${s.ticked} ticked, placement table: ${s.placementTable ? "yes" : "no"}`);
+    lines.push(`${s.path} — ${state}: ${s.criteria} criteria, ${s.ticked} ticked, placed: ${s.placed ? "yes" : "no"}`);
     // A board: block that cannot be read is named, never shown as merely untracked.
     for (const p of s.boardProblems) lines.push(`  board: ${p}`);
     for (const { id, hint } of s.hints) lines.push(`  ${id}  ${hintText(hint)}`);

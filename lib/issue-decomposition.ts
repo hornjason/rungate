@@ -542,7 +542,7 @@ export function planDecomposition(
     if (r.milestone !== null && !live.milestones.has(r.milestone)) {
       reasons.push(
         `line ${r.line}: milestone "${r.milestone}" does not exist — run \`rungate plan-spec\` ` +
-          `so the spec's placement table creates it, or correct the row`,
+          `so the spec's placement makes it, or correct the row`,
       );
     }
   }

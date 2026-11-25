@@ -165,14 +165,15 @@ rungate plan-spec <spec.md> --convert-placement [--write] [--json]
   --json     the whole reading, for something other than a person.
   --coverage every spec in the tree and whether its criteria are placed,
              instead of one spec. Takes no spec, reaches no network and
-             writes nothing. A spec with no placement table is named as
+             writes nothing. A spec that places no criterion, by
+             placement lines or an older placement table, is named as
              UNPLANNED rather than contributing nothing (SC-2611).
   --placement
              each placement value with its criteria, in phase order,
              read from the spec's placement lines or its table. Writes
              nothing (ADR-026, SC-2808).
   --convert-placement
-             move the spec's placement table into a placement: line
+             move an older spec's placement table into a placement: line
              beneath each criterion and drop the table's criteria column.
              The rest is retitled "What each placement means" when it has
              a column of meanings, and removed when it has none.
@@ -391,7 +392,7 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
   if (reading.reading === "UNMEASURED") {
     return refuse(
       values.json,
-      `UNMEASURED — the placement table could not be read:\n` +
+      `UNMEASURED — the spec's placement could not be read:\n` +
         reading.unmeasuredReasons.map(r => `  - ${r}`).join("\n") +
         `\n\nSee docs/adr/ADR-003-spec-to-tracker-mapping.md § 1.`,
     );

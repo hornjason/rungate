@@ -495,8 +495,8 @@ Phase 9 cannot, because its subject is a spec the engine did not write.
 
 ### Phase 4 — every spec is planned
 
-Until a spec places its criteria — a `placement:` line beneath each, or a
-placement table — `plan-spec` makes it no milestones and the board cannot
+Until a spec places its criteria — a `placement:` line beneath each, or an
+older spec's placement table — `plan-spec` makes it no milestones and the board cannot
 place its criteria. This is the widest gap by count.
 
 ### Phase 5 — the loop closes

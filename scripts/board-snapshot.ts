@@ -797,7 +797,7 @@ export async function main(
   const placement = placementReading(content);
   if (placement.reading === "UNMEASURED") {
     console.error(
-      `board-snapshot: UNMEASURED — ${specArg}'s Phase placement table could not be read:\n` +
+      `board-snapshot: UNMEASURED — ${specArg}'s placement could not be read:\n` +
         placement.unmeasuredReasons.map(r => `  - ${r}`).join("\n"),
     );
     return REFUSAL_EXIT;
@@ -810,7 +810,7 @@ export async function main(
   ];
   if (unsound.length > 0) {
     console.error(
-      `board-snapshot: UNMEASURED — ${specArg}'s Phase placement table is unsound, so the ` +
+      `board-snapshot: UNMEASURED — ${specArg}'s placement is unsound, so the ` +
         `denominator would be wrong:\n` +
         unsound.map(r => `  - ${r}`).join("\n"),
     );
