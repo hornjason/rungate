@@ -163,6 +163,47 @@ describe("update-project-state", () => {
     expect(ok.status, ok.out).toBe(0);
   });
 
+  test("#2818: --check passes a pair the writer rendered, and names the first line of one edited by hand, writing nothing", () => {
+    const check = () => {
+      const r = spawnSync("bun", [tmp.script, "--check"], { cwd: ROOT, encoding: "utf-8", timeout: 10000 });
+      return { status: r.status ?? 1, out: (r.stdout ?? "") + (r.stderr ?? "") };
+    };
+    writeTestJson({ updated: "2026-01-01", priorities: ["ship the first thing", "then the second"], phases: [], sessions: [] });
+    run();
+    const ok = check();
+    expect(ok.status, ok.out).toBe(0);
+    expect(ok.out).toContain("is a render of project-state.json as recorded");
+    // A priority changed in the record alone, as a hand edit or a refused writer run leaves it.
+    const recorded = JSON.parse(readFileSync(STATE_JSON, "utf-8"));
+    recorded.priorities[1] = "something else entirely";
+    writeFileSync(STATE_JSON, JSON.stringify(recorded, null, 2) + "\n");
+    const mdBefore = readFileSync(STATE_MD, "utf-8");
+    const jsonBefore = readFileSync(STATE_JSON, "utf-8");
+    const stale = check();
+    expect(stale.status, stale.out).not.toBe(0);
+    const line = mdBefore.split("\n").findIndex(l => l.includes("then the second")) + 1;
+    expect(line).toBeGreaterThan(0);
+    expect(stale.out).toContain(`differs from a render of project-state.json at line ${line}:`);
+    expect(stale.out).toContain("then the second");
+    expect(stale.out).toContain("something else entirely");
+    // Nothing written: both files are as they were.
+    expect(readFileSync(STATE_MD, "utf-8")).toBe(mdBefore);
+    expect(readFileSync(STATE_JSON, "utf-8")).toBe(jsonBefore);
+    // A missing markdown is a named refusal, not a crash, and is not created (#2827 review).
+    rmSync(STATE_MD);
+    const missing = check();
+    expect(missing.status, missing.out).not.toBe(0);
+    expect(missing.out).toContain("does not exist, so there is no markdown to compare");
+    expect(missing.out).not.toContain("ENOENT");
+    expect(existsSync(STATE_MD)).toBe(false);
+    // Neither file: the writer has nothing to do, and the check compared nothing, so it does not pass (#2827 review).
+    rmSync(STATE_JSON);
+    const neither = check();
+    expect(neither.status, neither.out).not.toBe(0);
+    expect(neither.out).toContain("--check had nothing to compare");
+    expect(exec().status, "the writer itself still treats this as nothing to do").toBe(0);
+  });
+
   test("generates markdown from JSON", () => {
     writeTestJson({
       updated: "2026-01-01",

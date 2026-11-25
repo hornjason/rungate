@@ -35,6 +35,8 @@ export const PROJECT_STATE_REFUSE_EXIT = 1;
 const ROOT = join(import.meta.dir, "..");
 const STATE_JSON = join(ROOT, "project-state.json");
 const STATE_MD = join(ROOT, "PROJECT-STATE.md");
+/** `--check`: compare the markdown with a render of the record, and write nothing (#2818). */
+const CHECK = process.argv.slice(2).includes("--check");
 const SPECS_DIR = join(ROOT, "specs");
 
 interface SC { id: string; what: string; done: boolean }
@@ -307,6 +309,11 @@ const missing = missingStateVerdict({
   markdownExists: existsSync(STATE_MD),
 });
 if (missing.verdict === "SKIP") {
+  // A check that compared nothing does not pass (#2827 review).
+  if (CHECK) {
+    console.error(`project-state: ${missing.detail}. --check had nothing to compare, so it does not pass.`);
+    process.exit(PROJECT_STATE_REFUSE_EXIT);
+  }
   console.log(`project-state: ${missing.detail}`);
   process.exit(0);
 }
@@ -373,6 +380,39 @@ if (parsed !== null && typeof parsed === "object" && "stages" in parsed) {
     console.error(`project-state: nothing was written. Fix the entries above and re-run.`);
     process.exit(PROJECT_STATE_REFUSE_EXIT);
   }
+}
+
+/**
+ * `--check` (#2818): is PROJECT-STATE.md a render of project-state.json AS
+ * RECORDED? The writer renders the markdown from the same state it saves, so
+ * a committed pair it wrote renders back byte for byte. A record edited by
+ * hand, or a markdown rendered from an older record, does not. It renders
+ * before the steps below stamp today's day and promote SC ticks, so the check
+ * answers whether the two files agree, not whether the record is due a new
+ * run, and it writes nothing. A difference names its first line.
+ */
+if (CHECK) {
+  // The writer creates a missing markdown; a check has nothing to compare (#2827 review).
+  if (!existsSync(STATE_MD)) {
+    console.error(`project-state: ${STATE_MD} does not exist, so there is no markdown to compare with project-state.json.`);
+    console.error(`project-state: render it with \`bun scripts/update-project-state.ts\` from the primary checkout. Nothing was written.`);
+    process.exit(PROJECT_STATE_REFUSE_EXIT);
+  }
+  const committed = readFileSync(STATE_MD, "utf-8");
+  const rendered = render(parsed as ProjectState) + "\n";
+  if (committed === rendered) {
+    console.log("project-state: PROJECT-STATE.md is a render of project-state.json as recorded");
+    process.exit(0);
+  }
+  const a = committed.split("\n");
+  const b = rendered.split("\n");
+  let line = 0;
+  while (line < a.length && line < b.length && a[line] === b[line]) line++;
+  console.error(`project-state: PROJECT-STATE.md differs from a render of project-state.json at line ${line + 1}:`);
+  console.error(`  in the markdown: ${line < a.length ? JSON.stringify(a[line]) : "(the file ends)"}`);
+  console.error(`  rendered:        ${line < b.length ? JSON.stringify(b[line]) : "(the render ends)"}`);
+  console.error(`project-state: re-render with \`bun scripts/update-project-state.ts\` from the primary checkout. Nothing was written.`);
+  process.exit(PROJECT_STATE_REFUSE_EXIT);
 }
 
 const state: ProjectState = parsed as ProjectState;
