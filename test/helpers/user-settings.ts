@@ -25,6 +25,12 @@
  * withholding it would blind both (#2810 review). A token kept as a value,
  * which is how a settings file holds one, never crosses.
  *
+ * The boundary, stated (#2819 review, round 3): a token someone writes into
+ * a variable's NAME or a directory's NAME crosses with the spelling or the
+ * resolved path, because names and paths are what the census reports.
+ * `test/user-settings-helper.test.ts` pins that, so the limit is a fact a
+ * test states rather than a gap a review finds.
+ *
  * A first design (#2798, not merged) gave tests a reduced COPY of each file
  * instead. Each of its four review rounds found a census reader the copy
  * starved, because the copy was a second model of the census. Here there is

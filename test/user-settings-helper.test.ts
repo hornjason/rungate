@@ -19,6 +19,7 @@ import { join } from "path";
 import ts from "typescript";
 import { REGISTRATION_SCOPES, readRegistrationScopes, registrationCensus, settingsScopePaths } from "../lib/hook-scopes";
 import { readEnvScopes, registeredTreeCensus } from "../lib/hook-target-tree";
+import { registrationCurrency } from "../lib/hook-tree-currency";
 import { settingsCommands, wrongTreeViolations } from "../lib/hook-trees";
 import {
   COMMAND_WITHHELD,
@@ -176,6 +177,12 @@ describe("#2792: every verdict is the census's own, with no command or value in 
     });
     expect(crossed(currency), "planted text in registrationCurrencyAt's result").toBe(false);
     expect(currency.examined).toBeGreaterThan(0);
+    // The census's own currency reading over the raw documents, with the same git (#2819 review, round 3).
+    const census = registeredTreeCensus(OWNED, readRegistrationScopes(repo, home, raw, REGISTRY), readEnvScopes(repo, home, raw), repo);
+    const want = registrationCurrency(census, "origin/main", () => ({ ok: false, stdout: "", stderr: "no git in this planted tree", status: 128 }) as never);
+    const shape = (c: typeof want) => [c.reading, c.examined, c.unresolved, c.unmeasuredReasons.length, c.directories.map(d => [d.dir, d.state, d.behind, d.registrations])];
+    expect(shape(currency)).toEqual(shape(want));
+    expect(currency.directories.length, "the planted home reaches at least one directory").toBeGreaterThan(0);
   });
 });
 
@@ -329,7 +336,7 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
     read: v => typeof v === "string" && SCOPES.has(v),
     missing: v => typeof v === "string" && SCOPES.has(v),
     unplaced: v => typeof v === "string" && OWNED.includes(v),
-    repoScopes: () => true,
+    repoScopes: v => typeof v === "string" && SCOPES.has(v),
     readable: v => typeof v === "boolean",
     unreadable: v => typeof v === "string" && (SCOPES.has(v) || noPlanted(v)),
     verdict: v => v === "registered" || v === "unregistered" || v === "unmeasured",
@@ -353,10 +360,11 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
     unresolved: v => typeof v === "number" || (typeof v === "object" && v !== null),
     registrations: v => typeof v === "number",
     behind: v => v === null || typeof v === "number",
-    violations: () => true,
-    inRepo: () => true,
-    foreign: () => true,
-    directories: () => true,
+    // Lists of readings: each entry an object, whose own fields are checked in turn.
+    violations: v => v !== null && typeof v === "object",
+    inRepo: v => v !== null && typeof v === "object",
+    foreign: v => v !== null && typeof v === "object",
+    directories: v => v !== null && typeof v === "object",
   };
 
   /** Every field outside the allow-list, or holding a value it does not allow, as `path: value`. */
@@ -384,7 +392,8 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
     // the census's own words. A short or path-shaped secret is caught by the
     // marker instead, so a planted value without it goes red here rather
     // than slipping past both checks.
-    expect(unaccountedPieces(plantedPieces())).toEqual([]);
+    // A count, so a failure names how many and prints none of them (#2819 review, round 3).
+    expect(unaccountedPieces(plantedPieces()).length, "planted pieces the floor skips that carry no marker: mark them").toBe(0);
     expect(unaccountedPieces(["gho_x", "a1b2c", "/abc123secret"])).toEqual(["gho_x", "a1b2c", "/abc123secret"]);
     // A path-shaped value carrying the marker is accounted for: the whole-result checks see it.
     expect(unaccountedPieces(["/gho_planted2792"])).toEqual([]);
@@ -424,6 +433,31 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
     // A path outside every planted directory is refused, such as one built from a token in an env value.
     expect(offList({ resolved: "/home/u/gho_AbC123xyz/Alpha.hook.ts" })).toEqual(["result.resolved: a string of 35 characters, withheld"]);
     expect(offList({ resolved: join(hookDir, "Alpha.hook.ts") })).toEqual([]);
+    // A list of readings holds objects: a bare string in one is refused (#2819 review, round 3).
+    expect(offList({ directories: ["a detail"], violations: ["x"], repoScopes: ["nope"] }).length).toBe(3);
+  });
+
+  test("the stated boundary: a token written into a variable or directory NAME crosses with the spelling or path (#2819 review, round 3)", () => {
+    // Names and paths are what the census reports, so the helper passes them on.
+    // This pins that limit; the header states it.
+    const h = join(root, "name-home");
+    const named = join(root, "gho_NameToken9-dir");
+    mkdirSync(join(h, ".claude"), { recursive: true });
+    mkdirSync(named, { recursive: true });
+    writeFileSync(
+      join(h, ".claude", "settings.json"),
+      JSON.stringify({
+        env: { X_DIR: named },
+        hooks: { PreToolUse: [{ matcher: "Bash", hooks: [
+          { type: "command", command: "bun ${X_DIR}/Alpha.hook.ts" },
+          { type: "command", command: "bun ${ghp_NameToken9}/Beta.hook.ts" },
+        ] }] },
+      }),
+    );
+    const got = treeCensusAt(repo, h, REGISTRY, OWNED);
+    const all = [...got.inRepo, ...got.foreign, ...got.unresolved];
+    expect(all.some(r => (r.resolved ?? "").includes("gho_NameToken9")), "a token in a directory name crosses with the path").toBe(true);
+    expect(all.some(r => r.spelling === "ghp_NameToken9"), "a token used as a variable name crosses as the spelling").toBe(true);
   });
 
   test("no result in the helper is built by spreading another object", () => {
