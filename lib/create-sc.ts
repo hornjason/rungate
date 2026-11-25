@@ -31,6 +31,8 @@ import {
   SC_RESERVATIONS_PATH,
 } from "./sc-reservations";
 import { tryLoadRungateConfig } from "./config-loader";
+import { readFences } from "./markdown-fence";
+import { parseCriteria } from "./spec-evidence";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -666,4 +668,42 @@ export function allocateScNumber(
  */
 export function formatSCLine(scNumber: number, statement: string): string {
   return `- [ ] SC-${scNumber}: ${statement}`;
+}
+
+/** What ends a criterion that only running something can prove. */
+export const BEHAVIORAL_MARKER = "(behavioral)";
+
+/**
+ * The statement for `create-sc --behavioral "<sentence>"` (#2845): the
+ * owner's sentence as written, with the marker. No registered pattern takes a
+ * free sentence, so before this an ADR's behavioural criterion was typed by
+ * hand, with its id and its bank move. The tool places the sentence and gives
+ * it an id; it does not write it, so it refuses rather than repairs one it
+ * cannot place as one line.
+ */
+export function behavioralStatement(sentence: string): string {
+  const s = sentence.trim();
+  if (s === "") throw new Error("--behavioral needs the criterion's sentence");
+  if (/[\r\n]/.test(s)) throw new Error("--behavioral takes one line: a criterion is one line in the spec");
+  if (s.endsWith(BEHAVIORAL_MARKER)) throw new Error(`write the sentence without ${BEHAVIORAL_MARKER}; create-sc adds the marker`);
+  return `${s} ${BEHAVIORAL_MARKER}`;
+}
+
+/**
+ * `spec` with `scLine` placed straight after its last criterion's block —
+ * the bullet and the prose, markers and annotations `parseCriteria` reads as
+ * its own — or at the end when it states none (#2845).
+ *
+ * Appending at the end put a new criterion after whatever section followed
+ * the criteria, so ADR-027's line was moved up by hand. A criterion inside a
+ * fenced example is not one to place after: inserting there would write the
+ * new line into the example.
+ */
+export function placeScLine(spec: string, scLine: string): string {
+  const lines = spec.split("\n");
+  const { roles } = readFences(lines);
+  const last = parseCriteria(spec).filter(c => roles[c.line - 1] === "prose").at(-1);
+  if (last === undefined) return spec.trimEnd() + "\n" + scLine + "\n";
+  lines.splice(last.end, 0, scLine);
+  return lines.join("\n");
 }

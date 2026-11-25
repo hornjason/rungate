@@ -15,6 +15,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { bankAfterAppend, writeDeferralBank, writeSpecWithBank } from "../lib/finding-promotion";
+import { behavioralStatement, formatSCLine, placeScLine } from "../lib/create-sc";
 import { writeSpec } from "../lib/write-spec";
 import { KNOWN_UNDECLARED_WRITES, trackedWriteSites } from "../scripts/contract-parity";
 import { execFileSync } from "child_process";
@@ -75,6 +76,25 @@ describe("bankAfterAppend: the bank after a criterion is appended", () => {
   test("a deferred spec missing from the bank, or with no bank at all, refuses", () => {
     expect(bankAfterAppend(bank("specs/ELSEWHERE.md", 2), "specs/FIX.md", before, after).ok).toBe(false);
     expect(bankAfterAppend(null, "specs/FIX.md", before, after).ok).toBe(false);
+  });
+});
+
+/**
+ * #2845: a behavioural criterion create-sc places is one more criterion to
+ * the bank, wherever in the spec it lands, so `--behavioral` moves the bank
+ * through the same `bankAfterAppend` call a pattern write does.
+ */
+describe("#2845: the bank counts a placed behavioural criterion", () => {
+  test("a deferred spec with a section after its criteria moves its bank by one", () => {
+    const before = spec(true, [9001, 9002]) + "\n## Notes\n\nProse after the criteria.\n";
+    const after = placeScLine(before, formatSCLine(9003, behavioralStatement("X happens")));
+    expect(after.indexOf("SC-9003")).toBeLessThan(after.indexOf("## Notes"));
+    const r = bankAfterAppend(bank("specs/FIX.md", 2), "specs/FIX.md", before, after);
+    expect(r.ok).toBe(true);
+    expect(JSON.parse((r as { text: string }).text).deferred).toEqual([
+      { path: "specs/OTHER.md", criteria: 3 },
+      { path: "specs/FIX.md", criteria: 3 },
+    ]);
   });
 });
 

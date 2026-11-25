@@ -132,7 +132,7 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   "create-sc": {
     script: "scripts/create-sc.ts",
     summary: "Generate a matchable success-criterion line from a registered pattern",
-    usage: "rungate create-sc --pattern <name> --params '<json>' [--spec <file>]",
+    usage: "rungate create-sc (--pattern <name> --params '<json>' | --behavioral <sentence>) [--spec <file>]",
   },
   "convert-spec": {
     script: "scripts/convert-spec.ts",

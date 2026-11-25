@@ -1,10 +1,11 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, rmSync } from "fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import { spawnSync } from "child_process";
 import { matchPattern, type ParsedSC } from "../lib/conformity";
 import { buildScRegistry } from "../lib/sc-ids";
-import { nextSCNumber, takenScNumbers } from "../lib/create-sc";
+import { behavioralStatement, formatSCLine, nextSCNumber, placeScLine, takenScNumbers } from "../lib/create-sc";
 
 const ROOT = join(import.meta.dir, "..");
 const SCRIPT = join(ROOT, "scripts", "create-sc.ts");
@@ -410,4 +411,90 @@ describe("#2067: the spec's own fixture-range mentions are read the way source o
     expect(takenScNumbers(PROSE).has(9999)).toBe(false);
     expect(takenScNumbers(DECLARED).has(9999)).toBe(true);
   });
+});
+
+/**
+ * #2845: ADR-027's two criteria were typed by hand, because `create-sc
+ * --spec` appended after the spec's last section rather than its last
+ * criterion, and could not write a `(behavioral)` criterion at all. It now
+ * places the line after the last criterion's block, and `--behavioral` writes
+ * the owner's sentence through the same allocator and the same bank write.
+ */
+describe("#2845: create-sc places a criterion after the last one, and --behavioral writes one as stated", () => {
+  const SPEC = [
+    "---",
+    "doc-type: spec",
+    "testable: true",
+    "---",
+    "",
+    "# Fixture",
+    "",
+    "## Success Criteria",
+    "",
+    "- [ ] SC-9100: the first fixture criterion",
+    "- [x] SC-9101: the second fixture criterion",
+    "  proved-by: test/fixture.test.ts",
+    "",
+    "## Notes",
+    "",
+    "Prose after the criteria, and an example nobody should insert into:",
+    "",
+    "```md",
+    "- [ ] SC-9199: an example inside a fence",
+    "```",
+    "",
+  ].join("\n");
+  const NEW = "- [ ] SC-9150: the placed line";
+
+  test("the line goes straight after the last criterion's block, above the next section, and nothing else moves", () => {
+    const out = placeScLine(SPEC, NEW);
+    const lines = out.split("\n");
+    expect(lines.indexOf(NEW), "placed somewhere other than after SC-9101's annotation").toBe(lines.indexOf("  proved-by: test/fixture.test.ts") + 1);
+    expect(out.indexOf(NEW)).toBeLessThan(out.indexOf("## Notes"));
+    expect(out.indexOf(NEW), "placed after a fenced example").toBeLessThan(out.indexOf("SC-9199"));
+    expect(out.replace(NEW + "\n", "")).toBe(SPEC);
+  });
+
+  test("a spec that states no criterion gets the line at its end, as before", () => {
+    const bare = "---\ndoc-type: spec\n---\n\n# Nothing yet\n\n```md\n- [ ] SC-9198: only an example\n```\n";
+    expect(placeScLine(bare, NEW)).toBe(bare.trimEnd() + "\n" + NEW + "\n");
+  });
+
+  test("behavioralStatement marks one sentence, and refuses an empty, multi-line or already-marked one", () => {
+    expect(behavioralStatement("  X happens  ")).toBe("X happens (behavioral)");
+    expect(formatSCLine(9150, behavioralStatement("X happens"))).toBe("- [ ] SC-9150: X happens (behavioral)");
+    expect(() => behavioralStatement("   ")).toThrow(/sentence/);
+    expect(() => behavioralStatement("X\nhappens")).toThrow(/one line/);
+    expect(() => behavioralStatement("X happens (behavioral)")).toThrow(/adds the marker/);
+  });
+
+  test("the CLI places after the last criterion, and --behavioral is allocated exactly as a pattern write is", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-2845-create-sc-"));
+    try {
+      const a = join(dir, "A-SPEC.md");
+      const b = join(dir, "B-SPEC.md");
+      writeFileSync(a, SPEC);
+      writeFileSync(b, SPEC);
+      const pattern = runCreateSC(["--pattern", "file-exists", "--params", JSON.stringify({ file: "README.md" }), "--spec", a]);
+      expect(pattern.exitCode, pattern.stderr).toBe(0);
+      const behavioral = runCreateSC(["--behavioral", "X happens", "--spec", b]);
+      expect(behavioral.exitCode, behavioral.stderr).toBe(0);
+      const after = (file: string) => {
+        const lines = readFileSync(file, "utf-8").split("\n");
+        return lines[lines.indexOf("  proved-by: test/fixture.test.ts") + 1];
+      };
+      const pa = after(a).match(/^- \[ \] SC-(\d+): .*README\.md/);
+      const pb = after(b).match(/^- \[ \] SC-(\d+): X happens \(behavioral\)$/);
+      expect(pa, `pattern line not placed after the last criterion: ${after(a)}`).not.toBeNull();
+      expect(pb, `behavioral line not placed or not as stated: ${after(b)}`).not.toBeNull();
+      expect(pb![1], "the behavioural write took a different allocator").toBe(pa![1]);
+      expect(readFileSync(b, "utf-8").replace(after(b) + "\n", "")).toBe(SPEC);
+
+      const both = runCreateSC(["--behavioral", "X happens", "--pattern", "file-exists", "--params", "{}", "--spec", b]);
+      expect(both.exitCode).toBe(1);
+      expect(both.stderr).toContain("--behavioral or --pattern");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
