@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
-import { homedir, tmpdir } from "os";
+import { tmpdir } from "os";
 import { dirname, join } from "path";
 
 import {
@@ -9,11 +9,11 @@ import {
   REGISTRATION_SCOPES,
   hookRegistration,
   readRegistrationScopes,
-  registrationCensus,
   settingsScopePaths,
   unplacedHooks,
   type ScopeReading,
 } from "../lib/hook-scopes";
+import { liveHookRegistration, liveRegistrationCensus, liveScopeReadability } from "./helpers/user-settings";
 import {
   appendEvidence,
   commandDigestFacts,
@@ -239,17 +239,11 @@ describe("#713 / #910 AC-2: the three verdicts are distinct and named", () => {
 });
 
 describe("#910 AC-3: the live reading of the two hooks #910 called unregistered", () => {
-  /** Every scope, read for real, with the ones that are not there named. */
-  function liveReadings(): ScopeReading[] {
-    const registry = join(ROOT, ".claude", "rungate", "hooks.json");
-    return readRegistrationScopes(
-      ROOT,
-      homedir(),
-      p => (existsSync(p) ? readFileSync(p, "utf-8") : null),
-      (JSON.parse(readFileSync(registry, "utf-8")) as { command?: string }[])
-        .map(h => h.command ?? "")
-        .filter(Boolean),
-    );
+  /** The registry's commands. Every live reading below goes through the settings helper (#2792). */
+  function registry(): string[] {
+    return (JSON.parse(readFileSync(join(ROOT, ".claude", "rungate", "hooks.json"), "utf-8")) as { command?: string }[])
+      .map(h => h.command ?? "")
+      .filter(Boolean);
   }
 
   test("AC-3a: neither hook is unregistered under a complete reading", () => {
@@ -257,15 +251,14 @@ describe("#910 AC-3: the live reading of the two hooks #910 called unregistered"
     // `user-settings`; on a runner, where that file does not exist, both
     // resolve to `unmeasured`. Neither is `unregistered`, which is the claim
     // the issue made and the one no complete reading can produce.
-    const readings = liveReadings();
-    const readable = readings.filter(r => r.commands !== null);
+    const readable = liveScopeReadability(ROOT, registry()).filter(r => r.readable);
     expect(
       readable.length,
       "no scope was readable at all, so this case compared nothing",
     ).toBeGreaterThan(0);
 
     for (const hook of ["TestSuiteRelease", "ProjectStateSync"]) {
-      const r = hookRegistration(hook, readings);
+      const r = liveHookRegistration(ROOT, registry(), hook);
       expect(
         r.verdict,
         `${hook}: ${r.detail}. #910 concluded "registered nowhere" from the repo registry alone.`,
@@ -279,9 +272,8 @@ describe("#910 AC-3: the live reading of the two hooks #910 called unregistered"
     // opened. `.claude/rungate/hooks.json` now carries a row for each, but a
     // row is the repo declaring where a hook is supposed to live; it is not a
     // registration, and this case is what keeps the two apart.
-    const readings = liveReadings();
-    const user = readings.find(r => r.scope === "user-settings")!;
-    if (user.commands === null) {
+    const user = liveScopeReadability(ROOT, registry()).find(r => r.scope === "user-settings")!;
+    if (!user.readable) {
       // A runner, and this arm has now been wrong TWICE in opposite
       // directions. Both are worth keeping written down, because the second
       // is this PR's own subject reproduced one level down.
@@ -302,11 +294,9 @@ describe("#910 AC-3: the live reading of the two hooks #910 called unregistered"
       // is SUPPOSED to live, not a registration — and what is left is the
       // question only the user scope can answer. On a runner it cannot be
       // answered, and `unmeasured` is the reading rather than a skip.
-      const withoutDeclaration = readings.map(r =>
-        r.scope === "repo-registry" ? { ...r, commands: [] } : r,
-      );
+      // An empty registry is the repo registry read with no commands.
       for (const hook of ["TestSuiteRelease", "ProjectStateSync"]) {
-        const r = hookRegistration(hook, withoutDeclaration);
+        const r = liveHookRegistration(ROOT, [], hook);
         // Each of these has an input that makes it red, and they are
         // different inputs: collapse the repo/machine ownership split and
         // the verdict becomes `unregistered`; let any repo-owned scope name
@@ -322,16 +312,15 @@ describe("#910 AC-3: the live reading of the two hooks #910 called unregistered"
     }
     for (const hook of ["TestSuiteRelease", "ProjectStateSync"]) {
       expect(
-        hookRegistration(hook, readings).registeredIn,
+        liveHookRegistration(ROOT, registry(), hook).registeredIn,
         `${hook} is no longer registered in ~/.claude/settings.json`,
       ).toContain("user-settings");
     }
   });
 
   test("AC-3c: a census answers for every hook handed to it", () => {
-    const readings = liveReadings();
     const hooks = ["TestSuiteRelease", "ProjectStateSync", "AgentBriefGuard"];
-    const census = registrationCensus(hooks, readings);
+    const census = liveRegistrationCensus(ROOT, registry(), hooks);
     expect(census.map(c => c.hook)).toEqual(hooks);
     // #713's own mirror of the same error: it reported AgentBriefGuard dead.
     expect(census.find(c => c.hook === "AgentBriefGuard")!.verdict).not.toBe("unregistered");
