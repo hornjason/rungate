@@ -253,9 +253,9 @@ export function parseDeclaredCloses(raw: unknown): number[] {
     // The rule `issueNumber` in lib/project-state-shape.ts reads, spelled
     // here because this script stays import-free for its mutation battery;
     // test/project-state-shape.test.ts holds the two equal (#2817).
-    const digits = typeof part === "string" ? /^#?(\d+)$/.exec(part) : null;
-    const n = typeof part === "number" ? (Number.isInteger(part) ? part : 0) : digits ? Number(digits[1]) : 0;
-    if (n <= 0) {
+    const n =
+      typeof part === "number" ? part : typeof part === "string" && /^#?\d+$/.test(part) ? Number(part.replace(/^#/, "")) : NaN;
+    if (!Number.isSafeInteger(n) || n <= 0) {
       throw new StateCloseRefused(
         `"Issues closed:" holds ${JSON.stringify(part)}, which is not an issue number — ` +
           `the comparison cannot tell a typo from a closure nobody declared`,
@@ -519,7 +519,7 @@ export function parseIssueStatesFile(raw: string, source: string): IssueStateRea
   const states: Record<number, IssueState> = {};
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
     const n = Number(String(key).replace(/^#/, "").trim());
-    if (!Number.isInteger(n) || n <= 0) {
+    if (!Number.isSafeInteger(n) || n <= 0) {
       throw new StateCloseRefused(`${source} holds the key ${JSON.stringify(key)}, which is not an issue number`);
     }
     const state = String(value).toUpperCase();
