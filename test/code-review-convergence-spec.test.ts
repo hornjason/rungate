@@ -1008,8 +1008,10 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: every criterion has exactly one
   const body = existsSync(join(REPO, SPEC)) ? readFileSync(join(REPO, SPEC), "utf-8") : null;
   const HEADING = "### Phase placement — every criterion has exactly one home";
 
-  // The placement table's rows, as {placement, ids}. MEMBERSHIP IS THE SECOND
-  // CELL and nothing else — the same claim-vs-citation discipline the bucket
+  // Each placement value with its criteria, as {placement, ids}. Since #2767
+  // MEMBERSHIP IS THE `placement:` LINE beneath each criterion and nothing
+  // else; an older spec's table still reads through its second cell. Either
+  // way it is a declaring position — the same claim-vs-citation discipline the bucket
   // partition above draws, and for the same measured reason: a scan of the
   // phase prose reported four criteria placed that Phase 0 only mentions, and
   // missed three that Phase 5 writes as one slash-joined run headed by CRC-M1,
@@ -1087,6 +1089,36 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: every criterion has exactly one
       `the placement table names criteria this spec does not declare. Either the id was ` +
         `renamed — fix the row — or the placement was invented.`,
     ).toEqual([]);
+  });
+
+  // #2790 review: the spec says a value must be in the meanings table's first
+  // column, so the test reads that column rather than a list of its own.
+  const meaningValues = (src: string): string[] => {
+    const lines = src.split("\n");
+    const start = lines.findIndex(l => l.startsWith(PLACEMENT_MEANINGS_HEADING));
+    expect(start, "the meanings section is gone or renamed — rename it here too").toBeGreaterThan(-1);
+    const out: string[] = [];
+    for (let i = start + 1; i < lines.length && !/^#{1,3} /.test(lines[i]!); i++) {
+      const l = lines[i]!;
+      if (!l.startsWith("| ") || l.startsWith("|---") || lines[i + 1]?.startsWith("|---")) continue;
+      out.push((l.split("|")[1] ?? "").replaceAll("*", "").trim());
+    }
+    return out;
+  };
+
+  /** Each placement value the document's criteria carry that its meanings table does not define. */
+  const undefinedPlacements = (src: string): string[] => {
+    const defined = meaningValues(src);
+    return [...new Set(rows(src).map(r => r.placement))].filter(v => !defined.includes(v));
+  };
+
+  test("every placement value a criterion carries is defined in the meanings table's first column", () => {
+    expect(meaningValues(body!).length, "the meanings table parsed no rows").toBeGreaterThan(5);
+    expect(undefinedPlacements(body!), "a placement value the meanings table does not define").toEqual([]);
+    // The same reading over a planted copy with the Phase 5 row deleted refuses it by name.
+    const withoutPhase5 = body!.replace(/^\| \*\*Phase 5\*\* \|.*\n/m, "");
+    expect(withoutPhase5).not.toBe(body);
+    expect(undefinedPlacements(withoutPhase5)).toEqual(["Phase 5"]);
   });
 
   test("a missing and a duplicated placement are both caught, so the cases above can fail", () => {
