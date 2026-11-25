@@ -330,40 +330,51 @@ export const RENDERED_PRIORITIES_MAX = 12;
 export const PROJECT_STATE_ZONE = "America/New_York";
 
 /**
- * Why a state's newest session is dated after its `updated` stamp, or null
- * when it is not (#2785).
+ * Every session in a state dated after its `updated` stamp, as one reason
+ * each; empty when there is none (#2785).
  *
  * A session's date is typed by hand, by the DA; only `updated` is stamped by
  * the writer, with the day it runs in {@link PROJECT_STATE_ZONE}. A session
  * dated later than that was dated by a day the record had not reached:
  * session 105 was written on the New York evening of 2026-11-24 and typed as
  * 2026-11-25, the UTC day, which hides every merge on the day in between from
- * the currency comparison. Or `updated` is stale, because the writer did not
- * run; the message names both, and the writer is the first thing to try.
+ * the currency comparison.
  *
- * The writer calls this before it writes, so a hand-typed date ahead of the
- * day is refused at commit time; the currency test calls it on the committed
- * record. One decider for both.
+ * Every date is read: the top-level `session`, which must start with a day,
+ * and each `sessions[]` entry that does. An entry with no day is left to the
+ * renderer, which already ranks it below every dated one (#2807 review).
+ *
+ * `caller` decides the remedy the reason names. The writer has just stamped
+ * today, so for it the only way out is re-dating the session. On a committed
+ * record `updated` may instead be stale, so re-running the writer comes first.
+ * The writer and the currency test both call this: one decider.
  */
-export function sessionAheadOfStamp(updated: unknown, sessionDate: unknown): string | null {
+export function sessionsAheadOfStamp(state: unknown, caller: "writer" | "record"): string[] {
   // A date may be followed by anything but another digit: `2026-11-25 session 106`, `2026-11-25T14:00`.
   const day = (v: unknown): string | null => {
     const m = typeof v === "string" ? /^(\d{4}-\d{2}-\d{2})(?!\d)/.exec(v) : null;
     return m ? m[1]! : null;
   };
-  const stamp = day(updated);
-  const session = day(sessionDate);
-  if (stamp === null) return `updated is ${JSON.stringify(updated)}, which is not a calendar day`;
-  if (session === null) return `the newest session's date is ${JSON.stringify(sessionDate)}, which starts with no calendar day`;
-  if (session > stamp) {
-    return (
-      `the newest session is dated ${session} and updated reads ${stamp}. Either updated is stale: run ` +
-      `\`bun scripts/update-project-state.ts\`, which stamps the day it runs in ${PROJECT_STATE_ZONE}. Or, if it ` +
-      `still reads ${stamp}, the session's date was typed ahead of the day: date it by the day in ` +
-      `${PROJECT_STATE_ZONE} it was written.`
-    );
+  const st = (state ?? {}) as { updated?: unknown; session?: { date?: unknown } | null; sessions?: unknown };
+  const stamp = day(st.updated);
+  if (stamp === null) return [`updated is ${JSON.stringify(st.updated)}, which is not a calendar day`];
+  const remedy =
+    caller === "writer"
+      ? `updated was stamped just now, so the session's date is ahead of the day: it is typed by hand, so date it by the day in ${PROJECT_STATE_ZONE} it was written.`
+      : `Either updated is stale: run \`bun scripts/update-project-state.ts\`, which stamps the day it runs in ${PROJECT_STATE_ZONE}. Or, if it still reads ${stamp}, the date was typed ahead of the day: date it by the day in ${PROJECT_STATE_ZONE} it was written.`;
+  const out: string[] = [];
+  if (st.session !== undefined && st.session !== null && "date" in st.session) {
+    const d = day(st.session.date);
+    if (d === null) out.push(`the newest session's date is ${JSON.stringify(st.session.date)}, which starts with no calendar day`);
+    else if (d > stamp) out.push(`the newest session is dated ${d} and updated reads ${stamp}. ${remedy}`);
   }
-  return null;
+  if (Array.isArray(st.sessions)) {
+    st.sessions.forEach((e: unknown, i: number) => {
+      const d = day((e as { date?: unknown } | null)?.date);
+      if (d !== null && d > stamp) out.push(`sessions[${i}] is dated ${d} and updated reads ${stamp}. ${remedy}`);
+    });
+  }
+  return out;
 }
 
 /** The day `at` falls on in {@link PROJECT_STATE_ZONE}: what `updated` is stamped with. */

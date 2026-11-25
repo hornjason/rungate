@@ -146,8 +146,14 @@ describe("update-project-state", () => {
     const r = exec();
     expect(r.status, r.out).toBe(1);
     expect(r.out).toContain("the newest session is dated 2999-01-01");
+    expect(r.out, "the writer named itself as the way out of its own refusal").not.toContain("run `bun scripts/update-project-state.ts`");
     expect(r.out).toContain("nothing was written");
     expect(readFileSync(STATE_JSON, "utf-8"), "the writer stamped a record it refused").toBe(before);
+    // An entry in sessions[] dated ahead is refused too (#2807 review).
+    writeTestJson({ ...ahead, session: { ...ahead.session, date: projectStateDay() }, sessions: [{ date: "2999-01-01 session 9", items: ["x"] }] });
+    const entry = exec();
+    expect(entry.status, entry.out).toBe(1);
+    expect(entry.out).toContain("sessions[0] is dated 2999-01-01");
     // Dated today in the record's zone, it writes.
     const today = projectStateDay();
     writeTestJson({ ...ahead, session: { ...ahead.session, date: today }, sessions: [{ date: `${today} session 9`, items: ["x"] }] });

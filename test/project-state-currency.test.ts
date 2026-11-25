@@ -34,7 +34,7 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 import { localCalendarDay } from "../lib/local-calendar-day";
-import { PROJECT_STATE_ZONE, sessionAheadOfStamp } from "../lib/project-state-shape";
+import { PROJECT_STATE_ZONE, sessionsAheadOfStamp } from "../lib/project-state-shape";
 
 const ROOT = join(import.meta.dir, "..");
 const STATE = join(ROOT, "project-state.json");
@@ -128,8 +128,8 @@ export function sessionNumberIn(date: unknown): number | null {
  *
  * Since #2785 the writer and this comparison read the zone from one constant,
  * `PROJECT_STATE_ZONE` in `lib/project-state-shape.ts`, so they cannot drift.
- * The session date is still typed by hand; `sessionAheadOfStamp` refuses one
- * dated past the stamp, in the writer and below.
+ * The session date is still typed by hand; `sessionsAheadOfStamp` refuses
+ * every one dated past the stamp, in the writer and below.
  */
 export const CURRENCY_ZONE = PROJECT_STATE_ZONE;
 
@@ -346,23 +346,35 @@ describe("project-state currency", () => {
   });
 
   test("#2785: the newest session is not dated after the day the record was stamped", () => {
-    expect(sessionAheadOfStamp(state.updated, latestDate)).toBeNull();
+    expect(sessionsAheadOfStamp(state, "record")).toEqual([]);
   });
 
   test("#2785: a session dated after the stamp is refused, naming both days", () => {
-    const ahead = sessionAheadOfStamp("2026-11-24", "2026-11-25");
+    const st = (updated: unknown, top: unknown, entries: unknown[] = []) => ({
+      updated,
+      session: { date: top },
+      sessions: entries.map(date => ({ date })),
+    });
+    const [ahead] = sessionsAheadOfStamp(st("2026-11-24", "2026-11-25"), "record");
     expect(ahead).toContain("dated 2026-11-25");
     expect(ahead).toContain("updated reads 2026-11-24");
-    expect(sessionAheadOfStamp("2026-11-25", "2026-11-25")).toBeNull();
-    expect(sessionAheadOfStamp("2026-11-26", "2026-11-25 session 106 (gist)")).toBeNull();
-    expect(sessionAheadOfStamp(undefined, "2026-11-25")).toContain("not a calendar day");
-    expect(sessionAheadOfStamp("2026-11-25", "session 106")).toContain("starts with no calendar day");
-    // #2807 review: a timestamp is a day followed by T, not a refusal.
-    expect(sessionAheadOfStamp("2026-11-25", "2026-11-25T14:00 session 106")).toBeNull();
-    expect(sessionAheadOfStamp("2026-11-25", "2026-11-251 session 106")).toContain("starts with no calendar day");
-    // The refusal names both ways out: re-run the writer, or re-date the session.
+    // On a committed record both ways out are named, re-running the writer first.
     expect(ahead).toContain("bun scripts/update-project-state.ts");
     expect(ahead).toContain("date it by the day in");
+    expect(sessionsAheadOfStamp(st("2026-11-25", "2026-11-25"), "record")).toEqual([]);
+    expect(sessionsAheadOfStamp(st("2026-11-26", "2026-11-25 session 106 (gist)"), "record")).toEqual([]);
+    expect(sessionsAheadOfStamp(st(undefined, "2026-11-25"), "record")[0]).toContain("not a calendar day");
+    expect(sessionsAheadOfStamp(st("2026-11-25", "session 106"), "record")[0]).toContain("starts with no calendar day");
+    // #2807 review: a timestamp is a day followed by T, not a refusal.
+    expect(sessionsAheadOfStamp(st("2026-11-25", "2026-11-25T14:00 session 106"), "record")).toEqual([]);
+    expect(sessionsAheadOfStamp(st("2026-11-25", "2026-11-251 session 106"), "record")[0]).toContain("starts with no calendar day");
+    // #2807 review, round 2: every entry in sessions[] is read, not only the top-level session.
+    const entries = sessionsAheadOfStamp(st("2026-11-25", "2026-11-25", ["2026-11-26 session 107", "2999-01-01 session 105", "undated"]), "record");
+    expect(entries.map(r => r.split(" is dated")[0])).toEqual(["sessions[0]", "sessions[1]"]);
+    // The writer has just stamped today, so it names only re-dating.
+    const [writer] = sessionsAheadOfStamp(st("2026-11-24", "2026-11-25"), "writer");
+    expect(writer).toContain("updated was stamped just now");
+    expect(writer).not.toContain("bun scripts/update-project-state.ts");
   });
 
   test("the staleness comparison fires on a date that IS stale", () => {

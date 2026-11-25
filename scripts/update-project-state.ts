@@ -13,7 +13,7 @@ import { execSync } from "child_process";
 
 /** How many sessions the handoff shows. One site, so the count can be mutated. */
 const RENDERED_SESSIONS = 3;
-import { boundedPriorities, missingStateVerdict, projectStateDay, projectStateViolations, selectRecentSessions, sessionAheadOfStamp } from "../lib/project-state-shape";
+import { boundedPriorities, missingStateVerdict, projectStateDay, projectStateViolations, selectRecentSessions, sessionsAheadOfStamp } from "../lib/project-state-shape";
 import { openImprovements, stageLadderViolations, type Stage } from "../lib/stage-ladder";
 
 /**
@@ -372,15 +372,15 @@ const state: ProjectState = parsed as ProjectState;
 // machine set to it. Now the zone itself, whatever machine runs this.
 state.updated = projectStateDay();
 // #2785 review: a session date is typed by hand, so the stamp alone could not
-// stop the UTC habit. Refused here, before anything is written, so the
-// pre-commit run catches it rather than the currency test after the merge.
-if (typeof state.session?.date === "string") {
-  const ahead = sessionAheadOfStamp(state.updated, state.session.date);
-  if (ahead !== null) {
-    console.error(`project-state: ${ahead}`);
-    console.error(`project-state: nothing was written.`);
-    process.exit(PROJECT_STATE_REFUSE_EXIT);
-  }
+// stop the UTC habit. Refused here, for every session date, before anything
+// is written. The pre-commit hook then stages nothing and says so; it does
+// not stop the commit, so a record staged by hand still lands, and the
+// currency test refuses it in CI (#2807 review).
+const ahead = sessionsAheadOfStamp(state, "writer");
+if (ahead.length > 0) {
+  for (const reason of ahead) console.error(`project-state: ${reason}`);
+  console.error(`project-state: nothing was written.`);
+  process.exit(PROJECT_STATE_REFUSE_EXIT);
 }
 
 // Sync SC status from spec files (promote-only: specs can mark done, never undo)
