@@ -186,13 +186,43 @@ const SEPARATORS = new Set(["#", ";", "&&", "||", "|", "&"]);
 /**
  * One leading `NAME=value` assignment and the space after it (#2802). The
  * value is any run of single-quoted parts (no escapes), double-quoted parts
- * (backslash escapes), and unquoted parts holding no space, quote or
- * separator, so `TOKEN="a b"` is one assignment where a whitespace split saw
+ * (backslash escapes), backslash-escaped characters, and unquoted parts
+ * holding no space, quote, backslash or separator, so `TOKEN="a b"` is one assignment where a whitespace split saw
  * `TOKEN="a` and `b"`. An unterminated quote matches nothing, so the command
  * reads as executing nothing, as the shell would not run it either. An
- * unquoted separator still ends the command: `A=x;bun …` is two.
+ * unquoted separator still ends the command: `A=x;bun …` is two. A
+ * backslash outside quotes escapes the next character, as in the shell, so
+ * `A=\'x' bun …` is an escaped quote followed by an unterminated one, and
+ * reads as executing nothing, rather than a quoted `'x'` followed by a
+ * command (security review of #2815).
  */
-const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s'"#;|&])*(?=\s|$)\s*/;
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"(?:[^"\\]|\\[\s\S])*"|\\[\s\S]|[^\s'"#;|&\\])*(?=\s|$)\s*/;
+
+/**
+ * Whether the first command in `text` leaves a quote open, read the way the
+ * shell reads quotes: single quotes take no escapes, double quotes and bare
+ * text take a backslash escape. The shell refuses such a line, so it runs
+ * nothing (#2815 review). The scan stops at an unquoted separator or a `#`
+ * that starts a word, so a quote in a later command or a comment is not read.
+ */
+function quoteLeftOpen(text: string): boolean {
+  let open: "'" | '"' | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (open === "'") {
+      if (c === "'") open = null;
+    } else if (c === "\\") {
+      i++;
+    } else if (open === '"') {
+      if (c === '"') open = null;
+    } else if (c === "'" || c === '"') {
+      open = c;
+    } else if (";|&".includes(c) || (c === "#" && (i === 0 || /\s/.test(text[i - 1]!)))) {
+      return false;
+    }
+  }
+  return open !== null;
+}
 
 /**
  * The executed hook file as a PATH — the first positional, un-basenamed.
@@ -218,6 +248,7 @@ export function executedHookPath(command: string): string | null {
     rest = rest.slice("env".length).trimStart();
     assignments();
   }
+  if (quoteLeftOpen(rest)) return null;
   const tokens: string[] = [];
   for (const raw of rest.split(/\s+/).filter(Boolean)) {
     // A separator ends the first command, whether it stands alone or is
@@ -254,7 +285,13 @@ export function executedHookPath(command: string): string | null {
   }
   if (i >= tokens.length) return null;
 
-  const arg = bare(tokens[i]);
+  // The positional is unquoted, or wrapped whole in one pair of quotes. A
+  // quote anywhere else means the shell's word is not this token: `"/x/A.hook.ts
+  // --flag"` is one argument, which is no hook file (#2815 review).
+  const raw = tokens[i]!;
+  const paired = raw.length >= 2 && (raw[0] === '"' || raw[0] === "'") && raw.at(-1) === raw[0];
+  const arg = paired ? raw.slice(1, -1) : raw;
+  if (/['"]/.test(arg)) return null;
   const base = arg.slice(arg.lastIndexOf("/") + 1);
   return /^[A-Za-z0-9_-]+\.hook\.ts$/.test(base) ? arg : null;
 }
