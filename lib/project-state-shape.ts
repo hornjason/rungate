@@ -25,29 +25,12 @@
  * hand-edited file wants the whole list, and a validator that stops at the
  * first finding turns one bad edit into four round-trips.
  */
+import { issueNumber } from "./issue-number";
 import { localCalendarDay } from "./local-calendar-day";
 
-/**
- * The issue number one entry of a session's issue list names, or null (#2817):
- * a positive safe integer, or a string of digits with one optional leading
- * `#` that reads as one. Past `Number.MAX_SAFE_INTEGER` a number prints
- * rounded or in exponent form, so it is refused rather than rendered as
- * `#1e+21` (#2821 review).
- *
- * The shape check refuses what this refuses, and the renderer prints what it
- * reads, so a `" 1675"` or `"1e3"` can no longer pass one and print garbled
- * from the other. `parseDeclaredCloses` in
- * `scripts/check-state-record-closes.ts` spells the same rule inline, since
- * that script stays import-free for its mutation battery.
- * `test/project-state-shape.test.ts` holds the two equal over a listed set
- * and a few thousand generated inputs, and holds that what the renderer
- * prints reads back as the same number.
- */
-export function issueNumber(item: unknown): number | null {
-  const n =
-    typeof item === "number" ? item : typeof item === "string" && /^#?\d+$/.test(item) ? Number(item.replace(/^#/, "")) : NaN;
-  return Number.isSafeInteger(n) && n > 0 ? n : null;
-}
+// The shape check refuses what `issueNumber` refuses, and the renderer prints
+// what it reads; re-exported so callers keep one import (#2817).
+export { issueNumber };
 
 /** Every shape violation in a parsed `project-state.json`, in document order. */
 export function projectStateViolations(raw: unknown): string[] {
@@ -167,11 +150,18 @@ export function projectStateViolations(raw: unknown): string[] {
           );
           continue;
         }
+        // A list naming one issue twice would render it twice (#2821 review).
+        const seen = new Map<number, number>();
         v.forEach((item, i) => {
-          if (issueNumber(item) === null) {
+          const n = issueNumber(item);
+          if (n === null) {
             out.push(
               `session.${k}[${i}] is ${JSON.stringify(item)}, expected an issue number`,
             );
+          } else if (seen.has(n)) {
+            out.push(`session.${k}[${i}] names #${n} again, already named at [${seen.get(n)}]`);
+          } else {
+            seen.set(n, i);
           }
         });
       }

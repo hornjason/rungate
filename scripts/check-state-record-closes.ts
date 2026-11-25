@@ -110,6 +110,8 @@
 
 import { readFileSync } from "fs";
 
+import { issueNumber } from "../lib/issue-number";
+
 /** The one exit code every refusal travels through. See note 1 above. */
 export const STATE_CLOSES_REFUSE_EXIT = 1;
 
@@ -236,19 +238,6 @@ export function closingReferences(
 }
 
 /**
- * The issue number one entry or state-file key names, or null: the rule
- * `issueNumber` in lib/project-state-shape.ts reads, spelled here because this
- * script stays import-free for its mutation battery. Both readers below use
- * it, and test/project-state-shape.test.ts holds it equal to `issueNumber`
- * over generated inputs (#2817, #2821 review).
- */
-function issueNumberOf(item: unknown): number | null {
-  const n =
-    typeof item === "number" ? item : typeof item === "string" && /^#?\d+$/.test(item) ? Number(item.replace(/^#/, "")) : NaN;
-  return Number.isSafeInteger(n) && n > 0 ? n : null;
-}
-
-/**
  * The record's declared closures, from whatever shape the record holds them
  * in. `project-state.json` writes an array of numbers; the renderer turns it
  * into the comma-joined string `PROJECT-STATE.md` shows.
@@ -263,7 +252,7 @@ export function parseDeclaredCloses(raw: unknown): number[] {
     : String(raw).split(/[,\s]+/).filter(Boolean);
   const out: number[] = [];
   for (const part of parts) {
-    const n = issueNumberOf(part);
+    const n = issueNumber(part);
     if (n === null) {
       throw new StateCloseRefused(
         `"Issues closed:" holds ${JSON.stringify(part)}, which is not an issue number — ` +
@@ -528,7 +517,7 @@ export function parseIssueStatesFile(raw: string, source: string): IssueStateRea
   const states: Record<number, IssueState> = {};
   const keyFor = new Map<number, string>();
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    const n = issueNumberOf(key);
+    const n = issueNumber(key);
     if (n === null) {
       throw new StateCloseRefused(`${source} holds the key ${JSON.stringify(key)}, which is not an issue number`);
     }

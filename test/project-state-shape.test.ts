@@ -594,7 +594,27 @@ describe("#2817: one reading of an issue number in a session's lists", () => {
     }
   });
 
-  test("the closures check, which stays import-free, reads each entry the same way", () => {
+  test("a session list naming one issue twice is refused, so it cannot render twice (#2821 review)", () => {
+    const doc = good() as any;
+    doc.session = { number: 1, date: "d", summary: "s", suite: "t", issues_created: [1675, "#1675", 1676, "01676"] };
+    expect(projectStateViolations(doc).filter(v => v.startsWith("session.issues_created"))).toEqual([
+      "session.issues_created[1] names #1675 again, already named at [0]",
+      "session.issues_created[3] names #1676 again, already named at [2]",
+    ]);
+  });
+
+  test("one decider: the session-record readers import issueNumber and spell no rule of their own (#2821 review, round 4)", () => {
+    const root = join(import.meta.dir, "..");
+    for (const rel of ["lib/project-state-shape.ts", "scripts/update-project-state.ts", "scripts/check-state-record-closes.ts"]) {
+      const src = readFileSync(join(root, rel), "utf-8");
+      expect(src.includes("/^#?\\d+$/"), `${rel} spells the issue-number rule itself`).toBe(false);
+      expect(/\bissueNumber\b[^;]*\bfrom "\.\.?\/(?:lib\/)?(?:issue-number|project-state-shape)"/s.test(src), `${rel} does not import issueNumber`).toBe(true);
+    }
+    // The rule is spelled where the readers import it from.
+    expect(readFileSync(join(root, "lib/issue-number.ts"), "utf-8").includes("/^#?\\d+$/")).toBe(true);
+  });
+
+  test("the closures check reads each entry the same way", () => {
     for (const item of [...ITEMS, ...GENERATED]) {
       const n = issueNumber(item);
       if (n === null) expect(() => parseDeclaredCloses([item]), JSON.stringify(item)).toThrow();
