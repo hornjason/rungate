@@ -34,7 +34,7 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 import { localCalendarDay } from "../lib/local-calendar-day";
-import { PROJECT_STATE_ZONE, selectRecentSessions, sessionAheadOfStamp } from "../lib/project-state-shape";
+import { PROJECT_STATE_ZONE, readSession, selectRecentSessions, sessionAheadOfStamp } from "../lib/project-state-shape";
 
 const ROOT = join(import.meta.dir, "..");
 const STATE = join(ROOT, "project-state.json");
@@ -96,17 +96,14 @@ const state = JSON.parse(readFileSync(STATE, "utf-8"));
 const latestDate: string = state.session?.date ?? "";
 
 /**
- * The session number an entry in `sessions[]` declares, or `null`.
+ * The session number an entry in `sessions[]` declares, or `null`, as
+ * `readSession` reads it: the renderer ranks by the same reading (#2809).
  *
  * The array's `date` carries both, as `"2026-11-02 session 73"`. Null
  * rather than 0 when no number is spelled: a missing number and session
  * zero are different facts, and the caller reports them differently.
  */
-export function sessionNumberIn(date: unknown): number | null {
-  if (typeof date !== "string") return null;
-  const m = /\bsession\s+(\d+)\b/i.exec(date);
-  return m ? Number(m[1]) : null;
-}
+const entryNumber = (entry: unknown): number | null => readSession(entry).number;
 
 /**
  * The one timezone every date in this comparison is resolved in (#766).
@@ -228,7 +225,7 @@ describe("project-state currency", () => {
   // renderer takes the headline from one and the body from the other, so the
   // same document contradicted itself and neither half was wrong on its own.
   test("the headline session is the newest one in the history", () => {
-    const newest = sessionNumberIn(state.sessions?.[0]?.date);
+    const newest = entryNumber(state.sessions?.[0]);
     expect(
       newest,
       `sessions[0].date is ${JSON.stringify(state.sessions?.[0]?.date)} and spells no session number. ` +
@@ -244,7 +241,7 @@ describe("project-state currency", () => {
     // file. So the ordering is asserted rather than assumed. Round 2 of
     // #1711.
     const numbered: { at: number; n: number }[] = (state.sessions ?? [])
-      .map((s: { date?: unknown }, at: number) => ({ at, n: sessionNumberIn(s?.date) }))
+      .map((s: unknown, at: number) => ({ at, n: entryNumber(s) }))
       .filter((r: { n: number | null }) => r.n !== null);
     const highest = numbered.reduce(
       (best: { at: number; n: number }, r: { at: number; n: number }) => (r.n > best.n ? r : best),

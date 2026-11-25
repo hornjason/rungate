@@ -28,7 +28,13 @@ import { spawnSync } from "child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { missingStateVerdict, projectStateViolations, selectRecentSessions } from "../lib/project-state-shape";
+import {
+  missingStateVerdict,
+  projectStateViolations,
+  readSession,
+  selectRecentSessions,
+  sessionAheadOfStamp,
+} from "../lib/project-state-shape";
 
 const REPO = join(import.meta.dir, "..");
 const SCRIPT = join(REPO, "scripts", "update-project-state.ts");
@@ -457,5 +463,67 @@ describe("#1517: same-day sessions render newest-first, and position decides not
     const sel = selectRecentSessions([first, second, s("2024-01-01 session 1")], 3);
     expect(dates(sel)).toEqual(["2024-01-01 session 1", "undated two", "undated one"]);
     expect(sel.undated, "both are named, in the order they were written").toEqual([first, second]);
+  });
+});
+
+// #2809: four places decided what a session is and what day it carries, each
+// its own way, and #2807's review rounds found them disagreeing one input at a
+// time. Now each calls `readSession`, and this runs every caller over the same
+// inputs, so a caller that grows its own reader disagrees here first.
+describe("#2809: one reader decides what a session is and its day, and every caller agrees with it", () => {
+  const FIXTURES: unknown[] = [
+    null,
+    [],
+    "2026-11-25",
+    5,
+    { date: "2026-11-25T14:00 session 106", items: [] },
+    { date: "undated", items: [] },
+    { date: "2026-11-251 session 106", items: [] },
+    { date: "2026-11-25 session 32b", items: [] },
+    { date: "2026-11-25 session 106", items: [] },
+    { date: 20261125, items: [] },
+  ];
+  const label = (f: unknown) => JSON.stringify(f);
+
+  test("the shape check calls an entry an object exactly when the reader does", () => {
+    for (const f of FIXTURES) {
+      const r = readSession(f);
+      const doc = good() as any;
+      doc.sessions = [f];
+      const named = projectStateViolations(doc).some(v => v === "sessions[0] is not an object");
+      expect(named, label(f)).toBe(!r.object);
+      // The top-level session is optional, so null is absent, not malformed.
+      const top = good() as any;
+      top.session = f;
+      const topNamed = projectStateViolations(top).some(v => v.startsWith("session is ") && v.endsWith("expected an object"));
+      expect(topNamed, label(f)).toBe(f !== null && !r.object);
+    }
+  });
+
+  test("the renderer calls an entry undated, and the stamp check finds no day, exactly when the reader does", () => {
+    for (const f of FIXTURES) {
+      const r = readSession(f);
+      const date = r.object ? (f as { date?: unknown }).date : undefined;
+      if (r.object && typeof date === "string") {
+        expect(selectRecentSessions([f as { date: string }], 3).undated.length, label(f)).toBe(r.day === null ? 1 : 0);
+      }
+      const ahead = sessionAheadOfStamp("2026-11-25", date) ?? "";
+      expect(ahead.includes("starts with no calendar day"), label(f)).toBe(r.day === null);
+    }
+  });
+
+  test("the renderer orders a day's entries by the number the reader reads", () => {
+    const a = { date: "2026-11-25 session 31", items: [] };
+    const b = { date: "2026-11-25 session 32b", items: [] };
+    expect(readSession(b).number).toBe(32);
+    expect(selectRecentSessions([a, b], 2).rendered).toEqual([b, a]);
+    // The top-level session carries its number as a field.
+    expect(readSession({ number: 106, date: "2026-11-25" }).number).toBe(106);
+  });
+
+  test("the currency test reads session numbers through the reader, not a regex of its own", () => {
+    const currency = readFileSync(join(REPO, "test", "project-state-currency.test.ts"), "utf-8");
+    expect(currency).not.toContain("function sessionNumberIn");
+    expect(currency).toContain("readSession(");
   });
 });

@@ -132,6 +132,37 @@ describe("update-project-state", () => {
     expect(src).toContain("state.updated = projectStateDay();");
   });
 
+  // #2809: a session's date is typed by hand, so the writer holds the session
+  // it writes to the day it runs, and refuses an archived entry dated ahead.
+  test("#2809: the writer refuses a session not dated the day it runs, and an entry dated ahead, writing nothing", () => {
+    const today = projectStateDay();
+    const earlier = projectStateDay(new Date(Date.now() - 36 * 3600 * 1000));
+    expect(earlier).not.toBe(today);
+    const base = { updated: "2026-01-01", priorities: [], phases: [], sessions: [] as unknown[] };
+    const session = (date: string) => ({ number: 7, date, summary: "s", suite: "t" });
+    const refused = (state: unknown, ...says: string[]) => {
+      writeTestJson(state);
+      const before = readFileSync(STATE_JSON, "utf-8");
+      const r = exec();
+      expect(r.status, r.out).toBe(1);
+      for (const said of says) expect(r.out).toContain(said);
+      expect(r.out).toContain("nothing was written");
+      expect(readFileSync(STATE_JSON, "utf-8"), "the refusal wrote the file anyway").toBe(before);
+    };
+    // A day behind: the UTC habit's other half, typed the day before and written after midnight.
+    refused({ ...base, session: session(earlier) }, `dated ${earlier}`, `today in ${PROJECT_STATE_ZONE} is ${today}`);
+    // A day ahead.
+    refused({ ...base, session: session("2999-01-01") }, "dated 2999-01-01");
+    // A timestamp is no calendar day to the renderer, so none here either.
+    refused({ ...base, session: session(`${today}T14:00 session 7`) }, "starts with no calendar day");
+    // An archived entry dated ahead, named by index.
+    refused({ ...base, session: session(today), sessions: [{ date: "2999-01-01 session 6", items: ["x"] }] }, "sessions[0] is dated 2999-01-01");
+    // Dated today, with an older entry and an undated one, it writes.
+    writeTestJson({ ...base, session: session(`${today} session 7`), sessions: [{ date: "2026-01-01 session 6", items: ["x"] }, { date: "undated", items: ["y"] }] });
+    const ok = exec();
+    expect(ok.status, ok.out).toBe(0);
+  });
+
   test("generates markdown from JSON", () => {
     writeTestJson({
       updated: "2026-01-01",
@@ -334,7 +365,7 @@ describe("update-project-state", () => {
     writeTestJson({
       updated: "2026-01-01", priorities: [],
       phases: [{ name: "Phase 0", scs: [{ id: "SC-9441", what: "A", done: true }] }],
-      session: { number: 1, date: "2026-01-01", summary: "s", suite: "t", issues_created: [1675, 1680], issues_closed: [] },
+      session: { number: 1, date: projectStateDay(), summary: "s", suite: "t", issues_created: [1675, 1680], issues_closed: [] },
       sessions: []
     });
     const md = run();
@@ -356,7 +387,7 @@ describe("update-project-state", () => {
     writeTestJson({
       updated: "2026-01-01", priorities: [],
       phases: [{ name: "Phase 0", scs: [{ id: "SC-9441", what: "A", done: true }] }],
-      session: { number: 1, date: "2026-01-01", summary: "s", suite: "t" },
+      session: { number: 1, date: projectStateDay(), summary: "s", suite: "t" },
       sessions: []
     });
     const md = run();
@@ -370,7 +401,7 @@ describe("update-project-state", () => {
     writeTestJson({
       updated: "2026-01-01", priorities: [],
       phases: [{ name: "Phase 0", scs: [{ id: "SC-9441", what: "A", done: true }] }],
-      session: { number: 1, date: "2026-01-01", summary: "s", suite: "t", issues_closed: [1676] },
+      session: { number: 1, date: projectStateDay(), summary: "s", suite: "t", issues_closed: [1676] },
       sessions: []
     });
     expect(run()).toContain("Issues closed: #1676");

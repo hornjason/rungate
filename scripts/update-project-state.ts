@@ -13,7 +13,14 @@ import { execSync } from "child_process";
 
 /** How many sessions the handoff shows. One site, so the count can be mutated. */
 const RENDERED_SESSIONS = 3;
-import { boundedPriorities, missingStateVerdict, projectStateDay, projectStateViolations, selectRecentSessions } from "../lib/project-state-shape";
+import {
+  boundedPriorities,
+  missingStateVerdict,
+  projectStateDay,
+  projectStateViolations,
+  selectRecentSessions,
+  sessionDatingViolations,
+} from "../lib/project-state-shape";
 import { openImprovements, stageLadderViolations, type Stage } from "../lib/stage-ladder";
 
 /**
@@ -371,6 +378,17 @@ const state: ProjectState = parsed as ProjectState;
 // #2785: then the process zone, which is the currency test's zone only on a
 // machine set to it. Now the zone itself, whatever machine runs this.
 state.updated = projectStateDay();
+
+// #2809: a session's date is typed by hand, so the writer holds the session it
+// writes to the day it runs, and refuses an archived entry dated ahead, before
+// anything is written. The pre-commit hook then stages nothing; it does not
+// stop the commit, so the currency test still holds a record staged by hand.
+const misdated = sessionDatingViolations(state, state.updated);
+if (misdated.length > 0) {
+  for (const reason of misdated) console.error(`project-state: ${reason}`);
+  console.error(`project-state: nothing was written.`);
+  process.exit(PROJECT_STATE_REFUSE_EXIT);
+}
 
 // Sync SC status from spec files (promote-only: specs can mark done, never undo)
 const specStatus = scanSpecSCStatus();
