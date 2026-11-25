@@ -228,15 +228,17 @@ describe("#2792: no test reads a machine settings scope except through the helpe
   const files = (dir: string): string[] =>
     readdirSync(dir).flatMap(name => {
       const p = join(dir, name);
-      if (name === "node_modules" || name === "fixtures") return [];
+      // Fixtures are scanned too: bun runs any .ts test file under them (#2798 review).
+      if (name === "node_modules") return [];
       return statSync(p).isDirectory() ? files(p) : /\.ts$/.test(name) ? [p] : [];
     });
 
   test("no file under test/ but the helper hands home to a call, or builds a home path to a settings file", () => {
     const helper = join(ROOT, "test", "helpers", "user-settings.ts");
-    const hits = files(join(ROOT, "test"))
-      .filter(f => f !== helper)
-      .flatMap(f => homeSettingsReads(readFileSync(f, "utf-8")).map(line => `${relative(ROOT, f)}:${line}`));
+    const scanned = files(join(ROOT, "test")).filter(f => f !== helper);
+    // The walk reaches the fixtures, where bun also runs test files.
+    expect(scanned.some(f => relative(ROOT, f).startsWith(join("test", "fixtures")))).toBe(true);
+    const hits = scanned.flatMap(f => homeSettingsReads(readFileSync(f, "utf-8")).map(line => `${relative(ROOT, f)}:${line}`));
     expect(hits, "read these through test/helpers/user-settings.ts").toEqual([]);
   });
 
@@ -272,6 +274,25 @@ describe("#2792: no test reads a machine settings scope except through the helpe
       ['const c = homePath(".claude");\nreadFileSync(join(c, "settings.json"));', [2]],
     ];
     for (const [src, lines] of missed) expect(homeSettingsReads(src), src).toEqual(lines);
+    // #2798 review, round 2: a settings name held in a variable or a parameter,
+    // a single-string or slash-split `homePath`, and a path through `..`.
+    const named: [string, number[]][] = [
+      ['const f = "settings.json";\nreadFileSync(join(homedir(), ".claude", f));', [2]],
+      ['function r(f: string) { return readFileSync(join(homedir(), ".claude", f)); }', [1]],
+      ['const f = "/.claude/settings.json";\nconst p = homedir() + f;', [2]],
+      ['const g = (x: string) => homedir() + "/.claude/" + x;', [1]],
+      ["const g = (x: string) => `${homedir()}/.claude/${x}`;", [1]],
+      ['readFileSync(homePath(".claude/settings.json"));', [1]],
+      ['readFileSync(homePath(".claude/", "settings.json"));', [1]],
+      ['join(homedir(), ".claude", "x", "..", "settings.json");', [1]],
+      ['const d = join(homedir(), ".claude");\nconst f = "settings.local.json";\nreadFileSync(join(d, f));', [3]],
+      // One name declared twice reads as unknown, and the scan still ends.
+      ['function a() { const f = "x.json"; }\nfunction b() { const f = "settings.json"; return join(homedir(), ".claude", f); }', [2]],
+    ];
+    for (const [src, lines] of named) expect(homeSettingsReads(src), src).toEqual(lines);
+    // An unreadable name outside ~/.claude, and ~/.claude itself, are not settings files.
+    expect(homeSettingsReads('const g = (x: string) => join(homedir(), ".pai", x);')).toEqual([]);
+    expect(homeSettingsReads('const d = join(homedir(), ".claude");')).toEqual([]);
     // An assertion comparing to home, a home path that is not a settings file,
     // and a command string naming one are not reads.
     expect(homeSettingsReads("expect(x).toBe(homedir());\nexpect(y).not.toEqual(process.env.HOME);")).toEqual([]);
@@ -287,8 +308,16 @@ describe("#2792: no test reads a machine settings scope except through the helpe
 
   test("homePath names a path under home, never home itself or a settings file", () => {
     expect(() => homePath()).toThrow();
-    expect(() => homePath(".claude", "settings.json")).toThrow();
-    expect(() => homePath(".claude", "settings.local.json")).toThrow();
+    // However the path is split or spelled (#2798 review, round 2).
+    const settings = [
+      [".claude", "settings.json"],
+      [".claude", "settings.local.json"],
+      [".claude/settings.json"],
+      [".claude/", "settings.json"],
+      [".claude", "x", "..", "settings.local.json"],
+      ["./.claude//settings.json"],
+    ];
+    for (const segments of settings) expect(() => homePath(...segments), segments.join(" | ")).toThrow();
     expect(homePath(".pai", "hooks").endsWith(join(".pai", "hooks"))).toBe(true);
   });
 

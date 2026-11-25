@@ -16,7 +16,7 @@
 
 import { readFileSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { join, posix } from "path";
 import ts from "typescript";
 import { readRegistrationScopes, settingsScopePaths, type ScopeReading } from "../../lib/hook-scopes";
 import { readEnvScopes, type EnvReading } from "../../lib/hook-target-tree";
@@ -223,17 +223,36 @@ export function liveUserSettingsMentions(needle: string): number | null {
   return settingsMentions(liveUserSettingsPath(), needle);
 }
 
-/** A path under the home directory that is not a settings file, such as `~/.pai/hooks`. */
+/**
+ * A path under the home directory that is not a settings file, such as
+ * `~/.pai/hooks`. The segments are joined and normalised before they are
+ * judged, so `".claude/settings.json"`, `".claude/", "settings.json"` and
+ * `".claude", "x", "..", "settings.json"` are all refused (#2798 review).
+ */
 export function homePath(...segments: string[]): string {
   if (segments.length === 0) throw new Error("homePath names a path under the home directory, never the directory itself");
-  if (segments[0] === ".claude" && /^settings(\.local)?\.json$/.test(segments[1] ?? "")) {
+  if (SETTINGS_PATH.test(normalisedTail(segments.join("/")))) {
     throw new Error("a settings file under ~/.claude is read through the settings readers above");
   }
   return join(homedir(), ...segments);
 }
 
+/** A path relative to home, normalised: no `.`, `..` or doubled `/`, and no leading `/`. */
+function normalisedTail(text: string): string {
+  return posix.normalize(`/${text}`).replace(/^\/+/, "");
+}
+
+/** A settings scope under home, as a normalised tail. */
+const SETTINGS_PATH = /^\.claude\/settings(\.local)?\.json$/;
+
 /** A settings file's name, as the tail of a path a source builds. */
 const SETTINGS_FILE = /(^|\/)settings(\.local)?\.json$/;
+
+/** A path's text past home, and whether any part of it could not be read. */
+interface Tail {
+  text: string;
+  unknown: boolean;
+}
 
 /** Calls that build a path rather than read one. */
 const PATH_BUILDERS = new Set(["join", "resolve"]);
@@ -252,10 +271,14 @@ const PATH_BUILDERS = new Set(["join", "resolve"]);
  *   builder and an assertion matcher. A function that takes home is one that
  *   reads under it; which ones read settings is not a list this can keep
  *   current, so it refuses them all and the helper offers live wrappers.
- * - **A home path ending at a settings file.** A `join` or `resolve`, a
- *   template literal, or a `+` concatenation, rooted at home or at a variable
- *   built from home, whose literal text ends in `settings.json` or
- *   `settings.local.json`, however the segments are split.
+ * - **A home path that is, or may be, a settings file.** A `join` or
+ *   `resolve`, `homePath`, a template literal, or a `+` concatenation, rooted
+ *   at home or at a variable built from home. Its text is resolved through
+ *   string literals and `const` bindings to them, and normalised. It is
+ *   refused when it ends in `settings.json` or `settings.local.json`, and when
+ *   it passes through `.claude` with any part the resolver cannot read: a
+ *   name held in a parameter could be the settings file (#2798 review, round
+ *   2, which found a name held in a variable read as nothing).
  *
  * "Home" is `homedir()`, `os.homedir()`, `process.env.HOME`, `homePath(...)`,
  * or a variable initialised from one of them. A call over planted directories
@@ -265,8 +288,10 @@ export function homeSettingsReads(source: string): number[] {
   const file = ts.createSourceFile("x.ts", source, ts.ScriptTarget.Latest, true);
   /** Variables holding the home directory itself. */
   const homeVars = new Set<string>();
-  /** Variables holding a path under it. */
-  const rootedVars = new Set<string>();
+  /** Variables holding a path under it, and that path's text past home as far as it could be read. */
+  const rootedVars = new Map<string, Tail>();
+  /** Variables bound to a string this can read. */
+  const textVars = new Map<string, string>();
   const unwrap = (n: ts.Node): ts.Node => {
     let e = n;
     while (ts.isNonNullExpression(e) || ts.isParenthesizedExpression(e) || ts.isAsExpression(e)) e = e.expression;
@@ -303,28 +328,79 @@ export function homeSettingsReads(source: string): number[] {
     if (ts.isElementAccessExpression(n)) return isEnv(n.expression) && literal(n.argumentExpression) === "HOME";
     return ts.isIdentifier(n) && homeVars.has(n.text);
   };
-  /** Home, or a path built under it. */
-  const isRooted = (raw: ts.Node): boolean => {
+  /** A string this can read: a literal, a template with no holes, a `+` of readable parts, or a variable bound to one. */
+  const textOf = (raw: ts.Node): string | null => {
     const n = unwrap(raw);
-    if (isHome(n)) return true;
-    if (ts.isIdentifier(n)) return rootedVars.has(n.text);
+    if (ts.isStringLiteralLike(n)) return n.text;
+    if (ts.isIdentifier(n)) return textVars.get(n.text) ?? null;
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const l = textOf(n.left);
+      const r = textOf(n.right);
+      return l === null || r === null ? null : l + r;
+    }
+    return null;
+  };
+  /** Text appended to a tail; an unreadable part marks it unknown. */
+  const extend = (t: Tail, part: string | null, sep: string): Tail =>
+    part === null ? { text: t.text, unknown: true } : { text: t.text + sep + part, unknown: t.unknown };
+  /** A path rooted at home, as its text past home, or null when it is not rooted there. */
+  const rootedTail = (raw: ts.Node): Tail | null => {
+    const n = unwrap(raw);
+    if (isHome(n)) return { text: "", unknown: false };
+    if (ts.isIdentifier(n)) return rootedVars.get(n.text) ?? null;
     if (ts.isCallExpression(n)) {
       const name = calleeName(n);
-      if (name === "homePath") return true;
-      return name !== null && PATH_BUILDERS.has(name) && n.arguments.length > 0 && isRooted(n.arguments[0]!);
+      const args = [...n.arguments];
+      if (name === "homePath") return args.reduce<Tail>((t, a) => extend(t, textOf(a), "/"), { text: "", unknown: false });
+      if (name === null || !PATH_BUILDERS.has(name) || args.length === 0) return null;
+      const base = rootedTail(args[0]!);
+      return base === null ? null : args.slice(1).reduce<Tail>((t, a) => extend(t, textOf(a), "/"), base);
     }
-    if (ts.isTemplateExpression(n)) return n.templateSpans.length > 0 && n.head.text === "" && isRooted(n.templateSpans[0]!.expression);
-    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken) return isRooted(n.left);
-    return false;
+    if (ts.isTemplateExpression(n)) {
+      if (n.head.text !== "" || n.templateSpans.length === 0) return null;
+      const base = rootedTail(n.templateSpans[0]!.expression);
+      if (base === null) return null;
+      return n.templateSpans.reduce<Tail>(
+        (t, sp, i) => extend(i === 0 ? t : extend(t, textOf(sp.expression), ""), sp.literal.text, ""),
+        base,
+      );
+    }
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const base = rootedTail(n.left);
+      return base === null ? null : extend(base, textOf(n.right), "");
+    }
+    return null;
   };
-  // To a fixed point, so a variable built from a variable built from home is rooted too.
+  /** Whether a rooted path is, or may be, a settings scope. */
+  const maySettings = (t: Tail): boolean => {
+    const tail = normalisedTail(t.text);
+    return SETTINGS_FILE.test(tail) || (t.unknown && /(^|\/)\.claude(\/|$)/.test(tail));
+  };
+  // To a fixed point, so a variable built from a variable built from home is
+  // rooted too. Bindings only ever gain information, so it ends: a name
+  // declared twice with two readings becomes unreadable once and stays so,
+  // rather than alternating between them (a scan of test/ never ended before
+  // this).
+  const conflicted = new Set<string>();
   for (let grew = true; grew; ) {
     grew = false;
     const collect = (n: ts.Node): void => {
       if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) {
         const name = n.name.text;
         if (!homeVars.has(name) && isHome(n.initializer)) { homeVars.add(name); grew = true; }
-        if (!rootedVars.has(name) && isRooted(n.initializer)) { rootedVars.add(name); grew = true; }
+        const text = textOf(n.initializer);
+        const hadText = textVars.get(name);
+        if (text !== null && hadText === undefined && !conflicted.has(`t:${name}`)) { textVars.set(name, text); grew = true; }
+        else if (hadText !== undefined && text !== hadText) { textVars.delete(name); conflicted.add(`t:${name}`); grew = true; }
+        const tail = rootedTail(n.initializer);
+        const had = rootedVars.get(name);
+        if (tail !== null && had === undefined) { rootedVars.set(name, tail); grew = true; }
+        else if (tail !== null && had !== undefined && !conflicted.has(`r:${name}`) && (had.text !== tail.text || had.unknown !== tail.unknown)) {
+          // Two readings of one name: keep the one that reaches furthest, and mark it unknown.
+          rootedVars.set(name, { text: had.text.length >= tail.text.length ? had.text : tail.text, unknown: true });
+          conflicted.add(`r:${name}`);
+          grew = true;
+        }
       }
       // `const { HOME } = process.env`, under any local name.
       if (ts.isVariableDeclaration(n) && ts.isObjectBindingPattern(n.name) && n.initializer && isEnv(unwrap(n.initializer))) {
@@ -332,7 +408,6 @@ export function homeSettingsReads(source: string): number[] {
           const key = el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : ts.isIdentifier(el.name) ? el.name.text : null;
           if (key === "HOME" && ts.isIdentifier(el.name) && !homeVars.has(el.name.text)) {
             homeVars.add(el.name.text);
-            rootedVars.add(el.name.text);
             grew = true;
           }
         }
@@ -350,16 +425,15 @@ export function homeSettingsReads(source: string): number[] {
     }
     return false;
   };
-  const endsAtSettings = (parts: (string | null)[]): boolean =>
-    SETTINGS_FILE.test(parts.filter((p): p is string => p !== null).join("/").replace(/\/+/g, "/"));
   const lines = new Set<number>();
   const flag = (n: ts.Node) => lines.add(file.getLineAndCharacterOfPosition(n.getStart()).line + 1);
   const visit = (n: ts.Node): void => {
     if (ts.isCallExpression(n)) {
       const name = calleeName(n);
       const args = [...n.arguments];
-      if (name !== null && PATH_BUILDERS.has(name)) {
-        if (args.length > 0 && isRooted(args[0]!) && endsAtSettings(args.slice(1).map(literal))) flag(n);
+      if (name !== null && (PATH_BUILDERS.has(name) || name === "homePath")) {
+        const tail = rootedTail(n);
+        if (tail !== null && maySettings(tail)) flag(n);
       } else if (!isMatcher(n)) {
         const handsHome = args.some(
           a =>
@@ -374,12 +448,9 @@ export function homeSettingsReads(source: string): number[] {
         if (handsHome) flag(n);
       }
     }
-    if (ts.isTemplateExpression(n) && isRooted(n)) {
-      if (endsAtSettings([n.templateSpans.map(sp => sp.literal.text).join("")])) flag(n);
-    }
-    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken && isRooted(n.left)) {
-      const right = unwrap(n.right);
-      if (endsAtSettings([literal(right)])) flag(n);
+    if (ts.isTemplateExpression(n) || (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken)) {
+      const tail = rootedTail(n);
+      if (tail !== null && maySettings(tail)) flag(n);
     }
     ts.forEachChild(n, visit);
   };
