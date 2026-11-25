@@ -732,8 +732,11 @@ describe("#1357: a blocking finding citing a line past the end of its file does 
     // with a space, word-split in two, must not be read as a counts path.
     const wrapper = readFileSync(join(import.meta.dir, "..", "scripts", "ai-review-findings.ts"), "utf-8");
     expect(wrapper).toContain(`readAiReviewLineCounts(process.env[AI_REVIEW_LINE_COUNTS_PATH_VAR])`);
-    // `populationOwed` since #1818 (CRC-N7), bound from the thread list like the gate.
-    expect(wrapper).toContain("process.exit(main(process.argv.slice(2), jury, suppress, citedLines, lineCounts, populationOwed));");
+    // `populationOwed` since #1818 (CRC-N7), and `findingsUnanswered` since #2832
+    // (CRC-B8), both bound from the thread list like the gate.
+    expect(wrapper).toContain(
+      "process.exit(main(process.argv.slice(2), jury, suppress, citedLines, lineCounts, populationOwed, findingsUnanswered));",
+    );
     expect(AI_REVIEW_LINE_COUNTS_PATH_VAR.length).toBeGreaterThan(0);
   });
 

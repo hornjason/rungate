@@ -76,8 +76,13 @@ import {
   AI_REVIEW_CHECKOUT_ROOT_VAR,
   AI_REVIEW_SNAPSHOT_ROUND_KEY,
 } from "./scaffold/ai-review-step";
-import type { AiReviewSuppressionGate, PopulationOwedReading, PopulationThread } from "./scaffold/ai-review-findings";
-import { populationOwed } from "./scaffold/ai-review-findings";
+import type {
+  AiReviewSuppressionGate,
+  FindingsUnansweredReading,
+  PopulationOwedReading,
+  PopulationThread,
+} from "./scaffold/ai-review-findings";
+import { findingsUnanswered, populationOwed } from "./scaffold/ai-review-findings";
 
 /** What the gate reads, so a test can drive it without a filesystem. */
 export interface SuppressionInputs {
@@ -370,9 +375,13 @@ export function productionSuppression(
   linesOf: (file: string) => readonly string[] | null;
   /** CRC-N7 (#1818): the class threads that still owe a population, from the same list; `null` when none is plumbed. */
   populationOwed: PopulationOwedReading | null;
+  /** CRC-B8 (#2832): the finding threads no person answered, from the same list; `null` when none is plumbed. */
+  findingsUnanswered: FindingsUnansweredReading | null;
 } {
   const reader = checkoutLineReader(root);
   const owed = threadsPath === undefined || threadsPath === "" ? null : populationOwedFromThreads(readOrNull(threadsPath));
+  const unanswered =
+    threadsPath === undefined || threadsPath === "" ? null : findingsUnansweredFromThreads(readOrNull(threadsPath));
   const gate =
     threadsPath === undefined || threadsPath === ""
       ? null
@@ -381,7 +390,7 @@ export function productionSuppression(
           lineTextFor: reader.lineTextFor,
           anchorOccurrences: reader.occurrencesOf,
         });
-  return { gate, lineTextFor: reader.lineTextFor, linesOf: reader.linesOf, populationOwed: owed };
+  return { gate, lineTextFor: reader.lineTextFor, linesOf: reader.linesOf, populationOwed: owed, findingsUnanswered: unanswered };
 }
 
 /**
@@ -394,6 +403,24 @@ export function productionSuppression(
  * UNMEASURED rather than owing.
  */
 export function populationOwedFromThreads(text: string | null): PopulationOwedReading {
+  const carried = carriedThreads(text);
+  return carried.status === "MEASURED" ? populationOwed(carried.threads) : carried;
+}
+
+/**
+ * CRC-B8 (#2832): the unanswered reading, from the same bytes and through the
+ * same parse as the owed reading above, so the two cannot read one list two
+ * ways.
+ */
+export function findingsUnansweredFromThreads(text: string | null): FindingsUnansweredReading {
+  const carried = carriedThreads(text);
+  return carried.status === "MEASURED" ? findingsUnanswered(carried.threads) : carried;
+}
+
+/** The carry step's thread list as `PopulationThread`s, or why it could not be read. */
+function carriedThreads(
+  text: string | null,
+): { status: "MEASURED"; threads: PopulationThread[] } | { status: "UNMEASURED"; reason: string } {
   const reading = threadReadingFromJson(text);
   if (reading.status !== "MEASURED") return { status: "UNMEASURED", reason: reading.reason };
   const raw = JSON.parse(text as string) as unknown[];
@@ -408,7 +435,7 @@ export function populationOwedFromThreads(text: string | null): PopulationOwedRe
       : undefined;
     threads.push({ body: node.body, replies });
   }
-  return populationOwed(threads);
+  return { status: "MEASURED", threads };
 }
 
 /**
