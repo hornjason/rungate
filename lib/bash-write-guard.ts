@@ -3544,8 +3544,11 @@ export function bodyTargets(body: string): BodyTargets {
   const lits = readLiterals(body);
   // An unterminated literal means every boundary after it is a guess.
   if (!lits) return { targets: [], fragments: [], protectedLiterals: [], unplaceable: [], unreadable: true };
-  /** Every literal span, so the backward walk can step over one. */
-  const spans: [number, number][] = lits.map(l => [l.start, l.end]);
+  // The literal reader only nominates; where a literal stands is read over
+  // every reading of the code, comments included (#2772). The readings are
+  // built at the first carrying literal, since most bodies have none.
+  let read: readonly CodeView[] | null = null;
+  const views = (): readonly CodeView[] => (read ??= READINGS.map(reading => codeMask(body, reading)));
   // Read once per body rather than once per literal: each call realpaths up
   // to six trees, and a body has as many literals as it likes.
   const live = protectedTrees();
@@ -3554,7 +3557,7 @@ export function bodyTargets(body: string): BodyTargets {
     if (where === 'protected') protectedLiterals.push(value);
     if (where === 'unplaceable') unplaceable.push(value);
     if (ALL_PROTECTED.some(p => value.toLowerCase().includes(p.toLowerCase()))) {
-      const pos = standsAlone(body, i, j) ? inWritePosition(body, i, spans) : UNPROVEN;
+      const pos = positionInEveryReading(body, i, j, views());
       if (pos === 'destination') targets.push(value);
       // `argument` is deliberately in neither list — see `inWritePosition`.
       else if (pos === 'unproven') fragments.push(value);
@@ -3761,15 +3764,34 @@ type Position = 'destination' | 'argument' | 'unproven';
 const IS_DESTINATION: Position = 'destination';
 const UNPROVEN: Position = 'unproven';
 
-function inWritePosition(body: string, start: number, spans: [number, number][]): Position {
+/**
+ * Where the literal spanning `[start, end]` stands under every reading of the
+ * body, or `unproven` when two readings disagree (#2772).
+ *
+ * The walks used to read the raw text with only quoted spans stepped over, so
+ * a comma in a Python `#` comment counted as an argument separator while the
+ * identity readers in `calleeShown` read the same comment as nothing. Each
+ * reading here is `codeMask`'s, the one those readers use. A reading that
+ * does not see a literal at these offsets, or whose quotes never close,
+ * places nothing.
+ */
+function positionInEveryReading(body: string, start: number, end: number, views: readonly CodeView[]): Position {
+  const answers = new Set(views.map(view => {
+    if (!view.balanced || !view.literals.some(([open, close]) => open === start && close === end)) return UNPROVEN;
+    return standsAlone(body, start, end, view.mask) ? inWritePosition(body, start, view.mask, views) : UNPROVEN;
+  }));
+  return answers.size === 1 ? [...answers][0] : UNPROVEN;
+}
+
+/** The literal's argument position, read back over one reading's code: literals and comments are stepped over. */
+function inWritePosition(body: string, start: number, mask: Uint8Array, views: readonly CodeView[]): Position {
   let i = start - 1;
   let depth = 0;
   /** Depth-0 commas between the opener and the literal: its argument index. */
   let index = 0;
   while (i >= 0) {
-    const span = spans.find(([s, e]) => i >= s && i <= e);
-    if (span) {
-      i = span[0] - 1;
+    if (mask[i] !== 0) {
+      i--;
       continue;
     }
     const c = body[i];
@@ -3777,8 +3799,8 @@ function inWritePosition(body: string, start: number, spans: [number, number][])
       depth++;
     } else if (c === '(') {
       if (depth === 0) {
-        const callee = calleeBefore(body, i);
-        if (!isWriteCallee(callee)) return UNPROVEN;
+        const callee = calleeBefore(body, i, mask);
+        if (!isWriteCallee(callee) || !calleeShown(body, i, views)) return UNPROVEN;
         return index === destIndexOf(callee) ? IS_DESTINATION : 'argument';
       }
       depth--;
@@ -3805,13 +3827,549 @@ function inWritePosition(body: string, start: number, spans: [number, number][])
   return UNPROVEN;
 }
 
-/** The dotted name immediately in front of an opening parenthesis. */
-function calleeBefore(body: string, openIndex: number): string {
+/** The dotted name immediately in front of an opening parenthesis; given a reading, a comment before the paren is stepped over. */
+function calleeBefore(body: string, openIndex: number, mask?: Uint8Array): string {
   let i = openIndex - 1;
-  while (i >= 0 && WHITESPACE.has(body[i])) i--;
+  while (i >= 0 && (WHITESPACE.has(body[i]) || mask?.[i] === 2)) i--;
   let end = i + 1;
-  while (i >= 0 && /[A-Za-z0-9_$.]/.test(body[i])) i--;
+  while (i >= 0 && /[A-Za-z0-9_$.]/.test(body[i]) && (!mask || mask[i] === 0)) i--;
   return body.slice(i + 1, end);
+}
+
+/**
+ * Is the write function called at `openIndex` the module's own, under EVERY
+ * reading of the body (#2705, #2731)?
+ *
+ * `isWriteCallee` answers by spelling, so a body that defines or binds its own
+ * `copy` had its scratch literal read as the write's target while its real
+ * write went elsewhere. #2726 matched binding forms one at a time and each
+ * review round found another. This reads the other way round, and fails
+ * closed: the identity holds only when every place the code names the function
+ * or its module is a position on a short list, and anything else — a binding
+ * form nobody listed included — leaves it unproven.
+ *
+ * - **The body must be readable.** A quote left open, a backtick, an escaped
+ *   quote, a triple quote, or an f-string with a `{` puts code where the
+ *   literal reader sees a string, so any of them ends it. The reader pairs
+ *   `"""` as `""` then `"…`, so an f-prefix three quotes back is not seen
+ *   (review of #2756); a triple quote is refused outright.
+ * - **Every name is spelled the way it is searched for.** Code outside
+ *   literals and comments holds no backslash but a line continuation, and no
+ *   character that Unicode normalization turns into a letter, digit, `_` or
+ *   `$`: JavaScript reads `\u0077riteFileSync` as `writeFileSync`, and
+ *   Python folds fullwidth `ｃｏｐｙ` to `copy`, so either would hide a
+ *   definition from a search for the name (security review of #2756). Any
+ *   other character, an em-dash in prose included, is not part of a name.
+ * - **Nothing binds by string or scope.** `globals`, `vars`, `setattr`,
+ *   `exec`, `builtins`, `globalThis`, a JavaScript `with`, a star import,
+ *   `sys.modules`, `getattr`, `Object.assign`, any dunder name in code or
+ *   in a literal (`shutil.__setattr__`, `__import__`) and their kind bind
+ *   names the code never spells (`DYNAMIC_BINDING`).
+ * - **No attribute outside a short list is reached** (`attributeAllowed`),
+ *   after a dot or as a literal key, which JavaScript reads as an attribute.
+ *   `sys._getframe().f_builtins['open'] = f` rebinds `open` by an item
+ *   assignment, and a generator's `gi_frame` reaches the same dict with no
+ *   import at all (#2772).
+ * - **No attribute is assigned**, by `=`, an augmented or logical operator
+ *   (`&&=`, `??=`), an annotation, a loop target, `as`, or a destructuring
+ *   pattern: `shutil.copy = f`, and as surely `os.rename = f`, which
+ *   `shutil.move` calls inside the module.
+ * - **Every import is on a short list** (`PY_MODULES`, `JS_MODULES`), and
+ *   no Python import binds an alias. A module outside it can bind anything
+ *   when it loads or when it is called: `vm` runs code from a string,
+ *   `types` and `importlib` reach the module table, and `import sys as s`
+ *   spells `sys.modules` as `s.modules`. Review round 3 of #2756 found the
+ *   third of these after two rounds of naming such mechanisms one at a time,
+ *   so the list is of what is allowed, not of what is not (AGENTS.md rule 5).
+ * - **The name is shown.** A dotted callee needs a module receiver that names
+ *   the function (`MODULE_WRITES`), imported as itself and named nowhere
+ *   else but as a receiver. A bare one may be imported only from the module
+ *   that defines it, and every other place the code names it must be a call
+ *   that is not a definition. A bare name nothing imports is a builtin
+ *   (`open`) or throws when called, and either way writes nowhere else.
+ *
+ * The four readings are `codeMask`'s, because a body's language is not known
+ * here: each reads `#` and `/` its own way, and a reading that disagrees is
+ * one in which the identity is not shown. The literal's position is read over
+ * the same four (`positionInEveryReading`), so no reader here walks text the
+ * others mask (#2772).
+ *
+ * Not read: what a module on the allowed list does when it loads is trusted,
+ * and a `python3` without `-I` imports a planted `shutil.py` from the working
+ * directory. Both are what the body loads, not what it says.
+ */
+function calleeShown(body: string, openIndex: number, views: readonly CodeView[]): boolean {
+  if (/[`]|\\['"]|'''|"""/.test(body)) return false;
+  return views.every(view => calleeShownIn(body, openIndex, view));
+}
+
+/**
+ * Python modules, and the write functions each defines that a body may call.
+ * Read only through `moduleWrites`: a receiver comes from the body, and an
+ * inherited key such as `constructor` is no module (review of #2756).
+ */
+const MODULE_WRITES: Readonly<Record<string, readonly string[]>> = {
+  shutil: ['copy', 'copyfile', 'copytree', 'move', 'rmtree'],
+  os: ['remove', 'rename', 'replace', 'unlink', 'rmdir'],
+  io: ['open'],
+  json: ['dump'],
+};
+
+/** The write functions a Python module defines, or `null` when the name is not one of `MODULE_WRITES`' own keys. */
+function moduleWrites(mod: string): readonly string[] | null {
+  return Object.hasOwn(MODULE_WRITES, mod) ? MODULE_WRITES[mod] : null;
+}
+/** The JavaScript module, reached by `import` or `require` under either specifier. */
+const FS_WRITES: readonly string[] = ['writeFileSync', 'appendFileSync', 'createWriteStream', 'copyFileSync', 'renameSync', 'unlinkSync', 'rmSync', 'truncateSync'];
+const FS_SPECIFIERS = new Set(['fs', 'node:fs']);
+
+/** The modules a body may import, Python and JavaScript, and still be read. */
+const PY_MODULES = new Set(['os', 'os.path', 'shutil', 'json', 'io', 'sys', 'pathlib', 'time', 'datetime', 're', 'tempfile', 'glob', 'hashlib', 'textwrap', 'math', 'string', 'random', 'collections', 'itertools']);
+const JS_MODULES = new Set([...FS_SPECIFIERS, 'path', 'node:path']);
+
+/** Names that bind, or reach a binding, without the code spelling the name bound. */
+const DYNAMIC_BINDING =
+  /\b(?:globals|vars|locals|setattr|delattr|getattr|exec|eval|builtins|importlib|globalThis|global|Reflect|defineProperty|defineProperties|setPrototypeOf|prototype|constructor|Function)\b|(?<!\bfrom[ \t]+[\w.]+[ \t]+)\bimport\s*\(|\b__\w+__\b|\bObject\s*\.\s*assign\b|\bwith\s*\(|\bimport\s*\*(?!\s*as\b)|\bsys\s*\.\s*(?:modules|path|meta_path|path_hooks)\b/;
+
+/**
+ * The attribute names a body may reach and still be read (#2772): the write
+ * functions `MODULE_WRITES` and `FS_WRITES` name, and the plain names below,
+ * which fixtures use and which reach no scope, frame or loader. An environment variable's name (`os.environ['RG']`,
+ * `process.env.RG`) is all capitals, and no attribute that reaches a scope,
+ * a frame or a loader is.
+ *
+ * `DYNAMIC_BINDING` lists mechanisms one at a time, and each review round of
+ * #2756 found the next: `vm`, `module.constructor`, `import sys as s`, and
+ * then `sys._getframe().f_builtins['open'] = …`, an item assignment into the
+ * builtins dict. A list of what may be reached refuses `f_builtins`,
+ * `f_globals`, `gi_frame` and `_getframe` without naming them. Taking
+ * `sys` off `PY_MODULES` instead would not have: a generator's frame
+ * reaches the same dict with no import at all.
+ */
+const PLAIN_ATTRIBUTES = new Set(['environ', 'env', 'get', 'argv', 'platform', 'flags', 'dev_mode', 'path', 'join', 'basename', 'dirname', 'exists', 'expanduser', 'expandvars', 'makedirs', 'mkdirSync', 'write', 'read', 'close', 'dumps', 'loads', 'stringify', 'parse']);
+
+/** May a body reach this attribute name? */
+function attributeAllowed(name: string): boolean {
+  if (/^[A-Z][A-Z0-9_]*$/.test(name) || PLAIN_ATTRIBUTES.has(name) || FS_WRITES.includes(name)) return true;
+  return Object.values(MODULE_WRITES).some(writes => writes.includes(name));
+}
+
+/**
+ * Is every attribute the code reaches one `attributeAllowed` names? An
+ * attribute follows a dot, or is a literal key after an operand, which
+ * JavaScript reads as an attribute: `module['require']` is `module.require`.
+ */
+function attributesShown(code: string, body: string, view: CodeView): boolean {
+  for (const m of code.matchAll(/\.(?:\s|\\\n)*([A-Za-z_$][\w$]*)/g)) if (!attributeAllowed(m[1])) return false;
+  for (const [open, close] of view.literals) {
+    const key = body.slice(open + 1, close);
+    if (!/^[A-Za-z_$][\w$]*$/.test(key)) continue;
+    const bracket = prevCode(code, open - 1);
+    if (code[bracket] !== '[' || code[nextCode(code, close + 1)] !== ']') continue;
+    const operand = prevCode(code, bracket - 1);
+    if (operand < 0 || !(isIdentChar(code[operand]) || code[operand] === ')' || code[operand] === ']')) continue;
+    if (!attributeAllowed(key)) return false;
+  }
+  return true;
+}
+
+/** A body as one reading's code: every literal and comment offset blanked, newlines kept. */
+function codeOf(body: string, view: CodeView): string {
+  let code = '';
+  for (let k = 0; k < body.length; k++) code += view.mask[k] === 0 || body[k] === '\n' ? body[k] : ' ';
+  return code;
+}
+
+/**
+ * Does every reading of the body import only allowed modules? The import
+ * reader on its own, exported so a test can assert on it (#2772).
+ */
+export function importsAllowedInEveryReading(body: string): boolean {
+  return READINGS.every(reading => {
+    const view = codeMask(body, reading);
+    return importsAllowed(codeOf(body, view), body, view);
+  });
+}
+
+/** Keywords a call may follow and still be a call rather than a definition. */
+const CALL_KEYWORDS = new Set(['return', 'await', 'yield', 'not', 'and', 'or', 'in', 'is', 'if', 'elif', 'else', 'while', 'assert', 'with', 'throw', 'typeof', 'void', 'case', 'do', 'print']);
+
+const isIdentChar = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9_$]/.test(c);
+
+function calleeShownIn(body: string, openIndex: number, view: CodeView): boolean {
+  if (!view.balanced) return false;
+  // f'{…}' runs code the mask reads as a string.
+  for (const [open, close] of view.literals) {
+    if (/(?:^|[^A-Za-z0-9_$])(?:[fF][rRbB]?|[rRbB][fF])$/.test(body.slice(Math.max(0, open - 3), open)) && body.slice(open, close).includes('{')) return false;
+  }
+  const code = codeOf(body, view);
+  if (/\\(?!\n)/.test(code)) return false;
+  for (const ch of code) {
+    if (ch > '\x7e' && ch.normalize('NFKC') !== ch && /[A-Za-z0-9_$]/.test(ch.normalize('NFKC'))) return false;
+  }
+  // A dunder named by string reaches what a dunder named in code does.
+  if (view.literals.some(([open, close]) => /__\w+__/.test(body.slice(open + 1, close)))) return false;
+  if (DYNAMIC_BINDING.test(code)) return false;
+  if (!attributesShown(code, body, view)) return false;
+  if (assignsAttribute(code)) return false;
+  if (!importsAllowed(code, body, view)) return false;
+
+  // The code view blanks a literal's quotes with its contents, so a literal
+  // is found by stepping over whitespace in the body itself.
+  const literalAt: LiteralAt = (at: number) => {
+    while (at < body.length && WHITESPACE.has(body[at])) at++;
+    const lit = view.literals.find(([open]) => open === at);
+    return lit ? { value: body.slice(lit[0] + 1, lit[1]), close: lit[1] } : null;
+  };
+  /** Is the text from `at` `require(<fs>)`, and where does it end? */
+  const requireFs = (at: number): number => {
+    const m = /^require\s*\(/.exec(code.slice(at));
+    if (!m || isIdentChar(code[at - 1]) || code[at - 1] === '.') return -1;
+    const lit = literalAt(at + m[0].length);
+    if (lit === null || !FS_SPECIFIERS.has(lit.value)) return -1;
+    const close = /^\s*\)/.exec(code.slice(lit.close + 1));
+    return close ? lit.close + 1 + close[0].length : -1;
+  };
+
+  // The callee, read back from the paren across whatever stands around a dot.
+  let j = prevCode(code, openIndex - 1);
+  const nameEnd = j + 1;
+  while (j >= 0 && isIdentChar(code[j])) j--;
+  const name = code.slice(j + 1, nameEnd);
+  if (!name) return false;
+  const dot = prevCode(code, j);
+  let receiver: 'none' | 'require' | string = 'none';
+  if (code[dot] === '.') {
+    const r = prevCode(code, dot - 1);
+    if (code[r] === ')') {
+      // Only require('fs') itself: find its start and read it forwards.
+      const start = code.lastIndexOf('require', r);
+      if (start < 0 || requireFs(start) !== r + 1) return false;
+      receiver = 'require';
+    } else if (isIdentChar(code[r])) {
+      let q = r;
+      while (q >= 0 && isIdentChar(code[q])) q--;
+      if (code[prevCode(code, q)] === '.') return false; // a deeper chain names no module here
+      receiver = code.slice(q + 1, r + 1);
+    } else return false;
+  }
+
+  // Every module name and `require` the code spells must be shown, whichever
+  // one the call goes through: a module calls the others inside itself.
+  for (const mod of [...Object.keys(MODULE_WRITES), 'fs', 'require']) {
+    for (const at of occurrences(code, mod)) if (!moduleNameShown(code, at, mod, requireFs, literalAt)) return false;
+  }
+
+  if (receiver === 'require') return FS_WRITES.includes(name) && requireTrusted(code, literalAt);
+  if (receiver !== 'none') {
+    const writes = receiver === 'fs' ? FS_WRITES : moduleWrites(receiver);
+    if (!writes || !writes.includes(name)) return false;
+    if (!occurrences(code, receiver).some(at => importsModule(code, at, receiver, requireFs, literalAt))) return false;
+    return receiver !== 'fs' || requireTrusted(code, literalAt);
+  }
+
+  // A bare name: imported, if at all, from the module that defines it, and
+  // otherwise only ever called.
+  for (const at of occurrences(code, name)) {
+    if (code[prevCode(code, at - 1)] === '.') continue; // another object's attribute, not this name
+    if (isCall(code, at, name.length)) continue;
+    if (importedFrom(code, at, name, requireFs, literalAt) === null) return false;
+  }
+  return requireTrusted(code, literalAt);
+}
+
+/** The index of the last code character at or before `i`, stepping over whitespace and line continuations. */
+function prevCode(code: string, i: number): number {
+  while (i >= 0 && (WHITESPACE.has(code[i]) || (code[i] === '\\' && code[i + 1] === '\n'))) i--;
+  return i;
+}
+
+/** The index of the first code character at or after `i`. */
+function nextCode(code: string, i: number): number {
+  while (i < code.length && (WHITESPACE.has(code[i]) || (code[i] === '\\' && code[i + 1] === '\n'))) i++;
+  return i;
+}
+
+/** Every offset where `name` stands as a whole identifier. */
+function occurrences(code: string, name: string): number[] {
+  const out: number[] = [];
+  for (let at = code.indexOf(name); at !== -1; at = code.indexOf(name, at + 1)) {
+    if (!isIdentChar(code[at - 1]) && !isIdentChar(code[at + name.length])) out.push(at);
+  }
+  return out;
+}
+
+/** The identifier ending at `end` (inclusive), or ''. */
+function wordEndingAt(code: string, end: number): string {
+  let q = end;
+  while (q >= 0 && isIdentChar(code[q])) q--;
+  return code.slice(q + 1, end + 1);
+}
+
+/** Is the name at `at` called, and not defined: `copy(…)`, never `def copy(`, `function copy(` or `copy(…) {`. */
+function isCall(code: string, at: number, len: number): boolean {
+  const open = nextCode(code, at + len);
+  if (code[open] !== '(') return false;
+  let p = at - 1;
+  while (p >= 0 && (code[p] === ' ' || code[p] === '\t' || code[p] === '\r' || (code[p] === '\n' && code[p - 1] === '\\'))) p -= code[p] === '\n' ? 2 : 1;
+  if (p >= 0 && !';,(=[{:!&|?+-*/%<>^~\n'.includes(code[p])) {
+    if (!isIdentChar(code[p]) || !CALL_KEYWORDS.has(wordEndingAt(code, p))) return false;
+  }
+  let depth = 0;
+  let k = open;
+  for (; k < code.length; k++) {
+    if (code[k] === '(') depth++;
+    else if (code[k] === ')' && --depth === 0) break;
+  }
+  return code[nextCode(code, k + 1)] !== '{';
+}
+
+/**
+ * `t` with every subscript group blanked: a `[` that follows a name, `)` or
+ * `]` opens an index, not a pattern, so `cfg[args.kind]` keeps no attribute
+ * inside it for the pattern check to find (review round 3 of #2756).
+ */
+/** Words after which `[` opens a pattern or a list, never an index. */
+const NOT_AN_OPERAND = new Set(['else', 'do', 'return', 'typeof', 'void', 'await', 'yield', 'in', 'of', 'case', 'new', 'delete', 'throw', 'instanceof', 'not', 'and', 'or', 'is', 'if', 'elif', 'while', 'assert', 'with', 'print', 'lambda', 'from', 'import', 'as', 'export', 'default', 'extends']);
+
+/**
+ * Does the `[` at `k` open an index? Only after a name that is not a keyword.
+ * A `)` or `]` before it may close an `if (…)` header or a list, so either
+ * reads as a pattern, the refusing direction (fourth security review of #2756).
+ */
+function opensIndex(t: string, k: number): boolean {
+  const p = prevCode(t, k - 1);
+  return p >= 0 && isIdentChar(t[p]) && !NOT_AN_OPERAND.has(wordEndingAt(t, p));
+}
+
+function withoutSubscripts(t: string): string {
+  let out = t;
+  for (let k = 0; k < out.length; k++) {
+    if (out[k] !== '[') continue;
+    if (!opensIndex(out, k)) continue;
+    let depth = 0;
+    let e = k;
+    for (; e < out.length; e++) {
+      if (out[e] === '[') depth++;
+      else if (out[e] === ']' && --depth === 0) break;
+    }
+    out = out.slice(0, k + 1) + ' '.repeat(Math.max(0, e - k - 1)) + out.slice(e);
+  }
+  return out;
+}
+
+/** Does any assignment, loop or `as` target an attribute? `os.environ['X'] = …` assigns an item. */
+function assignsAttribute(code: string): boolean {
+  const TARGET_ATTR = /\.\s*[A-Za-z_$][\w$]*\s*(?=$|[,\])])/;
+  for (let k = 0; k < code.length; k++) {
+    if (code[k] !== '=' || '=!'.includes(code[k - 1] ?? '') || '=>'.includes(code[k + 1] ?? '')) continue;
+    // `<=` and `>=` compare; `<<=` and `>>=` assign.
+    if ((code[k - 1] === '<' || code[k - 1] === '>') && code[k - 2] !== code[k - 1]) continue;
+    if (code[k - 1] === ':') continue; // a walrus binds a name, never an attribute
+    // An augmented or logical operator sits between the target and `=`, and
+    // the target may end a line or more above it: `fs.writeFileSync\n= f` and
+    // Python's `shutil.copy \\\n= f` (third security review of #2756).
+    const op = /(?:\*\*|\/\/|<<|>>>|>>|&&|\|\||\?\?|[-+*/%&|^@])$/.exec(code.slice(Math.max(0, k - 3), k))?.[0].length ?? 0;
+    const end = prevCode(code, k - op - 1);
+    // Back to the statement's start: a newline ends it only outside brackets
+    // and when no continuation joins it, so `(fs.writeFileSync\n) = f` is read whole.
+    let start = end;
+    let depth = 0;
+    for (; start >= 0; start--) {
+      const c = code[start];
+      if (c === ')' || c === ']') depth++;
+      else if (c === '(' || c === '[') {
+        if (depth === 0) break;
+        depth--;
+      } else if (depth === 0 && (c === ';' || c === '{' || c === '}')) break;
+      else if (depth === 0 && c === '\n' && code[start - 1] !== '\\') break;
+    }
+    const target = code.slice(start + 1, end + 1);
+    if (TARGET_ATTR.test(withoutSubscripts(target).trimEnd())) return true;
+    // An annotated assignment: an attribute chain where a statement can start,
+    // then `:`. `if x.y:` is not one (review round 3 of #2756).
+    if (/(?:^|:)\s*[A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)+\s*:(?![:=])/.test(target)) return true;
+    if (/\.\s*[A-Za-z_$][\w$]*\s*$/.test(target)) return true;
+  }
+  // A destructuring pattern: `({ w: fs.writeFileSync } = …)`, `[a.b] = …`.
+  // The statement walk above stops at its `}`, so the pattern is read here.
+  for (let k = 0; k < code.length; k++) {
+    if (code[k] !== '}' && code[k] !== ']') continue;
+    const eq = nextCode(code, k + 1);
+    if (code[eq] !== '=' || code[eq + 1] === '=' || code[eq + 1] === '>') continue;
+    const open = code[k] === '}' ? '{' : '[';
+    let depth = 0;
+    let j = k;
+    for (; j >= 0; j--) {
+      if (code[j] === code[k]) depth++;
+      else if (code[j] === open && --depth === 0) break;
+    }
+    // A subscript follows an expression; a pattern starts one. `cfg[args.kind] = x`
+    // assigns an item (review round 3 of #2756).
+    if (opensIndex(code, j)) continue;
+    if (/\.\s*[A-Za-z_$]/.test(code.slice(j + 1, k))) return true;
+  }
+  // An annotated attribute where a statement can start, read over the whole
+  // code rather than back from an `=` (fourth security review of #2756).
+  if (/(?:^|[\n;:])[ \t]*[A-Za-z_$][\w$]*(?:[ \t]*\.[ \t]*[A-Za-z_$][\w$]*)+[ \t]*:(?![:=])/.test(code)) return true;
+  for (const m of code.matchAll(/\bfor\s*\(?([^\n]*?)\b(?:in|of)\b/g)) if (/\.\s*[A-Za-z_$]/.test(m[1])) return true;
+  return /\bas\s+[A-Za-z_$][\w$]*\s*\./.test(code);
+}
+
+type RequireFs = (at: number) => number;
+type LiteralAt = (at: number) => { value: string; close: number } | null;
+
+/**
+ * Is every module the body imports or requires on the allowed list, with no
+ * Python alias? A literal the code view blanked is read from the body.
+ */
+function importsAllowed(code: string, body: string, view: CodeView): boolean {
+  const literalAfter = (at: number): string | null => {
+    while (at < body.length && WHITESPACE.has(body[at])) at++;
+    const lit = view.literals.find(([open]) => open === at);
+    return lit ? body.slice(lit[0] + 1, lit[1]) : null;
+  };
+  /** `require(<lit>)` exactly: one literal, then the closing paren. */
+  const onlyLiteral = (at: number): string | null => {
+    while (at < body.length && WHITESPACE.has(body[at])) at++;
+    const lit = view.literals.find(([open]) => open === at);
+    if (!lit || code[nextCode(code, lit[1] + 1)] !== ')') return null;
+    return body.slice(lit[0] + 1, lit[1]);
+  };
+  // JavaScript: `require(<lit>)`, `import … from <lit>`, and a bare `import <lit>`.
+  for (const m of code.matchAll(/(?<![\w$])require\s*\(/g)) {
+    // `module.require('vm')` loads a module as surely as `require('vm')` (#2772).
+    if (code[prevCode(code, (m.index ?? 0) - 1)] === '.') return false;
+    // `require('path'.replace('path', 'vm'))` starts with an allowed name.
+    const v = onlyLiteral((m.index ?? 0) + m[0].length);
+    if (v === null || !JS_MODULES.has(v)) return false;
+  }
+  for (const m of code.matchAll(/\bfrom\b(?=\s*$|\s*;|\s*\n|\s+)/g)) {
+    const v = literalAfter((m.index ?? 0) + m[0].length);
+    if (v !== null && !JS_MODULES.has(v)) return false;
+  }
+  for (const m of code.matchAll(/(?:^|[;\n])\s*import(?=\s)/g)) {
+    const v = literalAfter((m.index ?? 0) + m[0].length);
+    if (v !== null && !JS_MODULES.has(v)) return false;
+  }
+  // Python: `import a, b.c` and `from a import …`, one statement per line or
+  // `;`, once continuations are joined and a parenthesised list is one line.
+  // A statement that opens like an import and matches neither form is refused,
+  // never skipped (fourth security review of #2756).
+  const joined = code.replace(/\\\n/g, ' ').replace(/\bimport\s*\(([^)]*)\)/g, (_m, list: string) => `import ${list.replace(/\n/g, ' ')}`);
+  for (const stmt of joined.split(/[\n;]/)) {
+    const opensImport = /^\s*(?:import|from)\b/.test(stmt);
+    const imp = /^\s*import\s+([A-Za-z_][\w., \t]*)$/.exec(stmt);
+    // `import fs from 'fs'` is JavaScript, read above.
+    if (imp && !/\bfrom\b/.test(imp[1])) {
+      for (const name of imp[1].split(',')) {
+        const n = name.trim();
+        if (/\s/.test(n) || !PY_MODULES.has(n)) return false; // `x as y` carries a space
+      }
+    }
+    const from = /^\s*from\s+([A-Za-z_][\w.]*)\s+import\b(.*)$/.exec(stmt);
+    // `from sys import modules` reaches the module table with no `sys.` spelled.
+    if (from && (!PY_MODULES.has(from[1]) || from[1] === 'sys' || /\bas\b/.test(from[2]))) return false;
+    const jsImport = /^\s*import\b/.test(stmt) && (/\bfrom\b/.test(stmt) || /^\s*import\s*$/.test(stmt));
+    if (opensImport && !imp && !from && !jsImport) return false;
+  }
+  return true;
+}
+
+/**
+ * Does every `require` the code spells call it, and use what it returns only
+ * as a receiver or a binding's value? A `require` of the body's own is no
+ * module loader, and `Object.assign(require('fs'), …)` changes the module
+ * every later `require('fs')` returns (security review of #2756).
+ */
+function requireTrusted(code: string, literalAt: LiteralAt): boolean {
+  return occurrences(code, 'require').every(at => {
+    if (code[prevCode(code, at - 1)] === '.' || !isCall(code, at, 'require'.length)) return false;
+    let depth = 0;
+    let k = nextCode(code, at + 'require'.length);
+    for (; k < code.length; k++) {
+      if (code[k] === '(') depth++;
+      else if (code[k] === ')' && --depth === 0) break;
+    }
+    let next = k + 1;
+    while (next < code.length && (code[next] === ' ' || code[next] === '\t' || code[next] === '\r')) next++;
+    if (code[next] === '.') return true;
+    if (next < code.length && !';\n'.includes(code[next])) return false;
+    // Bound, `fs` must be bound to `fs`, which is checked as a module name
+    // everywhere, or destructured into functions. Any other name is a second
+    // spelling of the module nothing follows (second security review of #2756).
+    // Another allowed module (`path`) hands out no write function, so it may
+    // be bound to any name.
+    const required = literalAt(nextCode(code, at + 'require'.length) + 1);
+    if (required !== null && code[nextCode(code, required.close + 1)] === ')' && !FS_SPECIFIERS.has(required.value)) return true;
+    const before = code.slice(0, at);
+    return /\b(?:const|let|var)\s+fs\s*=\s*$/.test(before) || /\b(?:const|let|var)\s*\{[^}]*\}\s*=\s*$/.test(before) || /(?:^|[;\n])\s*$/.test(before);
+  });
+}
+
+/** Is this spelling of a module name, or of `require`, one that leaves it the module? */
+function moduleNameShown(code: string, at: number, mod: string, requireFs: RequireFs, literalAt: LiteralAt): boolean {
+  if (code[prevCode(code, at - 1)] === '.') return true; // an attribute of something else
+  if (mod === 'require') return isCall(code, at, mod.length);
+  if (code[nextCode(code, at + mod.length)] === '.') return true; // used as a receiver
+  return importsModule(code, at, mod, requireFs, literalAt) || /^\s+import\b/.test(code.slice(at + mod.length)) && /\bfrom\s*$/.test(code.slice(0, at));
+}
+
+/** Is the module name at `at` bound by an import of that very module? */
+function importsModule(code: string, at: number, mod: string, requireFs: RequireFs, literalAt: LiteralAt): boolean {
+  const after = code.slice(at + mod.length);
+  if (mod === 'fs') {
+    const before = code.slice(0, at);
+    const fromFs = (rest: string, offset: number): boolean => {
+      const m = /^\s*from\b/.exec(rest);
+      if (!m) return false;
+      const lit = literalAt(offset + m[0].length);
+      return lit !== null && FS_SPECIFIERS.has(lit.value);
+    };
+    if (/\bimport\s+$/.test(before) || /\bimport\s*\*\s*as\s+$/.test(before)) return fromFs(after, at + mod.length);
+    if (/\b(?:const|let|var)\s+$/.test(before)) {
+      const m = /^\s*=\s*/.exec(after);
+      return !!m && requireFs(at + mod.length + m[0].length) !== -1;
+    }
+    return false;
+  }
+  // Python: `import os, shutil` or `import os.path` on a line no `from` opens.
+  const line = code.slice(code.lastIndexOf('\n', at) + 1, at);
+  const stmt = line.slice(line.lastIndexOf(';') + 1);
+  return /^\s*import\s+(?:[A-Za-z_][\w.]*\s*,\s*)*$/.test(stmt) && /^\s*(?:[,;\n.]|$)/.test(after);
+}
+
+/** The module a bare name at `at` is imported from, when the import names exactly it from the module defining it. */
+function importedFrom(code: string, at: number, name: string, requireFs: RequireFs, literalAt: LiteralAt): string | null {
+  // The entry holding THIS spelling must be the name itself: `renameSync:
+  // writeFileSync` and `rmtree as copy` bind the name to another function
+  // (review round 2 of #2756), whatever the list's other entries say.
+  const entryIs = (list: string, listStart: number): boolean => {
+    let from = 0;
+    for (const entry of list.split(',')) {
+      const end = from + entry.length;
+      if (at >= listStart + from && at < listStart + end) return entry.replace(/[()]/g, '').trim() === name;
+      from = end + 1;
+    }
+    return false;
+  };
+  for (const m of code.matchAll(/\bfrom\s+([A-Za-z_][\w.]*)\s+import\s+(\([^)]*\)|[^\n;]*)/g)) {
+    const listStart = (m.index ?? 0) + m[0].length - m[2].length;
+    if (at < listStart || at >= listStart + m[2].length) continue;
+    return moduleWrites(m[1])?.includes(name) && entryIs(m[2], listStart) ? m[1] : null;
+  }
+  for (const m of code.matchAll(/\bimport\s*\{([^}]*)\}\s*from\b/g)) {
+    const listStart = (m.index ?? 0) + m[0].indexOf('{') + 1;
+    if (at < listStart || at >= listStart + m[1].length) continue;
+    const lit = literalAt((m.index ?? 0) + m[0].length);
+    return lit !== null && FS_SPECIFIERS.has(lit.value) && FS_WRITES.includes(name) && entryIs(m[1], listStart) ? 'fs' : null;
+  }
+  for (const m of code.matchAll(/\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*/g)) {
+    const listStart = (m.index ?? 0) + m[0].indexOf('{') + 1;
+    if (at < listStart || at >= listStart + m[1].length) continue;
+    return requireFs((m.index ?? 0) + m[0].length) !== -1 && FS_WRITES.includes(name) && entryIs(m[1], listStart) ? 'fs' : null;
+  }
+  return null;
 }
 
 /**
@@ -3857,15 +4415,19 @@ function calleeBefore(body: string, openIndex: number): string {
  * move. `bodyTargets` reporting it as a fragment is asserted in the tests;
  * no verdict claim is made for it, because none was earned.
  */
-function standsAlone(body: string, start: number, end: number): boolean {
+function standsAlone(body: string, start: number, end: number, mask: Uint8Array): boolean {
+  // A comment is stepped over like whitespace (#2772); another literal is
+  // not, so Python's `'a' 'b'` still joins them.
+  const blank = (k: number): boolean => WHITESPACE.has(body[k]) || mask[k] === 2;
   let a = start - 1;
-  while (a >= 0 && WHITESPACE.has(body[a])) a--;
-  if (a >= 0 && !ARG_OPENS.has(body[a])) return false;
+  while (a >= 0 && blank(a)) a--;
+  if (a >= 0 && (mask[a] !== 0 || !ARG_OPENS.has(body[a]))) return false;
 
   let b = end + 1;
   for (;;) {
-    while (b < body.length && WHITESPACE.has(body[b])) b++;
+    while (b < body.length && blank(b)) b++;
     if (b >= body.length) return true;
+    if (mask[b] !== 0) return false;
     const c = body[b];
     if (GROUP_CLOSES.has(c)) {
       b++;
