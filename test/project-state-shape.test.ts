@@ -520,10 +520,4 @@ describe("#2809: one reader decides what a session is and its day, and every cal
     // The top-level session carries its number as a field.
     expect(readSession({ number: 106, date: "2026-11-25" }).number).toBe(106);
   });
-
-  test("the currency test reads session numbers through the reader, not a regex of its own", () => {
-    const currency = readFileSync(join(REPO, "test", "project-state-currency.test.ts"), "utf-8");
-    expect(currency).not.toContain("function sessionNumberIn");
-    expect(currency).toContain("readSession(");
-  });
 });

@@ -203,10 +203,10 @@ export interface SessionSelection<T> {
    /**
    * Entries whose `date` does not begin with an ISO date.
    *
-   * They are NOT excluded — they rank below every dated entry, in array
-   * order, which is the only information left about them and is exactly
-   * what the old renderer used for everything. A project whose dates are
-   * all free-form therefore renders exactly as it did before.
+   * They are NOT excluded — they rank below every dated entry, by the
+   * session number they spell and then later index first, which is all
+   * that is left to order them by (#2814 review: this said "in array
+   * order", which stopped being true when the number tier was added).
    *
    * They are reported by name, because an entry nobody can order is a
    * thing worth saying out loud: it will be outranked by any dated entry,
