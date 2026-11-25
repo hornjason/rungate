@@ -696,14 +696,19 @@ export function specWithCriterion(
       return {
         ok: false,
         refusal: "ALREADY_PLACED",
-        why: `${id} is already placed in ${elsewhere.placement}; a criterion has one phase, so move it by editing the table`,
+        why: `${id} is already placed in ${elsewhere.placement}; a criterion has one phase, so change the placement it has rather than add a second`,
       };
     }
     // ADR-026: a spec of placement lines takes one beneath the criterion; a
     // spec with a table takes the id in its row, as before (SC-2807).
     const placed = placementLines(text).length > 0 ? withPlacementLine(text, id, phase) : withPhase(text, id, phase);
     if (placed === null) {
-      return { ok: false, refusal: "PHASE_ROW_ABSENT", why: `this spec is placed by the older Phase placement table, which has no row for Phase ${phase}` };
+      // Rows come from the older table here, since the spec has no placement
+      // lines: none at all means the spec places nothing yet (#2812 review).
+      const why = parsePlacementRows(text).length > 0
+        ? `this spec is placed by the older Phase placement table, which has no row for Phase ${phase}`
+        : `this spec places no criterion yet, by placement lines or an older placement table, so there is no Phase ${phase} to put ${id} in`;
+      return { ok: false, refusal: "PHASE_ROW_ABSENT", why };
     }
     text = placed;
   }

@@ -541,8 +541,8 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
     console.error(
       `\nREFUSING TO WRITE — ${problems.length} placement problem(s) above, and NOTHING was\n` +
         `  created or renamed. A milestone's description is the phase's criteria list, so a\n` +
-        `  table that does not place every criterion exactly once cannot say what to write.\n` +
-        `  Fix the table in the spec, re-run without --write to confirm the reading, then write.`,
+        `  placement that does not place every criterion exactly once cannot say what to write.\n` +
+        `  Fix the spec's placement, re-run without --write to confirm the reading, then write.`,
     );
     return REFUSAL_EXIT;
   }

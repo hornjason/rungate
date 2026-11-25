@@ -7,12 +7,19 @@
  * of #2790 found another message, help line or guide still naming the table as
  * the place a phase is decided, and nothing failed when new wording did it
  * again. This reads that text and refuses, by file and line, a sentence naming
- * a placement table unless the same sentence marks it as the older form, with
- * the word "older".
+ * a placement table unless "older" qualifies that mention: it stands within
+ * the few words before it, as in "an older spec's placement table". An
+ * "older" elsewhere in the sentence does not count (#2812 review).
+ *
+ * It reads the phrase "placement table". A sentence that says only "the
+ * table" is not caught: when this was written, every string saying "table" in
+ * code that reads a placement was checked by hand, and two were reworded
+ * (#2812 review).
  *
  * What it reads:
  * - every string and template literal in `lib/` and `scripts/`, parsed with
- *   TypeScript, so a comment is never read;
+ *   TypeScript, so a comment is never read, and a `+` chain of them read as
+ *   the one sentence a user sees;
  * - the prose of `docs/guides/`, `.claude/rules/`, `README.md`, `templates/`
  *   and `specs/`, with a spec's criterion blocks left out: criterion text is
  *   Jason's to write, so a criterion naming the table is listed for him and
@@ -29,15 +36,21 @@ const ROOT = join(import.meta.dir, "..");
 
 /** A sentence that names a placement table, once backticks and emphasis are gone. */
 const NAMES_TABLE = /placement\W{0,4}table/i;
-/** The mark that a sentence names the table as the older form. */
+/** The mark that a mention names the table as the older form. */
 const OLDER = /\bolder\b/i;
+/** How many words before a mention "older" may stand and still qualify it: "an older spec's Phase placement table". */
+const OLDER_REACH = 4;
 
-/** Each sentence of `text` that names a placement table and does not call it the older form. */
+/** Each sentence of `text` with a placement-table mention that "older" does not qualify. */
 export function sentencesNamingTable(text: string): string[] {
   return text
     .replace(/[`*]/g, "")
     .split(/(?<=[.!?])\s+/)
-    .filter(s => NAMES_TABLE.test(s) && !OLDER.test(s))
+    .filter(s =>
+      [...s.matchAll(new RegExp(NAMES_TABLE.source, "gi"))].some(
+        m => !s.slice(0, m.index).trim().split(/\s+/).slice(-OLDER_REACH).some(w => OLDER.test(w)),
+      ),
+    )
     .map(s => s.replace(/\s+/g, " ").trim());
 }
 
@@ -46,16 +59,43 @@ interface Passage {
   text: string;
 }
 
-/** The string and template literals of a TypeScript source, each with its line. Comments are not nodes, so none is read. */
+/**
+ * The string and template literals of a TypeScript source, each with its
+ * line. Comments are not nodes, so none is read. A `+` chain holding a
+ * literal is read as one passage, the sentence a user sees, with `X` where
+ * a value goes (#2812 review: a sentence split across two literals was read
+ * as two halves, neither naming the table).
+ */
 export function sourceStrings(path: string, source: string): Passage[] {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
   const out: Passage[] = [];
-  const visit = (node: ts.Node): void => {
-    let text: string | null = null;
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) text = node.text;
+  const at = (node: ts.Node) => file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+  const literal = (node: ts.Node): string | null => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
     // An interpolation stands for a value, so its place keeps the sentence whole.
-    else if (ts.isTemplateExpression(node)) text = node.head.text + node.templateSpans.map(s => `X${s.literal.text}`).join("");
-    if (text !== null) out.push({ line: file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1, text });
+    if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map(s => `X${s.literal.text}`).join("");
+    return null;
+  };
+  const plus = (node: ts.Node): node is ts.BinaryExpression =>
+    ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken;
+  const visit = (node: ts.Node): void => {
+    if (plus(node) && !plus(node.parent)) {
+      const parts: ts.Node[] = [];
+      const flatten = (n: ts.Node): void => {
+        if (plus(n)) {
+          flatten(n.left);
+          flatten(n.right);
+        } else parts.push(n);
+      };
+      flatten(node);
+      if (parts.some(p => literal(p) !== null)) {
+        out.push({ line: at(node), text: parts.map(p => literal(p) ?? "X").join("") });
+        for (const p of parts) if (literal(p) === null) visit(p);
+        return;
+      }
+    }
+    const text = literal(node);
+    if (text !== null) out.push({ line: at(node), text });
     ts.forEachChild(node, visit);
   };
   visit(file);
@@ -186,6 +226,14 @@ describe("#2800: user-facing text names a placement table only as the older form
     ]);
     // "older" in another sentence does not mark this one.
     expect(sentencesNamingTable("The older form is gone. The placement table decides.")).toEqual(["The placement table decides."]);
+    // Nor does an "older" in the same sentence that does not qualify the table (#2812 review).
+    for (const s of [
+      "The spec's Phase placement table decides each phase, and older specs are read too.",
+      "Each older criterion's phase is set by the Phase placement table.",
+    ]) {
+      expect(sentencesNamingTable(s), s).toEqual([s]);
+    }
+    expect(sentencesNamingTable("It reads placement lines, or an older spec's Phase placement table.")).toEqual([]);
   });
 
   test("a planted comment naming the table is not read; a string or template literal is", () => {
@@ -195,9 +243,16 @@ describe("#2800: user-facing text names a placement table only as the older form
       "const a = \"the placement table decides\";",
       "const b = `${x}'s placement table could not be read`;",
       "const c = 'an older placement table is still read';",
+      // A sentence split across a + chain is read whole (#2812 review).
+      "const d = \"UNMEASURED: the spec's placement \" + \"table could not be read.\";",
+      "const e = `${x}: the placement ` + y + \" table decides\";",
     ].join("\n");
     const found = sourceStrings("planted.ts", source).flatMap(p => sentencesNamingTable(p.text).map(s => `${p.line}: ${s}`));
-    expect(found).toEqual(["3: the placement table decides", "4: X's placement table could not be read"]);
+    expect(found).toEqual([
+      "3: the placement table decides",
+      "4: X's placement table could not be read",
+      "6: UNMEASURED: the spec's placement table could not be read.",
+    ]);
   });
 
   test("in a spec, a criterion block is not read as prose, and is listed instead", () => {

@@ -45,8 +45,8 @@ claim with no measurement behind it belongs under "Not decided here".}
 {Write each criterion id as a `- [ ] SC-<N>: …` line in the governing spec,
 and reserve the ids first if several branches allocate them. Place each one:
 a `placement: Phase <N>` line beneath it in a spec that uses placement
-lines, or, in an older spec that still has one, its id in the spec's Phase
-placement table.}
+lines, or its id in an older spec's Phase placement table, if the spec
+still has one.}
 
 One row per issue. `plan-issues --decompose` reads this table and refuses
 the whole plan if any row breaks a rule, so check each one:
