@@ -16,7 +16,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { readRegistrationScopes, registrationCensus, settingsScopePaths } from "../lib/hook-scopes";
+import ts from "typescript";
+import { REGISTRATION_SCOPES, readRegistrationScopes, registrationCensus, settingsScopePaths } from "../lib/hook-scopes";
 import { readEnvScopes, registeredTreeCensus } from "../lib/hook-target-tree";
 import { settingsCommands, wrongTreeViolations } from "../lib/hook-trees";
 import {
@@ -243,6 +244,141 @@ describe("#2810: no error message leaves the helper, and the count is the census
     );
     expect(commandsExecutingAt(repo, h, REGISTRY, "user-settings", "Beta")).toBe(1);
     expect(hookRegistrationAt(repo, h, REGISTRY, "Beta").registeredIn).toContain("user-settings");
+  });
+});
+
+// #2813: what crosses the boundary is listed, field by field, and checked.
+describe("#2813: every field of every verdict is on the helper's allow-list", () => {
+  /** Every string a planted settings document holds, as values and keys: what must not cross. */
+  const plantedText = (): string[] => {
+    const out: string[] = [];
+    const walk = (v: unknown): void => {
+      if (typeof v === "string") out.push(v);
+      else if (Array.isArray(v)) v.forEach(walk);
+      else if (v !== null && typeof v === "object") for (const [k, x] of Object.entries(v)) { out.push(k); walk(x); }
+    };
+    for (const { path } of settingsScopePaths(repo, home)) {
+      const doc = raw(path);
+      if (doc !== null) walk(JSON.parse(doc));
+    }
+    // Each string whole, and each space-separated piece of it, so a reason
+    // that quotes part of a command is caught too. An absolute path is the
+    // stated exception: a resolved path, or the directory a registration
+    // reaches its hook through, crosses by design. The JSON vocabulary of the
+    // files is no value.
+    const pieces = out.flatMap(t => [t, ...t.split(/\s+/)]);
+    return [...new Set(pieces)].filter(
+      t => t.length >= 6 && !t.startsWith("/") && !["PreToolUse", "command", "matcher"].includes(t),
+    );
+  };
+  const SCOPES = new Set<string>(REGISTRATION_SCOPES);
+  const noPlanted = (v: string) => plantedText().every(t => !v.includes(t));
+  // The stated exception: where a registration resolves to is what the census
+  // and the currency reading are about, so it crosses as an absolute path.
+  const absolutePath = (v: string) => v.startsWith("/");
+
+  /**
+   * Each field a result may carry, and what its value may be. A field not
+   * listed fails, so a census field that starts crossing has to be named here
+   * first. Free text (a detail, a reason) may hold no planted string; a
+   * resolved path or directory is the one stated exception.
+   */
+  const FIELDS: Record<string, (v: unknown) => boolean> = {
+    hook: v => typeof v === "string" && OWNED.includes(v),
+    scope: v => typeof v === "string" && SCOPES.has(v),
+    registeredIn: v => typeof v === "string" && SCOPES.has(v),
+    read: v => typeof v === "string" && SCOPES.has(v),
+    missing: v => typeof v === "string" && SCOPES.has(v),
+    unplaced: v => typeof v === "string" && OWNED.includes(v),
+    repoScopes: () => true,
+    readable: v => typeof v === "boolean",
+    unreadable: v => typeof v === "string" && (SCOPES.has(v) || noPlanted(v)),
+    verdict: v => v === "registered" || v === "unregistered" || v === "unmeasured",
+    tree: v => v === "rungate" || v === "pai" || v === "unknown" || v === "unparsed",
+    target: v => v === "in-repo" || v === "foreign" || v === "unresolved",
+    spelling: v => typeof v === "string" && /^(?:literal|[A-Za-z_][A-Za-z0-9_]*)$/.test(v),
+    command: v => v === COMMAND_WITHHELD,
+    resolved: v => v === null || (typeof v === "string" && absolutePath(v)),
+    dir: v => typeof v === "string" && absolutePath(v),
+    reading: v => v === "MEASURED" || v === "UNMEASURED",
+    state: v => v === "current" || v === "behind" || v === "unmeasured",
+    base: v => v === "origin/main",
+    baseSha: v => v === null || (typeof v === "string" && /^[0-9a-f]+$/.test(v)),
+    headSha: v => v === null || (typeof v === "string" && /^[0-9a-f]+$/.test(v)),
+    detail: v => typeof v === "string" && noPlanted(v),
+    unmeasuredReasons: v => typeof v === "string" && noPlanted(v),
+    commands: v => typeof v === "number",
+    examined: v => typeof v === "number",
+    unresolved: v => typeof v === "number" || (typeof v === "object" && v !== null),
+    registrations: v => typeof v === "number",
+    behind: v => v === null || typeof v === "number",
+    violations: () => true,
+    inRepo: () => true,
+    foreign: () => true,
+    directories: () => true,
+  };
+
+  /** Every field outside the allow-list, or holding a value it does not allow, as `path: value`. */
+  const offList = (value: unknown, at = "result"): string[] => {
+    if (Array.isArray(value)) return value.flatMap((v, i) => offList(v, `${at}[${i}]`));
+    if (value === null || typeof value !== "object") return [];
+    return Object.entries(value).flatMap(([k, v]) => {
+      const check = FIELDS[k];
+      if (check === undefined) return [`${at}.${k}: not on the allow-list`];
+      const leaves = Array.isArray(v) ? v : [v];
+      const bad = leaves.filter(x => (x === null || typeof x !== "object") && !check(x));
+      return [...bad.map(x => `${at}.${k}: ${JSON.stringify(x)}`), ...offList(v, `${at}.${k}`)];
+    });
+  };
+
+  test("the planted documents hold the text the check looks for", () => {
+    // Without this, every noPlanted check below holds because nothing was planted.
+    expect(plantedText().filter(t => PLANTED.test(t)).length).toBeGreaterThanOrEqual(5);
+  });
+
+  test("each function's result carries only listed fields, each holding a value its field allows", () => {
+    const results: [string, unknown][] = [
+      ["scopeReadability", scopeReadability(repo, home, REGISTRY)],
+      ["hookRegistrationAt", hookRegistrationAt(repo, home, REGISTRY, "Alpha")],
+      ["registrationCensusAt", registrationCensusAt(repo, home, REGISTRY, OWNED)],
+      ["unplacedHooksAt", unplacedHooksAt(repo, home, REGISTRY, OWNED, ["Delta"])],
+      ["wrongTreeAt", wrongTreeAt(repo, home, OWNED)],
+      ["treeCensusAt", treeCensusAt(repo, home, REGISTRY, OWNED)],
+      [
+        "registrationCurrencyAt",
+        registrationCurrencyAt({
+          repoRoot: repo,
+          home,
+          base: "origin/main",
+          ownedHooks: OWNED,
+          registryCommands: REGISTRY,
+          git: () => ({ ok: false, stdout: "", stderr: "no git in this planted tree", status: 128 }) as never,
+        }),
+      ],
+    ];
+    for (const [name, result] of results) expect(offList(result), name).toEqual([]);
+  });
+
+  test("the check refuses a field it does not list, and a listed field holding planted text", () => {
+    expect(offList({ hook: "Alpha", raw: "anything" })).toEqual(["result.raw: not on the allow-list"]);
+    expect(offList({ detail: "bun /srv/x/Beta.hook.ts" })).toEqual([]);
+    const leaked = plantedText().find(t => PLANTED.test(t))!;
+    expect(offList([{ detail: `it ran ${leaked}` }])).toEqual([`result[0].detail: ${JSON.stringify(`it ran ${leaked}`)}`]);
+  });
+
+  test("no result in the helper is built by spreading another object", () => {
+    // A spread copies whatever fields the census adds later, past every check
+    // above until somebody lists them. Built field by field, a new census field
+    // reaches no result until the helper names it.
+    const path = join(import.meta.dir, "helpers", "user-settings.ts");
+    const file = ts.createSourceFile(path, readFileSync(path, "utf-8"), ts.ScriptTarget.Latest, true);
+    const spreads: number[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isSpreadAssignment(node)) spreads.push(file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1);
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    expect(spreads, "object spreads in test/helpers/user-settings.ts, by line").toEqual([]);
   });
 });
 
