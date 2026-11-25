@@ -1775,6 +1775,15 @@ describe("#2066 / SC-2612: finding-promotion writes the spec's family, section, 
     const missing = specWithCriterion(PLANNED_SPEC, line, "SC-9010", 9);
     expect(missing.ok).toBe(false);
     if (!missing.ok) expect(missing.refusal).toBe("PHASE_ROW_ABSENT");
+    // #2812 review: the reason names the table only for a spec that has one.
+    if (!missing.ok) expect(missing.why).toContain("older Phase placement table, which has no row for Phase 9");
+    const unplaced = specWithCriterion(SPEC_WITH_CRITERIA, line, "SC-9010", 9);
+    expect(unplaced.ok).toBe(false);
+    if (!unplaced.ok) {
+      expect(unplaced.refusal).toBe("PHASE_ROW_ABSENT");
+      expect(unplaced.why).toContain("places no criterion yet");
+      expect(unplaced.why).not.toContain("is placed by the older");
+    }
     // CONTROL: a spec with no placement table takes the line with no phase.
     expect(specWithCriterion(SPEC_WITH_CRITERIA, line, "SC-9010", null).ok).toBe(true);
   });

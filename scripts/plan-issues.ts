@@ -792,7 +792,7 @@ export function placingFamilies(
     const placement = placementReading(text);
     const unsound = [...placement.unmeasuredReasons, ...unsoundPlacement(placement)];
     if (unsound.length > 0) {
-      refusals.push(`${spec.path} (${prefix}): its placement table cannot place an issue — ${unsound.join("; ")}`);
+      refusals.push(`${spec.path} (${prefix}): its placement cannot place an issue — ${unsound.join("; ")}`);
       continue;
     }
     const milestones = new Map<number, string>();
@@ -1041,7 +1041,7 @@ export async function main(
     // #2072: the one decider `--place` reads too.
     const unsound = unsoundPlacement(placement);
     if (unsound.length > 0) {
-      console.error(`plan-issues: ${values.spec}'s placement table is unsound, so no row can be placed from it:`);
+      console.error(`plan-issues: ${values.spec}'s placement is unsound, so no row can be placed from it:`);
       for (const u of unsound) console.error(`  - ${u}`);
       return REFUSAL_EXIT;
     }
