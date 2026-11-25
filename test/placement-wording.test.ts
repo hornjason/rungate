@@ -25,15 +25,16 @@
  * - every string and template literal in `lib/` and `scripts/`, parsed with
  *   TypeScript, so a comment is never read, and a `+` chain of them read as
  *   the one sentence a user sees;
- * - with each interpolated name that is a string constant read as its value:
- *   the file's own top-level `const`, or a named import from a relative
- *   module that exports one. Before #2816 every interpolation read as `X`,
- *   so a message building the heading from `PLACEMENT_HEADING` never showed
- *   the guard the words "Phase placement table";
- * - and failing closed where it cannot resolve: a value it cannot read,
- *   directly before the word "table", is refused rather than read as `X`,
- *   so a shape the resolver does not model is caught rather than passed
- *   (#2823 review, round 4);
+ * - with each interpolated value read as every text the TypeScript type
+ *   checker says it can hold, over one program of `lib/` and `scripts/`.
+ *   Before #2816 every interpolation read as `X`, so a message building the
+ *   heading from `PLACEMENT_HEADING` never showed the guard the words "Phase
+ *   placement table"; #2823's hand-written resolver then missed one more
+ *   expression shape each review round, so #2824 hands the question to the
+ *   compiler;
+ * - and failing closed where it cannot read a value: a string it cannot read,
+ *   standing where NAMES_TABLE would read "placement" or "table", is refused
+ *   rather than read as `X` (#2823 review, round 4; #2824);
  * - the prose of `docs/guides/`, `.claude/rules/`, `README.md`, `templates/`
  *   and `specs/`, with a spec's criterion blocks left out: criterion text is
  *   Jason's to write, so a criterion naming the table is listed for him and
@@ -67,32 +68,30 @@ interface Passage {
   line: number;
   text: string;
   /**
-   * A value this guard could not resolve sits directly before the word
-   * "table", so the sentence may name the placement table through a shape the
-   * resolver does not model. Refused, not read as `X` and passed: the guard
-   * fails closed (#2823 review, round 4).
+   * A value this guard could not read stands where NAMES_TABLE would read
+   * "placement" or "table", so the sentence may name the placement table
+   * through a value nobody can see. Refused, not read as `X` and passed: the
+   * guard fails closed (#2823 review, round 4). The window is NAMES_TABLE's
+   * own, so the two cannot disagree: round 5 found `${H}: table` and
+   * `${H} tables` outside the narrower window it replaced (#2824).
    */
   opaqueTable?: true;
 }
 
-/** Marks an unresolved value while a passage is built; shown as `X`. */
+/** Marks an unread value while a passage is built; shown as `X`. */
 const UNRESOLVED = "\u0000";
+/** NAMES_TABLE with an unread value in place of either word: where a value could complete the phrase. */
+const OPAQUE = ["placement", "table"].map(word => new RegExp(NAMES_TABLE.source.replace(word, UNRESOLVED), NAMES_TABLE.flags));
 /** A passage built with UNRESOLVED marks, as the text a reader sees and whether it fails closed. */
 function passage(line: number, raw: string): Passage {
-  const opaque = /\u0000[\s`*'"]{0,4}table\b/i.test(raw);
+  const opaque = OPAQUE.some(r => r.test(raw.replace(/[`*]/g, "")));
   return opaque ? { line, text: raw.replaceAll(UNRESOLVED, "X"), opaqueTable: true } : { line, text: raw.replaceAll(UNRESOLVED, "X") };
-}
-
-/** A string literal's text, through `as const`, `satisfies` and parentheses, or null. */
-function stringValue(node: ts.Expression): string | null {
-  const n = unwrapped(node);
-  return ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) ? n.text : null;
 }
 
 /**
  * An expression past every wrapper that leaves its value as it is: parentheses,
- * `as`, `satisfies` and `!`. The one unwrap every reader here uses, so no two
- * of them disagree about one input (#2823 review, round 3).
+ * `as`, `satisfies` and `!`. Asked before the type checker, since
+ * `PLACEMENT_HEADING as string` is typed `string` and still holds the heading.
  */
 function unwrapped(node: ts.Node): ts.Node {
   let n = node;
@@ -102,116 +101,139 @@ function unwrapped(node: ts.Node): ts.Node {
   return n;
 }
 
-/** Each top-level `const NAME = "…"` of a source, by name; only exported ones when asked. */
-function topLevelConstants(file: ts.SourceFile, exportedOnly: boolean): Map<string, string> {
-  const out = new Map<string, string>();
-  for (const st of file.statements) {
-    if (!ts.isVariableStatement(st) || !(st.declarationList.flags & ts.NodeFlags.Const)) continue;
-    const exported = st.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
-    if (exportedOnly && !exported) continue;
-    for (const d of st.declarationList.declarations) {
-      const value = d.initializer ? stringValue(d.initializer) : null;
-      if (ts.isIdentifier(d.name) && value !== null) out.set(d.name.text, value);
-    }
-  }
-  return out;
+/** What the guard knows about an interpolated value: the texts it can hold, and whether it is a string at all. */
+export interface Reader {
+  /** Every text the value can hold, or null when that cannot be told. */
+  readings(node: ts.Expression): string[] | null;
+  /** Whether the value is typed as a string, so a `+` chain of such values is a sentence. */
+  isString(node: ts.Expression): boolean;
 }
 
-/**
- * The string constants a source can interpolate, by the name it uses there:
- * its own top-level `const NAME = "…"`, each named import from a relative
- * module whose export is one, and `ns.NAME` through a namespace import of one
- * (#2816, #2823 review). A name it cannot resolve, a re-export or a computed
- * value, still reads as `X`.
- */
-export function stringConstants(path: string, source: string): Map<string, string> {
-  const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-  const out = topLevelConstants(file, false);
-  for (const st of file.statements) {
-    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
-    const spec = st.moduleSpecifier.text;
-    const named = st.importClause?.namedBindings;
-    if (!spec.startsWith(".") || named === undefined) continue;
-    const target = resolve(dirname(path), `${spec.replace(/\.(?:ts|js)$/, "")}.ts`);
-    if (!existsSync(target)) continue;
-    const exported = topLevelConstants(ts.createSourceFile(target, readFileSync(target, "utf-8"), ts.ScriptTarget.Latest, true), true);
-    if (ts.isNamespaceImport(named)) {
-      for (const [name, value] of exported) out.set(`${named.name.text}.${name}`, value);
-      continue;
-    }
-    for (const el of named.elements) {
-      const value = exported.get((el.propertyName ?? el.name).text);
-      if (value !== undefined) out.set(el.name.text, value);
-    }
-  }
-  return out;
-}
+/** A reader that knows no value: every interpolation is unread. */
+export const LITERALS_ONLY: Reader = { readings: () => null, isString: () => false };
+
+/** The most texts one value or one sentence is read as; past it, the value is unread (fail closed). */
+const MAX_READINGS = 16;
 
 /**
- * The value an interpolated expression holds when it is a known constant:
- * a name, or `ns.NAME` through a namespace import, read through `!`,
- * parentheses, `as` and `satisfies` (#2823 review). Null for any other value.
+ * The reader the TypeScript type checker gives (#2824). A string, number or
+ * boolean literal type reads as its text, and a union of them as each member.
+ * A number, bigint, boolean, null or undefined that is not one literal reads
+ * as `X`: no such value spells a word. Anything else, a wide `string`, `any`,
+ * a template literal type, is unread. The checker follows every import,
+ * alias, export list and re-export the compiler does, so no expression shape
+ * is modelled here: #2823's rounds 1 to 4 each found one more shape a
+ * hand-written resolver missed.
  */
-export function constantValue(node: ts.Node, constants: Map<string, string>): string | null {
+export function checkerReader(checker: ts.TypeChecker): Reader {
+  const texts = (t: ts.Type): string[] | null => {
+    if (t.isStringLiteral()) return [t.value];
+    if (t.isNumberLiteral()) return [String(t.value)];
+    if (t.isUnion()) {
+      const each = t.types.map(texts);
+      if (each.some(r => r === null)) return null;
+      const all = [...new Set(each.flat() as string[])];
+      return all.length <= MAX_READINGS ? all : null;
+    }
+    const wordless = ts.TypeFlags.NumberLike | ts.TypeFlags.BigIntLike | ts.TypeFlags.BooleanLike | ts.TypeFlags.Null | ts.TypeFlags.Undefined;
+    return t.flags & wordless ? ["X"] : null;
+  };
+  const stringy = (t: ts.Type): boolean =>
+    t.isUnion() ? t.types.some(stringy) : (t.flags & ts.TypeFlags.StringLike) !== 0;
+  return {
+    readings: node => texts(checker.getTypeAtLocation(unwrapped(node))),
+    isString: node => stringy(checker.getTypeAtLocation(node)),
+  };
+}
+
+let parsedOptions: ts.CompilerOptions | null = null;
+/** The repository's own compiler options, read from its tsconfig.json. */
+function compilerOptions(): ts.CompilerOptions {
+  if (parsedOptions === null) {
+    const config = ts.readConfigFile(join(ROOT, "tsconfig.json"), ts.sys.readFile);
+    if (config.error) throw new Error(`tsconfig.json could not be read: ${ts.flattenDiagnosticMessageText(config.error.messageText, "\n")}`);
+    parsedOptions = ts.parseJsonConfigFileContent(config.config, ts.sys, ROOT).options;
+  }
+  return parsedOptions;
+}
+
+/** One program over `roots`, with each `planted` source read in place of the disk (#2824). */
+export function programOf(roots: string[], planted: Map<string, string> = new Map()): ts.Program {
+  const options = compilerOptions();
+  const host = ts.createCompilerHost(options, true);
+  const readFile = host.readFile.bind(host);
+  const fileExists = host.fileExists.bind(host);
+  const getSourceFile = host.getSourceFile.bind(host);
+  host.readFile = f => planted.get(resolve(f)) ?? readFile(f);
+  host.fileExists = f => planted.has(resolve(f)) || fileExists(f);
+  host.getSourceFile = (f, language, onError, create) => {
+    const text = planted.get(resolve(f));
+    return text === undefined ? getSourceFile(f, language, onError, create) : ts.createSourceFile(f, text, language, true);
+  };
+  return ts.createProgram(roots, options, host);
+}
+
+/** Every pair of a reading of `a` followed by one of `b`, or one unread mark past MAX_READINGS. */
+function cross(a: string[], b: string[]): string[] {
+  if (a.length * b.length > MAX_READINGS) return a.map(x => x + UNRESOLVED);
+  return a.flatMap(x => b.map(y => x + y));
+}
+
+const isPlus = (node: ts.Node): node is ts.BinaryExpression =>
+  ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken;
+const isLiteralText = (node: ts.Node): boolean => {
   const n = unwrapped(node);
-  // An interpolated literal is its own text (#2823 review, round 3).
-  if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) return n.text;
-  if (ts.isIdentifier(n)) return constants.get(n.text) ?? null;
-  if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression)) return constants.get(`${n.expression.text}.${n.name.text}`) ?? null;
-  return null;
-}
+  return ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateExpression(n);
+};
 
 /**
  * The string and template literals of a TypeScript source, each with its
- * line. Comments are not nodes, so none is read. A `+` chain holding a
- * literal is read as one passage, the sentence a user sees, with `X` where
- * a value goes (#2812 review: a sentence split across two literals was read
- * as two halves, neither naming the table). Parentheses are see-through: a
- * parenthesised literal or sub-chain is part of the sentence, and a template
- * in a chain still has the strings inside its spans read (#2823 review).
+ * line, and each read once for every text its values can hold. Comments are
+ * not nodes, so none is read. A `+` chain is read as one passage, the
+ * sentence a user sees, when it holds a literal or the checker types it a
+ * string: a chain of constants alone is a sentence too (#2823 review, round
+ * 6). Parentheses are see-through, and a template in a chain still has the
+ * strings inside its spans read (#2823 review).
  */
-export function sourceStrings(path: string, source: string, constants: Map<string, string> = new Map()): Passage[] {
-  const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+export function sourceStrings(file: ts.SourceFile, reader: Reader = LITERALS_ONLY): Passage[] {
   const out: Passage[] = [];
   const at = (node: ts.Node) => file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
-  // A name holding a known string constant reads as its value (#2816); any other value reads as X.
-  const value = (node: ts.Node): string | null => constantValue(node, constants);
-  const bare = unwrapped;
-  const literal = (outer: ts.Node): string | null => {
-    const node = bare(outer);
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
-    // An interpolation stands for a value, so its place keeps the sentence whole.
-    if (ts.isTemplateExpression(node))
-      return node.head.text + node.templateSpans.map(s => `${value(s.expression) ?? UNRESOLVED}${s.literal.text}`).join("");
-    return null;
+  const textsOf = (outer: ts.Node): string[] => {
+    const node = unwrapped(outer);
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return [node.text];
+    if (ts.isTemplateExpression(node)) {
+      return node.templateSpans.reduce((acc, s) => cross(cross(acc, textsOf(s.expression)), [s.literal.text]), [node.head.text]);
+    }
+    if (isPlus(node)) return cross(textsOf(node.left), textsOf(node.right));
+    return reader.readings(node as ts.Expression) ?? [UNRESOLVED];
   };
-  const plus = (node: ts.Node): node is ts.BinaryExpression =>
-    ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken;
+  const push = (node: ts.Node) => {
+    for (const text of new Set(textsOf(node))) out.push(passage(at(node), text));
+  };
   const visit = (node: ts.Node): void => {
     // A chain inside parentheses inside another is flattened into the outer one and never visited alone.
-    if (plus(node) && !plus(node.parent)) {
+    if (isPlus(node) && !isPlus(node.parent)) {
       const parts: ts.Node[] = [];
       const flatten = (n: ts.Node): void => {
-        const b = bare(n);
-        if (plus(b)) {
+        const b = unwrapped(n);
+        if (isPlus(b)) {
           flatten(b.left);
           flatten(b.right);
         } else parts.push(n);
       };
       flatten(node);
-      if (parts.some(p => literal(p) !== null)) {
-        out.push(passage(at(node), parts.map(p => literal(p) ?? value(p) ?? UNRESOLVED).join("")));
+      if (parts.some(isLiteralText) || reader.isString(node)) {
+        push(node);
         for (const p of parts) {
-          const b = bare(p);
-          if (literal(p) === null) visit(p);
+          const b = unwrapped(p);
+          if (!isLiteralText(p)) visit(p);
           // A template's own spans can hold strings a user reads.
           else if (ts.isTemplateExpression(b)) for (const span of b.templateSpans) visit(span.expression);
         }
         return;
       }
     }
-    const text = literal(node);
-    if (text !== null) out.push(passage(at(node), text));
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) || ts.isTemplateExpression(node)) push(node);
     ts.forEachChild(node, visit);
   };
   visit(file);
@@ -270,26 +292,38 @@ function filesUnder(rel: string, ext: string): string[] {
   return out;
 }
 
+let treeProgramCache: { program: ts.Program; sources: string[] } | null = null;
+/** One type-checked program over every non-test source in `lib/` and `scripts/` (#2824). */
+function treeProgram(): { program: ts.Program; sources: string[] } {
+  if (treeProgramCache === null) {
+    const sources = [...filesUnder("lib", ".ts"), ...filesUnder("scripts", ".ts")].filter(f => !f.endsWith(".test.ts"));
+    treeProgramCache = { program: programOf(sources), sources };
+  }
+  return treeProgramCache;
+}
+
 /** Every sentence this tree's user-facing text names a placement table in, as `path:line: sentence`. */
 export function placementWordingViolations(): string[] {
-  const out: string[] = [];
-  for (const f of [...filesUnder("lib", ".ts"), ...filesUnder("scripts", ".ts")]) {
-    if (f.endsWith(".test.ts")) continue;
-    const source = readFileSync(f, "utf-8");
-    for (const p of sourceStrings(f, source, stringConstants(f, source))) {
-      for (const s of sentencesNamingTable(p.text)) out.push(`${relative(ROOT, f)}:${p.line}: ${s}`);
-      if (p.opaqueTable) out.push(`${relative(ROOT, f)}:${p.line}: a value this guard cannot read names a table — ${p.text.replace(/\s+/g, " ").trim()}`);
+  const out = new Set<string>();
+  const { program, sources } = treeProgram();
+  const reader = checkerReader(program.getTypeChecker());
+  for (const f of sources) {
+    const file = program.getSourceFile(f);
+    if (file === undefined) throw new Error(`${relative(ROOT, f)} is not in the program, so its strings were not read`);
+    for (const p of sourceStrings(file, reader)) {
+      for (const s of sentencesNamingTable(p.text)) out.add(`${relative(ROOT, f)}:${p.line}: ${s}`);
+      if (p.opaqueTable) out.add(`${relative(ROOT, f)}:${p.line}: a value this guard cannot read names a table — ${p.text.replace(/\s+/g, " ").trim()}`);
     }
   }
   for (const target of ["docs/guides", ".claude/rules", "README.md", "templates", "specs"]) {
     for (const f of filesUnder(target, ".md")) {
       const rel = relative(ROOT, f);
       for (const p of proseParagraphs(readFileSync(f, "utf-8"), rel.startsWith("specs/"))) {
-        for (const s of sentencesNamingTable(p.text)) out.push(`${rel}:${p.line}: ${s}`);
+        for (const s of sentencesNamingTable(p.text)) out.add(`${rel}:${p.line}: ${s}`);
       }
     }
   }
-  return out;
+  return [...out];
 }
 
 /**
@@ -300,6 +334,21 @@ export function placementWordingViolations(): string[] {
  * too, so it is struck here.
  */
 const KEPT: { file: string; phrase: string; why: string }[] = [
+  {
+    file: "lib/spec-placement.ts",
+    phrase: "names a table — placement: X",
+    why: "renders a criterion's own placement line, `placement: <phase>`; the value is the phase, so it can never be the word table (#2824)",
+  },
+  {
+    file: "lib/spec-placement.ts",
+    phrase: "would go with the table, which holds nothing but its placements",
+    why: "the value is the heading's own trailing text, quoted after it; the sentence says what conversion would do with that text, never where a phase is decided (#2824)",
+  },
+  {
+    file: "scripts/plan-spec.ts",
+    phrase: "names a table — in no placement: X",
+    why: "the value is the list of criterion ids no placement names (#2824)",
+  },
   {
     file: "lib/surface-lint.ts",
     phrase: "sends the agent to the X table in X, which has no table by that name",
@@ -385,7 +434,7 @@ describe("#2800: user-facing text names a placement table only as the older form
       "const g = (\"UNMEASURED: the spec's placement \" + \"table\") + \" could not be read.\";",
       "const h = \"Run: \" + `${ok ? \"the placement table decides\" : \"\"}`;",
     ].join("\n");
-    const found = sourceStrings("planted.ts", source).flatMap(p => sentencesNamingTable(p.text).map(s => `${p.line}: ${s}`));
+    const found = sourceStrings(ts.createSourceFile("planted.ts", source, ts.ScriptTarget.Latest, true)).flatMap(p => sentencesNamingTable(p.text).map(s => `${p.line}: ${s}`));
     expect(found).toEqual([
       "3: the placement table decides",
       "4: X's placement table could not be read",
@@ -396,8 +445,9 @@ describe("#2800: user-facing text names a placement table only as the older form
     ]);
   });
 
-  test("#2816: an interpolated string constant is read as its value, whether declared here or imported", () => {
+  test("#2816, #2824: an interpolated value is read as every text the type checker says it holds", () => {
     const at = join(ROOT, "lib", "planted.ts");
+    const again = join(ROOT, "lib", "planted-again.ts");
     const source = [
       'import { PLACEMENT_HEADING } from "./spec-placement";',
       'import { PLACEMENT_HEADING as H2 } from "./spec-placement.ts";',
@@ -413,15 +463,32 @@ describe("#2800: user-facing text names a placement table only as the older form
       "const g = `the ${(PLACEMENT_HEADING)} table decides`;",
       "const h = `the ${PLACEMENT_HEADING as string} table decides`;",
       "const i = `the ${sp.PLACEMENT_HEADING} table decides`;",
-      // One unwrap for every reader, and an interpolated literal is its text (#2823 review, round 3).
+      // An interpolated literal is its text (#2823 review, round 3).
       "const j = `the ${\"placement\"} table decides`;",
       "const k = \"UNMEASURED: the spec's placement \" + (\"table could not be read.\" as string);",
       "const l = \"UNMEASURED: the spec's placement \" + (\"table could not be read.\" satisfies string);",
+      // Shapes the hand-written resolver missed, each read through the checker (#2823 rounds 4 to 6, #2824).
+      "const H = PLACEMENT_HEADING;",
+      "const m = `the ${H} table decides`;",
+      'import { AGAIN, LISTED } from "./planted-again";',
+      "const n = `the ${AGAIN} table decides`;",
+      "const o = `the ${LISTED} table decides`;",
+      'const PRE = "the placement "; const POST = "table decides.";',
+      "const p = PRE + POST;",
+      "declare const ok: boolean;",
+      'const q = "the placement " + (ok ? "table decides" : "");',
+      "const r = `${H}: table decides`;",
+      "const s = `the ${H} tables decide`;",
     ].join("\n");
-    const found = sourceStrings(at, source, stringConstants(at, source)).flatMap(p =>
-      sentencesNamingTable(p.text).map(s => `${p.line}: ${s}`),
-    );
-    expect(found).toEqual([
+    const planted = new Map([
+      [at, source],
+      [again, 'export { PLACEMENT_HEADING as AGAIN } from "./spec-placement";\nconst LOCAL = "### Phase placement";\nexport { LOCAL as LISTED };\n'],
+    ]);
+    const program = programOf([at], planted);
+    const file = program.getSourceFile(at)!;
+    const named = (reader: Reader) =>
+      sourceStrings(file, reader).flatMap(p => sentencesNamingTable(p.text).map(s => `${p.line}: ${s}`));
+    expect(named(checkerReader(program.getTypeChecker()))).toEqual([
       "4: no ### Phase placement table lists a criterion",
       "5: its ### Phase placement table decides",
       "6: the ### Phase placement table decides",
@@ -432,37 +499,55 @@ describe("#2800: user-facing text names a placement table only as the older form
       "14: the placement table decides",
       "15: UNMEASURED: the spec's placement table could not be read.",
       "16: UNMEASURED: the spec's placement table could not be read.",
+      "18: the ### Phase placement table decides",
+      "20: the ### Phase placement table decides",
+      "21: the ### Phase placement table decides",
+      "23: the placement table decides.",
+      "25: the placement table decides",
+      "26: ### Phase placement: table decides",
+      "27: the ### Phase placement tables decide",
     ]);
-    // Without the constants, the same source shows the guard only the sentences built from literals.
-    expect(sourceStrings(at, source).flatMap(p => sentencesNamingTable(p.text).map(s => `${p.line}: ${s}`))).toEqual([
+    // Without the checker, the same source shows the guard only the sentences built from literals.
+    expect(named(LITERALS_ONLY)).toEqual([
       "14: the placement table decides",
       "15: UNMEASURED: the spec's placement table could not be read.",
       "16: UNMEASURED: the spec's placement table could not be read.",
     ]);
-  });
+  }, 30_000);
 
-  test("#2816: every interpolation that names PLACEMENT_HEADING in lib/ and scripts/ resolves", () => {
-    // Read from the syntax, not one spelling of it (#2823 review): each template
-    // span or `+` part whose expression mentions the name must resolve.
+  test("#2816, #2824: every interpolation of PLACEMENT_HEADING in lib/ and scripts/ reads as the heading", () => {
+    // Selected by the symbol the checker resolves it to, through any alias or
+    // export, never by its spelling (#2823 review, #2824).
+    const { program, sources } = treeProgram();
+    const checker = program.getTypeChecker();
+    const reader = checkerReader(checker);
+    const home = program.getSourceFile(join(ROOT, "lib", "spec-placement.ts"))!;
+    const declared = home.statements
+      .filter(ts.isVariableStatement)
+      .flatMap(st => st.declarationList.declarations)
+      .find(d => ts.isIdentifier(d.name) && d.name.text === "PLACEMENT_HEADING")!;
+    const heading = reader.readings(declared.initializer!)!;
+    expect(heading).toEqual(["### Phase placement"]);
+    const isHeading = (e: ts.Node): boolean => {
+      const n = unwrapped(e);
+      const at = ts.isPropertyAccessExpression(n) ? n.name : n;
+      let sym = checker.getSymbolAtLocation(at);
+      if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+      return sym?.declarations?.includes(declared) ?? false;
+    };
     const sites: string[] = [];
-    const unresolved: string[] = [];
-    for (const f of [...filesUnder("lib", ".ts"), ...filesUnder("scripts", ".ts")]) {
-      const source = readFileSync(f, "utf-8");
-      if (f.endsWith(".test.ts") || !/\bPLACEMENT_HEADING\b/.test(source)) continue;
-      const file = ts.createSourceFile(f, source, ts.ScriptTarget.Latest, true);
-      const constants = stringConstants(f, source);
-      const check = (e: ts.Node) => {
-        // A literal, or a nested `+`, is read as text (its own spans are visited); only a value is an interpolation.
-        const text = ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) || ts.isTemplateExpression(e);
-        const nested = ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken;
-        if (text || nested || !/\bPLACEMENT_HEADING\b/.test(e.getText(file))) return;
+    const unread: string[] = [];
+    for (const f of sources) {
+      const file = program.getSourceFile(f)!;
+      const check = (e: ts.Expression) => {
+        if (!isHeading(e)) return;
         const where = `${relative(ROOT, f)}:${file.getLineAndCharacterOfPosition(e.getStart(file)).line + 1}`;
         sites.push(where);
-        if (constantValue(e, constants) === null) unresolved.push(where);
+        if (JSON.stringify(reader.readings(e)) !== JSON.stringify(heading)) unread.push(where);
       };
       const visit = (n: ts.Node): void => {
         if (ts.isTemplateSpan(n)) check(n.expression);
-        else if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+        else if (isPlus(n)) {
           check(n.left);
           check(n.right);
         }
@@ -471,27 +556,39 @@ describe("#2800: user-facing text names a placement table only as the older form
       visit(file);
     }
     expect(sites.length, "no interpolation of the heading was found, so this reads nothing").toBeGreaterThanOrEqual(5);
-    expect(unresolved).toEqual([]);
-  });
+    // An imported use is among them, so the import alias was followed to the declaration.
+    expect(sites.some(s => s.startsWith("scripts/")), sites.join(", ")).toBe(true);
+    expect(unread).toEqual([]);
+  }, 30_000);
 
-  test("#2823: a value the guard cannot read, directly before \"table\", fails closed", () => {
+  test("#2823, #2824: a value the guard cannot read, where the phrase would name the table, fails closed", () => {
     const at = join(ROOT, "lib", "planted.ts");
     const source = [
-      'import { PLACEMENT_HEADING } from "./spec-placement";',
-      // A constant the resolver does not model: an identifier initialiser.
-      "const H = PLACEMENT_HEADING;",
-      "const a = `the ${H} table decides`;",
-      "const b = \"the \" + unknownName + \" table decides\";",
-      "const c = `the \\`${other()}\\` table decides`;",
-      // Not before "table": read as X and passed, as before.
-      "const d = `line ${n}: the phase is read`;",
-      // Resolved: read as the heading, and refused as a naming sentence instead.
-      "const e = `the ${PLACEMENT_HEADING} table decides`;",
+      "declare function other(): string;",
+      "declare const name: string;",
+      "declare const n: number;",
+      "const a = `the ${name} table decides`;",
+      'const b = "the " + name + " table decides";',
+      // Punctuation, a backquote and a plural, inside NAMES_TABLE's own window (#2823 round 5).
+      "const c = `the \\`${other()}\\`: table decides`;",
+      "const d = `the ${name} tables decide`;",
+      // The value standing for the table after the word placement.
+      "const e = `the placement: ${name} decides`;",
+      // A number spells no word, so it is read as X and never fails closed.
+      "const f = `line ${n}: the table is read`;",
+      // An unread value a word away from either word, or in another sentence, passes.
+      "const g = `the ${name} is the table`;",
+      "const h = `line ${name}: the phase is read`;",
+      "const i = `${name} decided. The table is read.`;",
+      // Emphasis around the value does not widen the window: it is stripped, as sentencesNamingTable strips it.
+      "const j = `the **\\`${name}\\`**: table decides`;",
     ].join("\n");
-    const passages = sourceStrings(at, source, stringConstants(at, source));
-    expect(passages.filter(p => p.opaqueTable).map(p => p.line)).toEqual([3, 4, 5]);
-    expect(passages.find(p => p.line === 3)!.text).toBe("the X table decides");
-  });
+    const program = programOf([at], new Map([[at, source]]));
+    const passages = sourceStrings(program.getSourceFile(at)!, checkerReader(program.getTypeChecker()));
+    expect(passages.filter(p => p.opaqueTable).map(p => p.line)).toEqual([4, 5, 6, 7, 8, 13]);
+    expect(passages.find(p => p.line === 4)!.text).toBe("the X table decides");
+    expect(passages.find(p => p.line === 9)!.text).toBe("line X: the table is read");
+  }, 30_000);
 
   test("in a spec, a criterion block is not read as prose, and is listed instead", () => {
     const spec = [
