@@ -98,18 +98,19 @@ describe("#2845: the bank counts a placed behavioural criterion", () => {
   });
 });
 
-describe("#2846: a CRLF deferred spec's bank moves with the line placed in it", () => {
-  test("the LF view the CLI hands the bank counts the placed line; the raw CRLF text counts nothing", () => {
-    const before = (spec(true, [9001, 9002]) + "\n## Notes\n").replace(/\n/g, "\r\n");
-    const after = placeScLine(before, formatSCLine(9003, behavioralStatement("X happens")));
-    const asLf = (t: string) => t.replace(/\r\n/g, "\n");
-    const r = bankAfterAppend(bank("specs/FIX.md", 2), "specs/FIX.md", asLf(before), asLf(after));
-    expect(r.ok).toBe(true);
-    expect(JSON.parse((r as { text: string }).text).deferred[1]).toEqual({ path: "specs/FIX.md", criteria: 3 });
-    // Why the CLI normalises: handed the raw CRLF text, the bank sees no criterion before or after.
-    expect(bankAfterAppend(bank("specs/FIX.md", 2), "specs/FIX.md", before, after)).toEqual({ ok: true, text: null });
-    // And the CLI does hand it the LF view.
-    expect(readFileSync(join(ROOT, "scripts", "create-sc.ts"), "utf-8")).toContain("bankAfterAppend(bankRead, specKey, asLf(content), asLf(newContent))");
+/**
+ * #2846 (review round 5): the bank and the check that compares it with a spec
+ * (`board-snapshot`) read a spec through one reader, `placementReading`, on
+ * the same raw text. create-sc hands the bank exactly that text, so the two
+ * cannot disagree about a spec create-sc wrote, CRLF included. That
+ * `parseCriteria` reads no criterion in a CRLF spec is older than this change
+ * and belongs to every reader, so it is its own issue.
+ */
+describe("#2846: create-sc hands the bank the raw text its check reads", () => {
+  test("the CLI gives bankAfterAppend the spec as read and as written, with nothing normalised in between", () => {
+    const cli = readFileSync(join(ROOT, "scripts", "create-sc.ts"), "utf-8");
+    expect(cli).toContain("bankAfterAppend(bankRead, specKey, content, newContent)");
+    expect(cli, "a caller-side view the check does not share").not.toMatch(/bankAfterAppend\([^)]*asLf/);
   });
 });
 

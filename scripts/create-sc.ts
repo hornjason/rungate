@@ -160,10 +160,7 @@ try {
     const bankPath = join(ROOT, ".claude/spec-deferral-ratchet.json");
     const specKey = relative(ROOT, resolve(specPath)).split(sep).join("/");
     const bankRead = existsSync(bankPath) ? readFileSync(bankPath, "utf-8") : null;
-    // The bank counts criteria with `parseCriteria`, which reads none in a
-    // CRLF line, so it is handed the LF view placement read (#2846).
-    const asLf = (t: string) => t.replace(/\r\n/g, "\n");
-    const banked = bankAfterAppend(bankRead, specKey, asLf(content), asLf(newContent));
+    const banked = bankAfterAppend(bankRead, specKey, content, newContent);
     if (!banked.ok) {
       console.error(`ERROR: ${banked.refusal}: ${banked.why}`);
       process.exit(1);
