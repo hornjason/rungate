@@ -256,9 +256,11 @@ const userPlaces = (root: string, home: string): PathPlaces => (file, token) => 
 
 /**
  * A probe over `root` that names each unreadable path in `unread`. The
- * project side reads paths with the same `probePath` as the user side
- * (review round 5 of #2844), so a file in an unsearchable directory is never
- * reported as missing on either side.
+ * project side's dangling-path lint reads paths with the same `probePath` as
+ * the user side (review round 5 of #2844), so that lint never reports a file
+ * in an unsearchable directory as missing. The project surface reader
+ * (`readRenderedSurface` and `resolveTarget` in `lib/surface-lint.ts`) still
+ * decides presence with `existsSync`; see `probePath`.
  */
 function recordingProbe(root: string, unread: string[]): (abs: string) => Probe {
   return abs => {

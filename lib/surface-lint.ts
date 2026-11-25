@@ -177,11 +177,18 @@ export type Probe = { kind: "dir" | "file" | "other" } | { kind: "absent" } | { 
  * not be read" are told apart in one place:
  *
  * - **absent**: nothing at the name. ENOENT or ENOTDIR from `stat`, `lstat`
- *   finds nothing either, and the nearest ancestor that exists is not a link
- *   that leads nowhere (review round 6 of #2844). Under a dangling link, the
- *   path is unreadable, not missing.
+ *   finds nothing either, and the nearest ancestor that exists is a directory
+ *   or a regular file, not a link that leads nowhere (review round 6 of
+ *   #2844). Nothing can be under a regular file, so a path through one is
+ *   absent. Under a dangling link, the path is unreadable, not missing.
  * - **unreadable**: something is there and cannot be followed or read. A
  *   dangling or looping link, EACCES, or any other error.
+ *
+ * What does not use it yet: the project-side reader above. `mdIn`,
+ * `readRenderedSurface`, `inRenderedTree` and `resolveTarget` decide
+ * presence with `existsSync`, as they did before #2844, so on the project
+ * side a dangling or unsearchable file still reads as missing. Routing them
+ * through this function is one separate change (review round 9 of #2844).
  */
 export function probePath(abs: string): Probe {
   try {
