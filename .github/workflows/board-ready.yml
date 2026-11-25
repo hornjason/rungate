@@ -1,4 +1,4 @@
-# generated-sha: c27b9fac3048feee
+# generated-sha: 169104cabb6ee67b
 # Managed by rungate — do not edit. The board is board.id in .claude/rungate/config.json.
 #
 # Keeps the board's Ready lane full from the events the repository already
@@ -55,7 +55,7 @@ jobs:
           OWNER: ${{ github.repository_owner }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::warning::UNMEASURED — BOARD_PROJECT_TOKEN is not set, so the acting identity could not be authorised and nothing was read. This run is UNMEASURED, not clean."
+            echo "::warning::UNMEASURED — RUNGATE_PROJECT_TOKEN is not set, so the acting identity could not be authorised and nothing was read. This run is UNMEASURED, not clean."
             echo "trusted=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
