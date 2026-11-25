@@ -26,9 +26,9 @@
  * nothing to keep in step: the census reads what it always read.
  */
 
-import { existsSync, readFileSync, realpathSync } from "fs";
+import { lstatSync, readFileSync } from "fs";
 import { homedir } from "os";
-import { basename, dirname, join, resolve, sep } from "path";
+import { join, resolve, sep } from "path";
 import {
   hookRegistration,
   registrationCensus,
@@ -296,34 +296,38 @@ export const liveUserSettingsMentions = (needle: string) => settingsMentions(liv
  * segments are resolved against `home`, so `..`, `.`, doubled and trailing
  * slashes are gone; a path that leaves `home` is refused; and the result is
  * compared with each settings file case-folded, since the volume this runs on
- * may not tell `.Claude` from `.claude`, and through symlinks, since a link
- * elsewhere under home can name the same file. A path that does not exist yet
- * is followed through its nearest ancestor that does, so a link to
- * `~/.claude` names `settings.local.json` before the file is made (#2810
- * review, round 2).
+ * may not tell `.Claude` from `.claude`.
+ *
+ * A path through a symlink under home is refused, not followed (#2810 review,
+ * round 3). Following one means resolving where it points, and a link to a
+ * file that does not exist yet points nowhere until the file is made: each of
+ * rounds 1 to 3 found another such link. A path with no link on it can only
+ * name what it spells, which the comparison above judges. No caller needs a
+ * link: the one path tests take this way is `~/.pai/hooks`.
  */
 export function homePathAt(home: string, ...segments: string[]): string {
   if (segments.length === 0) throw new Error("homePath names a path under the home directory, never the directory itself");
   const root = resolve(home);
   const p = resolve(root, ...segments);
   if (!p.startsWith(root + sep)) throw new Error("homePath names a path under the home directory, never one outside it");
-  const real = (x: string): string => {
-    let at = x;
-    const rest: string[] = [];
-    while (!existsSync(at) && dirname(at) !== at) {
-      rest.unshift(basename(at));
-      at = dirname(at);
-    }
-    try {
-      return join(realpathSync(at), ...rest);
-    } catch {
-      return x;
-    }
-  };
   const fold = (x: string) => x.toLowerCase();
   const settings = [join(root, ".claude", "settings.json"), join(root, ".claude", "settings.local.json")];
-  if (settings.some(f => fold(p) === fold(f) || fold(real(p)) === fold(real(f)))) {
+  if (settings.some(f => fold(p) === fold(f))) {
     throw new Error("a settings file under ~/.claude is read through the functions above");
+  }
+  let at = root;
+  for (const part of p.slice(root.length + 1).split(sep)) {
+    at = join(at, part);
+    let link: boolean;
+    try {
+      link = lstatSync(at).isSymbolicLink();
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      // Absent: nothing deeper exists either, so no link can be on the rest of the path.
+      if (code === "ENOENT" || code === "ENOTDIR") break;
+      throw e;
+    }
+    if (link) throw new Error(`homePath names no path through a symlink, so none can reach a settings file: ${at.slice(root.length + 1)} is one`);
   }
   return p;
 }

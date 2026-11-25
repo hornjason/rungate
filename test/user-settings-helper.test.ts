@@ -282,6 +282,11 @@ describe("#2792: homePath names a path under home, never home itself or a settin
     writeFileSync(join(h, ".claude", "settings.json"), "{}");
     symlinkSync(join(h, ".claude"), join(h, ".pai", "to-claude"));
     symlinkSync(join(h, ".claude", "settings.json"), join(h, ".pai", "s.json"));
+    // Dangling: a link to a settings file that does not exist yet (#2810 review, round 3).
+    symlinkSync(join(h, ".claude", "settings.local.json"), join(h, ".pai", "later.json"));
+    // A link to somewhere harmless is refused too: no link is followed.
+    mkdirSync(join(h, "elsewhere"));
+    symlinkSync(join(h, "elsewhere"), join(h, ".pai", "to-elsewhere"));
     const refused = [
       [".Claude", "settings.json"],
       [".CLAUDE", "Settings.JSON"],
@@ -293,8 +298,13 @@ describe("#2792: homePath names a path under home, never home itself or a settin
       // Absent, behind a symlinked directory: followed through the nearest ancestor that exists.
       [".pai", "to-claude", "settings.local.json"],
       [".pai", "s.json"],
+      [".pai", "later.json"],
+      [".pai", "to-elsewhere", "x"],
     ];
     for (const segments of refused) expect(() => homePathAt(h, ...segments), segments.join(" | ")).toThrow();
+    for (const linked of [[".pai", "s.json"], [".pai", "later.json"], [".pai", "to-claude", "settings.local.json"]]) {
+      expect(() => homePathAt(h, ...linked), linked.join(" | ")).toThrow("symlink");
+    }
     expect(() => homePathAt(h, "..", "elsewhere")).toThrow("outside");
     expect(homePathAt(h, ".pai", "hooks")).toBe(join(h, ".pai", "hooks"));
   });
