@@ -2,11 +2,11 @@
 
 **Current phase: Engine — a spec becomes a readable board, with nothing hand-run (ADR-009) — IN PROGRESS**
 
-**Session 104 (2026-11-24)** — The bash write guard reads six more write shapes. The ship gate retires a refusal only on a check it listed as passed. Review depth is configurable per repo, and three reviewer runs merge into one round. An agent's board edit to a payload issue is refused. ship.js lost three more hand copies to the launch bundle, and wave 7 is split so the last one can move. Waiting on Jason: the ruling on #2726 and #2729.
+**Session 105 (2026-11-25)** — ADR-026 is accepted: a criterion's phase is written beneath it, and its first row ships. The forge probe reads all six behaviours live. The filing guards read commands with a bash grammar, and ship.js's shellQuote copy goes to the launch bundle. Waiting on Jason: a waiver for #2756 and a criterion for #2778.
 
-Suite: 20 PRs merged (#2674, and #2695 to #2739); one release, 0.8.46.
-Issues opened: #2697, #2700, #2701, #2702, #2705, #2706, #2707, #2708, #2710, #2713, #2714, #2720, #2722, #2724, #2727, #2728, #2730, #2731, #2733, #2734, #2736, #2737, #2738
-Issues closed: #1407, #1425, #1655, #1885, #2648, #2650, #2692, #2693, #2697, #2700, #2701, #2702, #2707, #2708, #2710, #2713, #2714, #2720, #2722, #2730, #2736
+Suite: 14 PRs merged (#2729 to #2777); one release, 0.8.47.
+Issues opened: #2743, #2747, #2749, #2751, #2752, #2757, #2764, #2765, #2766, #2767, #2772, #2778, #2779, #2781
+Issues closed: #1910, #2290, #2488, #2504, #2727, #2728, #2733, #2734, #2737, #2738, #2743, #2747, #2749, #2751, #2752, #2764
 
 Read this before anything else. The suite is green under a CLEAN ENVIRONMENT, which is a stronger claim than the one this file made yesterday — run `bun scripts/test-clean-env.ts`, not `bun test`, before believing any gate. Plain `bun test` passes on this machine for reasons that have nothing to do with the code.
 
@@ -100,6 +100,14 @@ Suite: 25/25 SCs done.
 
 ---
 
+**Session 2026-11-25 session 105 (ADR-026 is accepted and its first row ships; the forge probe reads all six behaviours live; the filing guards read commands with a bash grammar):**
+- MERGED: 14 PRs since session 104 (#2729, #2735, #2740, #2742, #2744 to #2746, #2748, #2750, #2753 to #2755, #2768, #2777), the last of them (#2777) on 2026-11-24. One release: 0.8.47 (#2748).
+- ADR-026 IS ACCEPTED AND ITS FIRST ROW SHIPS: Jason accepted ADR-026 (#2755, closing #2488). A criterion's phase is a `placement:` line beneath it, and the phase list is printed on demand, never stored. Its four rows were filed into Engine Phase 7 as #2764 to #2767. Row 1 shipped: placement is read from the line beneath each criterion through the one parser every reader uses (#2777, closing #2764), and SC-2806 ticked. Row 3, the printed view and the table converter, is open as #2782 (#2766), and its dry run converts both placed specs with nothing refused. Row 2, promotion writing a placement line (#2765), is built and waits for #2782, because both bank the same ratchet.
+- THE FORGE PROBE READS ALL SIX BEHAVIOURS LIVE: the forge behaviours our tools rest on are probed live, and the tree is held to their inventory (#2750, closing #1910). The two that need a throwaway pull request are probed too (#2768, closing #2749), and SC-2765 ticked. The arm-time row tells arm-time from fire-time with a stale pin GitHub refuses ('expected head oid does not match the current head oid'). Whether the merge compares the pin again when it fires is not observed, and the row says so.
+- THE FILING GUARDS READ COMMANDS WITH A BASH GRAMMAR (#2735, #2746), released as 0.8.47. ship.js's shellQuote copy goes to the launch bundle, and a test fails if ship.js carries an inlined or mirrored block (#2742, #2744, #2745). A rejected evidence command is recorded on the AC (#2740). AI review out-of-turns messages name ci.reviewDepth (#2729). The aditi and discovery briefs have eval cases (#2753, #2754).
+- WAITING ON JASON: #2756 (#2731, #2705), the write guard's callee identity, stopped at review round 4 under rule 5. It refuses everything main refuses and 75 of its 79 witness rows besides; the redesign the reviewers asked for is #2772. It needs his waiver and a hand merge. #2778, filed by the DDB consumer (prompt-audit does not read the user-level ~/.claude files), needs a criterion or a declared none.
+- OPEN: #2780 (#2779, the reporting-upstream example path) and #2782 (#2766). Filed: #2757, #2772, #2781.
+
 **Session 2026-11-24 session 104 (the bash write guard reads six more write shapes; a refusal retires only on a signed pass list; review depth is configurable; three more ship.js hand copies go to the launch bundle):**
 - MERGED: 20 PRs since session 103 (#2674, and #2695 to #2739), the last of them (#2739) on 2026-11-24. One release: 0.8.46 (#2703, closing #2700).
 - THE BASH WRITE GUARD READS SIX MORE SHAPES: the cp -a row is a real bypass, executed rather than described (#2696, closing #1425); a write call past a long argument (#2699, closing #1407); shutil.copy2, fs.writeFile and the other spellings it missed (#2704, closing #2701); a JavaScript body read with a parser as well as the mask (#2712, closing #2702); a protected name followed through JavaScript path calls, fallbacks and templates (#2718, closing #2714); and the mask binds a protected literal to the assignment holding it (#2721, closing #2720). #2726 (#2705), the scratch exemption's callee identity, stopped at review round 4 under rule 5 and waits on Jason's ruling.
@@ -119,15 +127,4 @@ Suite: 25/25 SCs done.
 - REFUSAL RETIREMENT STOPS TRUSTING AN INCOMPLETE FAILED LIST (#2691): a gate report whose failedChecks misses a failing line, names a check by a bare prefix, repeats a name, or fails while naming nothing retires no earlier refusal. It took four review rounds; the fourth named the cause, that the list is re-typed by the gate's agent, and rule 5 stopped the repairs there. The producer fix is #2692.
 - IN FLIGHT: #2692 (the gate writes which checks passed, and a refusal is retired only on that list); #2693 (SC-2775 wave 6a, the phase-2 decomposition copy). #2650 (the AI review guide, CRC-B13) waits on #2674.
 - OPEN, for Jason: merging #2674 (three review runs per round, #1885), which edits ai-review.yml; #2605 and #2488 as before. 0.8.46 follows #2674.
-
-**Session 2026-11-22 session 102 (ADR-024's consumer surface checks ship; the trial reviewer is deleted; the AI review audit and ADR-025; CI's external API calls are counted and cut):**
-- MERGED: 25 PRs since session 101 (#2569, and #2590 to #2638), the last of them (#2634) on 2026-11-22. No release.
-- WHAT A CONSUMER'S AGENTS LOAD IS CHECKED BEFORE IT SHIPS (ADR-024, merged as #2569): a scaffold run reports the consumer's instruction surface (#2619), against a budget from the consumer's own config (#2622), and the generated conformity test refuses an over-budget surface (#2624). CI renders the scaffold into fixture consumers (#2620), and three lints read that rendering: a brief names only files and tables that exist (#2625, #2623), no template artifact survives (#2629), and no always-loaded rule carries a count a commit can stale (#2632, #2638). rungate prompt-audit lints what a consumer's agents load, sorts findings by owner, and drafts rungate's own as upstream reports (#2636).
-- THE TRIAL REVIEWER IS GONE: the advisory Claude reviewer posted nothing on its last six pull requests while reporting a green check that could not fail. Jason approved deleting it. The shared pin, Bun-version and turn-budget checks moved to ai-review.yml (#2630), lib/ and scripts/ comments stopped naming it as live (#2633), and the workflow and the code only it used are deleted (#2637).
-- THE AI REVIEW AUDIT AND ADR-025 (#2634, merged by Jason): the blocking reviewer's accuracy, cost and consumer access were measured on replayed pull requests. ADR-025 proposes Haiku 5.5 as the default, three runs per round merged, the job's own token instead of the Claude GitHub App, a consumer guide, and retiring CRC-M18. It is merged with status proposed; its five criteria are Jason's to write before plan-issues can file its rows.
-- CI'S EXTERNAL API CALLS ARE COUNTED AND CUT: every external call CI makes is counted, with the biggest callers named (#2614); a stage-ladder run reads each board once, 96 GitHub calls down to 24 (#2618); RepoRails checks run under an API key (#2607), cache readings by file content between runs (#2608), and get a probe budget of their own (#2610).
-- REVIEW CONVERGENCE: CRC-N3 counts a class finding by its own search and holds it open until its population is answered (#2590); CRC-N4 stops repeating advisory findings while a blocking finding is re-reported until fixed (#2593); criteria-named gives a consumer-filed issue its first two days (#2592, SC-2795).
-- SMALLER: the missing-environments case observes the environment check it is named after (#2617).
-- IN FLIGHT: #2640 starts a second hand-edits run for SC-2625 (#2639). The first run failed on one forced milestone edit, on #2463 on 2026-11-19, made because nothing then filed a criterion's successor. Jason approved the restart on #1722 on 2026-11-22. The second run opens at 2026-11-20T12:36:43Z, when that gap closed, and reads MET.
-- OPEN, for Jason: ADR-025's five criteria; #2605 (an eval's CI cost) and #2488 (needs an ADR).
 
