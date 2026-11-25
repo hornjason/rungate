@@ -144,9 +144,12 @@ function codeOf(e: unknown): string {
 /**
  * Every `.md` file under `dir`, following symlinks. A user's skills are often
  * links into another checkout, and Claude Code loads them through the link,
- * so a walk that skipped links would read less than a session loads. Each
- * directory is entered once by its real path, so a cycle through directories
- * ends.
+ * so a walk that skipped links would read less than a session loads.
+ *
+ * Two links to one directory are two skills to a session, so both are read
+ * under their own names (review round 3 of #2844). Only a link back to a
+ * directory the walk is already inside is a cycle, and it is named in
+ * `unreadable` rather than followed.
  *
  * An entry that cannot be read is named in `unreadable` and skipped, never
  * dropped silently and never allowed to end the walk: a link to itself
@@ -156,7 +159,6 @@ function codeOf(e: unknown): string {
  */
 function mdInFollowingLinks(root: string, dir: string, unreadable: string[]): string[] {
   const out: string[] = [];
-  const entered = new Set<string>();
   const tryFs = <T>(rel: string, read: () => T): T | undefined => {
     try {
       return read();
@@ -165,15 +167,19 @@ function mdInFollowingLinks(root: string, dir: string, unreadable: string[]): st
       return undefined;
     }
   };
-  const walk = (abs: string, rel: string): void => {
+  const walk = (abs: string, rel: string, inside: ReadonlySet<string>): void => {
     const real = tryFs(rel, () => realpathSync(abs));
-    if (real === undefined || entered.has(real)) return;
-    entered.add(real);
+    if (real === undefined) return;
+    if (inside.has(real)) {
+      unreadable.push(`${rel} (links back to a directory it is inside)`);
+      return;
+    }
+    const here = new Set(inside).add(real);
     const names = tryFs(rel, () => readdirSync(abs));
     for (const name of (names ?? []).sort((x, y) => x.localeCompare(y))) {
       if (neverLoaded(name)) continue;
       const st = tryFs(`${rel}/${name}`, () => statSync(join(abs, name)));
-      if (st?.isDirectory()) walk(join(abs, name), `${rel}/${name}`);
+      if (st?.isDirectory()) walk(join(abs, name), `${rel}/${name}`, here);
       else if (st?.isFile() && name.endsWith(".md")) out.push(`${rel}/${name}`);
     }
   };
@@ -187,7 +193,7 @@ function mdInFollowingLinks(root: string, dir: string, unreadable: string[]): st
     return out;
   }
   const st = tryFs(dir, () => statSync(at));
-  if (st?.isDirectory()) walk(at, dir);
+  if (st?.isDirectory()) walk(at, dir, new Set());
   return out;
 }
 
@@ -400,7 +406,11 @@ const TEST_ONLY_MARKER = /CANARY_MARKER_FOR_\w+/g;
  * does not: an example command inside a step is part of that step, so a
  * list numbered 1, 3 around one is still a skip.
  */
-export function templateArtifacts(): SurfaceLint {
+export function templateArtifacts(opts: { variables?: boolean } = {}): SurfaceLint {
+  // `variables: false` (#2844, review round 3): the user-level surface is no
+  // render, and Claude Code expands its own `${CLAUDE_PROJECT_DIR}` and
+  // `${CLAUDE_SKILL_DIR}` there, so an unexpanded variable is not a defect.
+  const variables = opts.variables ?? true;
   return {
     name: "template-artifact",
     check(surface) {
@@ -415,7 +425,7 @@ export function templateArtifacts(): SurfaceLint {
           const at = `line ${i + 1}`;
           for (const m of ln.match(TEST_ONLY_MARKER) ?? []) findings.push({ file, message: `${at} carries the test-only marker ${m}` });
           if (roles[i] !== "prose") return;
-          for (const v of ln.match(TEMPLATE_VARIABLE) ?? []) {
+          for (const v of variables ? (ln.match(TEMPLATE_VARIABLE) ?? []) : []) {
             findings.push({ file, message: `${at} carries ${v}, a template variable the render never filled` });
           }
           const item = ln.match(/^(\s*)(\d+)\.\s/);

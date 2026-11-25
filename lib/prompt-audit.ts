@@ -277,8 +277,14 @@ function danglingPathFindings(surface: RenderedSurface, owners: Map<string, Owne
 
 export const PROMPT_AUDIT_LINTS: readonly string[] = [...SURFACE_LINTS.map(l => l.name), "pressure-density", "dangling-path"];
 
-/** The surface lints that also run over the user-level files (#2778). */
-const USER_SURFACE_LINTS = [templateArtifacts(), staleCounts()];
+/**
+ * The surface lints that also run over the user-level files (#2778), each
+ * only where its premise holds there. A user file is no render, so
+ * template-artifact keeps its list-numbering and test-marker checks and drops
+ * the unexpanded-variable check: Claude Code expands `${CLAUDE_SKILL_DIR}`
+ * and its kin in those files itself (review round 3 of #2844).
+ */
+const USER_SURFACE_LINTS = [templateArtifacts({ variables: false }), staleCounts()];
 export const USER_AUDIT_LINTS: readonly string[] = [...USER_SURFACE_LINTS.map(l => l.name), "pressure-density", "dangling-path"];
 
 /** What a default run says about the user-level files it did not read. */

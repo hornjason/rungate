@@ -329,7 +329,7 @@ describe("#2778: the user-level surface is reported unread by default and linted
   test("--user runs pressure-density, stale-count and template-artifact over the user's files too, and keeps the project's owners", () => {
     const home = fakeHome(
       ["CLAUDE.md", `${PRESSURE}\n\nThere are 12 agents here.`],
-      ["agents/helper.md", "Read ${SOURCE_DIRS} first."],
+      ["agents/helper.md", "1. First.\n3. Third, straight after the first."],
       ["commands/go.md", "Go."],
     );
     const root = planted([".claude/agents/marcus.md", "Read ${SOURCE_DIRS}."]);
@@ -342,6 +342,35 @@ describe("#2778: the user-level surface is reported unread by default and linted
     ]);
     expect([...upstreamBodies(audit, "rungate 9.9.9, read for this test").keys()]).toEqual(["template-artifact"]);
     expect(upstreamBodies(audit, "rungate 9.9.9, read for this test").get("template-artifact")).not.toContain("helper.md");
+  });
+
+  // Review round 3 of #2844: a user file is no render, and Claude Code expands
+  // its own variables there, so only the list and marker checks run on it.
+  test("an unexpanded variable in a user file is not a finding; a skipped list number still is", () => {
+    const home = fakeHome(["skills/deploy/SKILL.md", "Run `${CLAUDE_SKILL_DIR}/scripts/deploy.sh` from ${CLAUDE_PROJECT_DIR}.\n\n1. One.\n3. Three."]);
+    const root = planted([".claude/agents/marcus.md", "Read ${SOURCE_DIRS}."]);
+    const audit = promptAudit(root, undefined, { home });
+    expect(audit.findings.map(f => `${f.owner} ${f.lint} ${f.file}: ${f.message}`).sort()).toEqual([
+      "harness template-artifact .claude/agents/marcus.md: " + audit.findings.find(f => f.owner === "harness")!.message,
+      "user template-artifact ~/.claude/skills/deploy/SKILL.md: line 4 numbers a list item 3 straight after 1",
+    ]);
+    expect(audit.findings.find(f => f.owner === "harness")!.message).toContain("${SOURCE_DIRS}");
+  });
+
+  test("two links to one checkout are two skills, each read under its own name; a link back up is named and not followed", () => {
+    const linked = mkdtempSync(join(scratch, "shared-checkout-"));
+    mkdirSync(join(linked, "references"));
+    writeFileSync(join(linked, "SKILL.md"), "Read `references/gone.md` first.\n");
+    symlinkSync(".", join(linked, "loop"));
+    const home = fakeHome(["CLAUDE.md", "Hello."]);
+    mkdirSync(join(home, ".claude", "skills"));
+    symlinkSync(linked, join(home, ".claude", "skills", "a"));
+    symlinkSync(linked, join(home, ".claude", "skills", "b"));
+    const audit = promptAudit(rendered, undefined, { home });
+    expect(audit.user?.files).toBe(3);
+    expect(audit.findings.map(f => f.file)).toEqual(["~/.claude/skills/a/SKILL.md", "~/.claude/skills/b/SKILL.md"]);
+    const unread = audit.unmeasured.join("\n");
+    for (const name of ["skills/a/loop", "skills/b/loop"]) expect(unread, name).toContain(`${USER_PREFIX}${name} (links back to a directory it is inside)`);
   });
 
   test("a skills directory reached through a symlink is read like any other", () => {
