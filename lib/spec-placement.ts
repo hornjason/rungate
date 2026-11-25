@@ -410,7 +410,8 @@ export type PlacementConversion =
  * Decision 5): each id the table lists becomes a `placement:` line at the end
  * of its criterion's block, beside `needs:` and `proved-by:`, and the table
  * loses its criteria column. Refused, with nothing returned to write, when
- * {@link placementConversionDiff} finds anything the conversion would change.
+ * {@link placementConversionDiff} finds anything the conversion would change,
+ * or when the spec states one id in two criterion blocks (#2788).
  */
 export function convertPlacement(content: string): PlacementConversion {
   const table = parsePlacementTable(content);
@@ -422,6 +423,20 @@ export function convertPlacement(content: string): PlacementConversion {
   }
 
   const criteria = parseCriteria(content);
+  // A placement given by id cannot say which of two same-id blocks it belongs
+  // to, and the before/after comparison is keyed by id, so it would not see
+  // the second block go unplaced (#2788).
+  const blocks = new Map<string, number[]>();
+  for (const c of criteria) blocks.set(c.id, [...(blocks.get(c.id) ?? []), c.line]);
+  const repeated = [...blocks].filter(([, at]) => at.length > 1);
+  if (repeated.length > 0) {
+    return {
+      refusal: repeated.map(
+        ([id, at]) =>
+          `${id} is stated in ${at.length} criterion blocks (lines ${at.join(", ")}); a placement given by id cannot say which one it belongs to, so state it once first`,
+      ),
+    };
+  }
   const lines = content.split("\n");
   const after = new Map<number, string[]>();
   let written = 0;
