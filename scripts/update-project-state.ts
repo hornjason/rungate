@@ -18,6 +18,7 @@ import {
   missingStateVerdict,
   projectStateDay,
   projectStateViolations,
+  readSession,
   selectRecentSessions,
   sessionDatingViolations,
 } from "../lib/project-state-shape";
@@ -457,7 +458,7 @@ if (changed.length === 0) {
 }
 console.log(
   `project-state: rendered ${selection.rendered.length} of ${state.sessions.length} session(s) — ` +
-    `${selection.rendered.map(s => s.date.split(" ")[0]).join(", ") || "none"}`,
+    `${selection.rendered.map(s => readSession(s).day ?? s.date).join(", ") || "none"}`,
 );
 if (selection.undated.length > 0) {
   // UNMEASURED, by name. An entry with no readable date ranks below every

@@ -400,9 +400,13 @@ export function sessionAheadOfStamp(updated: unknown, sessionDate: unknown): str
  * {@link PROJECT_STATE_ZONE}: what it has just stamped `updated` with.
  *
  * A session's date is typed by hand. The top-level session is the one being
- * written, so it is held to `today`: a date typed by the UTC day is refused
- * whether the record is written before New York midnight (a day ahead) or
- * after it (the day before work that is now today's). An entry in
+ * written, so it is held to `today`, the day the writer runs. That is all
+ * the writer can see: it has no record of when the date was typed. So a date
+ * typed by the UTC day is refused when the writer runs before New York
+ * midnight, a day ahead, and passes when it runs after midnight on the typed
+ * day (#2814 review). The writer runs on every pre-commit in the primary
+ * checkout, so it refuses on any run on a later day than the session, edit
+ * or not, and the hook then stages nothing. An entry in
  * `sessions[]` dated after `today` was typed ahead; one with no day is left
  * to the renderer, which already names it. Every date is read by
  * {@link readSession}. Run after {@link projectStateViolations}, which has

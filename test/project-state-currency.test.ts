@@ -93,7 +93,11 @@ function isShallow(): boolean {
 }
 
 const state = JSON.parse(readFileSync(STATE, "utf-8"));
-const latestDate: string = state.session?.date ?? "";
+// The day the newest session carries, read by `readSession` as every other
+// caller reads it: a date the writer accepts, such as "2026-11-25 session 7",
+// reaches the window arithmetic as its day, not as the whole text (#2814 review).
+export const newestDay = (st: { session?: unknown }): string => readSession(st.session).day ?? "";
+const latestDate: string = newestDay(state);
 
 /**
  * The session number an entry in `sessions[]` declares, or `null`, as
@@ -227,6 +231,15 @@ function prsLandedAfter(dateStr: string): string[] | null {
 }
 
 describe("project-state currency", () => {
+  test("#2814: the newest session reaches the window arithmetic as its day, whatever follows it", () => {
+    // The writer accepts "YYYY-MM-DD session N" for the top-level session; the
+    // whole text is no day, and the window arithmetic refuses it.
+    const st = { session: { number: 7, date: "2026-11-25 session 7" } };
+    expect(newestDay(st)).toBe("2026-11-25");
+    expect(() => windowStart(newestDay(st))).not.toThrow();
+    expect(() => windowStart("2026-11-25 session 7")).toThrow();
+  });
+
   test("the file names a latest session with a date", () => {
     expect(latestDate, "project-state.json has no session.date — nothing to compare against").toMatch(
       /^\d{4}-\d{2}-\d{2}/,
