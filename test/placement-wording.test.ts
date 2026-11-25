@@ -103,7 +103,7 @@ function unwrapped(node: ts.Node): ts.Node {
 
 /** What the guard knows about an interpolated value: the texts it can hold, and whether it is a string at all. */
 export interface Reader {
-  /** Every text the value can hold, or null when that cannot be told. */
+  /** Every text the value can hold, or null when that cannot be told. The caller passes it past its wrappers ({@link unwrapped}). */
   readings(node: ts.Expression): string[] | null;
   /** Whether the value is typed as a string, so a `+` chain of such values is a sentence. */
   isString(node: ts.Expression): boolean;
@@ -141,7 +141,7 @@ export function checkerReader(checker: ts.TypeChecker): Reader {
   const stringy = (t: ts.Type): boolean =>
     t.isUnion() ? t.types.some(stringy) : (t.flags & ts.TypeFlags.StringLike) !== 0;
   return {
-    readings: node => texts(checker.getTypeAtLocation(unwrapped(node))),
+    readings: node => texts(checker.getTypeAtLocation(node)),
     isString: node => stringy(checker.getTypeAtLocation(node)),
   };
 }
@@ -543,7 +543,7 @@ describe("#2800: user-facing text names a placement table only as the older form
         if (!isHeading(e)) return;
         const where = `${relative(ROOT, f)}:${file.getLineAndCharacterOfPosition(e.getStart(file)).line + 1}`;
         sites.push(where);
-        if (JSON.stringify(reader.readings(e)) !== JSON.stringify(heading)) unread.push(where);
+        if (JSON.stringify(reader.readings(unwrapped(e) as ts.Expression)) !== JSON.stringify(heading)) unread.push(where);
       };
       const visit = (n: ts.Node): void => {
         if (ts.isTemplateSpan(n)) check(n.expression);
@@ -575,7 +575,7 @@ describe("#2800: user-facing text names a placement table only as the older form
       // The value standing for the table after the word placement.
       "const e = `the placement: ${name} decides`;",
       // A number spells no word, so it is read as X and never fails closed.
-      "const f = `line ${n}: the table is read`;",
+      "const f = `line ${n}: table rows are read`;",
       // An unread value a word away from either word, or in another sentence, passes.
       "const g = `the ${name} is the table`;",
       "const h = `line ${name}: the phase is read`;",
@@ -587,7 +587,7 @@ describe("#2800: user-facing text names a placement table only as the older form
     const passages = sourceStrings(program.getSourceFile(at)!, checkerReader(program.getTypeChecker()));
     expect(passages.filter(p => p.opaqueTable).map(p => p.line)).toEqual([4, 5, 6, 7, 8, 13]);
     expect(passages.find(p => p.line === 4)!.text).toBe("the X table decides");
-    expect(passages.find(p => p.line === 9)!.text).toBe("line X: the table is read");
+    expect(passages.find(p => p.line === 9)!.text).toBe("line X: table rows are read");
   }, 30_000);
 
   test("in a spec, a criterion block is not read as prose, and is listed instead", () => {
