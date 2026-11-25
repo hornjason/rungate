@@ -102,6 +102,8 @@ export interface ParsedCriterion {
   id: string;
   /** 1-indexed line of the `- [ ]` bullet, for a message somebody can act on. */
   line: number;
+  /** 1-indexed last line of the criterion's block: its bullet, prose, markers and annotations. */
+  end: number;
   /** Whether the box is ticked. */
   ticked: boolean;
   /** The criterion's prose, normalised, which is what {@link criterionFingerprint} hashes. */
@@ -260,6 +262,7 @@ export function parseCriteria(content: string): ParsedCriterion[] {
     const annotations = new Map<string, string>();
     const placements: { value: string; line: number }[] = [];
     let text = m[3];
+    let last = i;
 
     for (let j = i + 1; j < lines.length; j++) {
       const next = lines[j];
@@ -270,7 +273,10 @@ export function parseCriteria(content: string): ParsedCriterion[] {
       // annotation, and treating it as a terminator would silently sever
       // every criterion in a strict-compliance spec from its own evidence —
       // which reads exactly like a spec that never recorded any.
-      if (/^\s*<!--/.test(next)) continue;
+      if (/^\s*<!--/.test(next)) {
+        last = j;
+        continue;
+      }
 
       // The key must be one of {@link ANNOTATION_KEYS}, not any `word:`.
       // A general `[a-z-]+:` was tried before the prose branch below, so a
@@ -284,6 +290,7 @@ export function parseCriteria(content: string): ParsedCriterion[] {
       if (kv && (ANNOTATION_KEYS as readonly string[]).includes(kv[1])) {
         if (kv[1] === "placement") placements.push({ value: kv[2].trim(), line: j + 1 });
         annotations.set(kv[1], kv[2].trim());
+        last = j;
         continue;
       }
       // An indented line that is not `key: value` is a continuation of the
@@ -291,6 +298,7 @@ export function parseCriteria(content: string): ParsedCriterion[] {
       // clause onto the next line would silently preserve the fingerprint.
       if (/^\s{2,}\S/.test(next)) {
         text += ` ${next.trim()}`;
+        last = j;
         continue;
       }
       // A blank line ENDS this criterion's annotation block. Walking past it
@@ -310,6 +318,7 @@ export function parseCriteria(content: string): ParsedCriterion[] {
     out.push({
       id: m[2],
       line: i + 1,
+      end: last + 1,
       ticked: m[1].toLowerCase() === "x",
       text,
       needs: annotations.get("needs") ?? null,

@@ -17,6 +17,16 @@
  * of a phase's criteria no open issue names. All three are things somebody
  * has to act on, and two of them are judgement.
  *
+ * ## Placement in either form (ADR-026)
+ *
+ * `--placement` prints each placement value with its criteria, in phase
+ * order, read through the one parser whichever form the spec uses, and
+ * writes nothing. `--convert-placement` moves a `### Phase placement` table
+ * into a `placement:` line beneath each criterion, drops the table's criteria
+ * column and retitles what is left `### What each placement means`; it writes the spec only with `--write`, and refuses
+ * without writing when any criterion would read differently afterwards.
+ * Neither reaches the network or needs `--repo` or `--prefix`.
+ *
  * ## It does NOT create issues, and that is a decision
  *
  * Which criteria belong together in one issue is judgement — a criterion
@@ -47,12 +57,18 @@ import {
   renameMilestone,
 } from "../lib/github";
 import {
+  PLACEMENT_HEADING,
+  PLACEMENT_MEANINGS_HEADING,
+  convertPlacement,
   milestoneBody,
   milestonePlan,
   placementCoverage,
+  placementLines,
   placementReading,
+  placementView,
   uncoveredByMilestone,
 } from "../lib/spec-placement";
+import { writeSpec } from "../lib/write-spec";
 import { specPathSweep } from "../lib/board-mirror";
 import { readMilestonePrefix } from "../lib/live-issues";
 
@@ -131,6 +147,8 @@ const LIVE_GITHUB: PlanSpecGitHub = {
 
 const USAGE = `rungate plan-spec <spec.md> --repo <owner/name> --prefix <name> [--rename-from <old name>] [--write] [--json]
 rungate plan-spec --coverage [--project-root <dir>] [--json]
+rungate plan-spec <spec.md> --placement [--json]
+rungate plan-spec <spec.md> --convert-placement [--write] [--json]
 
   --repo     owner/name. Defaults to $GITHUB_REPOSITORY.
   --prefix   the milestone name prefix, e.g. "Convergence" gives
@@ -146,7 +164,17 @@ rungate plan-spec --coverage [--project-root <dir>] [--json]
   --coverage every spec in the tree and whether its criteria are placed,
              instead of one spec. Takes no spec, reaches no network and
              writes nothing. A spec with no placement table is named as
-             UNPLANNED rather than contributing nothing (SC-2611).`;
+             UNPLANNED rather than contributing nothing (SC-2611).
+  --placement
+             each placement value with its criteria, in phase order,
+             read from the spec's placement lines or its table. Writes
+             nothing (ADR-026, SC-2808).
+  --convert-placement
+             move the spec's placement table into a placement: line
+             beneath each criterion, drop the table's criteria column and
+             retitle the rest "What each placement means".
+             Writes only with --write, and refuses without writing when any
+             criterion would read differently afterwards (SC-2808).`;
 
 /**
  * The repo-wide reading, printed. Reaches no network and writes nothing.
@@ -185,6 +213,62 @@ function reportCoverage(root: string, asJson: boolean): number {
   return 0;
 }
 
+/**
+ * `--placement`: each placement value with its criteria, in phase order
+ * (ADR-026 Decision 2). Reaches no network and writes nothing. An UNMEASURED
+ * reading refuses rather than printing a view nobody can trust.
+ */
+function printPlacement(content: string, asJson: boolean): number {
+  const reading = placementReading(content);
+  if (reading.reading === "UNMEASURED") {
+    return refuse(asJson, `UNMEASURED — ${reading.unmeasuredReasons.join("; ")}`);
+  }
+  const view = placementView(content);
+  if (asJson) {
+    console.log(JSON.stringify({ view, unplaced: reading.unplaced }, null, 2));
+    return 0;
+  }
+  const source = placementLines(content).length > 0 ? "its placement lines" : `its \`${PLACEMENT_HEADING}\` table`;
+  console.log(`placement, read from ${source}:\n`);
+  for (const v of view) console.log(`  ${v.placement}: ${v.ids.join(", ")}`);
+  if (reading.unplaced.length > 0) console.log(`\n  in no placement: ${reading.unplaced.join(", ")}`);
+  return 0;
+}
+
+/**
+ * `--convert-placement`: the table moved into placement lines (ADR-026
+ * Decision 5). Without `--write` it says what it would write. With it, the
+ * spec is written through `writeSpec`, pinned to the bytes that were read, so
+ * a concurrent edit refuses the write instead of being lost.
+ */
+function convertTable(path: string, content: string, write: boolean, asJson: boolean): number {
+  const c = convertPlacement(content);
+  if ("nothing" in c) {
+    console.log(asJson ? JSON.stringify({ written: 0, reason: c.nothing }) : c.nothing);
+    return 0;
+  }
+  if ("refusal" in c) {
+    return refuse(
+      asJson,
+      `refused, nothing written — converting would change what the spec says:\n` + c.refusal.map(r => `  - ${r}`).join("\n"),
+    );
+  }
+  if (write) {
+    const result = writeSpec(path, c.after, { expected: content });
+    if (!result.written) return refuse(asJson, result.refusal ?? `${path} was not written`);
+  }
+  if (asJson) {
+    console.log(JSON.stringify({ written: write ? c.written : 0, placementLines: c.written }));
+  } else {
+    console.log(
+      write
+        ? `wrote ${c.written} placement line(s) beneath their criteria; the table lost its criteria column and is now \`${PLACEMENT_MEANINGS_HEADING}\``
+        : `would write ${c.written} placement line(s) beneath their criteria, drop the table's criteria column and retitle it \`${PLACEMENT_MEANINGS_HEADING}\`. Nothing written; re-run with --write.`,
+    );
+  }
+  return 0;
+}
+
 export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Promise<number> {
   let parsed;
   try {
@@ -197,6 +281,8 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
         write: { type: "boolean", default: false },
         json: { type: "boolean", default: false },
         coverage: { type: "boolean", default: false },
+        placement: { type: "boolean", default: false },
+        "convert-placement": { type: "boolean", default: false },
         "project-root": { type: "string" },
       },
       allowPositionals: true,
@@ -225,6 +311,17 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
   const specArg = positionals[0];
   if (!specArg) {
     return refuse(values.json, `no spec given`, true);
+  }
+  // ADR-026: the view and the converter read one spec and reach no network,
+  // so neither needs --repo or --prefix.
+  if (values.placement || values["convert-placement"]) {
+    if (values.placement && values["convert-placement"]) {
+      return refuse(values.json, `--placement prints and --convert-placement converts; give one`, true);
+    }
+    const at = isAbsolute(specArg) ? specArg : join(values["project-root"] ?? process.cwd(), specArg);
+    if (!existsSync(at)) return refuse(values.json, `no such spec: ${at}`);
+    const text = readFileSync(at, "utf-8");
+    return values.placement ? printPlacement(text, values.json) : convertTable(at, text, values.write, values.json);
   }
   // ONE reading, trimmed once. `if (!prefix)` was false for `"   "`, and
   // this command WRITES: a blank prefix would have created live milestones

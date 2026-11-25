@@ -39,10 +39,17 @@
 import { parseFrontmatter } from "./frontmatter";
 import { PHASE_TOKEN, readMilestoneTitle } from "./milestone-title";
 import { oneScMentionPattern } from "./sc-ids";
-import { parseCriteria } from "./spec-evidence";
+import { criterionFingerprint, parseCriteria } from "./spec-evidence";
 
 /** The heading a spec puts its placement table under. One spelling, by fiat. */
 export const PLACEMENT_HEADING = "### Phase placement";
+
+/**
+ * Where a converted table's other columns go (ADR-026 Decision 6): the
+ * meaning of each placement value, under a heading no placement reader reads,
+ * so a meaning that names a criterion cannot read as a second placement.
+ */
+export const PLACEMENT_MEANINGS_HEADING = "### What each placement means";
 
 /**
  * Placement values that are NOT phases, and so get no milestone.
@@ -336,6 +343,114 @@ export function placementReading(content: string): PlacementReading {
       .map(r => r.placement)
       .filter(p => !PHASE_VALUE.test(p) && !NON_PHASE_PLACEMENTS.some(v => p.startsWith(v))),
   };
+}
+
+/**
+ * Each placement value with its criteria, in phase order (ADR-026 Decision 2):
+ * phases by number, then every other value in the order it was first seen. Read
+ * through {@link parsePlacementRows}, so it is the same view whichever form the
+ * spec uses, and a value two table rows share is shown once.
+ */
+export function placementView(content: string): { placement: string; ids: string[] }[] {
+  const byValue = new Map<string, string[]>();
+  for (const r of parsePlacementRows(content)) byValue.set(r.placement, [...(byValue.get(r.placement) ?? []), ...r.ids]);
+  const phase = (p: string): number | null => {
+    const m = p.match(PHASE_VALUE);
+    return m ? Number(m[1]) : null;
+  };
+  const rows = [...byValue].map(([placement, ids], seen) => ({ placement, ids, seen, n: phase(placement) }));
+  rows.sort((a, b) => {
+    if (a.n !== null && b.n !== null) return a.n - b.n;
+    if (a.n !== null) return -1;
+    if (b.n !== null) return 1;
+    return a.seen - b.seen;
+  });
+  return rows.map(({ placement, ids }) => ({ placement, ids }));
+}
+
+/**
+ * Why converting `before` into `after` would change what the spec says: a
+ * criterion placed differently, a reading that moves, or a fingerprint that
+ * changes. Empty when the conversion changes the form and nothing else
+ * (ADR-026 Decision 5).
+ */
+export function placementConversionDiff(before: string, after: string): string[] {
+  const out: string[] = [];
+  const was = placementsById(before);
+  const now = placementsById(after);
+  for (const id of new Set([...was.keys(), ...now.keys()])) {
+    if (was.get(id) !== now.get(id)) out.push(`${id}: placed ${was.get(id) ?? "nowhere"} before and ${now.get(id) ?? "nowhere"} after`);
+  }
+  const rb = placementReading(before);
+  const ra = placementReading(after);
+  if (ra.reading !== rb.reading) {
+    out.push(`the reading would be ${ra.reading} afterwards, not ${rb.reading}: ${ra.unmeasuredReasons.join("; ")}`);
+  }
+  const prints = new Map(parseCriteria(before).map(c => [c.id, criterionFingerprint(c.text)]));
+  const afterCriteria = parseCriteria(after);
+  for (const c of afterCriteria) {
+    if (prints.get(c.id) !== criterionFingerprint(c.text)) out.push(`${c.id}: its fingerprint would change`);
+  }
+  if (afterCriteria.length !== prints.size) out.push(`the spec would state ${afterCriteria.length} criteria, not ${prints.size}`);
+  return out;
+}
+
+export type PlacementConversion =
+  | { after: string; written: number }
+  | { nothing: string }
+  | { refusal: string[] };
+
+/**
+ * A spec's `### Phase placement` table moved into placement lines (ADR-026
+ * Decision 5): each id the table lists becomes a `placement:` line at the end
+ * of its criterion's block, beside `needs:` and `proved-by:`, and the table
+ * loses its criteria column. Refused, with nothing returned to write, when
+ * {@link placementConversionDiff} finds anything the conversion would change.
+ */
+export function convertPlacement(content: string): PlacementConversion {
+  const table = parsePlacementTable(content);
+  if (!table.some(r => r.ids.length > 0)) {
+    return { nothing: `no \`${PLACEMENT_HEADING}\` table lists a criterion, so there is nothing to convert` };
+  }
+  if (placementLines(content).length > 0) {
+    return { refusal: ["this spec already has placement lines beside a table that lists criteria; keep one source before converting"] };
+  }
+
+  const criteria = parseCriteria(content);
+  const lines = content.split("\n");
+  const after = new Map<number, string[]>();
+  let written = 0;
+  for (const r of table) {
+    for (const id of r.ids) {
+      const c = criteria.find(x => x.id === id);
+      if (!c) continue; // an id the spec states nowhere: the diff below refuses it
+      after.set(c.end - 1, [...(after.get(c.end - 1) ?? []), `      placement: ${r.placement}`]);
+      written += 1;
+    }
+  }
+
+  // The table's criteria column is the second cell, the one the parser reads.
+  // What is left is each value's meaning, and moves under its own heading
+  // (ADR-026 Decision 6): a meaning that names a criterion would otherwise
+  // read as a second table of them.
+  const start = lines.findIndex(l => l.startsWith(PLACEMENT_HEADING));
+  if (start >= 0) lines[start] = PLACEMENT_MEANINGS_HEADING;
+  for (let i = start + 1; start >= 0 && i < lines.length; i++) {
+    if (/^#{1,3} /.test(lines[i]!)) break;
+    if (!lines[i]!.startsWith("|")) continue;
+    const cells = lines[i]!.split("|");
+    if (cells.length > 3) cells.splice(2, 1);
+    lines[i] = cells.join("|");
+  }
+
+  const out: string[] = [];
+  lines.forEach((line, i) => {
+    out.push(line);
+    out.push(...(after.get(i) ?? []));
+  });
+  const converted = out.join("\n");
+  const diff = placementConversionDiff(content, converted);
+  return diff.length > 0 ? { refusal: diff } : { after: converted, written };
 }
 
 /** What one spec's planning state is, across the whole tree — SC-2611. */

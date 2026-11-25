@@ -528,7 +528,11 @@ const UNCLAIMED_RATCHET = 150;
 // placement is read from the `placement:` line beneath it, a reading of the
 // placement parser that no registered pattern expresses; the `SC-2806` describe
 // in test/spec-to-board-pipeline.test.ts names it (2026-11-24).
-const CLAIMED_UNBINDABLE = 211;
+// 212: SC-2808 (#2766) ticked by `sync-sc-status --only SC-2808` — `plan-spec`
+// prints the placement view and converts a table, a reading of the command
+// that no registered pattern expresses; the `SC-2808` describe in
+// test/plan-spec.test.ts names it (2026-11-24).
+const CLAIMED_UNBINDABLE = 212;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
