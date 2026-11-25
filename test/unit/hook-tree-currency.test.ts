@@ -486,8 +486,9 @@ describe("#1216: the mechanism has a production caller", () => {
       .filter(n => n.endsWith(".hook.ts"))
       .map(n => n.replace(/\.hook\.ts$/, ""));
 
-    // Through the helper, so the machine's settings reach this case reduced to
-    // the hook files and path variables the census reads (#2798 review).
+    // Through the settings helper (#2792): it runs the census and the currency
+    // reading on the raw settings documents, inside the helper, and returns
+    // the verdict with every command and detail withheld.
     const r = liveRegistrationCurrency({
       repoRoot: REPO_ROOT,
       base: BASE,

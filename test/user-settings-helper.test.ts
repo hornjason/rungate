@@ -290,6 +290,8 @@ describe("#2792: homePath names a path under home, never home itself or a settin
       [".claude/settings.json/"],
       ["..", "link-home", ".claude", "settings.json"],
       [".pai", "to-claude", "settings.json"],
+      // Absent, behind a symlinked directory: followed through the nearest ancestor that exists.
+      [".pai", "to-claude", "settings.local.json"],
       [".pai", "s.json"],
     ];
     for (const segments of refused) expect(() => homePathAt(h, ...segments), segments.join(" | ")).toThrow();

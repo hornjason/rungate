@@ -26,9 +26,9 @@
  * nothing to keep in step: the census reads what it always read.
  */
 
-import { readFileSync, realpathSync } from "fs";
+import { existsSync, readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
-import { join, resolve, sep } from "path";
+import { basename, dirname, join, resolve, sep } from "path";
 import {
   hookRegistration,
   registrationCensus,
@@ -297,7 +297,10 @@ export const liveUserSettingsMentions = (needle: string) => settingsMentions(liv
  * slashes are gone; a path that leaves `home` is refused; and the result is
  * compared with each settings file case-folded, since the volume this runs on
  * may not tell `.Claude` from `.claude`, and through symlinks, since a link
- * elsewhere under home can name the same file.
+ * elsewhere under home can name the same file. A path that does not exist yet
+ * is followed through its nearest ancestor that does, so a link to
+ * `~/.claude` names `settings.local.json` before the file is made (#2810
+ * review, round 2).
  */
 export function homePathAt(home: string, ...segments: string[]): string {
   if (segments.length === 0) throw new Error("homePath names a path under the home directory, never the directory itself");
@@ -305,8 +308,14 @@ export function homePathAt(home: string, ...segments: string[]): string {
   const p = resolve(root, ...segments);
   if (!p.startsWith(root + sep)) throw new Error("homePath names a path under the home directory, never one outside it");
   const real = (x: string): string => {
+    let at = x;
+    const rest: string[] = [];
+    while (!existsSync(at) && dirname(at) !== at) {
+      rest.unshift(basename(at));
+      at = dirname(at);
+    }
     try {
-      return realpathSync(x);
+      return join(realpathSync(at), ...rest);
     } catch {
       return x;
     }
