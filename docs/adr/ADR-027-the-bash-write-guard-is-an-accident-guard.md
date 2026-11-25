@@ -1,6 +1,6 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-25
 updated: 2026-11-25
 ---
@@ -9,7 +9,7 @@ updated: 2026-11-25
 
 ## Status
 
-**Proposed, 2026-11-25.** Jason chose this direction on 2026-11-25, after an audit of the guard ("Shrink via ADR"). Filed as #2841. He merges this ADR. Still open for him: the wording of SC-2810 and SC-2811, quoted under Criteria.
+**Accepted, 2026-11-25.** Jason merged it in #2843. Jason chose this direction on 2026-11-25, after an audit of the guard ("Shrink via ADR"). Filed as #2841. The wording of SC-2810 and SC-2811 below is as merged.
 
 ## Context
 
