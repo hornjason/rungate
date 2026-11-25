@@ -7,8 +7,8 @@
  * the output. Making each assertion careful about what it prints fixed one
  * site per round. This makes it structural: a machine-owned scope is reduced,
  * on read, to what the census suites use — the hook files the commands execute,
- * and the `env` keys some scope's hook path references — and nothing else ever
- * reaches a test. AC-11, which asks a wider question than the census, gets a
+ * and the `env` values that are absolute paths — and nothing else ever reaches
+ * a test. AC-11, which asks a wider question than the census, gets a
  * count taken over the raw file instead, never the file.
  *
  * `test/user-settings-helper.test.ts` refuses any other reader in `test/`.
@@ -22,9 +22,6 @@ import { readRegistrationScopes, settingsScopePaths, type ScopeReading } from ".
 import { readEnvScopes, type EnvReading } from "../../lib/hook-target-tree";
 import { readRegistrationCurrency, type RegistrationCurrency } from "../../lib/hook-tree-currency";
 import { executedHookPath, settingsCommands } from "../../lib/hook-trees";
-
-/** A variable a path reads: `${NAME}` or `$NAME`. */
-const VAR_REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g;
 
 /** What a command stands for once reduced, when it executes no hook file. */
 export const NO_HOOK_FILE = "<a command that executes no hook file>";
@@ -55,29 +52,35 @@ function reduceHooks(doc: string): Record<string, unknown> {
   return { [REDUCED_EVENT]: [{ hooks }] };
 }
 
-/** Each variable a reduced command's hook path reads. */
-function pathVariables(commands: string[]): string[] {
-  return commands.flatMap(c => [...c.matchAll(VAR_REF)].map(m => (m[1] ?? m[2])!));
-}
-
 const NOT_JSON = "a machine settings file is not JSON, so it was not read; nothing of it is printed here";
 
 /**
+ * An `env` value the copy keeps: an absolute path, with no whitespace and no
+ * shell or quoting character. What the census reads `env` for is to resolve a
+ * hook path, and a hook path's variable holds a directory. No token format on
+ * this machine starts with `/` (`gho_`, `sk-lf-`, `pk-lf-`, a JSON key).
+ */
+const PATH_VALUE = /^\/[^\s"'`$;|&<>(){}\\]*$/;
+
+/**
  * A settings document rebuilt from an allowlist, never redacted in place:
- * `hooks` with each command reduced to the hook file it executes, and the
- * `env` keys named in `referenced`. Throws, quoting nothing, when the
+ * `hooks` with each command reduced to the hook file it executes, and each
+ * `env` value that is an absolute path. Throws, quoting nothing, when the
  * document is not JSON.
  *
- * `referenced` is every variable a hook path reads in ANY scope, not only this
- * document's (#2798 review). The census merges `env` across scopes before it
- * resolves a path, so a variable one file defines and another file's hook
- * reads must keep its value, and a variable two files define must keep both,
- * or a refusal ("defined 2 times") turns into a clean reading.
+ * **Decided by the value, not by who reads it** (#2798 review, round 3). The
+ * census merges `env` across every scope and resolves the paths of every
+ * command it reads, the repo registry's included. Two rounds kept the
+ * variables some input referenced, and each round found an input the set had
+ * missed: another scope, then the registry. A rule over the value cannot miss
+ * an input.
  *
- * The limit, stated: a variable a hook path does read is kept, value and all,
- * because resolving the path needs it.
+ * The limits, stated: a variable a hook reads whose value is not an absolute
+ * path is dropped, so the census reads that hook's path as unresolved, an
+ * UNMEASURED reading and never a pass; and an absolute path is kept whether or
+ * not anything reads it, because a location is not a secret.
  */
-export function redactSettings(src: string, referenced: ReadonlySet<string>): string {
+export function redactSettings(src: string): string {
   let doc: { env?: unknown };
   try {
     doc = JSON.parse(src);
@@ -88,43 +91,21 @@ export function redactSettings(src: string, referenced: ReadonlySet<string>): st
   const env: Record<string, unknown> = {};
   const given = doc?.env;
   if (given !== null && typeof given === "object" && !Array.isArray(given)) {
-    for (const [k, v] of Object.entries(given as Record<string, unknown>)) if (referenced.has(k)) env[k] = v;
+    for (const [k, v] of Object.entries(given as Record<string, unknown>)) if (typeof v === "string" && PATH_VALUE.test(v)) env[k] = v;
   }
   return JSON.stringify({ hooks, env }, null, 2);
-}
-
-/**
- * Every variable a hook path reads, across every scope document given. A
- * document that is absent, unreadable or not JSON adds nothing here; reading
- * it through {@link settingsReader} is what refuses it.
- */
-export function referencedVariables(paths: string[]): Set<string> {
-  const out = new Set<string>();
-  for (const path of paths) {
-    let commands: string[];
-    try {
-      commands = settingsCommands([readFileSync(path, "utf-8")]).map(reduceCommand);
-    } catch {
-      continue; // its own read through settingsReader throws or reads null
-    }
-    for (const v of pathVariables(commands)) out.add(v);
-  }
-  return out;
 }
 
 /**
  * A `readFile` for `readRegistrationScopes` and `readEnvScopes`, and for any
  * direct read of a settings scope. The committed project scope is returned
  * verbatim, because it is in git. Every other path, machine-owned or the
- * gitignored project-local one, is returned through {@link redactSettings},
- * keeping every variable any of the four scopes' hook paths reads.
+ * gitignored project-local one, is returned through {@link redactSettings}.
  * An absent file is `null`; any other read error is thrown, never read as
  * absence.
  */
 export function settingsReader(repoRoot: string, home: string): (path: string) => string | null {
-  const scopes = settingsScopePaths(repoRoot, home);
-  const committed = scopes.find(s => s.scope === "project-settings")!.path;
-  const referenced = referencedVariables(scopes.map(s => s.path));
+  const committed = settingsScopePaths(repoRoot, home).find(s => s.scope === "project-settings")!.path;
   return path => {
     let src: string;
     try {
@@ -133,7 +114,7 @@ export function settingsReader(repoRoot: string, home: string): (path: string) =
       if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw e;
     }
-    return path === committed ? src : redactSettings(src, referenced);
+    return path === committed ? src : redactSettings(src);
   };
 }
 
@@ -272,13 +253,13 @@ const PATH_BUILDERS = new Set(["join", "resolve"]);
  *   reads under it; which ones read settings is not a list this can keep
  *   current, so it refuses them all and the helper offers live wrappers.
  * - **A home path that is, or may be, a settings file.** A `join` or
- *   `resolve`, `homePath`, a template literal, or a `+` concatenation, rooted
+ *   `resolve`, a template literal, or a `+` concatenation, rooted
  *   at home or at a variable built from home. Its text is resolved through
  *   string literals and `const` bindings to them, and normalised. It is
  *   refused when it ends in `settings.json` or `settings.local.json`, and when
- *   it passes through `.claude` with any part the resolver cannot read: a
- *   name held in a parameter could be the settings file (#2798 review, round
- *   2, which found a name held in a variable read as nothing).
+ *   any part of it cannot be read: a name held in a parameter could be the
+ *   settings file, or a `..` back into `~/.claude` (#2798 review, rounds 2
+ *   and 3).
  *
  * "Home" is `homedir()`, `os.homedir()`, `process.env.HOME`, `homePath(...)`,
  * or a variable initialised from one of them. A call over planted directories
@@ -371,11 +352,12 @@ export function homeSettingsReads(source: string): number[] {
     }
     return null;
   };
-  /** Whether a rooted path is, or may be, a settings scope. */
-  const maySettings = (t: Tail): boolean => {
-    const tail = normalisedTail(t.text);
-    return SETTINGS_FILE.test(tail) || (t.unknown && /(^|\/)\.claude(\/|$)/.test(tail));
-  };
+  /**
+   * Whether a rooted path is, or may be, a settings scope. Any unreadable part
+   * may be: a name under `~/.pai` can still be `../.claude/settings.json`
+   * (#2798 review, round 3).
+   */
+  const maySettings = (t: Tail): boolean => t.unknown || SETTINGS_FILE.test(normalisedTail(t.text));
   // To a fixed point, so a variable built from a variable built from home is
   // rooted too. Bindings only ever gain information, so it ends: a name
   // declared twice with two readings becomes unreadable once and stays so,
@@ -433,9 +415,13 @@ export function homeSettingsReads(source: string): number[] {
     if (ts.isCallExpression(n)) {
       const name = calleeName(n);
       const args = [...n.arguments];
-      if (name !== null && (PATH_BUILDERS.has(name) || name === "homePath")) {
+      if (name !== null && PATH_BUILDERS.has(name)) {
         const tail = rootedTail(n);
         if (tail !== null && maySettings(tail)) flag(n);
+      } else if (name === "homePath") {
+        // Not flagged here: `homePath` normalises what it is given and throws on
+        // a settings path at run time, however it is spelled. A path built ON
+        // it is a `join` or a template, and is judged above or below.
       } else if (!isMatcher(n)) {
         const handsHome = args.some(
           a =>
@@ -452,7 +438,11 @@ export function homeSettingsReads(source: string): number[] {
     }
     if (ts.isTemplateExpression(n) || (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken)) {
       const tail = rootedTail(n);
-      if (tail !== null && maySettings(tail)) flag(n);
+      // Text with a space in what could be read is a message that starts with
+      // a path, `${archive} holds ${n} runs`, not a path: only a settings
+      // file it names outright counts there.
+      const message = tail !== null && /\s/.test(tail.text);
+      if (tail !== null && (message ? SETTINGS_FILE.test(normalisedTail(tail.text)) : maySettings(tail))) flag(n);
     }
     ts.forEachChild(n, visit);
   };

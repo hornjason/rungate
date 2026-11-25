@@ -56,7 +56,7 @@ const PLANTED = {
 
 describe("#2792: the helper keeps what the census reads and nothing else", () => {
   test("redactSettings keeps each hook's executed file and the variables it references, and nothing else", () => {
-    const out = redactSettings(JSON.stringify(PLANTED, null, 2), new Set(["RUNGATE_HOOKS_DIR"]));
+    const out = redactSettings(JSON.stringify(PLANTED, null, 2));
     expect(out).not.toMatch(/planted2792/);
     const doc = JSON.parse(out);
     expect(doc.env).toEqual({ RUNGATE_HOOKS_DIR: "/srv/rungate/hooks" });
@@ -88,7 +88,7 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
     ];
     for (const shape of shapes) {
       const src = JSON.stringify(shape);
-      const out = redactSettings(src, new Set(["H"]));
+      const out = redactSettings(src);
       expect(out).not.toMatch(/planted2792/);
       expect(settingsCommands([out]).map(executedHookPath)).toEqual(settingsCommands([src]).map(executedHookPath));
     }
@@ -123,6 +123,22 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
     }
   });
 
+  test("#2798 round 3: an env value is kept when it is an absolute path, whoever reads it, and dropped otherwise", () => {
+    const env = {
+      UNREAD_DIR: "/srv/nobody/reads/this",
+      READ_DIR: "/srv/rungate/hooks",
+      TILDE: "~/hooks",
+      RELATIVE: "hooks",
+      SPACED: "/srv/My Hooks",
+      SHELL: "/bin/sh -c 'echo $GH_TOKEN'",
+      TOKEN: "gho_planted2792",
+      JSONKEY: '{"private_key":"planted2792"}',
+      NUMBER: 3,
+    };
+    const doc = JSON.parse(redactSettings(JSON.stringify({ env, hooks: {} })));
+    expect(doc.env).toEqual({ UNREAD_DIR: "/srv/nobody/reads/this", READ_DIR: "/srv/rungate/hooks" });
+  });
+
   test("every hook path resolves the same through the copies as through the originals, across scopes", () => {
     // #2798 review: the census merges `env` across every scope before it
     // resolves a path, so a variable one file defines and another file's hook
@@ -140,6 +156,7 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
     const VARS = ["A", "B", "C"];
     const kinds = new Map<string, number>();
     let crossScope = 0;
+    let registryReads = 0;
     for (let i = 0; i < 200; i++) {
       const repo = mkdtempSync(join(tmpdir(), "rg-2798-repo-"));
       const home = mkdtempSync(join(tmpdir(), "rg-2798-home-"));
@@ -173,10 +190,18 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
           const defs = definedIn.get(v) ?? new Set<number>();
           if ([...defs].some(d => ![...readers].includes(d))) crossScope++;
         }
+        // #2798 round 3: the repo registry is an input too, and its commands
+        // read variables no settings file's hook may read.
+        const registry = Array.from({ length: Math.floor(rand() * 3) }, (_, k) => {
+          const v = pick([...VARS, "literal"]);
+          if (v !== "literal") (readIn.get(v) ?? readIn.set(v, new Set()).get(v)!).add(4);
+          return v === "literal" ? `bun /lit/R${k}.hook.ts` : `bun ${"$"}{${v}}/hooks/R${k}.hook.ts`;
+        });
+        if (registry.some(c => c.includes("$"))) registryReads++;
         const raw = (p: string): string | null => (existsSync(p) ? readFileSync(p, "utf-8") : null);
         const copy = settingsReader(repo, home);
-        const original = readRegistrationScopes(repo, home, raw, []);
-        const reduced = readRegistrationScopes(repo, home, copy, []);
+        const original = readRegistrationScopes(repo, home, raw, registry);
+        const reduced = readRegistrationScopes(repo, home, copy, registry);
         expect(JSON.stringify([reduced, readEnvScopes(repo, home, copy)])).not.toMatch(/planted2798/);
         const files = (rs: typeof original) => rs.map(r => r.commands?.map(executedHookPath) ?? null);
         expect(files(reduced), `case ${i}: a scope's hook files differ`).toEqual(files(original));
@@ -198,6 +223,7 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
     expect(kinds.get("resolved") ?? 0).toBeGreaterThan(10);
     expect(kinds.get("twice") ?? 0).toBeGreaterThan(10);
     expect(kinds.get("undefined") ?? 0).toBeGreaterThan(10);
+    expect(registryReads).toBeGreaterThan(50);
     expect(crossScope).toBeGreaterThan(50);
   });
 
@@ -282,8 +308,9 @@ describe("#2792: no test reads a machine settings scope except through the helpe
       ['const f = "/.claude/settings.json";\nconst p = homedir() + f;', [2]],
       ['const g = (x: string) => homedir() + "/.claude/" + x;', [1]],
       ["const g = (x: string) => `${homedir()}/.claude/${x}`;", [1]],
-      ['readFileSync(homePath(".claude/settings.json"));', [1]],
-      ['readFileSync(homePath(".claude/", "settings.json"));', [1]],
+      // #2798 round 3: an unreadable part anywhere under home, not only under ~/.claude.
+      ['const readUser = (rel: string) => readFileSync(join(homedir(), rel), "utf-8");', [1]],
+      ['const g = (x: string) => join(homedir(), ".pai", x);', [1]],
       ['join(homedir(), ".claude", "x", "..", "settings.json");', [1]],
       ['const d = join(homedir(), ".claude");\nconst f = "settings.local.json";\nreadFileSync(join(d, f));', [3]],
       // One name declared twice reads as unknown, and the scan still ends.
@@ -294,7 +321,10 @@ describe("#2792: no test reads a machine settings scope except through the helpe
     ];
     for (const [src, lines] of named) expect(homeSettingsReads(src), src).toEqual(lines);
     // An unreadable name outside ~/.claude, and ~/.claude itself, are not settings files.
-    expect(homeSettingsReads('const g = (x: string) => join(homedir(), ".pai", x);')).toEqual([]);
+    // `homePath` is not flagged: it refuses every spelling of a settings path at run time (below).
+    expect(homeSettingsReads('readFileSync(homePath(".claude/settings.json"));')).toEqual([]);
+    // A message that starts with a home path is not a path.
+    expect(homeSettingsReads('const d = join(homedir(), ".rungate");\nconst m = `${d} holds ${n} runs` + "and more";')).toEqual([]);
     expect(homeSettingsReads('const d = join(homedir(), ".claude");')).toEqual([]);
     // An assertion comparing to home, a home path that is not a settings file,
     // and a command string naming one are not reads.
