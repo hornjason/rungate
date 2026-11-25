@@ -536,7 +536,12 @@ const UNCLAIMED_RATCHET = 150;
 // writes a `placement:` line beneath the criterion it adds in a spec that uses
 // them, a reading of the promotion writer that no registered pattern expresses;
 // the `SC-2807` describe in test/finding-promotion.test.ts names it (2026-11-25).
-const CLAIMED_UNBINDABLE = 213;
+// 214: SC-2809 (#2767) ticked by `sync-sc-status --only SC-2809` — both engine
+// specs place their criteria in `placement:` lines, and two same-phase
+// additions merge cleanly where the table form conflicts, a reading of the
+// specs and of `git merge-file` that no registered pattern expresses; the
+// `SC-2809` describe in test/spec-placement-merge.test.ts names it (2026-11-25).
+const CLAIMED_UNBINDABLE = 214;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

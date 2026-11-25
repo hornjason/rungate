@@ -59,12 +59,6 @@
       "from": 2796,
       "to": 2805,
       "note": "ADR-024 criteria (#2568); above #2589's 2795, which took the block's first id on main first"
-    },
-    {
-      "owner": "rg/2488-placement-adr",
-      "from": 2806,
-      "to": 2809,
-      "note": "ADR-026 criteria (#2488); above ADR-024's 2796-2805"
     }
   ]
 }

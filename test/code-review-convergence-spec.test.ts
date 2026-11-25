@@ -34,7 +34,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { PLACEMENT_HEADING, parsePlacementRows } from "../lib/spec-placement";
+import { PLACEMENT_MEANINGS_HEADING, parsePlacementRows } from "../lib/spec-placement";
 
 const REPO = join(import.meta.dir, "..");
 const SPEC = "specs/CODE-REVIEW-CONVERGENCE-SPEC.md";
@@ -584,31 +584,6 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: the prose around the table cann
     seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20,
   };
 
-  /**
-   * Each `### Phase N — …` section's text, keyed by phase number.
-   *
-   * The LAST section must stop at the placement table, not at the end of the
-   * document. The first version of this ended it at `### Exit conditions`,
-   * which sits after the table — so Phase 6's "prose" contained every row of
-   * the table and the case reported 38 violations, every one an artefact. An
-   * instrument that swallows the thing it is comparing against reports total
-   * disagreement, which is at least loud; the same slip one boundary smaller
-   * would have reported a believable number.
-   */
-  const phaseSections = (src: string): Map<number, string> => {
-    const out = new Map<number, string>();
-    const heads = [...src.matchAll(/^#{2,4} Phase (\d+)\b.*$/gm)];
-    const stops = [src.indexOf(`\n${PLACEMENT_HEADING}`), src.indexOf("\n### Exit conditions")]
-      .filter(i => i > 0);
-    heads.forEach((h, i) => {
-      const start = h.index! + h[0].length;
-      const after = i + 1 < heads.length ? heads[i + 1].index! : src.length;
-      const end = Math.min(after, ...stops.filter(s => s > start));
-      out.set(Number(h[1]), src.slice(start, end));
-    });
-    return out;
-  };
-
   test("a `**<Word> more belong here**` count equals the ids that sentence then names", () => {
     expect(body, `${SPEC} is missing`).not.toBeNull();
     const hits = [...body!.matchAll(/\*\*([A-Za-z]+) more belong here[^*]*\.\*\*([\s\S]*?)(?=\n\n|\n\*\*)/g)];
@@ -1033,8 +1008,10 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: every criterion has exactly one
   const body = existsSync(join(REPO, SPEC)) ? readFileSync(join(REPO, SPEC), "utf-8") : null;
   const HEADING = "### Phase placement — every criterion has exactly one home";
 
-  // The placement table's rows, as {placement, ids}. MEMBERSHIP IS THE SECOND
-  // CELL and nothing else — the same claim-vs-citation discipline the bucket
+  // Each placement value with its criteria, as {placement, ids}. Since #2767
+  // MEMBERSHIP IS THE `placement:` LINE beneath each criterion and nothing
+  // else; an older spec's table still reads through its second cell. Either
+  // way it is a declaring position — the same claim-vs-citation discipline the bucket
   // partition above draws, and for the same measured reason: a scan of the
   // phase prose reported four criteria placed that Phase 0 only mentions, and
   // missed three that Phase 5 writes as one slash-joined run headed by CRC-M1,
@@ -1057,9 +1034,15 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: every criterion has exactly one
   // disagreement between what the test polices and what the command creates
   // would be invisible from both sides, and the command is the one that
   // writes to GitHub.
+  // Since #2767 the spec places each criterion with a `placement:` line
+  // beneath it, and the table keeps only the meanings, under their own
+  // heading (ADR-026). `parsePlacementRows` reads either form, so the planted
+  // table below still runs the same reader.
   const rows = (src: string): { placement: string; ids: string[] }[] => {
-    expect(src.includes(HEADING), `the placement section is gone or renamed — rename it here too`)
-      .toBe(true);
+    expect(
+      src.includes(HEADING) || src.includes(PLACEMENT_MEANINGS_HEADING),
+      `neither the placement table nor its meanings section is here — rename it here too`,
+    ).toBe(true);
     return parsePlacementRows(src);
   };
 
@@ -1089,8 +1072,7 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: every criterion has exactly one
     expect(
       declared.filter(id => !placed.includes(id)),
       `criteria with NO phase. The backlog is built from this document and an unplaced ` +
-        `criterion reads as finished. Add each to a row of the placement table — ` +
-        `"${HEADING.replace("### ", "")}".`,
+        `criterion reads as finished. Give each a \`placement: Phase N\` line beneath it.`,
     ).toEqual([]);
     expect(
       placed.filter((id, i) => placed.indexOf(id) !== i),
@@ -1107,6 +1089,36 @@ describe("specs/CODE-REVIEW-CONVERGENCE-SPEC.md: every criterion has exactly one
       `the placement table names criteria this spec does not declare. Either the id was ` +
         `renamed — fix the row — or the placement was invented.`,
     ).toEqual([]);
+  });
+
+  // #2790 review: the spec says a value must be in the meanings table's first
+  // column, so the test reads that column rather than a list of its own.
+  const meaningValues = (src: string): string[] => {
+    const lines = src.split("\n");
+    const start = lines.findIndex(l => l.startsWith(PLACEMENT_MEANINGS_HEADING));
+    expect(start, "the meanings section is gone or renamed — rename it here too").toBeGreaterThan(-1);
+    const out: string[] = [];
+    for (let i = start + 1; i < lines.length && !/^#{1,3} /.test(lines[i]!); i++) {
+      const l = lines[i]!;
+      if (!l.startsWith("| ") || l.startsWith("|---") || lines[i + 1]?.startsWith("|---")) continue;
+      out.push((l.split("|")[1] ?? "").replaceAll("*", "").trim());
+    }
+    return out;
+  };
+
+  /** Each placement value the document's criteria carry that its meanings table does not define. */
+  const undefinedPlacements = (src: string): string[] => {
+    const defined = meaningValues(src);
+    return [...new Set(rows(src).map(r => r.placement))].filter(v => !defined.includes(v));
+  };
+
+  test("every placement value a criterion carries is defined in the meanings table's first column", () => {
+    expect(meaningValues(body!).length, "the meanings table parsed no rows").toBeGreaterThan(5);
+    expect(undefinedPlacements(body!), "a placement value the meanings table does not define").toEqual([]);
+    // The same reading over a planted copy with the Phase 5 row deleted refuses it by name.
+    const withoutPhase5 = body!.replace(/^\| \*\*Phase 5\*\* \|.*\n/m, "");
+    expect(withoutPhase5).not.toBe(body);
+    expect(undefinedPlacements(withoutPhase5)).toEqual(["Phase 5"]);
   });
 
   test("a missing and a duplicated placement are both caught, so the cases above can fail", () => {
