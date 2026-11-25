@@ -30,6 +30,10 @@
  *   module that exports one. Before #2816 every interpolation read as `X`,
  *   so a message building the heading from `PLACEMENT_HEADING` never showed
  *   the guard the words "Phase placement table";
+ * - and failing closed where it cannot resolve: a value it cannot read,
+ *   directly before the word "table", is refused rather than read as `X`,
+ *   so a shape the resolver does not model is caught rather than passed
+ *   (#2823 review, round 4);
  * - the prose of `docs/guides/`, `.claude/rules/`, `README.md`, `templates/`
  *   and `specs/`, with a spec's criterion blocks left out: criterion text is
  *   Jason's to write, so a criterion naming the table is listed for him and
@@ -62,6 +66,21 @@ export function sentencesNamingTable(text: string): string[] {
 interface Passage {
   line: number;
   text: string;
+  /**
+   * A value this guard could not resolve sits directly before the word
+   * "table", so the sentence may name the placement table through a shape the
+   * resolver does not model. Refused, not read as `X` and passed: the guard
+   * fails closed (#2823 review, round 4).
+   */
+  opaqueTable?: true;
+}
+
+/** Marks an unresolved value while a passage is built; shown as `X`. */
+const UNRESOLVED = "\u0000";
+/** A passage built with UNRESOLVED marks, as the text a reader sees and whether it fails closed. */
+function passage(line: number, raw: string): Passage {
+  const opaque = /\u0000[\s`*'"]{0,4}table\b/i.test(raw);
+  return opaque ? { line, text: raw.replaceAll(UNRESOLVED, "X"), opaqueTable: true } : { line, text: raw.replaceAll(UNRESOLVED, "X") };
 }
 
 /** A string literal's text, through `as const`, `satisfies` and parentheses, or null. */
@@ -163,7 +182,7 @@ export function sourceStrings(path: string, source: string, constants: Map<strin
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
     // An interpolation stands for a value, so its place keeps the sentence whole.
     if (ts.isTemplateExpression(node))
-      return node.head.text + node.templateSpans.map(s => `${value(s.expression) ?? "X"}${s.literal.text}`).join("");
+      return node.head.text + node.templateSpans.map(s => `${value(s.expression) ?? UNRESOLVED}${s.literal.text}`).join("");
     return null;
   };
   const plus = (node: ts.Node): node is ts.BinaryExpression =>
@@ -181,7 +200,7 @@ export function sourceStrings(path: string, source: string, constants: Map<strin
       };
       flatten(node);
       if (parts.some(p => literal(p) !== null)) {
-        out.push({ line: at(node), text: parts.map(p => literal(p) ?? value(p) ?? "X").join("") });
+        out.push(passage(at(node), parts.map(p => literal(p) ?? value(p) ?? UNRESOLVED).join("")));
         for (const p of parts) {
           const b = bare(p);
           if (literal(p) === null) visit(p);
@@ -192,7 +211,7 @@ export function sourceStrings(path: string, source: string, constants: Map<strin
       }
     }
     const text = literal(node);
-    if (text !== null) out.push({ line: at(node), text });
+    if (text !== null) out.push(passage(at(node), text));
     ts.forEachChild(node, visit);
   };
   visit(file);
@@ -259,6 +278,7 @@ export function placementWordingViolations(): string[] {
     const source = readFileSync(f, "utf-8");
     for (const p of sourceStrings(f, source, stringConstants(f, source))) {
       for (const s of sentencesNamingTable(p.text)) out.push(`${relative(ROOT, f)}:${p.line}: ${s}`);
+      if (p.opaqueTable) out.push(`${relative(ROOT, f)}:${p.line}: a value this guard cannot read names a table — ${p.text.replace(/\s+/g, " ").trim()}`);
     }
   }
   for (const target of ["docs/guides", ".claude/rules", "README.md", "templates", "specs"]) {
@@ -280,6 +300,11 @@ export function placementWordingViolations(): string[] {
  * too, so it is struck here.
  */
 const KEPT: { file: string; phrase: string; why: string }[] = [
+  {
+    file: "lib/surface-lint.ts",
+    phrase: "sends the agent to the X table in X, which has no table by that name",
+    why: "the table is whatever a rule file cites, read from the finding; the message reports a dangling reference and never says a phase is decided there (#2823 review, round 4)",
+  },
   {
     file: "lib/spec-placement.ts",
     phrase: "Derived from the spec's Phase placement table by rungate plan-spec.",
@@ -447,6 +472,25 @@ describe("#2800: user-facing text names a placement table only as the older form
     }
     expect(sites.length, "no interpolation of the heading was found, so this reads nothing").toBeGreaterThanOrEqual(5);
     expect(unresolved).toEqual([]);
+  });
+
+  test("#2823: a value the guard cannot read, directly before \"table\", fails closed", () => {
+    const at = join(ROOT, "lib", "planted.ts");
+    const source = [
+      'import { PLACEMENT_HEADING } from "./spec-placement";',
+      // A constant the resolver does not model: an identifier initialiser.
+      "const H = PLACEMENT_HEADING;",
+      "const a = `the ${H} table decides`;",
+      "const b = \"the \" + unknownName + \" table decides\";",
+      "const c = `the \\`${other()}\\` table decides`;",
+      // Not before "table": read as X and passed, as before.
+      "const d = `line ${n}: the phase is read`;",
+      // Resolved: read as the heading, and refused as a naming sentence instead.
+      "const e = `the ${PLACEMENT_HEADING} table decides`;",
+    ].join("\n");
+    const passages = sourceStrings(at, source, stringConstants(at, source));
+    expect(passages.filter(p => p.opaqueTable).map(p => p.line)).toEqual([3, 4, 5]);
+    expect(passages.find(p => p.line === 3)!.text).toBe("the X table decides");
   });
 
   test("in a spec, a criterion block is not read as prose, and is listed instead", () => {
