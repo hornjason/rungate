@@ -232,7 +232,7 @@ function printPlacement(content: string, asJson: boolean): number {
     console.log(JSON.stringify({ view, unplaced: reading.unplaced }, null, 2));
     return 0;
   }
-  const source = placementLines(content).length > 0 ? "its placement lines" : `its \`${PLACEMENT_HEADING}\` table`;
+  const source = placementLines(content).length > 0 ? "its placement lines" : `its older placement table (\`${PLACEMENT_HEADING}\`)`;
   console.log(`placement, read from ${source}:\n`);
   for (const v of view) console.log(`  ${v.placement}: ${v.ids.join(", ")}`);
   if (reading.unplaced.length > 0) console.log(`\n  in no placement: ${reading.unplaced.join(", ")}`);

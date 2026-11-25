@@ -25,6 +25,11 @@
  * - every string and template literal in `lib/` and `scripts/`, parsed with
  *   TypeScript, so a comment is never read, and a `+` chain of them read as
  *   the one sentence a user sees;
+ * - with each interpolated name that is a string constant read as its value:
+ *   the file's own top-level `const`, or a named import from a relative
+ *   module that exports one. Before #2816 every interpolation read as `X`,
+ *   so a message building the heading from `PLACEMENT_HEADING` never showed
+ *   the guard the words "Phase placement table";
  * - the prose of `docs/guides/`, `.claude/rules/`, `README.md`, `templates/`
  *   and `specs/`, with a spec's criterion blocks left out: criterion text is
  *   Jason's to write, so a criterion naming the table is listed for him and
@@ -32,7 +37,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
-import { join, relative } from "path";
+import { dirname, join, relative, resolve } from "path";
 import ts from "typescript";
 
 import { parseCriteria } from "../lib/spec-evidence";
@@ -59,6 +64,53 @@ interface Passage {
   text: string;
 }
 
+/** A string literal's text, through `as const`, `satisfies` and parentheses, or null. */
+function stringValue(node: ts.Expression): string | null {
+  let n: ts.Expression = node;
+  while (ts.isAsExpression(n) || ts.isSatisfiesExpression(n) || ts.isParenthesizedExpression(n)) n = n.expression;
+  return ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) ? n.text : null;
+}
+
+/** Each top-level `const NAME = "…"` of a source, by name; only exported ones when asked. */
+function topLevelConstants(file: ts.SourceFile, exportedOnly: boolean): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const st of file.statements) {
+    if (!ts.isVariableStatement(st) || !(st.declarationList.flags & ts.NodeFlags.Const)) continue;
+    const exported = st.modifiers?.some(m => m.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+    if (exportedOnly && !exported) continue;
+    for (const d of st.declarationList.declarations) {
+      const value = d.initializer ? stringValue(d.initializer) : null;
+      if (ts.isIdentifier(d.name) && value !== null) out.set(d.name.text, value);
+    }
+  }
+  return out;
+}
+
+/**
+ * The string constants a source can interpolate, by the name it uses there:
+ * its own top-level `const NAME = "…"`, and each named import from a
+ * relative module whose export is one (#2816). A name it cannot resolve, a
+ * re-export or a computed value, still reads as `X`.
+ */
+export function stringConstants(path: string, source: string): Map<string, string> {
+  const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  const out = topLevelConstants(file, false);
+  for (const st of file.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const spec = st.moduleSpecifier.text;
+    const named = st.importClause?.namedBindings;
+    if (!spec.startsWith(".") || named === undefined || !ts.isNamedImports(named)) continue;
+    const target = resolve(dirname(path), `${spec.replace(/\.(?:ts|js)$/, "")}.ts`);
+    if (!existsSync(target)) continue;
+    const exported = topLevelConstants(ts.createSourceFile(target, readFileSync(target, "utf-8"), ts.ScriptTarget.Latest, true), true);
+    for (const el of named.elements) {
+      const value = exported.get((el.propertyName ?? el.name).text);
+      if (value !== undefined) out.set(el.name.text, value);
+    }
+  }
+  return out;
+}
+
 /**
  * The string and template literals of a TypeScript source, each with its
  * line. Comments are not nodes, so none is read. A `+` chain holding a
@@ -66,14 +118,17 @@ interface Passage {
  * a value goes (#2812 review: a sentence split across two literals was read
  * as two halves, neither naming the table).
  */
-export function sourceStrings(path: string, source: string): Passage[] {
+export function sourceStrings(path: string, source: string, constants: Map<string, string> = new Map()): Passage[] {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
   const out: Passage[] = [];
   const at = (node: ts.Node) => file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+  // A name holding a known string constant reads as its value (#2816); any other value reads as X.
+  const value = (node: ts.Node): string | null => (ts.isIdentifier(node) ? (constants.get(node.text) ?? null) : null);
   const literal = (node: ts.Node): string | null => {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
     // An interpolation stands for a value, so its place keeps the sentence whole.
-    if (ts.isTemplateExpression(node)) return node.head.text + node.templateSpans.map(s => `X${s.literal.text}`).join("");
+    if (ts.isTemplateExpression(node))
+      return node.head.text + node.templateSpans.map(s => `${value(s.expression) ?? "X"}${s.literal.text}`).join("");
     return null;
   };
   const plus = (node: ts.Node): node is ts.BinaryExpression =>
@@ -89,7 +144,7 @@ export function sourceStrings(path: string, source: string): Passage[] {
       };
       flatten(node);
       if (parts.some(p => literal(p) !== null)) {
-        out.push({ line: at(node), text: parts.map(p => literal(p) ?? "X").join("") });
+        out.push({ line: at(node), text: parts.map(p => literal(p) ?? value(p) ?? "X").join("") });
         for (const p of parts) if (literal(p) === null) visit(p);
         return;
       }
@@ -159,7 +214,8 @@ export function placementWordingViolations(): string[] {
   const out: string[] = [];
   for (const f of [...filesUnder("lib", ".ts"), ...filesUnder("scripts", ".ts")]) {
     if (f.endsWith(".test.ts")) continue;
-    for (const p of sourceStrings(f, readFileSync(f, "utf-8"))) {
+    const source = readFileSync(f, "utf-8");
+    for (const p of sourceStrings(f, source, stringConstants(f, source))) {
       for (const s of sentencesNamingTable(p.text)) out.push(`${relative(ROOT, f)}:${p.line}: ${s}`);
     }
   }
@@ -264,6 +320,39 @@ describe("#2800: user-facing text names a placement table only as the older form
       "4: X's placement table could not be read",
       "6: UNMEASURED: the spec's placement table could not be read.",
     ]);
+  });
+
+  test("#2816: an interpolated string constant is read as its value, whether declared here or imported", () => {
+    const at = join(ROOT, "lib", "planted.ts");
+    const source = [
+      'import { PLACEMENT_HEADING } from "./spec-placement";',
+      'import { PLACEMENT_HEADING as H2 } from "./spec-placement.ts";',
+      'const OWN = "### Phase placement";',
+      "const a = `no \\`${PLACEMENT_HEADING}\\` table lists a criterion`;",
+      'const b = "its " + OWN + " table decides";',
+      "const c = `the ${H2} table decides`;",
+      "const d = `the ${unknown} table decides`;",
+      "const e = `an older placement table (${PLACEMENT_HEADING}) is still read`;",
+    ].join("\n");
+    const found = sourceStrings(at, source, stringConstants(at, source)).flatMap(p =>
+      sentencesNamingTable(p.text).map(s => `${p.line}: ${s}`),
+    );
+    expect(found).toEqual([
+      "4: no ### Phase placement table lists a criterion",
+      "5: its ### Phase placement table decides",
+      "6: the ### Phase placement table decides",
+    ]);
+    // Without the constants, the same source shows the guard none of them.
+    expect(sourceStrings(at, source).flatMap(p => sentencesNamingTable(p.text))).toEqual([]);
+  });
+
+  test("#2816: every file interpolating PLACEMENT_HEADING has it resolved", () => {
+    const files = [...filesUnder("lib", ".ts"), ...filesUnder("scripts", ".ts")].filter(
+      f => !f.endsWith(".test.ts") && readFileSync(f, "utf-8").includes("${PLACEMENT_HEADING}"),
+    );
+    expect(files.length, "no file interpolates the heading, so this reads nothing").toBeGreaterThanOrEqual(2);
+    const unresolved = files.filter(f => !stringConstants(f, readFileSync(f, "utf-8")).has("PLACEMENT_HEADING"));
+    expect(unresolved.map(f => relative(ROOT, f))).toEqual([]);
   });
 
   test("in a spec, a criterion block is not read as prose, and is listed instead", () => {
