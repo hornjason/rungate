@@ -497,6 +497,16 @@ describe("#2845: create-sc places a criterion after the last one, and --behavior
     expect(lines.indexOf(NEW), "placed inside the comment").toBe(lines.indexOf("-->") + 1);
   });
 
+  // Review round 4 of #2846: endings are kept line by line.
+  test("a mixed-ending spec changes by exactly the placed line, which takes the ending of the line it follows", () => {
+    const mixed = "# S\r\n\n- [ ] SC-9100: a\r\n  needs: x\n\n## Notes\r\n";
+    const out = placeScLine(mixed, NEW);
+    expect(out).toBe("# S\r\n\n- [ ] SC-9100: a\r\n  needs: x\n" + NEW + "\n\n## Notes\r\n");
+    const crlfLast = placeScLine("# S\n\n- [ ] SC-9100: a\r\n\n## Notes\n", NEW);
+    expect(crlfLast).toBe("# S\n\n- [ ] SC-9100: a\r\n" + NEW + "\r\n\n## Notes\n");
+    expect(placeScLine("# Nothing\r\n", NEW)).toBe("# Nothing\r\n" + NEW + "\r\n");
+  });
+
   test("an HTML comment nothing closes is refused, naming the line", () => {
     expect(() => placeScLine("# S\n\n- [ ] SC-9100: a\n<!-- never closed\n", NEW)).toThrow(/an HTML comment at line 4 that nothing closes/);
   });

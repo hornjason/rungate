@@ -98,6 +98,21 @@ describe("#2845: the bank counts a placed behavioural criterion", () => {
   });
 });
 
+describe("#2846: a CRLF deferred spec's bank moves with the line placed in it", () => {
+  test("the LF view the CLI hands the bank counts the placed line; the raw CRLF text counts nothing", () => {
+    const before = (spec(true, [9001, 9002]) + "\n## Notes\n").replace(/\n/g, "\r\n");
+    const after = placeScLine(before, formatSCLine(9003, behavioralStatement("X happens")));
+    const asLf = (t: string) => t.replace(/\r\n/g, "\n");
+    const r = bankAfterAppend(bank("specs/FIX.md", 2), "specs/FIX.md", asLf(before), asLf(after));
+    expect(r.ok).toBe(true);
+    expect(JSON.parse((r as { text: string }).text).deferred[1]).toEqual({ path: "specs/FIX.md", criteria: 3 });
+    // Why the CLI normalises: handed the raw CRLF text, the bank sees no criterion before or after.
+    expect(bankAfterAppend(bank("specs/FIX.md", 2), "specs/FIX.md", before, after)).toEqual({ ok: true, text: null });
+    // And the CLI does hand it the LF view.
+    expect(readFileSync(join(ROOT, "scripts", "create-sc.ts"), "utf-8")).toContain("bankAfterAppend(bankRead, specKey, asLf(content), asLf(newContent))");
+  });
+});
+
 describe("writeSpecWithBank: the spec and the bank land together or not at all (review, #2298)", () => {
   /** An in-memory writer that fails on the paths it is told to. */
   function writer(failOn: string[] = []) {

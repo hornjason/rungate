@@ -711,13 +711,18 @@ export function behavioralStatement(sentence: string): string {
  * unless a fence or an HTML comment hides it, and the new line goes at the
  * first boundary after the last visible criterion's block where neither is
  * open. A fence or comment nothing closes is refused, by line, because no
- * place after it is visible. A CRLF spec is read as LF and written back as
- * CRLF; otherwise `parseCriteria` sees no criterion in it at all.
+ * place after it is visible.
+ *
+ * Line endings are read once, as LF, and written back line by line (review
+ * round 4 of #2846). Every existing line keeps its own ending, and the new
+ * line takes the ending of the line it follows, so a mixed-ending spec
+ * changes by exactly one line. `parseCriteria` reads no criterion in a CRLF
+ * line, so the LF view is also what the CLI hands the deferral bank.
  */
 export function placeScLine(spec: string, scLine: string): string {
-  const crlf = spec.includes("\r\n");
-  const text = crlf ? spec.replace(/\r\n/g, "\n") : spec;
-  const lines = text.split("\n");
+  const raw = spec.split("\n");
+  const lines = raw.map(l => (l.endsWith("\r") ? l.slice(0, -1) : l));
+  const text = lines.join("\n");
   const regions = renderedRegions(lines);
   if (regions.unclosed !== null) {
     throw new Error(
@@ -725,16 +730,16 @@ export function placeScLine(spec: string, scLine: string): string {
     );
   }
   const last = parseCriteria(text).filter(c => !regions.hidden[c.line - 1]).at(-1);
-  let out: string;
   if (last === undefined) {
-    out = text.trimEnd() + "\n" + scLine + "\n";
-  } else {
-    let at = last.end;
-    while (at < lines.length && regions.openAfter[at - 1]) at++;
-    lines.splice(at, 0, scLine);
-    out = lines.join("\n");
+    // The ending of the file's last line break, so an appended line matches it.
+    const lastBreak = spec.lastIndexOf("\n");
+    const eol = lastBreak > 0 && spec[lastBreak - 1] === "\r" ? "\r\n" : "\n";
+    return spec.trimEnd() + eol + scLine + eol;
   }
-  return crlf ? out.replace(/\n/g, "\r\n") : out;
+  let at = last.end;
+  while (at < lines.length && regions.openAfter[at - 1]) at++;
+  raw.splice(at, 0, scLine + (raw[at - 1]?.endsWith("\r") ? "\r" : ""));
+  return raw.join("\n");
 }
 
 /**
