@@ -716,8 +716,10 @@ export function behavioralStatement(sentence: string): string {
  * Line endings are read once, as LF, and written back line by line (review
  * round 4 of #2846). Every existing line keeps its own ending, and the new
  * line takes the ending of the line it follows, so a mixed-ending spec
- * changes by exactly one line. `parseCriteria` reads no criterion in a CRLF
- * line, so the LF view is also what the CLI hands the deferral bank.
+ * changes by exactly one line. The LF view is placement's alone: the CLI
+ * hands the deferral bank the raw text, the same text and reader its check
+ * (`board-snapshot`) uses, so the two agree. `parseCriteria` reading no
+ * criterion in a CRLF line is a reader-level gap of its own (review round 5).
  */
 export function placeScLine(spec: string, scLine: string): string {
   const raw = spec.split("\n");
