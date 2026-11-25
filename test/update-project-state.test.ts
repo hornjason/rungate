@@ -375,6 +375,18 @@ describe("update-project-state", () => {
     expect(md, "an empty list rendered a label with nothing after it").not.toContain("Issues closed:");
   });
 
+  // #2817: the renderer prints the number the shared reading gives, so a
+  // string entry and a #-prefixed one render alike.
+  test("#2817: issue entries written as strings render as the numbers they name", () => {
+    writeTestJson({
+      updated: "2026-01-01", priorities: [],
+      phases: [{ name: "Phase 0", scs: [{ id: "SC-9441", what: "A", done: true }] }],
+      session: { number: 1, date: projectStateDay(), summary: "s", suite: "t", issues_created: ["#1675", "1680", 1690] },
+      sessions: []
+    });
+    expect(run()).toContain("Issues opened: #1675, #1680, #1690");
+  });
+
   /**
    * A field that was never written renders nothing — not `#undefined`.
    *

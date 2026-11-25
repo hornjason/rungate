@@ -28,7 +28,9 @@ import { spawnSync } from "child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { parseDeclaredCloses } from "../scripts/check-state-record-closes";
 import {
+  issueNumber,
   missingStateVerdict,
   projectStateViolations,
   readSession,
@@ -191,6 +193,13 @@ describe("#project-state: the shape is checked before the renderer reads it", ()
       [[1675, null], "session.issues_created[1]"],
       [[1675, { n: 1 }], "session.issues_created[1]"],
       [[1675, "not-a-number"], "session.issues_created[1]"],
+      // #2817: Number() read these as numbers the renderer then printed garbled.
+      [[1675, " 1675"], "session.issues_created[1]"],
+      [[1675, "1e3"], "session.issues_created[1]"],
+      [[1675, "0x10"], "session.issues_created[1]"],
+      [[1675, "#12a"], "session.issues_created[1]"],
+      [[1675, "#0"], "session.issues_created[1]"],
+      [[1675, 1.5], "session.issues_created[1]"],
     ] as [unknown, string][]) {
       const doc = good() as any;
       doc.session = { number: 1, date: "d", summary: "s", suite: "t", issues_created: value };
@@ -519,5 +528,33 @@ describe("#2809: one reader decides what a session is and its day, and every cal
     expect(selectRecentSessions([a, b], 2).rendered).toEqual([b, a]);
     // The top-level session carries its number as a field.
     expect(readSession({ number: 106, date: "2026-11-25" }).number).toBe(106);
+  });
+});
+
+// #2817: the shape check, the renderer and the closures check each read an
+// issue number their own way. One rule now: a positive integer, or digits with
+// one optional leading #.
+describe("#2817: one reading of an issue number in a session's lists", () => {
+  const ITEMS: unknown[] = [1675, "1675", "#1675", " 1675", "1675 ", "1e3", "0x10", "#12a", "##12", "0", "#0", 0, -3, 1.5, null, "", "#"];
+
+  test("issueNumber reads a positive integer, or digits with one optional #, and nothing else", () => {
+    expect(ITEMS.map(issueNumber)).toEqual([1675, 1675, 1675, null, null, null, null, null, null, null, null, null, null, null, null, null, null]);
+  });
+
+  test("the shape check refuses exactly what issueNumber refuses", () => {
+    for (const item of ITEMS) {
+      const doc = good() as any;
+      doc.session = { number: 1, date: "d", summary: "s", suite: "t", issues_closed: [item] };
+      const refused = projectStateViolations(doc).some(v => v.startsWith("session.issues_closed[0]"));
+      expect(refused, JSON.stringify(item)).toBe(issueNumber(item) === null);
+    }
+  });
+
+  test("the closures check, which stays import-free, reads each entry the same way", () => {
+    for (const item of ITEMS) {
+      const n = issueNumber(item);
+      if (n === null) expect(() => parseDeclaredCloses([item]), JSON.stringify(item)).toThrow();
+      else expect(parseDeclaredCloses([item]), JSON.stringify(item)).toEqual([n]);
+    }
   });
 });

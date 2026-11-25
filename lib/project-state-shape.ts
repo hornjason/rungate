@@ -27,6 +27,24 @@
  */
 import { localCalendarDay } from "./local-calendar-day";
 
+/**
+ * The issue number one entry of a session's issue list names, or null (#2817):
+ * a positive integer, or a string of digits with one optional leading `#`.
+ *
+ * The shape check refuses what this refuses, and the renderer prints what it
+ * reads, so a `" 1675"` or `"1e3"` can no longer pass one and print garbled
+ * from the other. `parseDeclaredCloses` in
+ * `scripts/check-state-record-closes.ts` spells the same rule inline, since
+ * that script stays import-free for its mutation battery, and
+ * `test/project-state-shape.test.ts` holds the two equal on every input.
+ */
+export function issueNumber(item: unknown): number | null {
+  if (typeof item === "number") return Number.isInteger(item) && item > 0 ? item : null;
+  const digits = typeof item === "string" ? /^#?(\d+)$/.exec(item) : null;
+  const n = digits ? Number(digits[1]) : 0;
+  return n > 0 ? n : null;
+}
+
 /** Every shape violation in a parsed `project-state.json`, in document order. */
 export function projectStateViolations(raw: unknown): string[] {
   const out: string[] = [];
@@ -146,8 +164,7 @@ export function projectStateViolations(raw: unknown): string[] {
           continue;
         }
         v.forEach((item, i) => {
-          const n = typeof item === "number" ? item : Number(String(item).replace(/^#/, "").trim());
-          if (typeof item === "object" || !Number.isInteger(n) || n <= 0) {
+          if (issueNumber(item) === null) {
             out.push(
               `session.${k}[${i}] is ${JSON.stringify(item)}, expected an issue number`,
             );

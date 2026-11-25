@@ -250,8 +250,12 @@ export function parseDeclaredCloses(raw: unknown): number[] {
     : String(raw).split(/[,\s]+/).filter(Boolean);
   const out: number[] = [];
   for (const part of parts) {
-    const n = typeof part === "number" ? part : Number(String(part).replace(/^#/, "").trim());
-    if (!Number.isInteger(n) || n <= 0) {
+    // The rule `issueNumber` in lib/project-state-shape.ts reads, spelled
+    // here because this script stays import-free for its mutation battery;
+    // test/project-state-shape.test.ts holds the two equal (#2817).
+    const digits = typeof part === "string" ? /^#?(\d+)$/.exec(part) : null;
+    const n = typeof part === "number" ? (Number.isInteger(part) ? part : 0) : digits ? Number(digits[1]) : 0;
+    if (n <= 0) {
       throw new StateCloseRefused(
         `"Issues closed:" holds ${JSON.stringify(part)}, which is not an issue number — ` +
           `the comparison cannot tell a typo from a closure nobody declared`,
