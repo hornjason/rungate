@@ -704,38 +704,75 @@ export function behavioralStatement(sentence: string): string {
  * continuation up to the first blank line, which can sit inside the fence, so
  * when the block ends inside one the line goes after the fence closes.
  *
- * Review round 2 of #2846 added three more places a line must not land:
- * - **An unclosed fence** is refused, by line. Everything after it renders as
- *   code, so no place in the file is outside it.
- * - **An HTML comment the block holds open** is stepped past. `parseCriteria`
- *   reads a `<!--` line under a criterion as its own, so the block can end
- *   between a comment's first line and its `-->`.
- * - **A CRLF spec** is read as LF and written back as CRLF. Otherwise
- *   `parseCriteria` sees no criterion in it, and the line would be appended at
- *   the end with a bare LF.
+ * Review rounds 2 and 3 of #2846 kept finding one more shape of the same
+ * mistake: a fence, a comment the block left open, a criterion inside a
+ * comment, a `<!--` in a criterion's own code span. So placement reads the
+ * spec the way it renders, once ({@link renderedRegions}): a line is visible
+ * unless a fence or an HTML comment hides it, and the new line goes at the
+ * first boundary after the last visible criterion's block where neither is
+ * open. A fence or comment nothing closes is refused, by line, because no
+ * place after it is visible. A CRLF spec is read as LF and written back as
+ * CRLF; otherwise `parseCriteria` sees no criterion in it at all.
  */
 export function placeScLine(spec: string, scLine: string): string {
   const crlf = spec.includes("\r\n");
   const text = crlf ? spec.replace(/\r\n/g, "\n") : spec;
   const lines = text.split("\n");
-  const { roles, unclosedAt } = readFences(lines);
-  if (unclosedAt !== null) {
-    throw new Error(`the spec opens a fence at line ${unclosedAt + 1} that nothing closes, so every line after it is code; close it before a criterion can be placed`);
+  const regions = renderedRegions(lines);
+  if (regions.unclosed !== null) {
+    throw new Error(
+      `the spec opens ${regions.unclosed.what} at line ${regions.unclosed.line} that nothing closes, so nothing after it is visible; close it before a criterion can be placed`,
+    );
   }
-  const last = parseCriteria(text).filter(c => roles[c.line - 1] === "prose").at(-1);
+  const last = parseCriteria(text).filter(c => !regions.hidden[c.line - 1]).at(-1);
   let out: string;
   if (last === undefined) {
     out = text.trimEnd() + "\n" + scLine + "\n";
   } else {
     let at = last.end;
-    if (roles[at - 1] !== "prose") while (at < lines.length && roles[at] !== "prose") at++;
-    const block = lines.slice(last.line - 1, at).join("\n");
-    if (block.split("<!--").length > block.split("-->").length) {
-      while (at < lines.length && !lines[at].includes("-->")) at++;
-      at = Math.min(at + 1, lines.length);
-    }
+    while (at < lines.length && regions.openAfter[at - 1]) at++;
     lines.splice(at, 0, scLine);
     out = lines.join("\n");
   }
   return crlf ? out.replace(/\n/g, "\r\n") : out;
+}
+
+/**
+ * Which lines of a spec render hidden, and after which lines something stays
+ * open (#2846). `hidden[i]`: line i starts inside a fence or an HTML comment.
+ * `openAfter[i]`: a fence or comment is still open when line i ends. A
+ * comment marker inside an inline code span is code, not a comment, so spans
+ * are dropped before the markers are read. Fences are `readFences`'s to say.
+ */
+export function renderedRegions(lines: readonly string[]): {
+  hidden: boolean[];
+  openAfter: boolean[];
+  unclosed: { what: "a fence" | "an HTML comment"; line: number } | null;
+} {
+  const { roles, unclosedAt } = readFences(lines);
+  if (unclosedAt !== null) return { hidden: [], openAfter: [], unclosed: { what: "a fence", line: unclosedAt + 1 } };
+  const hidden: boolean[] = [];
+  const openAfter: boolean[] = [];
+  let inFence = false;
+  let inComment = false;
+  let commentFrom = 0;
+  lines.forEach((ln, i) => {
+    if (roles[i] !== "prose") {
+      if (roles[i] === "fence") inFence = !inFence;
+      hidden.push(true);
+      openAfter.push(inFence);
+      return;
+    }
+    hidden.push(inComment);
+    const visible = ln.replace(/`[^`]*`/g, "");
+    for (let at = 0; at < visible.length; ) {
+      const next = inComment ? visible.indexOf("-->", at) : visible.indexOf("<!--", at);
+      if (next < 0) break;
+      if (!inComment) commentFrom = i + 1;
+      inComment = !inComment;
+      at = next + (inComment ? 4 : 3);
+    }
+    openAfter.push(inComment);
+  });
+  return { hidden, openAfter, unclosed: inComment ? { what: "an HTML comment", line: commentFrom } : null };
 }

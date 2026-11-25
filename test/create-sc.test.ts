@@ -484,6 +484,23 @@ describe("#2845: create-sc places a criterion after the last one, and --behavior
     expect(() => placeScLine("# Notes\n\n```md\nexample\n", NEW)).toThrow(/line 3 that nothing closes/);
   });
 
+  // Review round 3 of #2846: placement reads the spec as it renders.
+  test("a comment marker in a criterion's code span is code, and placement stays beside the criterion", () => {
+    const spec = ["# S", "", "- [ ] SC-9107: the tool writes a `<!--` marker", "  needs: test-x", "", "## Notes", "", "Some text.", "<!-- a note -->", "", "## Later", ""].join("\n");
+    const lines = placeScLine(spec, NEW).split("\n");
+    expect(lines.indexOf(NEW), "walked to a later comment").toBe(lines.indexOf("  needs: test-x") + 1);
+  });
+
+  test("a criterion inside an HTML comment is not the last one, and the line lands after the comment, visible", () => {
+    const spec = ["# S", "", "- [ ] SC-9101: a", "<!--", "- [ ] SC-9102: retired", "-->", "", "## Notes", ""].join("\n");
+    const lines = placeScLine(spec, NEW).split("\n");
+    expect(lines.indexOf(NEW), "placed inside the comment").toBe(lines.indexOf("-->") + 1);
+  });
+
+  test("an HTML comment nothing closes is refused, naming the line", () => {
+    expect(() => placeScLine("# S\n\n- [ ] SC-9100: a\n<!-- never closed\n", NEW)).toThrow(/an HTML comment at line 4 that nothing closes/);
+  });
+
   test("a spec that states no criterion gets the line at its end, as before", () => {
     const bare = "---\ndoc-type: spec\n---\n\n# Nothing yet\n\n```md\n- [ ] SC-9198: only an example\n```\n";
     expect(placeScLine(bare, NEW)).toBe(bare.trimEnd() + "\n" + NEW + "\n");
