@@ -9,9 +9,16 @@
  * readers (`readRegistrationScopes`, `readEnvScopes`, `wrongTreeViolations`,
  * `registeredTreeCensus`, `registrationCurrency`) on the raw documents, inside
  * this module, and returns their verdicts with every command and every
- * detail built from one replaced. Hook names, scopes, trees, spellings,
- * counts and resolved directories cross the boundary; a command and an `env`
- * value never do, so no assertion can print one.
+ * detail built from one replaced. Hook names, scopes, trees, spellings and
+ * counts cross the boundary, and so does the path a registration resolves
+ * to. A command never does, and neither does an error's message.
+ *
+ * An `env` value crosses only as part of a resolved path, when a registration
+ * reaches its hook through it. That path is what the tree census and the
+ * currency reading are about: the census says which copy a registration runs,
+ * and the currency reading runs git in its directory and has to name it, so
+ * withholding it would blind both (#2810 review). A token kept as a value,
+ * which is how a settings file holds one, never crosses.
  *
  * A first design (#2798, not merged) gave tests a reduced COPY of each file
  * instead. Each of its four review rounds found a census reader the copy
@@ -19,9 +26,9 @@
  * nothing to keep in step: the census reads what it always read.
  */
 
-import { readFileSync } from "fs";
+import { readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
-import { join, posix } from "path";
+import { join, resolve, sep } from "path";
 import {
   hookRegistration,
   registrationCensus,
@@ -34,7 +41,7 @@ import {
 } from "../../lib/hook-scopes";
 import { readEnvScopes, registeredTreeCensus, type TargetReading, type TargetTreeCensus } from "../../lib/hook-target-tree";
 import { registrationCurrency, type GitRunner, type RegistrationCurrency } from "../../lib/hook-tree-currency";
-import { settingsCommands, wrongTreeViolations, type TreeViolation } from "../../lib/hook-trees";
+import { commandNamesHook, settingsCommands, wrongTreeViolations, type TreeViolation } from "../../lib/hook-trees";
 
 /** What stands where a command was, in every verdict this module returns. */
 export const COMMAND_WITHHELD = "<command withheld: machine settings text>";
@@ -46,6 +53,24 @@ function rawRead(path: string): string | null {
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw e;
+  }
+}
+
+/**
+ * Runs one reading and lets no error message out of this module (#2810
+ * review). The census's own parse of a malformed settings document throws a
+ * SyntaxError naming the text where it failed, which can be a token; so can
+ * any reader's. What crosses is the error's kind and code, never its message.
+ */
+function guarded<T>(name: string, read: () => T): T {
+  try {
+    return read();
+  } catch (e) {
+    const kind = e instanceof Error ? e.name : typeof e;
+    const code = (e as NodeJS.ErrnoException | null)?.code;
+    throw new Error(
+      `${name}: reading the machine's settings threw ${kind}${typeof code === "string" ? ` (${code})` : ""}; its message is withheld, since it can quote settings text`,
+    );
   }
 }
 
@@ -69,34 +94,36 @@ const readability = (r: ScopeReading): ScopeReadability => ({
 
 /** Each scope, and whether it could be read. */
 export function scopeReadability(repoRoot: string, home: string, registry: string[]): ScopeReadability[] {
-  return readings(repoRoot, home, registry).map(readability);
+  return guarded("scopeReadability", () => readings(repoRoot, home, registry).map(readability));
 }
 
 /** `hookRegistration` over the raw scopes: a verdict naming scopes, never a command. */
 export function hookRegistrationAt(repoRoot: string, home: string, registry: string[], hook: string): HookRegistration {
-  return hookRegistration(hook, readings(repoRoot, home, registry));
+  return guarded("hookRegistrationAt", () => hookRegistration(hook, readings(repoRoot, home, registry)));
 }
 
 /**
- * How many commands in one scope contain `needle`, or null when the scope
- * could not be read. A count, so a test can hold a registration to exactly
- * one without ever holding the commands.
+ * How many commands in one scope execute `<hook>.hook.ts`, or null when the
+ * scope could not be read. A count, so a test can hold a registration to
+ * exactly one without ever holding the commands. Read with
+ * `commandNamesHook`, the census's own predicate, so the count and the
+ * registration verdict beside it cannot disagree (#2810 review).
  */
-export function commandsNamingAt(
+export function commandsExecutingAt(
   repoRoot: string,
   home: string,
   registry: string[],
   scope: RegistrationScope,
-  needle: string,
+  hook: string,
 ): number | null {
-  const r = readings(repoRoot, home, registry).find(x => x.scope === scope);
+  const r = guarded("commandsExecutingAt", () => readings(repoRoot, home, registry)).find(x => x.scope === scope);
   if (r === undefined) throw new Error(`${scope} is not a scope the census reads`);
-  return r.commands === null ? null : r.commands.filter(c => c.includes(needle)).length;
+  return r.commands === null ? null : r.commands.filter(c => commandNamesHook(c, hook)).length;
 }
 
 /** `registrationCensus` over the raw scopes: one verdict per hook, naming scopes, never a command. */
 export function registrationCensusAt(repoRoot: string, home: string, registry: string[], hooks: string[]): HookRegistration[] {
-  return registrationCensus(hooks, readings(repoRoot, home, registry));
+  return guarded("registrationCensusAt", () => registrationCensus(hooks, readings(repoRoot, home, registry)));
 }
 
 /**
@@ -110,15 +137,17 @@ export function unplacedHooksAt(
   hooks: string[],
   declaredUnregistered: string[],
 ): { repoScopes: ScopeReadability[]; unplaced: string[] } {
-  const owned = new Set<RegistrationScope>([
-    ...settingsScopePaths(repoRoot, home).filter(s => s.ownership === "repo").map(s => s.scope),
-    "repo-registry",
-  ]);
-  const repoReadings = readings(repoRoot, home, registry).filter(r => owned.has(r.scope));
-  return {
-    repoScopes: repoReadings.map(readability),
-    unplaced: unplacedHooks({ hooks, repoReadings, declaredUnregistered }),
-  };
+  return guarded("unplacedHooksAt", () => {
+    const owned = new Set<RegistrationScope>([
+      ...settingsScopePaths(repoRoot, home).filter(s => s.ownership === "repo").map(s => s.scope),
+      "repo-registry",
+    ]);
+    const repoReadings = readings(repoRoot, home, registry).filter(r => owned.has(r.scope));
+    return {
+      repoScopes: repoReadings.map(readability),
+      unplaced: unplacedHooks({ hooks, repoReadings, declaredUnregistered }),
+    };
+  });
 }
 
 /** A tree violation with its command withheld and a detail that names none. */
@@ -141,20 +170,22 @@ export function wrongTreeAt(
   home: string,
   owned: string[],
 ): { read: RegistrationScope[]; missing: RegistrationScope[]; commands: number; violations: TreeViolation[] } {
-  const read: RegistrationScope[] = [];
-  const missing: RegistrationScope[] = [];
-  const docs: string[] = [];
-  for (const { scope, path } of settingsScopePaths(repoRoot, home)) {
-    const doc = rawRead(path);
-    if (doc === null) {
-      missing.push(scope);
-      continue;
+  return guarded("wrongTreeAt", () => {
+    const read: RegistrationScope[] = [];
+    const missing: RegistrationScope[] = [];
+    const docs: string[] = [];
+    for (const { scope, path } of settingsScopePaths(repoRoot, home)) {
+      const doc = rawRead(path);
+      if (doc === null) {
+        missing.push(scope);
+        continue;
+      }
+      docs.push(doc);
+      read.push(scope);
     }
-    docs.push(doc);
-    read.push(scope);
-  }
-  const commands = settingsCommands(docs);
-  return { read, missing, commands: commands.length, violations: wrongTreeViolations(owned, commands).map(safeViolation) };
+    const commands = settingsCommands(docs);
+    return { read, missing, commands: commands.length, violations: wrongTreeViolations(owned, commands).map(safeViolation) };
+  });
 }
 
 /** A target reading with its command withheld and a detail that names none. */
@@ -170,7 +201,9 @@ function safeTarget(r: TargetReading): TargetReading {
  * safe detail.
  */
 export function treeCensusAt(repoRoot: string, home: string, registry: string[], owned: string[]): TargetTreeCensus {
-  const census = registeredTreeCensus(owned, readings(repoRoot, home, registry), readEnvScopes(repoRoot, home, rawRead), repoRoot);
+  const census = guarded("treeCensusAt", () =>
+    registeredTreeCensus(owned, readings(repoRoot, home, registry), readEnvScopes(repoRoot, home, rawRead), repoRoot),
+  );
   const replaced = new Map(census.unresolved.map(r => [r.detail, safeTarget(r).detail]));
   return {
     ...census,
@@ -190,11 +223,8 @@ export function registrationCurrencyAt(input: {
   registryCommands: string[];
   git: GitRunner;
 }): RegistrationCurrency {
-  return registrationCurrency(
-    treeCensusAt(input.repoRoot, input.home, input.registryCommands, input.ownedHooks),
-    input.base,
-    input.git,
-  );
+  const census = treeCensusAt(input.repoRoot, input.home, input.registryCommands, input.ownedHooks);
+  return guarded("registrationCurrencyAt", () => registrationCurrency(census, input.base, input.git));
 }
 
 /**
@@ -230,8 +260,10 @@ export function countMentions(src: string, needle: string): number {
 
 /** {@link countMentions} over the file at `path`, or null when it is absent. */
 export function settingsMentions(path: string, needle: string): number | null {
-  const src = rawRead(path);
-  return src === null ? null : countMentions(src, needle);
+  return guarded("settingsMentions", () => {
+    const src = rawRead(path);
+    return src === null ? null : countMentions(src, needle);
+  });
 }
 
 // ── This machine ─────────────────────────────────────────────────────────
@@ -239,8 +271,8 @@ export function settingsMentions(path: string, needle: string): number | null {
 export const liveScopeReadability = (repoRoot: string, registry: string[]) => scopeReadability(repoRoot, homedir(), registry);
 export const liveHookRegistration = (repoRoot: string, registry: string[], hook: string) =>
   hookRegistrationAt(repoRoot, homedir(), registry, hook);
-export const liveCommandsNaming = (repoRoot: string, registry: string[], scope: RegistrationScope, needle: string) =>
-  commandsNamingAt(repoRoot, homedir(), registry, scope, needle);
+export const liveCommandsExecuting = (repoRoot: string, registry: string[], scope: RegistrationScope, hook: string) =>
+  commandsExecutingAt(repoRoot, homedir(), registry, scope, hook);
 export const liveRegistrationCensus = (repoRoot: string, registry: string[], hooks: string[]) =>
   registrationCensusAt(repoRoot, homedir(), registry, hooks);
 export const liveUnplacedHooks = (repoRoot: string, registry: string[], hooks: string[], declaredUnregistered: string[]) =>
@@ -257,18 +289,35 @@ export const liveUserSettingsPath = () => join(homedir(), ".claude", "settings.j
 /** {@link settingsMentions} over this machine's user settings file. */
 export const liveUserSettingsMentions = (needle: string) => settingsMentions(liveUserSettingsPath(), needle);
 
-/** A settings scope under home, as a normalised tail. */
-const SETTINGS_PATH = /^\.claude\/settings(\.local)?\.json$/;
-
 /**
- * A path under the home directory that is not a settings file, such as
- * `~/.pai/hooks`. The segments are joined and normalised before they are
- * judged, so no split or spelling of a settings path gets through.
+ * A path under `home` that is not a settings file, such as `~/.pai/hooks`.
+ *
+ * Judged on the path itself, not on how it was spelled (#2810 review): the
+ * segments are resolved against `home`, so `..`, `.`, doubled and trailing
+ * slashes are gone; a path that leaves `home` is refused; and the result is
+ * compared with each settings file case-folded, since the volume this runs on
+ * may not tell `.Claude` from `.claude`, and through symlinks, since a link
+ * elsewhere under home can name the same file.
  */
-export function homePath(...segments: string[]): string {
+export function homePathAt(home: string, ...segments: string[]): string {
   if (segments.length === 0) throw new Error("homePath names a path under the home directory, never the directory itself");
-  if (SETTINGS_PATH.test(posix.normalize(`/${segments.join("/")}`).replace(/^\/+/, ""))) {
+  const root = resolve(home);
+  const p = resolve(root, ...segments);
+  if (!p.startsWith(root + sep)) throw new Error("homePath names a path under the home directory, never one outside it");
+  const real = (x: string): string => {
+    try {
+      return realpathSync(x);
+    } catch {
+      return x;
+    }
+  };
+  const fold = (x: string) => x.toLowerCase();
+  const settings = [join(root, ".claude", "settings.json"), join(root, ".claude", "settings.local.json")];
+  if (settings.some(f => fold(p) === fold(f) || fold(real(p)) === fold(real(f)))) {
     throw new Error("a settings file under ~/.claude is read through the functions above");
   }
-  return join(homedir(), ...segments);
+  return p;
 }
+
+/** {@link homePathAt} under this machine's home directory. */
+export const homePath = (...segments: string[]): string => homePathAt(homedir(), ...segments);

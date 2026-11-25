@@ -4,7 +4,7 @@ import { join } from "path";
 
 import { loadRungateConfig } from "../lib/config-loader";
 import {
-  liveCommandsNaming,
+  liveCommandsExecuting,
   liveHookRegistration,
   liveScopeReadability,
   liveUserSettingsPath,
@@ -115,7 +115,7 @@ describe("#67-A / #910: the user-scope registration, reported rather than skippe
       // Two registrations means two slots taken for one suite, so this stays
       // an exact count rather than a floor. A count, never the commands: the
       // file holds the machine's tokens (#2792).
-      const count = liveCommandsNaming(repoRoot, registry(), "user-settings", hook);
+      const count = liveCommandsExecuting(repoRoot, registry(), "user-settings", name);
       expect(count, `${hook} is registered ${count} times in ${userSettingsPath}`).toBe(1);
       expect(liveHookRegistration(repoRoot, registry(), name).registeredIn).toContain("user-settings");
     });

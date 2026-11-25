@@ -1,6 +1,7 @@
 /**
  * #2792: tests read the machine's settings files through one helper, and what
- * crosses its boundary is the census's verdicts, never a command or a value.
+ * crosses its boundary is the census's verdicts, never a command, an error's
+ * message, or a value except as part of the path a registration resolves to.
  *
  * Each case plants a home whose settings carry tokens in every place a token
  * can sit, runs a helper function over it, and asserts two things: no planted
@@ -12,7 +13,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { readRegistrationScopes, registrationCensus, settingsScopePaths } from "../lib/hook-scopes";
@@ -20,9 +21,10 @@ import { readEnvScopes, registeredTreeCensus } from "../lib/hook-target-tree";
 import { settingsCommands, wrongTreeViolations } from "../lib/hook-trees";
 import {
   COMMAND_WITHHELD,
-  commandsNamingAt,
+  commandsExecutingAt,
   countMentions,
   homePath,
+  homePathAt,
   hookRegistrationAt,
   registrationCensusAt,
   registrationCurrencyAt,
@@ -138,7 +140,7 @@ describe("#2792: every verdict is the census's own, with no command or value in 
     expect(hookRegistrationAt(repo, home, REGISTRY, "Beta")).toEqual(want.find(r => r.hook === "Beta")!);
   });
 
-  test("scopeReadability, commandsNamingAt and unplacedHooksAt: scopes, counts and names only", () => {
+  test("scopeReadability, commandsExecutingAt and unplacedHooksAt: scopes, counts and names only", () => {
     const readable = scopeReadability(repo, home, REGISTRY);
     expect(JSON.stringify(readable)).not.toMatch(PLANTED);
     expect(readable.every(r => r.readable)).toBe(true);
@@ -147,8 +149,8 @@ describe("#2792: every verdict is the census's own, with no command or value in 
     const absent = scopeReadability(repo, nowhere, REGISTRY).filter(r => !r.readable);
     expect(absent.map(r => r.scope)).toEqual(["user-settings", "user-local-settings"]);
     expect(absent.every(r => (r.unreadable ?? "").includes("not on this machine"))).toBe(true);
-    expect(commandsNamingAt(repo, home, REGISTRY, "user-settings", "Beta.hook.ts")).toBe(1);
-    expect(commandsNamingAt(repo, nowhere, REGISTRY, "user-settings", "Beta.hook.ts")).toBeNull();
+    expect(commandsExecutingAt(repo, home, REGISTRY, "user-settings", "Beta")).toBe(1);
+    expect(commandsExecutingAt(repo, nowhere, REGISTRY, "user-settings", "Beta")).toBeNull();
     const placed = unplacedHooksAt(repo, home, REGISTRY, OWNED, ["Delta"]);
     expect(JSON.stringify(placed)).not.toMatch(PLANTED);
     // Only the repo-owned scopes place a hook: Alpha in the committed file, Reg in the registry.
@@ -166,6 +168,81 @@ describe("#2792: every verdict is the census's own, with no command or value in 
     });
     expect(JSON.stringify(currency)).not.toMatch(PLANTED);
     expect(currency.examined).toBeGreaterThan(0);
+  });
+});
+
+// #2810 review, round 1.
+describe("#2810: no error message leaves the helper, and the count is the census's predicate", () => {
+  // A user settings file that is not JSON, with a token where the parse fails.
+  const bad = () => {
+    const h = join(root, "bad-home");
+    mkdirSync(join(h, ".claude"), { recursive: true });
+    writeFileSync(join(h, ".claude", "settings.json"), '{"env": {"GH_TOKEN": gho_planted2792}, "hooks": {}}');
+    return h;
+  };
+
+  test("a malformed settings document throws inside the census naming the token, and out of the helper without it", () => {
+    const h = bad();
+    // The census's own parse quotes the token, so the withholding is doing work.
+    expect(() => readRegistrationScopes(repo, h, raw, REGISTRY)).toThrow(PLANTED);
+    const calls: [string, () => unknown][] = [
+      ["scopeReadability", () => scopeReadability(repo, h, REGISTRY)],
+      ["hookRegistrationAt", () => hookRegistrationAt(repo, h, REGISTRY, "Alpha")],
+      ["commandsExecutingAt", () => commandsExecutingAt(repo, h, REGISTRY, "user-settings", "Alpha")],
+      ["registrationCensusAt", () => registrationCensusAt(repo, h, REGISTRY, OWNED)],
+      ["unplacedHooksAt", () => unplacedHooksAt(repo, h, REGISTRY, OWNED, [])],
+      ["wrongTreeAt", () => wrongTreeAt(repo, h, OWNED)],
+      ["treeCensusAt", () => treeCensusAt(repo, h, REGISTRY, OWNED)],
+      [
+        "registrationCurrencyAt",
+        () =>
+          registrationCurrencyAt({
+            repoRoot: repo,
+            home: h,
+            base: "origin/main",
+            ownedHooks: OWNED,
+            registryCommands: REGISTRY,
+            git: () => ({ ok: false, stdout: "", stderr: "no git", status: 128 }) as never,
+          }),
+      ],
+      ["settingsMentions", () => settingsMentions(join(h, ".claude", "settings.json"), "x")],
+    ];
+    let threw = 0;
+    for (const [name, call] of calls) {
+      try {
+        expect(JSON.stringify(call() ?? null), name).not.toMatch(PLANTED);
+      } catch (e) {
+        threw += 1;
+        const message = e instanceof Error ? e.message : String(e);
+        expect(message, name).not.toMatch(PLANTED);
+        expect(message, name).toContain("withheld");
+      }
+    }
+    // Every census reading parses the file, so each of them threw; only the count reads it as text.
+    expect(threw).toBe(calls.length - 1);
+  });
+
+  test("commandsExecutingAt counts what executes the hook, as the registration verdict does, not what contains its name", () => {
+    const h = join(root, "count-home");
+    mkdirSync(join(h, ".claude"), { recursive: true });
+    writeFileSync(
+      join(h, ".claude", "settings.json"),
+      JSON.stringify({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "Bash",
+              hooks: [
+                { type: "command", command: "bun /x/MyBeta.hook.ts" },
+                { type: "command", command: "bun /x/Beta.hook.ts" },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+    expect(commandsExecutingAt(repo, h, REGISTRY, "user-settings", "Beta")).toBe(1);
+    expect(hookRegistrationAt(repo, h, REGISTRY, "Beta").registeredIn).toContain("user-settings");
   });
 });
 
@@ -195,5 +272,28 @@ describe("#2792: homePath names a path under home, never home itself or a settin
     ];
     for (const segments of settings) expect(() => homePath(...segments), segments.join(" | ")).toThrow();
     expect(homePath(".pai", "hooks").endsWith(join(".pai", "hooks"))).toBe(true);
+  });
+
+  // #2810 review: judged on the path, not on its spelling.
+  test("#2810: a case variant, a trailing slash, a path out of home and back, and a symlink are refused", () => {
+    const h = join(root, "link-home");
+    mkdirSync(join(h, ".claude"), { recursive: true });
+    mkdirSync(join(h, ".pai"), { recursive: true });
+    writeFileSync(join(h, ".claude", "settings.json"), "{}");
+    symlinkSync(join(h, ".claude"), join(h, ".pai", "to-claude"));
+    symlinkSync(join(h, ".claude", "settings.json"), join(h, ".pai", "s.json"));
+    const refused = [
+      [".Claude", "settings.json"],
+      [".CLAUDE", "Settings.JSON"],
+      // Absent, so no symlink or volume lookup folds it: the comparison itself must.
+      [".Claude", "Settings.Local.JSON"],
+      [".claude/settings.json/"],
+      ["..", "link-home", ".claude", "settings.json"],
+      [".pai", "to-claude", "settings.json"],
+      [".pai", "s.json"],
+    ];
+    for (const segments of refused) expect(() => homePathAt(h, ...segments), segments.join(" | ")).toThrow();
+    expect(() => homePathAt(h, "..", "elsewhere")).toThrow("outside");
+    expect(homePathAt(h, ".pai", "hooks")).toBe(join(h, ".pai", "hooks"));
   });
 });
