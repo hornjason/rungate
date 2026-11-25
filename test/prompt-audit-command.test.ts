@@ -118,6 +118,40 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     expect(promptAudit(ROOT).findings.filter(f => f.lint === "dangling-path" && f.owner === "harness").map(f => `${f.file}: ${f.message}`)).toEqual([]);
   });
 
+  // #2784: every lint, not one. The same reading runs on rungate's own tree and
+  // on a render planted with one harness-owned trigger per lint, so the empty
+  // reading on rungate is only believed for lints the planted case shows it
+  // can see.
+  const harnessFindings = (root: string): string[] =>
+    promptAudit(root).findings.filter(f => f.owner === "harness").map(f => `${f.lint} ${f.file}: ${f.message}`);
+
+  test("rungate's own tree has no harness-owned finding of any lint", () => {
+    expect(harnessFindings(ROOT)).toEqual([]);
+  });
+
+  // #2799 review: `lints` is a constant, so its length proved nothing ran, and
+  // one planted lint left the other four unwitnessed. Each lint the audit
+  // registers gets its own trigger here, in a file rungate owns, so a lint
+  // dropped from the run or a lint's findings filtered out turns this red.
+  test("the same reading names a harness-owned finding of every lint, on a render planted for each", () => {
+    const triggers: Record<string, [string, string]> = {
+      "dangling-read-target": [".claude/agents/discovery.md", "Look up the governing spec in the AGENTS.md Specs table."],
+      "template-artifact": [".claude/agents/marcus.md", "Read ${SOURCE_DIRS} first."],
+      "stale-count": [".claude/rules/docs-routing.md", "| Decisions | `docs/adr/` (3 files) |"],
+      "pressure-density": [".claude/rules/key-files.md", PRESSURE],
+      "dangling-path": ["AGENTS.md", "The rules live in `specs/RETIRED-SPEC.md`."],
+    };
+    // Every lint the registry runs, plus the audit's own two, has a trigger:
+    // a lint added without one fails here rather than going unwitnessed.
+    const registered = [...SURFACE_LINTS.map(l => l.name), "pressure-density", "dangling-path"];
+    expect(registered.length).toBeGreaterThanOrEqual(5);
+    expect(Object.keys(triggers).sort()).toEqual([...registered].sort());
+    const root = planted(...Object.values(triggers));
+    expect([...promptAudit(root).lints].sort()).toEqual([...registered].sort());
+    const found = new Set(harnessFindings(root).map(h => h.split(" ")[0]));
+    expect(registered.filter(l => !found.has(l)), "these lints found nothing in a render planted for them").toEqual([]);
+  });
+
   // #2780 review: the filing rule's example is a placeholder, not a path, so an
   // agent that copies it names no path, and two reports that both copied it
   // share no duplicate key.
