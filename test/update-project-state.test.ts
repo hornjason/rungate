@@ -196,6 +196,12 @@ describe("update-project-state", () => {
     expect(missing.out).toContain("does not exist, so there is no markdown to compare");
     expect(missing.out).not.toContain("ENOENT");
     expect(existsSync(STATE_MD)).toBe(false);
+    // Neither file: the writer has nothing to do, and the check compared nothing, so it does not pass (#2827 review).
+    rmSync(STATE_JSON);
+    const neither = check();
+    expect(neither.status, neither.out).not.toBe(0);
+    expect(neither.out).toContain("--check had nothing to compare");
+    expect(exec().status, "the writer itself still treats this as nothing to do").toBe(0);
   });
 
   test("generates markdown from JSON", () => {

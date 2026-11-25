@@ -306,6 +306,11 @@ const missing = missingStateVerdict({
   markdownExists: existsSync(STATE_MD),
 });
 if (missing.verdict === "SKIP") {
+  // A check that compared nothing does not pass (#2827 review).
+  if (CHECK) {
+    console.error(`project-state: ${missing.detail}. --check had nothing to compare, so it does not pass.`);
+    process.exit(PROJECT_STATE_REFUSE_EXIT);
+  }
   console.log(`project-state: ${missing.detail}`);
   process.exit(0);
 }
