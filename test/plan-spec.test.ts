@@ -1006,6 +1006,27 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
     }
   });
 
+  // #2782 review: the column drop touches exactly the rows the parser reads.
+  test("a row the placement reader skips refuses the conversion, so its criteria cannot be dropped unseen", () => {
+    const spec = plant({}).replace("| **Phase 2** | CRC-A3 | because |", "|Phase 2|CRC-A3|because|");
+    const c = convertPlacement(spec);
+    expect("refusal" in c).toBe(true);
+    if ("refusal" in c) expect(c.refusal.join("\n")).toMatch(/line \d+ .*do not start with/);
+  });
+
+  test("a table written without closing pipes still loses its criteria column", () => {
+    const spec = plant({})
+      .replace("| Placement | Criteria | What the value means |", "| Placement | Criteria")
+      .replace("|---|---|---|", "|---|---")
+      .replace("| **Phase 1** | CRC-A1, CRC-A2 | because |", "| **Phase 1** | CRC-A1, CRC-A2")
+      .replace("| **Phase 2** | CRC-A3 | because |", "| **Phase 2** | CRC-A3");
+    const c = convertPlacement(spec);
+    if (!("after" in c)) throw new Error(`did not convert: ${JSON.stringify(c)}`);
+    const meanings = c.after.slice(c.after.indexOf(PLACEMENT_MEANINGS_HEADING));
+    expect(meanings).not.toMatch(/CRC-A\d/);
+    expect([...placementsById(c.after)]).toEqual([["CRC-A1", "Phase 1"], ["CRC-A2", "Phase 1"], ["CRC-A3", "Phase 2"]]);
+  });
+
   test("--placement and --convert-placement together are refused", async () => {
     const r = await run(["--placement", "--convert-placement"], LINES);
     expect(r.code).toBe(REFUSAL_EXIT);

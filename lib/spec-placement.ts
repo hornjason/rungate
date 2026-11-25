@@ -433,14 +433,32 @@ export function convertPlacement(content: string): PlacementConversion {
   // What is left is each value's meaning, and moves under its own heading
   // (ADR-026 Decision 6): a meaning that names a criterion would otherwise
   // read as a second table of them.
+  // Only the rows the parser reads, and its header and separator, lose the
+  // cell: a row it skips would lose a placement nobody read (#2782 review),
+  // so one in the table refuses the conversion instead.
   const start = lines.findIndex(l => l.startsWith(PLACEMENT_HEADING));
   if (start >= 0) lines[start] = PLACEMENT_MEANINGS_HEADING;
+  const read = new Set(table.map(r => r.line - 1));
+  const unread: number[] = [];
   for (let i = start + 1; start >= 0 && i < lines.length; i++) {
-    if (/^#{1,3} /.test(lines[i]!)) break;
-    if (!lines[i]!.startsWith("|")) continue;
-    const cells = lines[i]!.split("|");
-    if (cells.length > 3) cells.splice(2, 1);
+    const l = lines[i]!;
+    if (/^#{1,3} /.test(l)) break;
+    if (!l.startsWith("|")) continue;
+    if (!read.has(i) && !l.startsWith("|---") && !l.startsWith("| Placement")) {
+      unread.push(i + 1);
+      continue;
+    }
+    const cells = l.split("|");
+    // `| P | ids |` and a row with no closing pipe, `| P | ids`, alike.
+    if (cells.length >= 3) cells.splice(2, 1);
     lines[i] = cells.join("|");
+  }
+  if (unread.length > 0) {
+    return {
+      refusal: [
+        `line ${unread.join(", ")} of the \`${PLACEMENT_HEADING}\` table: rows that do not start with "| ", which the placement reader skips, so converting would drop their criteria unseen; fix them first`,
+      ],
+    };
   }
 
   const out: string[] = [];
