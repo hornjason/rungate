@@ -62,7 +62,7 @@
     },
     {
       "path": "specs/HOOK-ARCHITECTURE-SPEC.md",
-      "criteria": 32
+      "criteria": 34
     },
     {
       "path": "specs/INSTRUCTION-COMPLIANCE-SPEC.md",
