@@ -181,47 +181,93 @@ const INTERPRETERS = new Set([
   "bun", "bunx", "node", "npx", "npm", "pnpm", "yarn", "deno", "ts-node", "tsx",
 ]);
 const SUBCOMMANDS = new Set(["run", "exec"]);
-const SEPARATORS = new Set(["#", ";", "&&", "||", "|", "&"]);
+/** One shell word: its text with quotes and escapes removed, and as written. */
+interface ShellWord {
+  text: string;
+  raw: string;
+}
 
 /**
- * One leading `NAME=value` assignment and the space after it (#2802). The
- * value is any run of single-quoted parts (no escapes), double-quoted parts
- * (backslash escapes), backslash-escaped characters, and unquoted parts
- * holding no space, quote, backslash or separator, so `TOKEN="a b"` is one assignment where a whitespace split saw
- * `TOKEN="a` and `b"`. An unterminated quote matches nothing, so the command
- * reads as executing nothing, as the shell would not run it either. An
- * unquoted separator still ends the command: `A=x;bun …` is two. A
- * backslash outside quotes escapes the next character, as in the shell, so
- * `A=\'x' bun …` is an escaped quote followed by an unterminated one, and
- * reads as executing nothing, rather than a quoted `'x'` followed by a
- * command (security review of #2815).
+ * The words of a command line's first command, read the way a POSIX shell
+ * reads them, or null when the line leaves a quote open (#2802, #2815 review).
+ *
+ * One reader for every quoting question, replacing a regex for leading
+ * assignments, a whitespace split for everything after them, and a separate
+ * scan for open quotes. Each of #2815's review rounds found the three
+ * disagreeing about one input or another.
+ *
+ * - Outside quotes, whitespace ends a word, a backslash escapes the next
+ *   character, and `'` or `"` opens a quote.
+ * - Inside single quotes nothing is special until the closing quote.
+ * - Inside double quotes a backslash escapes `"`, `\`, `$`, a backquote or
+ *   a newline, and is kept before anything else.
+ * - An unquoted `;`, `|`, `&` or newline ends the first command. A `#` that
+ *   starts a word starts a comment, to the end of its line. A `#` inside a
+ *   word is part of it.
+ * - The whole line is scanned for an open quote, past the first command: the
+ *   shell parses the line before it runs any of it, so a quote left open
+ *   anywhere means nothing runs.
  */
-const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"(?:[^"\\]|\\[\s\S])*"|\\[\s\S]|[^\s'"#;|&\\])*(?=\s|$)\s*/;
-
-/**
- * Whether the first command in `text` leaves a quote open, read the way the
- * shell reads quotes: single quotes take no escapes, double quotes and bare
- * text take a backslash escape. The shell refuses such a line, so it runs
- * nothing (#2815 review). The scan stops at an unquoted separator or a `#`
- * that starts a word, so a quote in a later command or a comment is not read.
- */
-function quoteLeftOpen(text: string): boolean {
-  let open: "'" | '"' | null = null;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i]!;
-    if (open === "'") {
-      if (c === "'") open = null;
-    } else if (c === "\\") {
-      i++;
-    } else if (open === '"') {
-      if (c === '"') open = null;
+function shellWords(command: string): ShellWord[] | null {
+  const words: ShellWord[] = [];
+  let text = "";
+  let raw = "";
+  let inWord = false;
+  let quote: "'" | '"' | null = null;
+  let collecting = true;
+  const end = () => {
+    if (inWord && collecting) words.push({ text, raw });
+    text = "";
+    raw = "";
+    inWord = false;
+  };
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i]!;
+    if (quote === "'") {
+      raw += c;
+      if (c === "'") quote = null;
+      else text += c;
+      continue;
+    }
+    if (quote === '"') {
+      raw += c;
+      if (c === '"') quote = null;
+      else if (c === "\\" && i + 1 < command.length && '"\\$`\n'.includes(command[i + 1]!)) {
+        text += command[i + 1]!;
+        raw += command[i + 1]!;
+        i++;
+      } else text += c;
+      continue;
+    }
+    if (c === "\\") {
+      inWord = true;
+      raw += c;
+      if (i + 1 < command.length) {
+        text += command[i + 1]!;
+        raw += command[i + 1]!;
+        i++;
+      }
     } else if (c === "'" || c === '"') {
-      open = c;
-    } else if (";|&".includes(c) || (c === "#" && (i === 0 || /\s/.test(text[i - 1]!)))) {
-      return false;
+      inWord = true;
+      quote = c;
+      raw += c;
+    } else if (c === "#" && !inWord) {
+      // A comment runs to the end of its line; the newline then ends the command.
+      while (i + 1 < command.length && command[i + 1] !== "\n") i++;
+    } else if (c === "\n" || c === ";" || c === "|" || c === "&") {
+      end();
+      collecting = false;
+    } else if (/\s/.test(c)) {
+      end();
+    } else {
+      inWord = true;
+      text += c;
+      raw += c;
     }
   }
-  return open !== null;
+  if (quote !== null) return null;
+  end();
+  return words;
 }
 
 /**
@@ -233,65 +279,41 @@ function quoteLeftOpen(text: string): boolean {
  *
  * The path is what `wrongTreeViolations` classifies, and the basename is what
  * every registration reading compares. Both come from here; they cannot
- * disagree about which token ran.
+ * disagree about which token ran. Its words come from {@link shellWords}.
  */
 export function executedHookPath(command: string): string | null {
-  // Leading assignments, and an `env` that introduces more, are read off the
-  // string before it is split on whitespace, since a quoted value may hold a
-  // space or a separator (#2802).
-  let rest = command.trimStart();
-  const assignments = (): void => {
-    for (let m = ASSIGNMENT.exec(rest); m !== null; m = ASSIGNMENT.exec(rest)) rest = rest.slice(m[0].length);
-  };
-  assignments();
-  if (/^env(?=\s|$)/.test(rest)) {
-    rest = rest.slice("env".length).trimStart();
-    assignments();
-  }
-  if (quoteLeftOpen(rest)) return null;
-  const tokens: string[] = [];
-  for (const raw of rest.split(/\s+/).filter(Boolean)) {
-    // A separator ends the first command, whether it stands alone or is
-    // glued to the token before it (`x.ts;`, `x.ts&&`).
-    if (SEPARATORS.has(raw)) break;
-    const cut = raw.search(/[#;|&]/);
-    if (cut === 0) break;
-    if (cut > 0) {
-      tokens.push(raw.slice(0, cut));
-      break;
-    }
-    tokens.push(raw);
-  }
-
+  const words = shellWords(command);
+  if (words === null) return null;
+  // A leading assignment is a word written `NAME=` before any quote: a quoted
+  // `"A=1"` is a command word to the shell, not an assignment.
+  const assignment = (w: ShellWord | undefined) => w !== undefined && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w.raw);
   let i = 0;
-  const bare = (t: string) => t.replace(/^['"]+|['"]+$/g, "");
-  if (i < tokens.length && INTERPRETERS.has(bare(tokens[i]).split("/").pop() ?? "")) i++;
-  if (i < tokens.length && SUBCOMMANDS.has(bare(tokens[i]))) i++;
+  while (assignment(words[i])) i++;
+  if (words[i]?.raw === "env") {
+    i++;
+    while (assignment(words[i])) i++;
+  }
+  if (i < words.length && INTERPRETERS.has(words[i]!.text.split("/").pop() ?? "")) i++;
+  if (i < words.length && SUBCOMMANDS.has(words[i]!.text)) i++;
   // The flag run is where an argv parse silently becomes wrong, and it is the
   // differential a review found in the first version of this parse:
   // `bun --preload Foo.hook.ts run real.ts` PRELOADS Foo and EXECUTES
   // real.ts, so a loop that skips flags and then takes the next token reports
   // a file that never ran as the registration.
   //
-  // A `--flag=value` carries its value in its own token, so skipping it
+  // A `--flag=value` carries its value in its own word, so skipping it
   // cannot swallow the script. A BARE flag may or may not consume the next
-  // token, and the only way to know is a list of value-taking flags — which
+  // word, and the only way to know is a list of value-taking flags — which
   // goes stale the next time bun adds one, and a stale allowlist defaulting
   // to "this was safe to skip" is the fail-open direction. So a bare flag is
   // REFUSED: `null`, no registration read, loud.
-  while (i < tokens.length && bare(tokens[i]).startsWith("-")) {
-    if (!bare(tokens[i]).includes("=")) return null;
+  while (i < words.length && words[i]!.text.startsWith("-")) {
+    if (!words[i]!.text.includes("=")) return null;
     i++;
   }
-  if (i >= tokens.length) return null;
+  if (i >= words.length) return null;
 
-  // The positional is unquoted, or wrapped whole in one pair of quotes. A
-  // quote anywhere else means the shell's word is not this token: `"/x/A.hook.ts
-  // --flag"` is one argument, which is no hook file (#2815 review).
-  const raw = tokens[i]!;
-  const paired = raw.length >= 2 && (raw[0] === '"' || raw[0] === "'") && raw.at(-1) === raw[0];
-  const arg = paired ? raw.slice(1, -1) : raw;
-  if (/['"]/.test(arg)) return null;
+  const arg = words[i]!.text;
   const base = arg.slice(arg.lastIndexOf("/") + 1);
   return /^[A-Za-z0-9_-]+\.hook\.ts$/.test(base) ? arg : null;
 }

@@ -82,6 +82,25 @@ describe("#2802: a quoted leading assignment is read, spaces and all", () => {
     expect(executedHookPath('bun "${D}/A.hook.ts"')).toBe("${D}/A.hook.ts");
     expect(executedHookPath("bun '/x/A.hook.ts'")).toBe("/x/A.hook.ts");
     expect(executedHookPath("bun /x/A.hook.ts # it's here")).toBe("/x/A.hook.ts");
-    expect(executedHookPath("bun /x/A.hook.ts; echo \"done")).toBe("/x/A.hook.ts");
+    // #2815 review, round 2: the shell parses the whole line before running any
+    // of it, so a quote left open in a later command means nothing runs.
+    expect(executedHookPath('bun /x/A.hook.ts; echo "done')).toBeNull();
+    expect(executedHookPath("bun /x/A.hook.ts & echo '")).toBeNull();
+    // A later command with its quotes closed leaves the first one read.
+    expect(executedHookPath('bun /x/A.hook.ts; echo "done"')).toBe("/x/A.hook.ts");
+  });
+
+  test("#2815: every word is read by one shell reader, flags and positionals as well as assignments", () => {
+    // A quoted flag value holding a space is one word, so the path after it is read.
+    expect(executedHookPath('bun --name="a b" /x/A.hook.ts')).toBe("/x/A.hook.ts");
+    // An escaped space joins the path to the flag: one word, no positional.
+    expect(executedHookPath("bun --name=x\\ /x/A.hook.ts")).toBeNull();
+    // A # inside a word is part of it, so the word is no hook file.
+    expect(executedHookPath("bun /x/A.hook.ts#notes")).toBeNull();
+    // A quoted NAME=value is a command word to the shell, not an assignment.
+    expect(executedHookPath('"A=1" bun /x/A.hook.ts')).toBeNull();
+    // A comment ends at its line; a newline ends the first command.
+    expect(executedHookPath("bun /x/A.hook.ts # note\necho \"x")).toBeNull();
+    expect(executedHookPath("bun /x/A.hook.ts # it's\necho done")).toBe("/x/A.hook.ts");
   });
 });
