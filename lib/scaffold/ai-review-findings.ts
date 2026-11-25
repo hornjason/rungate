@@ -809,12 +809,13 @@ export function advisoryNotice(reading: AiReviewFindingsReading): string | null 
     `in ${order} order. ` +
     `${rendered.join("; ")}. ` +
     unobserved +
-    `Each is UNANSWERED: nothing in this pipeline requires it to be fixed, ` +
-    `resolved with a reason, or filed, and this annotation is the only place ` +
-    `it survives the job — the payload lives under the runner's temp directory ` +
-    `and is uploaded nowhere. Answer each one on this pull request (fix it, or ` +
-    `say in a comment why it stands), naming its key. Filing an issue is the ` +
-    `exception, not the default.`
+    `Each one placed on the diff is posted as a review thread, and the next round ` +
+    `refuses while a finding thread has no reply from a person (CRC-B8, #2832). ` +
+    `A finding on code this pull request does not touch, or on a line that cannot ` +
+    `be placed, is not posted: this annotation is the only place it survives the ` +
+    `job, and nothing yet requires it to be answered. Answer it on this pull ` +
+    `request (fix it, or say in a comment why it stands), naming its key. Filing ` +
+    `an issue is the exception, not the default.`
   );
 }
 
@@ -1745,10 +1746,19 @@ export function populationOwedRefusal(owed: readonly string[]): string {
  * criterion forbids. The words are not judged, only that a person wrote some.
  *
  * Only threads the poster wrote are read, told by the key marker, so a
- * person's own review comment is not this rule's. A class thread is left to
- * CRC-N7 (`populationOwed`), whose reply must also state the population, so
- * one thread is never refused twice. Read thread by thread, as CRC-N7 is: a
- * thread whose replies were not carried is unknown, and only it.
+ * person's own review comment is not this rule's. The marker's presence
+ * decides, not whether its payload decodes: a posted finding whose key was
+ * damaged is still a finding (review of #2851). A thread whose first comment
+ * did not come through at all is unknown, never skipped. A class thread is
+ * left to CRC-N7 (`populationOwed`), whose reply must also state the
+ * population, so one thread is never refused twice. Read thread by thread, as
+ * CRC-N7 is: a thread whose replies were not carried is unknown, and only it.
+ *
+ * A re-run of a round reads the threads its own earlier attempt posted, since
+ * the carry step lists every thread on the pull request. So a re-run on the
+ * same head refuses until those are answered too. That is intended: a thread
+ * must be answered before the merge whichever attempt posted it (review of
+ * #2851).
  */
 export type FindingsUnansweredReading =
   | { status: "MEASURED"; unanswered: string[] }
@@ -1762,7 +1772,12 @@ export function findingsUnanswered(threads: readonly PopulationThread[]): Findin
   let findings = 0;
   let unread = 0;
   for (const t of threads) {
-    if (threadKeyFrom(t.body) === null || threadPopulationFrom(t.body) !== null) continue;
+    if (typeof t.body !== "string") {
+      findings++;
+      unread++;
+      continue;
+    }
+    if (!t.body.includes(`<!-- ${AI_REVIEW_THREAD_KEY_MARKER} `) || threadPopulationFrom(t.body) !== null) continue;
     findings++;
     if (t.replies === undefined) {
       unread++;

@@ -1,5 +1,6 @@
 /**
- * Covers CRC-B8 (CODE-REVIEW-CONVERGENCE-SPEC.md), #2832.
+ * #2832: part of the "every finding is answered" criterion in
+ * specs/CODE-REVIEW-CONVERGENCE-SPEC.md, and not all of it.
  *
  * Every finding is answered: fixed, or resolved with a stated reason. #1162
  * closed the half where a finding was silently dropped, because every round's
@@ -29,8 +30,10 @@ import { findingsUnansweredFromThreads } from "../lib/ai-review-suppression";
 import {
   AI_REVIEW_FINDING_UNANSWERED_TITLE,
   AI_REVIEW_FINDING_UNANSWERED_UNMEASURED_TITLE,
+  advisoryNotice,
   findingsUnanswered,
   main,
+  readAiReviewFindings,
   threadBody,
 } from "../lib/scaffold/ai-review-findings";
 import { AI_REVIEW_OUTCOME_LINE, AI_REVIEW_REQUIRED_EXIT, AI_REVIEW_THREADS_PATH_VAR } from "../lib/scaffold/ai-review-step";
@@ -77,7 +80,7 @@ function cleanPayload(): string {
 
 const unansweredOf = (r: ReturnType<typeof findingsUnanswered>): string[] => (r.status === "MEASURED" ? r.unanswered : ["<UNMEASURED>"]);
 
-describe("CRC-B8 (#2832): which earlier finding threads are unanswered", () => {
+describe("#2832: which earlier finding threads are unanswered", () => {
   test("FA-1: a finding thread with no reply is unanswered, and named", () => {
     const r = findingsUnanswered([{ body: keyed(), replies: [] }]);
     expect(unansweredOf(r)).toHaveLength(1);
@@ -125,6 +128,20 @@ describe("CRC-B8 (#2832): which earlier finding threads are unanswered", () => {
     expect(mixed.status === "UNMEASURED" ? mixed.reason : "").toContain("1 of 2");
   });
 
+  /**
+   * Review of #2851: the first draft skipped a thread whose key did not
+   * decode, so a posted finding with a damaged key was neither checked nor
+   * counted, and the round read MEASURED and clean.
+   */
+  test("FA-12: a posted finding whose key is damaged is still checked, and a missing first comment is unknown", () => {
+    const damaged = keyed().replace(/(ai-review-finding-key:v1 )\S+/, "$1%%%not-base64%%%");
+    expect(damaged).not.toBe(keyed());
+    expect(unansweredOf(findingsUnanswered([{ body: damaged, replies: [] }]))).toHaveLength(1);
+    expect(findingsUnanswered([{ body: damaged, replies: [{ body: "fixed", bot: false }] }])).toEqual({ status: "MEASURED", unanswered: [] });
+    const missing = findingsUnanswered([{ body: null, replies: [] }]);
+    expect(missing.status).toBe("UNMEASURED");
+  });
+
   test("FA-7: read from the bytes the carry step writes", () => {
     const owing = JSON.stringify([{ isResolved: true, body: keyed(), replies: [] }]);
     const answered = JSON.stringify([{ isResolved: true, body: keyed(), replies: [{ body: "fixed", bot: false }] }]);
@@ -137,7 +154,20 @@ describe("CRC-B8 (#2832): which earlier finding threads are unanswered", () => {
   });
 });
 
-describe("CRC-B8 (#2832): the adjudicator refuses while a finding is unanswered", () => {
+describe("#2832: the adjudicator refuses while a finding is unanswered", () => {
+  /**
+   * Review of #2851: the advisory notice said nothing in the pipeline
+   * requires an advisory finding to be answered, which this rule now
+   * contradicts for every finding placed on the diff.
+   */
+  test("FA-13: the advisory notice says a posted finding must be answered, and which findings are not posted", () => {
+    const notice = advisoryNotice(readAiReviewFindings(JSON.stringify({ findings: [FINDING], verdict: "PASS" })));
+    expect(notice).not.toBeNull();
+    expect(notice).not.toContain("nothing in this pipeline requires it to be fixed");
+    expect(notice).toContain("the next round refuses while a finding thread has no reply from a person");
+    expect(notice).toContain("is not posted");
+  });
+
   test("FA-8: a clean payload refuses while an earlier finding has no reply, and names it", () => {
     const unanswered = findingsUnanswered([{ body: keyed(), replies: [] }]);
     const r = captured(() => main([cleanPayload()], null, null, null, undefined, null, unanswered));

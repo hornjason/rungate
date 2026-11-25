@@ -541,12 +541,7 @@ const UNCLAIMED_RATCHET = 150;
 // additions merge cleanly where the table form conflicts, a reading of the
 // specs and of `git merge-file` that no registered pattern expresses; the
 // `SC-2809` describe in test/spec-placement-merge.test.ts names it (2026-11-25).
-// 215: CRC-B8 (#2832) ticked by `sync-sc-status --only CRC-B8` — the review
-// adjudicator refuses a round while an earlier finding thread has no reply
-// from a person, a reading of the findings reader that no registered pattern
-// expresses; the `CRC-B8 (#2832)` describes in
-// test/ai-review-finding-answered.test.ts name it (2026-11-25).
-const CLAIMED_UNBINDABLE = 215;
+const CLAIMED_UNBINDABLE = 214;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
