@@ -176,8 +176,10 @@ export type Probe = { kind: "dir" | "file" | "other" } | { kind: "absent" } | { 
  * user-side touch now goes through this function, so "missing" and "could
  * not be read" are told apart in one place:
  *
- * - **absent**: nothing at the name. ENOENT or ENOTDIR from `stat`, and
- *   `lstat` finds nothing either.
+ * - **absent**: nothing at the name. ENOENT or ENOTDIR from `stat`, `lstat`
+ *   finds nothing either, and the nearest ancestor that exists is not a link
+ *   that leads nowhere (review round 6 of #2844). Under a dangling link, the
+ *   path is unreadable, not missing.
  * - **unreadable**: something is there and cannot be followed or read. A
  *   dangling or looping link, EACCES, or any other error.
  */
@@ -192,10 +194,38 @@ export function probePath(abs: string): Probe {
       lstatSync(abs);
     } catch (e2) {
       const code2 = codeOf(e2);
-      return code2 === "ENOENT" || code2 === "ENOTDIR" ? { kind: "absent" } : { kind: "unreadable", code: code2 };
+      if (code2 !== "ENOENT" && code2 !== "ENOTDIR") return { kind: "unreadable", code: code2 };
+      const blocked = blockingAncestor(abs);
+      return blocked === null ? { kind: "absent" } : { kind: "unreadable", code: blocked };
     }
     return { kind: "unreadable", code };
   }
+}
+
+/**
+ * Why the nearest ancestor of `abs` that exists stops a read, or null when
+ * it does not: a link to nowhere (ENOENT), or a directory the walk up could
+ * not look into (its error code).
+ */
+function blockingAncestor(abs: string): string | null {
+  for (let d = dirname(abs); d !== dirname(d); d = dirname(d)) {
+    let isLink: boolean;
+    try {
+      isLink = lstatSync(d).isSymbolicLink();
+    } catch (e) {
+      const code = codeOf(e);
+      if (code === "ENOENT" || code === "ENOTDIR") continue;
+      return code;
+    }
+    if (!isLink) return null;
+    try {
+      statSync(d);
+      return null;
+    } catch (e) {
+      return codeOf(e);
+    }
+  }
+  return null;
 }
 
 /**

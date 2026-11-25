@@ -486,6 +486,19 @@ describe("#2778: the user-level surface is reported unread by default and linted
     }
   });
 
+  // Review round 6 of #2844: a path under a dangling link is unreadable, not missing.
+  test("a path under a dangling link is named as unread, and no dangling-path finding says it is missing", () => {
+    const home = fakeHome(["skills/x/SKILL.md", "Read `refs/gone.md` first."], ["refs/other.md", "present"]);
+    symlinkSync(join(home, "nowhere"), join(home, ".claude", "skills", "x", "refs"));
+    const audit = promptAudit(rendered, undefined, { home });
+    expect(audit.findings.filter(f => f.lint === "dangling-path"), "a path under a dangling link was reported missing").toEqual([]);
+    expect(audit.unmeasured.join("\n")).toContain(`${USER_PREFIX}skills/x/refs/gone.md (ENOENT)`);
+  });
+
+  test("the disclosure says which user files load every session and which load when used", () => {
+    expect(USER_SURFACE_UNREAD).toContain(`Claude Code loads ${USER_PREFIX}CLAUDE.md and ${USER_PREFIX}rules/ into every session here, and the rest when they are used.`);
+  });
+
   test("the command says the surface was unread without --user, and lints it with --user, under the HOME it is given", () => {
     const home = fakeHome(["skills/x/SKILL.md", "Read `references/gone.md` first."], ["skills/x/references/here.md", "present"]);
     const run = (args: string[]) =>

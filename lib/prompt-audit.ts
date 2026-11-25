@@ -319,10 +319,14 @@ const USER_SURFACE_LINTS = [
 ];
 export const USER_AUDIT_LINTS: readonly string[] = [...USER_SURFACE_LINTS.map(l => l.name), "pressure-density", "dangling-path"];
 
+/** One {@link USER_SURFACE} entry as a reader sees it: `~/.claude/rules/`. */
+const userSurfaceName = (e: { path: string; kind: "file" | "dir" }): string => `${USER_PREFIX}${e.path}${e.kind === "dir" ? "/" : ""}`;
+
 /** What a default run says about the user-level files it did not read. */
 export const USER_SURFACE_UNREAD =
-  `UNMEASURED: the user-level surface (${USER_SURFACE.map(e => `${USER_PREFIX}${e.path}${e.kind === "dir" ? "/" : ""}`).join(", ")}) was not read, ` +
-  "and Claude Code loads it into every session here. Run with --user to lint it; nothing there is written.";
+  `UNMEASURED: the user-level surface (${USER_SURFACE.map(userSurfaceName).join(", ")}) was not read. Claude Code loads ` +
+  `${USER_SURFACE.filter(e => e.everySession).map(userSurfaceName).join(" and ")} into every session here, and the rest when they are used. ` +
+  "Run with --user to lint it; nothing there is written.";
 
 /** The line a surface lint's message starts with, or null. */
 const lineOf = (message: string): number | null => {
