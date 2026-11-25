@@ -13,7 +13,7 @@ import { execSync } from "child_process";
 
 /** How many sessions the handoff shows. One site, so the count can be mutated. */
 const RENDERED_SESSIONS = 3;
-import { boundedPriorities, missingStateVerdict, projectStateDay, projectStateViolations, selectRecentSessions } from "../lib/project-state-shape";
+import { boundedPriorities, missingStateVerdict, projectStateDay, projectStateViolations, selectRecentSessions, sessionAheadOfStamp } from "../lib/project-state-shape";
 import { openImprovements, stageLadderViolations, type Stage } from "../lib/stage-ladder";
 
 /**
@@ -371,6 +371,17 @@ const state: ProjectState = parsed as ProjectState;
 // #2785: then the process zone, which is the currency test's zone only on a
 // machine set to it. Now the zone itself, whatever machine runs this.
 state.updated = projectStateDay();
+// #2785 review: a session date is typed by hand, so the stamp alone could not
+// stop the UTC habit. Refused here, before anything is written, so the
+// pre-commit run catches it rather than the currency test after the merge.
+if (typeof state.session?.date === "string") {
+  const ahead = sessionAheadOfStamp(state.updated, state.session.date);
+  if (ahead !== null) {
+    console.error(`project-state: ${ahead}`);
+    console.error(`project-state: nothing was written.`);
+    process.exit(PROJECT_STATE_REFUSE_EXIT);
+  }
+}
 
 // Sync SC status from spec files (promote-only: specs can mark done, never undo)
 const specStatus = scanSpecSCStatus();

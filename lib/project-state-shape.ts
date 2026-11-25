@@ -329,6 +329,43 @@ export const RENDERED_PRIORITIES_MAX = 12;
  */
 export const PROJECT_STATE_ZONE = "America/New_York";
 
+/**
+ * Why a state's newest session is dated after its `updated` stamp, or null
+ * when it is not (#2785).
+ *
+ * A session's date is typed by hand, by the DA; only `updated` is stamped by
+ * the writer, with the day it runs in {@link PROJECT_STATE_ZONE}. A session
+ * dated later than that was dated by a day the record had not reached:
+ * session 105 was written on the New York evening of 2026-11-24 and typed as
+ * 2026-11-25, the UTC day, which hides every merge on the day in between from
+ * the currency comparison. Or `updated` is stale, because the writer did not
+ * run; the message names both, and the writer is the first thing to try.
+ *
+ * The writer calls this before it writes, so a hand-typed date ahead of the
+ * day is refused at commit time; the currency test calls it on the committed
+ * record. One decider for both.
+ */
+export function sessionAheadOfStamp(updated: unknown, sessionDate: unknown): string | null {
+  // A date may be followed by anything but another digit: `2026-11-25 session 106`, `2026-11-25T14:00`.
+  const day = (v: unknown): string | null => {
+    const m = typeof v === "string" ? /^(\d{4}-\d{2}-\d{2})(?!\d)/.exec(v) : null;
+    return m ? m[1]! : null;
+  };
+  const stamp = day(updated);
+  const session = day(sessionDate);
+  if (stamp === null) return `updated is ${JSON.stringify(updated)}, which is not a calendar day`;
+  if (session === null) return `the newest session's date is ${JSON.stringify(sessionDate)}, which starts with no calendar day`;
+  if (session > stamp) {
+    return (
+      `the newest session is dated ${session} and updated reads ${stamp}. Either updated is stale: run ` +
+      `\`bun scripts/update-project-state.ts\`, which stamps the day it runs in ${PROJECT_STATE_ZONE}. Or, if it ` +
+      `still reads ${stamp}, the session's date was typed ahead of the day: date it by the day in ` +
+      `${PROJECT_STATE_ZONE} it was written.`
+    );
+  }
+  return null;
+}
+
 /** The day `at` falls on in {@link PROJECT_STATE_ZONE}: what `updated` is stamped with. */
 export function projectStateDay(at: Date = new Date()): string {
   return localCalendarDay(at, PROJECT_STATE_ZONE);

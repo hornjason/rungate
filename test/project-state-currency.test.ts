@@ -34,7 +34,7 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 import { localCalendarDay } from "../lib/local-calendar-day";
-import { PROJECT_STATE_ZONE } from "../lib/project-state-shape";
+import { PROJECT_STATE_ZONE, sessionAheadOfStamp } from "../lib/project-state-shape";
 
 const ROOT = join(import.meta.dir, "..");
 const STATE = join(ROOT, "project-state.json");
@@ -115,9 +115,10 @@ export function sessionNumberIn(date: unknown): number | null {
  * meaning without a zone. Before this was declared, the two sides were
  * computed in two DIFFERENT zones and neither was this one:
  *
- *   - the session date is stamped by `scripts/update-project-state.ts`
- *     through `localCalendarDay()` (#600), which uses the PROCESS zone — the
- *     DA's machine;
+ *   - the session date, which the DA types by hand, and `updated`, which
+ *     `scripts/update-project-state.ts` stamped through `localCalendarDay()`
+ *     (#600) in the PROCESS zone, the DA's machine, until #2785 stamped it in
+ *     this zone;
  *   - the probe took `%cI`.slice(0, 10), and `%cI` renders each commit in
  *     ITS OWN RECORDED OFFSET, which varies commit to commit on one branch.
  *
@@ -125,40 +126,13 @@ export function sessionNumberIn(date: unknown): number | null {
  * process zone is UTC, so the same probe over the same tree could answer
  * differently locally and in CI.
  *
- * This is the zone the stamper runs in. If that ever stops being true, both
- * must move together — which is the argument for there being exactly one
- * place to change, rather than a `slice(0, 10)` at each use site.
+ * Since #2785 the writer and this comparison read the zone from one constant,
+ * `PROJECT_STATE_ZONE` in `lib/project-state-shape.ts`, so they cannot drift.
+ * The session date is still typed by hand; `sessionAheadOfStamp` refuses one
+ * dated past the stamp, in the writer and below.
  */
 export const CURRENCY_ZONE = PROJECT_STATE_ZONE;
 
-/**
- * Why a state's newest session is dated after its `updated` stamp, or null
- * when it is not (#2785).
- *
- * The writer stamps `updated` with the day it runs, in {@link CURRENCY_ZONE}.
- * A session dated later than that was dated by a day the record had not
- * reached: session 105 was written on the New York evening of 2026-11-24 and
- * typed as 2026-11-25, the UTC day. A session dated ahead hides every merge on
- * the days in between from the comparison above.
- */
-export function sessionAheadOfStamp(updated: unknown, sessionDate: unknown): string | null {
-  const day = (v: unknown): string | null => {
-    const m = typeof v === "string" ? /^(\d{4}-\d{2}-\d{2})\b/.exec(v) : null;
-    return m ? m[1]! : null;
-  };
-  const stamp = day(updated);
-  const session = day(sessionDate);
-  if (stamp === null) return `updated is ${JSON.stringify(updated)}, which is not a calendar day`;
-  if (session === null) return `the newest session's date is ${JSON.stringify(sessionDate)}, which starts with no calendar day`;
-  if (session > stamp) {
-    return (
-      `the newest session is dated ${session} and updated reads ${stamp}. The writer stamps the day it runs, ` +
-      `in ${CURRENCY_ZONE}, so the session was dated by a day the record had not reached. Date it by the ` +
-      `day in ${CURRENCY_ZONE} it was written.`
-    );
-  }
-  return null;
-}
 
 /**
  * The calendar day a commit instant falls on, in the one frame.
@@ -383,6 +357,12 @@ describe("project-state currency", () => {
     expect(sessionAheadOfStamp("2026-11-26", "2026-11-25 session 106 (gist)")).toBeNull();
     expect(sessionAheadOfStamp(undefined, "2026-11-25")).toContain("not a calendar day");
     expect(sessionAheadOfStamp("2026-11-25", "session 106")).toContain("starts with no calendar day");
+    // #2807 review: a timestamp is a day followed by T, not a refusal.
+    expect(sessionAheadOfStamp("2026-11-25", "2026-11-25T14:00 session 106")).toBeNull();
+    expect(sessionAheadOfStamp("2026-11-25", "2026-11-251 session 106")).toContain("starts with no calendar day");
+    // The refusal names both ways out: re-run the writer, or re-date the session.
+    expect(ahead).toContain("bun scripts/update-project-state.ts");
+    expect(ahead).toContain("date it by the day in");
   });
 
   test("the staleness comparison fires on a date that IS stale", () => {
