@@ -73,7 +73,7 @@
  * the confident-and-wrong path this file exists to stop.
  */
 
-import { executedHookPath } from "./hook-trees";
+import { executedHookPath, mentionsHook } from "./hook-trees";
 import {
   type RegistrationScope,
   type ScopeReading,
@@ -272,7 +272,7 @@ export interface TargetReading {
   hook: string;
   scope: RegistrationScope;
   command: string;
-  /** The variable the path is reached through, or `"literal"`. */
+  /** The variable the path is reached through, `"literal"`, or `"unparsed"` when no path was read (#2820). */
   spelling: string;
   target: Target;
   /** The absolute path the registration resolves to, when it resolved. */
@@ -335,8 +335,30 @@ export function registeredTreeCensus(
     const projectDir = PROJECT_DIR_SCOPES.includes(reading.scope) ? repoRoot : null;
     for (const command of reading.commands ?? []) {
       const raw = executedHookPath(command);
-      if (raw === null) continue;
-      const base = raw.slice(raw.lastIndexOf("/") + 1).replace(/\.hook\.ts$/, "");
+      const executed = raw === null ? null : raw.slice(raw.lastIndexOf("/") + 1).replace(/\.hook\.ts$/, "");
+      // A command naming an owned hook it is not read as executing is a
+      // registration this census could not read: counted and reported, never
+      // skipped, as `wrongTreeViolations` reports it `unparsed` (#2820). The
+      // detail quotes no command, so no setting crosses into a reason.
+      for (const hook of owned) {
+        if (hook === executed || !mentionsHook(command, hook)) continue;
+        examined++;
+        out.push({
+          hook,
+          scope: reading.scope,
+          command,
+          spelling: "unparsed",
+          target: "unresolved",
+          resolved: null,
+          detail:
+            `${hook} is named in ${reading.scope} by a command this census does not read as executing it ` +
+            `(${executed === null ? "no executed hook file could be read from it" : `it executes ${executed}`}), ` +
+            `so which tree that registration runs could not be read. A registration not read is not this ` +
+            `repo's copy; it is no reading at all`,
+        });
+      }
+      if (raw === null || executed === null) continue;
+      const base = executed;
       if (!owned.includes(base)) continue;
 
       examined++;

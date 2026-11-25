@@ -474,11 +474,22 @@ export interface TreeViolation {
  * the boundary, stated, because a stated limit is an answer and silence reads
  * as coverage.
  */
+/**
+ * Does `command` NAME `<hook>.hook.ts` anywhere: the selection both census
+ * readers make, deliberately over-broad (see the table above). One binding, so
+ * `wrongTreeViolations` and `registeredTreeCensus` agree on which strings
+ * mention a hook, and each reports a mention it does not read as an
+ * execution rather than skipping it (#2820).
+ */
+export function mentionsHook(command: string, hook: string): boolean {
+  return command.includes(`${hook}.hook.ts`);
+}
+
 export function wrongTreeViolations(owned: string[], commands: string[]): TreeViolation[] {
   const out: TreeViolation[] = [];
   for (const hook of owned) {
     // SELECTION stays over-broad on purpose — see the table above.
-    for (const command of commands.filter(c => c.includes(`${hook}.hook.ts`))) {
+    for (const command of commands.filter(c => mentionsHook(c, hook))) {
       const path = hookRegistrationPath(command, hook);
       if (path === null) {
         const executes = executedHookFile(command);

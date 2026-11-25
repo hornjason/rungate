@@ -930,6 +930,31 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
     expect(census.inRepo.map(r => r.hook)).toEqual(["ProjectStateSync"]);
   });
 
+  test("#2820: a registration the parse does not read is counted and reported, never skipped", () => {
+    const env = envs({ "user-settings": { RUNGATE_HOOKS_DIR: `${REPO}/hooks` } });
+    const refused = [
+      // The parse refuses the line.
+      "bun ${RUNGATE_HOOKS_DIR}/ProjectStateSync.hook.ts --name $(echo x # y)",
+      // Named inside a quoted string, not executed.
+      'sh -c "bun ${RUNGATE_HOOKS_DIR}/ProjectStateSync.hook.ts"',
+      // Named, while another hook executes.
+      "bun ${RUNGATE_HOOKS_DIR}/Other.hook.ts --for ProjectStateSync.hook.ts",
+    ];
+    for (const command of refused) {
+      // Beside an in-repo registration of the same hook, which alone reads clean (AC-R2).
+      const census = registeredTreeCensus(["ProjectStateSync"], cmds({ "user-settings": [RG("ProjectStateSync"), command] }), env, REPO);
+      expect(census.reading, command).toBe("UNMEASURED");
+      expect(census.examined, command).toBe(2);
+      expect(census.inRepo.map(r => r.hook), command).toEqual(["ProjectStateSync"]);
+      expect(census.unresolved.map(r => [r.hook, r.spelling]), command).toEqual([["ProjectStateSync", "unparsed"]]);
+      expect(census.unmeasuredReasons.join(" "), command).toContain("does not read as executing it");
+      // The detail names no command, so no setting crosses into a reason.
+      expect(census.unresolved[0]!.detail, command).not.toContain(command);
+      // The two readers agree: the tree census reports the same string unparsed.
+      expect(wrongTreeViolations(["ProjectStateSync"], [command]).map(v => v.tree), command).toEqual(["unparsed"]);
+    }
+  });
+
   test("AC-R3: a variable nothing defines is UNRESOLVED, never 'this repo'", () => {
     // Fail-open one. An undefined variable is the state CI is in, and the
     // tempting reading is that `${RUNGATE_HOOKS_DIR}` obviously means the
