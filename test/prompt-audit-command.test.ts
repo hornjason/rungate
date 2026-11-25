@@ -22,6 +22,7 @@ import {
   PROMPT_AUDIT_LINTS,
   USER_AUDIT_LINTS,
   USER_PREFIX,
+  USER_SURFACE_UNREAD,
   formatAudit,
   generatedNames,
   lineOwners,
@@ -32,7 +33,7 @@ import {
   type PromptAudit,
 } from "../lib/prompt-audit";
 import { symptomKeys } from "../lib/finding-arbiter";
-import { SURFACE_LINTS } from "../lib/surface-lint";
+import { SURFACE_LINTS, USER_SURFACE } from "../lib/surface-lint";
 import { commitFixture, initFixtureRepo } from "./helpers/git-fixture";
 
 const ROOT = join(import.meta.dir, "..");
@@ -438,6 +439,37 @@ describe("#2778: the user-level surface is reported unread by default and linted
     expect(audit.user?.files).toBe(2);
     expect(audit.findings).toEqual([]);
     expect(audit.unmeasured).toEqual([]);
+  });
+
+  // Review round 4 of #2844: one table of what Claude Code loads drives the
+  // reader and the disclosure, and one probe reads every user-side path.
+  test("the default run's disclosure names every entry of the one table the reader reads", () => {
+    for (const e of USER_SURFACE) expect(USER_SURFACE_UNREAD, e.path).toContain(`${USER_PREFIX}${e.path}${e.kind === "dir" ? "/" : ""}`);
+    expect(USER_SURFACE.map(e => e.path)).toContain("rules");
+  });
+
+  test("user rules are read, and one with a count is a stale-count finding unless it is path-scoped", () => {
+    const home = fakeHome(
+      ["rules/mine.md", "There are 12 agents here."],
+      ["rules/scoped.md", "---\npaths:\n  - \"src/**\"\n---\n\nThere are 12 agents here."],
+    );
+    const audit = promptAudit(rendered, undefined, { home });
+    expect(audit.findings.map(f => `${f.owner} ${f.lint} ${f.file}`)).toEqual(["user stale-count ~/.claude/rules/mine.md"]);
+    expect(audit.user?.files).toBe(2);
+  });
+
+  test("a file dangling-path cannot stat is named as unread, never reported as missing", () => {
+    if (process.getuid?.() === 0) return; // root searches a mode-600 directory anyway
+    const home = fakeHome(["skills/x/SKILL.md", "Read `references/here.md` first."], ["skills/x/references/here.md", "present"]);
+    const refs = join(home, ".claude", "skills", "x", "references");
+    chmodSync(refs, 0o600);
+    try {
+      const audit = promptAudit(rendered, undefined, { home });
+      expect(audit.findings.filter(f => f.lint === "dangling-path"), "an unreadable file was reported as missing").toEqual([]);
+      expect(audit.unmeasured.join("\n")).toContain(`${USER_PREFIX}skills/x/references/here.md (EACCES)`);
+    } finally {
+      chmodSync(refs, 0o755);
+    }
   });
 
   test("the command says the surface was unread without --user, and lints it with --user, under the HOME it is given", () => {

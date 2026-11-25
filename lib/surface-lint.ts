@@ -18,7 +18,7 @@
  */
 
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
-import { dirname, isAbsolute, join, relative, resolve } from "path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "path";
 
 import { resolveConfig } from "./config-loader";
 import { readFences } from "./markdown-fence";
@@ -113,16 +113,42 @@ export function readRenderedSurface(root: string): RenderedSurface {
 
 // ── #2778: the user-level surface ─────────────────────────────────────────
 
-/** The user-level files Claude Code loads into every session, relative to `~/.claude`. */
-export const USER_SURFACE_FILES = ["CLAUDE.md"] as const;
+/**
+ * What Claude Code loads from `~/.claude`, relative to it, in one table
+ * (review round 4 of #2844). The reader and the default run's disclosure are
+ * both built from this table, so neither can name a surface the other misses.
+ * Claude Code's memory docs list `~/.claude/CLAUDE.md` and `~/.claude/rules/`
+ * as user scope. They load into every session; agents, skills and commands
+ * load when used.
+ */
+export const USER_SURFACE: ReadonlyArray<{ path: string; kind: "file" | "dir"; everySession: boolean }> = [
+  { path: "CLAUDE.md", kind: "file", everySession: true },
+  { path: "rules", kind: "dir", everySession: true },
+  { path: "agents", kind: "dir", everySession: false },
+  { path: "skills", kind: "dir", everySession: false },
+  { path: "commands", kind: "dir", everySession: false },
+];
 
-/** The user-level directories whose `*.md` files are the rest of it, relative to `~/.claude`. */
-export const USER_SURFACE_DIRS = ["agents", "skills", "commands"] as const;
+/**
+ * Whether a user-level file, named from `~/.claude`, loads into every
+ * session: an every-session entry of {@link USER_SURFACE}, except a rule that
+ * declares `paths:`, which loads beside matching files the way a project rule
+ * does (`isPathScoped`, the same reading).
+ */
+export function userLoadsEverySession(file: string, text: string): boolean {
+  return USER_SURFACE.some(e => {
+    if (!e.everySession) return false;
+    if (e.kind === "file") return file === e.path;
+    return file.startsWith(`${e.path}/`) && !(e.path === "rules" && isPathScoped(text));
+  });
+}
 
-/** The user-level surface as read: the files, and every path that could not be read, with why. */
+/** The user-level surface as read: the files, every path that could not be read, and the one probe that decided both. */
 export interface UserSurface extends RenderedSurface {
-  /** Paths relative to `~/.claude`, each with the error code that stopped it, e.g. `skills/a (ELOOP)`. */
+  /** Paths named from `~/.claude` (or `~/`), each with the code that stopped it, e.g. `skills/a (ELOOP)`. */
   readonly unreadable: readonly string[];
+  /** {@link probePath}, recording any unreadable answer in `unreadable` under its name. */
+  readonly probe: (abs: string) => Probe;
 }
 
 /**
@@ -141,60 +167,35 @@ function codeOf(e: unknown): string {
   return (e as NodeJS.ErrnoException).code ?? (e as Error).message;
 }
 
+/** What is at a path, following links, or why it could not be read. */
+export type Probe = { kind: "dir" | "file" | "other" } | { kind: "absent" } | { kind: "unreadable"; code: string };
+
 /**
- * Every `.md` file under `dir`, following symlinks. A user's skills are often
- * links into another checkout, and Claude Code loads them through the link,
- * so a walk that skipped links would read less than a session loads.
+ * The one reading of a user-level path (review round 4 of #2844). Earlier
+ * rounds fixed one errno per round across three separate readers. Every
+ * user-side touch now goes through this function, so "missing" and "could
+ * not be read" are told apart in one place:
  *
- * Two links to one directory are two skills to a session, so both are read
- * under their own names (review round 3 of #2844). Only a link back to a
- * directory the walk is already inside is a cycle, and it is named in
- * `unreadable` rather than followed.
- *
- * An entry that cannot be read is named in `unreadable` and skipped, never
- * dropped silently and never allowed to end the walk: a link to itself
- * (ELOOP), a path through a file (ENOTDIR), an unreadable directory (EACCES)
- * and a dangling link (ENOENT) are each one path the report says it did not
- * read (review round 1 of #2844).
+ * - **absent**: nothing at the name. ENOENT or ENOTDIR from `stat`, and
+ *   `lstat` finds nothing either.
+ * - **unreadable**: something is there and cannot be followed or read. A
+ *   dangling or looping link, EACCES, or any other error.
  */
-function mdInFollowingLinks(root: string, dir: string, unreadable: string[]): string[] {
-  const out: string[] = [];
-  const tryFs = <T>(rel: string, read: () => T): T | undefined => {
-    try {
-      return read();
-    } catch (e) {
-      unreadable.push(`${rel} (${codeOf(e)})`);
-      return undefined;
-    }
-  };
-  const walk = (abs: string, rel: string, inside: ReadonlySet<string>): void => {
-    const real = tryFs(rel, () => realpathSync(abs));
-    if (real === undefined) return;
-    if (inside.has(real)) {
-      unreadable.push(`${rel} (links back to a directory it is inside)`);
-      return;
-    }
-    const here = new Set(inside).add(real);
-    const names = tryFs(rel, () => readdirSync(abs));
-    for (const name of (names ?? []).sort((x, y) => x.localeCompare(y))) {
-      if (neverLoaded(name)) continue;
-      const st = tryFs(`${rel}/${name}`, () => statSync(join(abs, name)));
-      if (st?.isDirectory()) walk(join(abs, name), `${rel}/${name}`, here);
-      else if (st?.isFile() && name.endsWith(".md")) out.push(`${rel}/${name}`);
-    }
-  };
-  // An absent surface directory loads nothing and is not a failure to read.
-  // Anything else lstat refuses is (EACCES on `~/.claude`, say).
-  const at = join(root, dir);
+export function probePath(abs: string): Probe {
   try {
-    lstatSync(at);
+    const st = statSync(abs);
+    return { kind: st.isDirectory() ? "dir" : st.isFile() ? "file" : "other" };
   } catch (e) {
-    if (codeOf(e) !== "ENOENT") unreadable.push(`${dir} (${codeOf(e)})`);
-    return out;
+    const code = codeOf(e);
+    if (code !== "ENOENT" && code !== "ENOTDIR") return { kind: "unreadable", code };
+    try {
+      lstatSync(abs);
+    } catch (e2) {
+      const code2 = codeOf(e2);
+      return code2 === "ENOENT" || code2 === "ENOTDIR" ? { kind: "absent" } : { kind: "unreadable", code: code2 };
+    }
+    return { kind: "unreadable", code };
   }
-  const st = tryFs(dir, () => statSync(at));
-  if (st?.isDirectory()) walk(at, dir, new Set());
-  return out;
 }
 
 /**
@@ -203,32 +204,64 @@ function mdInFollowingLinks(root: string, dir: string, unreadable: string[]): st
  * not refused for lacking a scaffold's markers: a home with no `.claude` is
  * an empty surface, and the caller reports how many files it read and which
  * paths it could not.
+ *
+ * Directories are walked following links, because Claude Code loads a
+ * linked skill through its link. Two links to one directory are two skills,
+ * each read under its own name. Only a link back to a directory the walk is
+ * already inside is a cycle, and it is named rather than followed.
  */
 export function readUserSurface(home: string): UserSurface {
-  const root = join(resolve(home), ".claude");
+  const homeAbs = resolve(home);
+  const root = join(homeAbs, ".claude");
   const files = new Map<string, string>();
   const unreadable: string[] = [];
-  const read = (rel: string): void => {
+  const nameOf = (abs: string): string => {
+    const inRoot = relative(root, abs);
+    if (!inRoot.startsWith("..") && !isAbsolute(inRoot)) return inRoot.split(sep).join("/");
+    const inHome = relative(homeAbs, abs);
+    return !inHome.startsWith("..") && !isAbsolute(inHome) ? `~/${inHome.split(sep).join("/")}` : abs;
+  };
+  const note = (abs: string, why: string): void => {
+    const entry = `${nameOf(abs)} (${why})`;
+    if (!unreadable.includes(entry)) unreadable.push(entry);
+  };
+  const probe = (abs: string): Probe => {
+    const p = probePath(abs);
+    if (p.kind === "unreadable") note(abs, p.code);
+    return p;
+  };
+  const attempt = <T>(abs: string, run: () => T): T | undefined => {
     try {
-      files.set(rel, readFileSync(join(root, rel), "utf-8"));
+      return run();
     } catch (e) {
-      unreadable.push(`${rel} (${codeOf(e)})`);
+      note(abs, codeOf(e));
+      return undefined;
     }
   };
-  // Present means lstat finds an entry, not that `existsSync` can follow it:
-  // a dangling or looping link is present and unreadable, and is named as
-  // such (review round 2 of #2844). Only a missing entry is absent.
-  for (const f of USER_SURFACE_FILES) {
-    try {
-      lstatSync(join(root, f));
-    } catch (e) {
-      if (codeOf(e) !== "ENOENT") unreadable.push(`${f} (${codeOf(e)})`);
-      continue;
+  const read = (abs: string): void => {
+    const text = attempt(abs, () => readFileSync(abs, "utf-8"));
+    if (text !== undefined) files.set(nameOf(abs), text);
+  };
+  const walk = (abs: string, inside: ReadonlySet<string>): void => {
+    const real = attempt(abs, () => realpathSync(abs));
+    if (real === undefined) return;
+    if (inside.has(real)) return note(abs, "links back to a directory it is inside");
+    const here = new Set(inside).add(real);
+    for (const name of (attempt(abs, () => readdirSync(abs)) ?? []).sort((x, y) => x.localeCompare(y))) {
+      if (neverLoaded(name)) continue;
+      const at = join(abs, name);
+      const p = probe(at);
+      if (p.kind === "dir") walk(at, here);
+      else if (p.kind === "file" && name.endsWith(".md")) read(at);
     }
-    read(f);
+  };
+  for (const entry of USER_SURFACE) {
+    const at = join(root, entry.path);
+    const p = probe(at);
+    if (entry.kind === "file" && p.kind === "file") read(at);
+    if (entry.kind === "dir" && p.kind === "dir") walk(at, new Set());
   }
-  for (const d of USER_SURFACE_DIRS) for (const f of mdInFollowingLinks(root, d, unreadable)) read(f);
-  return { root, files, unreadable };
+  return { root, files, unreadable, probe };
 }
 
 /** A surface file, or any file that exists inside the rendered root. */
@@ -480,13 +513,17 @@ function alwaysLoaded(file: string, text: string): boolean {
  * reading the surface measurement uses — decides which rules are which.
  * Fenced examples are not read.
  */
-export function staleCounts(): SurfaceLint {
+export function staleCounts(opts: { everySession?: (file: string, text: string) => boolean } = {}): SurfaceLint {
+  // `everySession` (#2844): which files of THIS surface load into every
+  // session. The user-level surface names them from `~/.claude`, where a rule
+  // is `rules/x.md`, not `.claude/rules/x.md`.
+  const loaded = opts.everySession ?? alwaysLoaded;
   return {
     name: "stale-count",
     check(surface) {
       const findings: SurfaceFinding[] = [];
       for (const [file, text] of surface.files) {
-        if (!alwaysLoaded(file, text)) continue;
+        if (!loaded(file, text)) continue;
         const lines = text.split("\n");
         const { roles } = readFences(lines);
         lines.forEach((ln, i) => {

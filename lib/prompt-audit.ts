@@ -64,7 +64,9 @@ import { OWNED_FILES } from "./scaffold/owned-files";
 import {
   PACKAGE_ROOT,
   SURFACE_LINTS,
-  USER_SURFACE_DIRS,
+  USER_SURFACE,
+  userLoadsEverySession,
+  type Probe,
   lintRenderedTree,
   readRenderedSurface,
   readUserSurface,
@@ -251,7 +253,15 @@ const userPlaces = (root: string, home: string): PathPlaces => (file, token) => 
   return looksLikeRepoPath(token) ? [join(root, dirname(file), token), join(root, token)] : null;
 };
 
-function danglingPathFindings(surface: RenderedSurface, owners: Map<string, Owner[]>, places: PathPlaces = projectPlaces(surface.root)): AuditFinding[] {
+/** The project's reading of a path: here or not, as `existsSync` says. The user surface passes its own probe, which also tells "unreadable" apart. */
+const projectProbe = (abs: string): Probe => (existsSync(abs) ? { kind: statSync(abs).isDirectory() ? "dir" : "file" } : { kind: "absent" });
+
+function danglingPathFindings(
+  surface: RenderedSurface,
+  owners: Map<string, Owner[]>,
+  places: PathPlaces = projectPlaces(surface.root),
+  probe: (abs: string) => Probe = projectProbe,
+): AuditFinding[] {
   const out: AuditFinding[] = [];
   for (const [file, text] of surface.files) {
     const lines = text.split("\n");
@@ -261,8 +271,12 @@ function danglingPathFindings(surface: RenderedSurface, owners: Map<string, Owne
       for (const [, token] of ln.matchAll(BACKTICKED)) {
         const at = places(file, token);
         if (at === null) continue;
-        if (!at.some(p => existsSync(dirname(p)) && statSync(dirname(p)).isDirectory())) continue;
-        if (at.some(p => existsSync(p))) continue;
+        // A finding needs one place whose directory is there, and every place
+        // without the file. A place that could not be read is neither: the
+        // user probe names it as unread, so it is never reported as missing
+        // (review round 4 of #2844).
+        if (!at.map(p => probe(dirname(p))).some(k => k.kind === "dir")) continue;
+        if (at.map(p => probe(p)).some(k => k.kind !== "absent")) continue;
         out.push({
           lint: "dangling-path", file, line: i + 1, owner: owners.get(file)![i],
           message: `line ${i + 1} names \`${token}\`; its directory exists and the file does not`,
@@ -284,12 +298,15 @@ export const PROMPT_AUDIT_LINTS: readonly string[] = [...SURFACE_LINTS.map(l => 
  * the unexpanded-variable check: Claude Code expands `${CLAUDE_SKILL_DIR}`
  * and its kin in those files itself (review round 3 of #2844).
  */
-const USER_SURFACE_LINTS = [templateArtifacts({ variables: false }), staleCounts()];
+const USER_SURFACE_LINTS = [
+  templateArtifacts({ variables: false }),
+  staleCounts({ everySession: userLoadsEverySession }),
+];
 export const USER_AUDIT_LINTS: readonly string[] = [...USER_SURFACE_LINTS.map(l => l.name), "pressure-density", "dangling-path"];
 
 /** What a default run says about the user-level files it did not read. */
 export const USER_SURFACE_UNREAD =
-  `UNMEASURED: the user-level surface (${USER_PREFIX}CLAUDE.md and ${USER_PREFIX}{${USER_SURFACE_DIRS.join(",")}}) was not read, ` +
+  `UNMEASURED: the user-level surface (${USER_SURFACE.map(e => `${USER_PREFIX}${e.path}${e.kind === "dir" ? "/" : ""}`).join(", ")}) was not read, ` +
   "and Claude Code loads it into every session here. Run with --user to lint it; nothing there is written.";
 
 /** The line a surface lint's message starts with, or null. */
@@ -317,7 +334,7 @@ function userFindings(home: string): { root: string; files: number; findings: Au
   const findings: AuditFinding[] = USER_SURFACE_LINTS.flatMap(lint =>
     lint.check(surface).map(f => ({ lint: lint.name, file: f.file, line: lineOf(f.message), owner: "user" as const, message: f.message })),
   );
-  findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners, userPlaces(surface.root, home)));
+  findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners, userPlaces(surface.root, home), surface.probe));
   return { root: surface.root, files: surface.files.size, findings: findings.map(f => ({ ...f, file: USER_PREFIX + f.file })), unreadable: surface.unreadable };
 }
 
