@@ -37,6 +37,7 @@ import {
   placementCoverage,
   placementReading,
   placementsById,
+  previousMilestoneBody,
   uncoveredByMilestone,
 } from "../lib/spec-placement";
 import { criterionFingerprint, parseCriteria } from "../lib/spec-evidence";
@@ -327,6 +328,35 @@ describe("lib/spec-placement: milestones are derived, and matched on the phase N
     expect(actions.find(a => a.phase === 1)?.action).toBe("update");
   });
 
+  // #2797: the sentence changed, and the live milestones still hold the old
+  // one. Reading it as `update` would make the live milestones reading short
+  // on every pull request until somebody rewrote them by hand.
+  test("#2797: the previous sentence with the current criteria is unchanged, and marked for rewording", () => {
+    const plan = (description: string | null, title = "Conv Phase 1 — stop the repeats") =>
+      milestonePlan(spec, [{ number: 4, title, description }], "Conv").actions.find(a => a.phase === 1)!;
+    const older = plan(previousMilestoneBody(["CRC-A1", "CRC-A2"]));
+    expect([older.action, older.reword]).toEqual(["unchanged", true]);
+    const current = plan(milestoneBody(["CRC-A1", "CRC-A2"]));
+    expect([current.action, current.reword]).toEqual(["unchanged", undefined]);
+    // The old sentence over a criteria list that moved is still an update.
+    const moved = plan(previousMilestoneBody(["CRC-A1"]));
+    expect([moved.action, moved.reword]).toEqual(["update", undefined]);
+    // And a moved title is a rename, which writes the new sentence anyway.
+    const renamed = plan(previousMilestoneBody(["CRC-A1", "CRC-A2"]), "Conv Phase 1 — stop repeats");
+    expect([renamed.action, renamed.reword]).toEqual(["rename", undefined]);
+  });
+
+  test("#2797: the previous sentence is byte-for-byte what the live milestones hold, and the new one names the placement lines", () => {
+    expect(previousMilestoneBody(["CRC-A1", "CRC-A2"])).toBe(
+      "2 criteria: CRC-A1, CRC-A2\n\nDerived from the spec's Phase placement table by `rungate plan-spec`. Edit the table, not this.",
+    );
+    const body = milestoneBody(["CRC-A1", "CRC-A2"]);
+    expect(body.startsWith("2 criteria: CRC-A1, CRC-A2\n\n")).toBe(true);
+    expect(body).toContain("`placement:` line");
+    expect(body).not.toMatch(/Edit the table/);
+    expect(body).not.toBe(previousMilestoneBody(["CRC-A1", "CRC-A2"]));
+  });
+
   test("a title that moved AND a description that moved is a rename, not an update", () => {
     // Both halves differ, so the two arms could each claim it. `rename` wins
     // because the human output prints `was: <old title>` and that line is the
@@ -426,6 +456,7 @@ describe("scripts/plan-spec --write: nothing reaches GitHub on an unsound table"
   function spy(live: { number: number; title: string; description: string | null }[] = []) {
     const created: string[] = [];
     const renamed: string[] = [];
+    const described: string[] = [];
     const gh: PlanSpecGitHub = {
       createClient: (() => ({}) as any) as PlanSpecGitHub["createClient"],
       listMilestones: (async () => live) as unknown as PlanSpecGitHub["listMilestones"],
@@ -437,11 +468,12 @@ describe("scripts/plan-spec --write: nothing reaches GitHub on an unsound table"
         created.push(o.title);
         return { number: 900 + created.length };
       }) as unknown as PlanSpecGitHub["createMilestone"],
-      renameMilestone: (async (_c: unknown, _r: unknown, n: number, o: { title: string }) => {
+      renameMilestone: (async (_c: unknown, _r: unknown, n: number, o: { title: string; description?: string }) => {
         renamed.push(`#${n} -> ${o.title}`);
+        described.push(o.description ?? "");
       }) as unknown as PlanSpecGitHub["renameMilestone"],
     };
-    return { gh, created, renamed };
+    return { gh, created, renamed, described };
   }
 
   /** Run the real `main` against a planted spec on disk. */
@@ -458,7 +490,7 @@ describe("scripts/plan-spec --write: nothing reaches GitHub on an unsound table"
         ["SPEC.md", "--repo", "o/r", "--prefix", "Conv", "--project-root", dir, ...extra],
         s.gh,
       );
-      return { code, created: s.created, renamed: s.renamed };
+      return { code, created: s.created, renamed: s.renamed, described: s.described };
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -762,6 +794,30 @@ describe("scripts/plan-spec --write: nothing reaches GitHub on an unsound table"
     expect(code).toBe(0);
   });
 
+  test("#2797: --write rewords a milestone holding the previous sentence, and the dry run says it would", async () => {
+    const live = [
+      { number: 4, title: "Conv Phase 1 — stop the repeats", description: previousMilestoneBody(["CRC-A1", "CRC-A2"]) },
+      { number: 5, title: "Conv Phase 2 — stop the false findings", description: milestoneBody(["CRC-A3"]) },
+    ];
+    const out: string[] = [];
+    const log = console.log;
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    let dry;
+    try {
+      dry = await run(SOUND, [], live);
+    } finally {
+      console.log = log;
+    }
+    expect(dry.renamed).toEqual([]);
+    expect(out.join("\n")).toContain("REWORD  Conv Phase 1 — stop the repeats");
+    expect(out.join("\n")).toContain("Re-run with --write to apply 1 milestone change(s)");
+    const wrote = await run(SOUND, ["--write"], live);
+    // Phase 1 gets the new sentence; phase 2 already has it and is not touched.
+    expect(wrote.renamed).toEqual(["#4 -> Conv Phase 1 — stop the repeats"]);
+    expect(wrote.described).toEqual([milestoneBody(["CRC-A1", "CRC-A2"])]);
+    expect(wrote.code).toBe(0);
+  });
+
   // ── #2124: --rename-from ─────────────────────────────────────────────────
   const OLD_FAMILY = [
     { number: 7, title: "Old Phase 1 — stop the repeats", description: null },
@@ -1007,6 +1063,20 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
     }
   });
 
+  // #2797: neither keeps a one-column list of placement values under the
+  // meanings heading, which is what converting a two-column table used to leave.
+  test("neither of rungate's placed specs keeps a meanings table with no meanings in it", () => {
+    for (const name of ["SPEC-TO-BOARD-PIPELINE-SPEC.md", "CODE-REVIEW-CONVERGENCE-SPEC.md"]) {
+      const lines = readFileSync(join(REPO, "specs", name), "utf-8").split("\n");
+      const start = lines.findIndex(l => l.startsWith(PLACEMENT_MEANINGS_HEADING));
+      if (start < 0) continue;
+      const end = lines.findIndex((l, i) => i > start && /^#{1,3} /.test(l));
+      const rows = lines.slice(start + 1, end < 0 ? undefined : end).filter(l => l.startsWith("|"));
+      const oneColumn = rows.filter(l => l.replace(/^\|/, "").replace(/\|\s*$/, "").split("|").length === 1);
+      expect(oneColumn, name).toEqual([]);
+    }
+  });
+
   // #2782 review: the column drop touches exactly the rows the parser reads.
   test("a row the placement reader skips refuses the conversion, so its criteria cannot be dropped unseen", () => {
     const spec = plant({}).replace("| **Phase 2** | CRC-A3 | because |", "|Phase 2|CRC-A3|because|");
@@ -1017,15 +1087,94 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
 
   test("a table written without closing pipes still loses its criteria column", () => {
     const spec = plant({})
-      .replace("| Placement | Criteria | What the value means |", "| Placement | Criteria")
-      .replace("|---|---|---|", "|---|---")
-      .replace("| **Phase 1** | CRC-A1, CRC-A2 | because |", "| **Phase 1** | CRC-A1, CRC-A2")
-      .replace("| **Phase 2** | CRC-A3 | because |", "| **Phase 2** | CRC-A3");
+      .replace("| Placement | Criteria | What the value means |", "| Placement | Criteria | What the value means")
+      .replace("|---|---|---|", "|---|---|---")
+      .replace("| **Phase 1** | CRC-A1, CRC-A2 | because |", "| **Phase 1** | CRC-A1, CRC-A2 | because")
+      .replace("| **Phase 2** | CRC-A3 | because |", "| **Phase 2** | CRC-A3 | because");
     const c = convertPlacement(spec);
     if (!("after" in c)) throw new Error(`did not convert: ${JSON.stringify(c)}`);
+    expect(c.meanings).toBe("kept");
+    expect(c.after.indexOf(PLACEMENT_MEANINGS_HEADING)).toBeGreaterThan(0);
     const meanings = c.after.slice(c.after.indexOf(PLACEMENT_MEANINGS_HEADING));
     expect(meanings).not.toMatch(/CRC-A\d/);
     expect([...placementsById(c.after)]).toEqual([["CRC-A1", "Phase 1"], ["CRC-A2", "Phase 1"], ["CRC-A3", "Phase 2"]]);
+  });
+
+  // #2797: a table whose only other column was its criteria has nothing left
+  // to say once they move into lines.
+  const TWO_COLUMN = plant({})
+    .replace("| Placement | Criteria | What the value means |", "| Placement | Criteria |")
+    .replace("|---|---|---|", "|---|---|")
+    .replace("| **Phase 1** | CRC-A1, CRC-A2 | because |", "| **Phase 1** | CRC-A1, CRC-A2 |")
+    .replace("| **Phase 2** | CRC-A3 | because |", "| **Phase 2** | CRC-A3 |");
+
+  test("#2797: a table with no column but its placements is removed, and its heading with it", () => {
+    expect(TWO_COLUMN).toContain("| Placement | Criteria |\n|---|---|\n");
+    expect(TWO_COLUMN).not.toMatch(/\n\n\n/);
+    const c = convertPlacement(TWO_COLUMN);
+    if (!("after" in c)) throw new Error(`did not convert: ${JSON.stringify(c)}`);
+    expect(c.meanings).toBe("removed");
+    expect(c.after).not.toContain(PLACEMENT_MEANINGS_HEADING);
+    expect(c.after).not.toContain(PLACEMENT_HEADING);
+    expect(c.after.split("\n").filter(l => l.startsWith("|"))).toEqual([]);
+    // The removal leaves no doubled blank line where the table stood.
+    expect(c.after).not.toMatch(/\n\n\n/);
+    expect([...placementsById(c.after)]).toEqual([...placementsById(TWO_COLUMN)]);
+    expect(placementReading(c.after).reading).toBe("MEASURED");
+    // A table that keeps a meanings column keeps it, under the meanings heading.
+    const three = convertPlacement(plant({}));
+    expect("after" in three && three.meanings).toBe("kept");
+  });
+
+  test("#2797: prose written under the heading keeps it when the table goes", () => {
+    const prose = "A criterion in no phase is unreadable as anything.";
+    const spec = TWO_COLUMN.replace(/(### Phase placement[^\n]*\n\n)/, `$1${prose}\n\n`);
+    expect(spec).toContain(prose);
+    const c = convertPlacement(spec);
+    if (!("after" in c)) throw new Error(`did not convert: ${JSON.stringify(c)}`);
+    expect(c.meanings).toBe("removed");
+    expect(c.after).toContain(`${PLACEMENT_MEANINGS_HEADING}\n\n${prose}\n`);
+    expect(c.after.split("\n").filter(l => l.startsWith("|"))).toEqual([]);
+    expect(c.after).not.toMatch(/\n\n\n/);
+  });
+
+  test("#2797: --convert-placement says it removes a placements-only table rather than retitling it", async () => {
+    const dry = await run(["--convert-placement"], TWO_COLUMN);
+    expect(dry.code, dry.stderr).toBe(0);
+    expect(dry.stdout).toContain("remove the table, which holds nothing but its placements");
+    expect(dry.stdout).not.toContain("retitle");
+    const wrote = await run(["--convert-placement", "--write"], TWO_COLUMN);
+    expect(wrote.stdout).toContain("the table held nothing but its placements, so it was removed");
+    expect(wrote.after).not.toContain(PLACEMENT_MEANINGS_HEADING);
+  });
+
+  // #2804 review, round 2: rows a placement line cannot carry refuse, by line.
+  test("#2797: a row listing no criterion, or other text in its criteria cell, refuses the conversion", async () => {
+    const empty = TWO_COLUMN.replace("| **Phase 2** | CRC-A3 |", "| **Phase 2** | CRC-A3 |\n| **Phase 4** | |");
+    const c1 = convertPlacement(empty);
+    expect("refusal" in c1 ? c1.refusal.join("\n") : JSON.stringify(c1)).toMatch(/line \d+: Phase 4 lists no criterion/);
+    const note = TWO_COLUMN.replace("| **Phase 2** | CRC-A3 |", "| **Phase 2** | CRC-A3 (see the note) |");
+    const c2 = convertPlacement(note);
+    expect("refusal" in c2 ? c2.refusal.join("\n") : JSON.stringify(c2)).toMatch(/line \d+: the criteria cell holds text that is not a criterion id/);
+    // A second table under the heading, carrying meanings in the cell the reader reads.
+    const second = TWO_COLUMN.replace("| **Phase 2** | CRC-A3 |\n", "| **Phase 2** | CRC-A3 |\n\n| Placement | Meaning |\n|---|---|\n| Phase 1 | does x |\n");
+    const c3 = convertPlacement(second);
+    expect("refusal" in c3 ? c3.refusal.join("\n") : JSON.stringify(c3)).toMatch(/lists no criterion/);
+    // Nothing is written through the command either.
+    const r = await run(["--convert-placement", "--write"], empty);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(r.after).toBe(empty);
+    // Bold, commas and backticks around ids are not other text.
+    const styled = TWO_COLUMN.replace("| **Phase 1** | CRC-A1, CRC-A2 |", "| **Phase 1** | `CRC-A1`, **CRC-A2** |");
+    expect("after" in convertPlacement(styled)).toBe(true);
+  });
+
+  // #2804 review: the usage text says both outcomes, not only the retitle.
+  test("#2797: the usage text says a placements-only table is removed and one with meanings is retitled", async () => {
+    const r = await run([], TWO_COLUMN);
+    const usage = r.stderr.slice(r.stderr.indexOf("--convert-placement"));
+    expect(usage).toContain('retitled "What each placement means" when it has');
+    expect(usage).toContain("removed when it has none");
   });
 
   // #2782 review round 2: the milestone plan and the placement view are one reading.

@@ -22,8 +22,10 @@
  * `--placement` prints each placement value with its criteria, in phase
  * order, read through the one parser whichever form the spec uses, and
  * writes nothing. `--convert-placement` moves a `### Phase placement` table
- * into a `placement:` line beneath each criterion, drops the table's criteria
- * column and retitles what is left `### What each placement means`; it writes the spec only with `--write`, and refuses
+ * into a `placement:` line beneath each criterion and drops the table's criteria
+ * column. What is left is retitled `### What each placement means` when it
+ * still has a column of meanings, and removed when it has only its placements
+ * (#2797). It writes the spec only with `--write`, and refuses
  * without writing when any criterion would read differently afterwards.
  * Neither reaches the network or needs `--repo` or `--prefix`.
  *
@@ -171,8 +173,9 @@ rungate plan-spec <spec.md> --convert-placement [--write] [--json]
              nothing (ADR-026, SC-2808).
   --convert-placement
              move the spec's placement table into a placement: line
-             beneath each criterion, drop the table's criteria column and
-             retitle the rest "What each placement means".
+             beneath each criterion and drop the table's criteria column.
+             The rest is retitled "What each placement means" when it has
+             a column of meanings, and removed when it has none.
              Writes only with --write, and refuses without writing when any
              criterion would read differently afterwards (SC-2808).`;
 
@@ -260,10 +263,19 @@ function convertTable(path: string, content: string, write: boolean, asJson: boo
   if (asJson) {
     console.log(JSON.stringify({ written: write ? c.written : 0, placementLines: c.written }));
   } else {
+    // A table with no column but its placements is removed, not retitled (#2797).
+    const table =
+      c.meanings === "kept"
+        ? write
+          ? `the table lost its criteria column and is now \`${PLACEMENT_MEANINGS_HEADING}\``
+          : `drop the table's criteria column and retitle it \`${PLACEMENT_MEANINGS_HEADING}\``
+        : write
+          ? "the table held nothing but its placements, so it was removed"
+          : "remove the table, which holds nothing but its placements";
     console.log(
       write
-        ? `wrote ${c.written} placement line(s) beneath their criteria; the table lost its criteria column and is now \`${PLACEMENT_MEANINGS_HEADING}\``
-        : `would write ${c.written} placement line(s) beneath their criteria, drop the table's criteria column and retitle it \`${PLACEMENT_MEANINGS_HEADING}\`. Nothing written; re-run with --write.`,
+        ? `wrote ${c.written} placement line(s) beneath their criteria; ${table}`
+        : `would write ${c.written} placement line(s) beneath their criteria, and ${table}. Nothing written; re-run with --write.`,
     );
   }
   return 0;
@@ -474,16 +486,20 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
 
   console.log(`MILESTONES`);
   for (const a of actions) {
-    const mark = {
-      create: "CREATE  ",
-      rename: "RENAME  ",
-      update: "UPDATE  ",
-      unchanged: "ok      ",
-    }[a.action];
+    const mark = a.reword
+      ? "REWORD  "
+      : {
+          create: "CREATE  ",
+          rename: "RENAME  ",
+          update: "UPDATE  ",
+          unchanged: "ok      ",
+        }[a.action];
     console.log(`  ${mark}${a.title}  (${a.criteria.length} criteria)`);
     if (a.action === "rename") console.log(`            was: ${a.existing!.title}  (#${a.existing!.number})`);
     if (a.action === "update")
       console.log(`            #${a.existing!.number}, same name — its criteria list moved`);
+    if (a.reword)
+      console.log(`            #${a.existing!.number}, same name and criteria — its description names where they come from the older way`);
   }
   if (unmanaged.length > 0) {
     console.log(`\n  Not derived from this spec, left alone:`);
@@ -511,7 +527,7 @@ export async function main(argv: string[], gh: PlanSpecGitHub = LIVE_GITHUB): Pr
   );
 
   if (!values.write) {
-    const todo = actions.filter(a => a.action !== "unchanged").length;
+    const todo = actions.filter(a => a.action !== "unchanged" || a.reword).length;
     console.log(
       todo > 0
         ? `\nNothing written. Re-run with --write to apply ${todo} milestone change(s).`
@@ -560,6 +576,9 @@ async function applyMilestones(
           ? `renamed  #${a.existing!.number} -> ${a.title}`
           : `updated  #${a.existing!.number} ${a.title} — criteria list refreshed`,
       );
+    } else if (a.reword) {
+      await gh.renameMilestone(client, repo, a.existing!.number, { title: a.title, description });
+      done.push(`reworded #${a.existing!.number} ${a.title} — description names the placement lines`);
     }
   }
   return done;
