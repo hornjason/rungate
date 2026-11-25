@@ -315,6 +315,19 @@ export function selectRecentSessions<T extends { date: string }>(
  */
 export const RENDERED_PRIORITIES_MAX = 12;
 
+/**
+ * The one timezone the session record's calendar days are read in (#766,
+ * #2785).
+ *
+ * `test/project-state-currency.test.ts` compares the day each PR merged with
+ * the newest session's day, and both are days in this zone.
+ * `scripts/update-project-state.ts` stamps `updated` in it too. It used to
+ * stamp in the process zone, and the test's comment said the two "must move
+ * together"; with the constant in the test, the writer could not read it, so
+ * nothing made them. Here, both import it.
+ */
+export const PROJECT_STATE_ZONE = "America/New_York";
+
 /** The priorities to render, and how many were left in the json. Pure. */
 export function boundedPriorities(
   priorities: readonly string[],

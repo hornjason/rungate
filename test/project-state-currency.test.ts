@@ -34,6 +34,7 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 import { localCalendarDay } from "../lib/local-calendar-day";
+import { PROJECT_STATE_ZONE } from "../lib/project-state-shape";
 
 const ROOT = join(import.meta.dir, "..");
 const STATE = join(ROOT, "project-state.json");
@@ -128,7 +129,36 @@ export function sessionNumberIn(date: unknown): number | null {
  * must move together — which is the argument for there being exactly one
  * place to change, rather than a `slice(0, 10)` at each use site.
  */
-export const CURRENCY_ZONE = "America/New_York";
+export const CURRENCY_ZONE = PROJECT_STATE_ZONE;
+
+/**
+ * Why a state's newest session is dated after its `updated` stamp, or null
+ * when it is not (#2785).
+ *
+ * The writer stamps `updated` with the day it runs, in {@link CURRENCY_ZONE}.
+ * A session dated later than that was dated by a day the record had not
+ * reached: session 105 was written on the New York evening of 2026-11-24 and
+ * typed as 2026-11-25, the UTC day. A session dated ahead hides every merge on
+ * the days in between from the comparison above.
+ */
+export function sessionAheadOfStamp(updated: unknown, sessionDate: unknown): string | null {
+  const day = (v: unknown): string | null => {
+    const m = typeof v === "string" ? /^(\d{4}-\d{2}-\d{2})\b/.exec(v) : null;
+    return m ? m[1]! : null;
+  };
+  const stamp = day(updated);
+  const session = day(sessionDate);
+  if (stamp === null) return `updated is ${JSON.stringify(updated)}, which is not a calendar day`;
+  if (session === null) return `the newest session's date is ${JSON.stringify(sessionDate)}, which starts with no calendar day`;
+  if (session > stamp) {
+    return (
+      `the newest session is dated ${session} and updated reads ${stamp}. The writer stamps the day it runs, ` +
+      `in ${CURRENCY_ZONE}, so the session was dated by a day the record had not reached. Date it by the ` +
+      `day in ${CURRENCY_ZONE} it was written.`
+    );
+  }
+  return null;
+}
 
 /**
  * The calendar day a commit instant falls on, in the one frame.
@@ -339,6 +369,20 @@ describe("project-state currency", () => {
         `where the project is, so a date behind the tree is the file lying. Add a session entry ` +
         `— the narrative is the point, so write what the change WAS, not that it happened.`,
     ).toEqual([]);
+  });
+
+  test("#2785: the newest session is not dated after the day the record was stamped", () => {
+    expect(sessionAheadOfStamp(state.updated, latestDate)).toBeNull();
+  });
+
+  test("#2785: a session dated after the stamp is refused, naming both days", () => {
+    const ahead = sessionAheadOfStamp("2026-11-24", "2026-11-25");
+    expect(ahead).toContain("dated 2026-11-25");
+    expect(ahead).toContain("updated reads 2026-11-24");
+    expect(sessionAheadOfStamp("2026-11-25", "2026-11-25")).toBeNull();
+    expect(sessionAheadOfStamp("2026-11-26", "2026-11-25 session 106 (gist)")).toBeNull();
+    expect(sessionAheadOfStamp(undefined, "2026-11-25")).toContain("not a calendar day");
+    expect(sessionAheadOfStamp("2026-11-25", "session 106")).toContain("starts with no calendar day");
   });
 
   test("the staleness comparison fires on a date that IS stale", () => {
