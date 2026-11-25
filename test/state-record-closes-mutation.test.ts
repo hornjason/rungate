@@ -373,10 +373,42 @@ describe("#590 AC-6: zeroing the exit constant turns the real refusals green", (
   test("an unparseable entry in 'Issues closed:' refuses, and the mutant does not", () => {
     const path = stateFile("bad-list", {
       number: 49, date: "2026-10-17", suite: "green",
-      issues_closed: "508,not-a-number",
+      issues_closed: [508, "not-a-number"],
       summary: "#582 closed #508.",
     });
     expectRefused(["--state", path, "--repo", REPO], /not an issue number/);
+  });
+
+  test("a record holding its closed list as a string refuses, and the mutant does not (#2825)", () => {
+    const path = stateFile("string-list", {
+      number: 49, date: "2026-10-17", suite: "green",
+      issues_closed: "508,509",
+      summary: "#582 closed #508.",
+    });
+    expectRefused(["--state", path, "--repo", REPO], /holds an array of issue numbers/);
+  });
+
+  test("a record holding its closed list as null or a bare number refuses, and the mutant does not (#2829 review)", () => {
+    for (const [name, value] of [["null-list", null], ["number-list", 508]] as const) {
+      const path = stateFile(name, {
+        number: 49, date: "2026-10-17", suite: "green",
+        issues_closed: value,
+        summary: "#582 closed #508.",
+      });
+      expectRefused(["--state", path, "--repo", REPO], /holds an array of issue numbers/);
+    }
+  });
+
+  test("a state file naming one issue twice under one exact key refuses, and the mutant does not (#2829 review)", () => {
+    const path = stateFile("repeat-key", {
+      number: 49, date: "2026-10-17", suite: "green", issues_closed: [586],
+      summary: "Session 49 landed the spec rewrite.",
+    });
+    const dir = join(FIX, "repeat-key");
+    const states = join(dir, "issue-states.json");
+    // Written as text: an object literal would hold one entry, as JSON.parse does.
+    writeFileSync(states, '{"586": "OPEN", "586": "CLOSED"}');
+    expectRefused(["--state", path, "--repo", REPO, "--issue-states", states], /names #586 twice/);
   });
 
   test("an unknown option refuses, and the mutant does not", () => {

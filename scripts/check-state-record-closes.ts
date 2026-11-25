@@ -113,7 +113,7 @@
 
 import { readFileSync } from "fs";
 
-import { issueNumber } from "../lib/issue-number";
+import { isIssueListField, issueList, issueNumber } from "../lib/issue-number";
 
 /** The one exit code every refusal travels through. See note 1 above. */
 export const STATE_CLOSES_REFUSE_EXIT = 1;
@@ -253,18 +253,21 @@ export function parseDeclaredCloses(raw: unknown): number[] {
   const parts = Array.isArray(raw)
     ? raw
     : String(raw).split(/[,\s]+/).filter(Boolean);
-  const out: number[] = [];
-  for (const part of parts) {
-    const n = issueNumber(part);
-    if (n === null) {
-      throw new StateCloseRefused(
-        `"Issues closed:" holds ${JSON.stringify(part)}, which is not an issue number — ` +
-          `the comparison cannot tell a typo from a closure nobody declared`,
-      );
-    }
-    out.push(n);
+  // One list reader (#2825): a repeat is refused, as the shape check refuses it, not deduped here.
+  const { numbers, violations } = issueList(parts);
+  const x = violations[0];
+  if (x !== undefined && x.first === null) {
+    throw new StateCloseRefused(
+      `"Issues closed:" holds ${JSON.stringify(x.item)}, which is not an issue number — ` +
+        `the comparison cannot tell a typo from a closure nobody declared`,
+    );
   }
-  return [...new Set(out)].sort((a, b) => a - b);
+  if (x !== undefined) {
+    throw new StateCloseRefused(
+      `"Issues closed:" names #${issueNumber(x.item)} twice, at ${x.first} and ${x.index} — the record's list names each issue once`,
+    );
+  }
+  return numbers.sort((a, b) => a - b);
 }
 
 /**
@@ -507,6 +510,31 @@ export async function fetchIssueStates(
  * comparison. An id simply absent from the file is UNMEASURED, which is a
  * different thing and is handled by the decider, not here.
  */
+/**
+ * The keys of a JSON object's text, in order and with repeats kept.
+ * `JSON.parse` keeps only the last of a repeated key, so a state file naming
+ * one issue twice under one exact key would lose its first state with no
+ * refusal (#2829 review). Called only on text `JSON.parse` has accepted as an
+ * object, so every string token at depth one followed by `:` is a key.
+ */
+export function objectKeysAsWritten(raw: string): string[] {
+  const keys: string[] = [];
+  const colon = /\s*:/y;
+  let depth = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (c === '"') {
+      let j = i + 1;
+      while (j < raw.length && raw[j] !== '"') j += raw[j] === "\\" ? 2 : 1;
+      colon.lastIndex = j + 1;
+      if (depth === 1 && colon.test(raw)) keys.push(JSON.parse(raw.slice(i, j + 1)) as string);
+      i = j;
+    } else if (c === "{" || c === "[") depth++;
+    else if (c === "}" || c === "]") depth--;
+  }
+  return keys;
+}
+
 export function parseIssueStatesFile(raw: string, source: string): IssueStateReading {
   let parsed: unknown;
   try {
@@ -518,20 +546,24 @@ export function parseIssueStatesFile(raw: string, source: string): IssueStateRea
     throw new StateCloseRefused(`${source} is not a JSON object of issue number to state`);
   }
   const states: Record<number, IssueState> = {};
-  const keyFor = new Map<number, string>();
-  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    const n = issueNumber(key);
-    if (n === null) {
-      throw new StateCloseRefused(`${source} holds the key ${JSON.stringify(key)}, which is not an issue number`);
-    }
-    // Two spellings of one issue would leave its state to file order (#2821 review).
-    const first = keyFor.get(n);
-    if (first !== undefined) {
-      throw new StateCloseRefused(
-        `${source} names #${n} twice, as ${JSON.stringify(first)} and ${JSON.stringify(key)}, so its state would be whichever comes last`,
-      );
-    }
-    keyFor.set(n, key);
+  const entries = Object.entries(parsed as Record<string, unknown>);
+  // The keys are an issue list: one list reader refuses a bad key and two spellings of one issue (#2821 review, #2825).
+  // They are read from the text, as written: JSON.parse keeps only the last of a repeated key (#2829 review).
+  const keys = objectKeysAsWritten(raw);
+  if (new Set(keys).size !== entries.length) {
+    throw new StateCloseRefused(`${source} could not be read key by key: its text and its parse disagree about which keys it holds`);
+  }
+  const bad = issueList(keys).violations[0];
+  if (bad !== undefined && bad.first === null) {
+    throw new StateCloseRefused(`${source} holds the key ${JSON.stringify(bad.item)}, which is not an issue number`);
+  }
+  if (bad !== undefined) {
+    throw new StateCloseRefused(
+      `${source} names #${issueNumber(bad.item)} twice, as ${JSON.stringify(keys[bad.first!])} and ${JSON.stringify(bad.item)}, so its state would be whichever comes last`,
+    );
+  }
+  for (const [key, value] of entries) {
+    const n = issueNumber(key)!;
     // Only a string names a state: String(["CLOSED"]) would read as "CLOSED" (#2821 review).
     if (typeof value !== "string") {
       throw new StateCloseRefused(`${source} says #${n} is ${JSON.stringify(value)} — a state is a string: OPEN, CLOSED or UNMEASURED`);
@@ -596,6 +628,15 @@ export function recordFromState(state: unknown, args: Record<string, string>): S
   }
   if (args["message-file"]) {
     texts.push({ label: "commit message", text: readFileSync(args["message-file"], "utf-8") });
+  }
+  // The record holds an array, or no list at all, as the shape check requires: one predicate for
+  // both readers (#2825, #2829 review). A comma-joined string is the rendered markdown's form, not
+  // the record's; `null` and a bare number are no list either.
+  if (!isIssueListField(s.issues_closed)) {
+    throw new StateCloseRefused(
+      `the record's issues_closed is ${JSON.stringify(s.issues_closed)} — project-state.json holds an array of ` +
+        `issue numbers, and the renderer refuses anything else, a comma-separated string included`,
+    );
   }
   return { texts, declared: parseDeclaredCloses(s.issues_closed), repo: args.repo ?? null };
 }
