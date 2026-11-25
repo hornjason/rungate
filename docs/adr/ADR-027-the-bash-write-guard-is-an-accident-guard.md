@@ -42,7 +42,7 @@ updated: 2026-11-25
 
 ## Decision
 
-The guard catches accidents and says so. It refuses a shell command that writes a protected artifact. It also refuses an interpreter body that names one beside a declared write verb, wherever it points. It reads no program to find out where that program writes. Reads, and the sanctioned `writeWorkflowState` repair, stay allowed. Plain shell writes into a scratch directory stay exempt, decided by the target's real directory. The module shrinks to under 2,000 lines.
+The guard catches accidents and says so. It refuses a shell command that writes a protected artifact. It also refuses an interpreter body that names one beside a declared write verb, wherever it points. It reads no program to find out where that program writes. Reads, and the sanctioned `writeWorkflowState` repair, stay allowed. Plain shell writes into a scratch directory stay exempt, decided by the target's real directory. The module shrinks to 2,000 lines or fewer.
 
 ## Decisions
 
@@ -56,10 +56,17 @@ The guard catches accidents and says so. It refuses a shell command that writes 
 
    Both directions were measured on main over every unique Bash command in this machine's transcripts:
    - with the exemption cut short to `false`, 0 of 108,310 change (above);
-   - with `callWrites` cut short to `false`, 0 of 109,328 change. Main refuses 65 of those, and `callWrites` alone decides none of them.
+   - with `callWrites` cut short to `false`, 0 of 109,328 change. Main refuses 65 of those, and `callWrites` alone decides none of them. The corpus is the same transcripts, read again later the same day. The 1,018 extra commands are what this machine's sessions ran in between, and none of them is refused either way.
 
    Review round 1 of #2843 corrected the first draft, which dropped the write-verb condition. Round 2 corrected "unchanged".
-4. **Shell writes keep a scratch exemption, decided by where the target really is.** At decision time, the target is resolved with `realpath` when it exists, so a link at the leaf is followed; when it does not exist yet, its parent is resolved instead. The target is exempt only when the resolved path lands under a fixed scratch root and is not itself a protected artifact. So `echo x > /tmp/g`, with `/tmp/g` a link to `workflow-state.json`, is refused: that write-through is the case the old machinery's docblock exists for. This replaces the link-chain and step-order machinery (#1367). The cut's corpus sweep reports every command it newly refuses or newly allows, by name.
+4. **Shell writes keep a scratch exemption, and links are judged by name.**
+   - **The exemption.** A write that names a protected artifact is exempt only when it lands under a fixed scratch root. That is judged by the real directory it writes into, not by its spelling.
+   - **A name that is not protected is not judged.** A write to `/tmp/g` goes through, whatever `/tmp/g` links to, as it does on main today.
+   - **That route is closed where the link is made.** `ln`, and `cp` with a link flag (`-l`, `-s`, `--link`, `--symbolic-link`), are refused by name when any argument names a protected artifact, dangling or hard links included. Main refuses the `ln` forms today. It allows both `cp` forms (measured), so those two are refusals the cut adds.
+   - **What stays outside.** A link made any other way is outside an accident guard, like the script-then-run route in Context.
+   - **The detail goes in tests.** How the real directory is read, and the rows that pin it, belong to the cut. The rows: a link at the leaf, a dangling link, a hard link, a directory made in the same command. The cut writes them as a failure matrix in `test/bash-write-guard.test.ts` before its first push. Three review rounds on #2843 each found a new row, and a decision record is the wrong place to grow a matrix.
+
+   This replaces the link-chain and step-order machinery (#1367). The cut's corpus sweep reports every command it newly refuses or newly allows, by name.
 5. **What stays:**
    - the shell reader;
    - `interpreterPrograms` (`lib/issue-create-override.ts`);
@@ -85,4 +92,4 @@ The first row's pull request also says `Fixes` for #2705, #2731 and #2772. Their
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
 | SC-2811 | The write guard drops program-body reading and the interpreter scratch exemption | lib/bash-write-guard.ts, lib/interpreter-calls.ts, test/bash-write-guard.test.ts, test/interpreter-calls.test.ts | — | — |
-| SC-2810 | The write guard is cut to an accident guard under two thousand lines | lib/bash-write-guard.ts, test/bash-write-guard.test.ts, hooks/BashWriteGuard.hook.ts, specs/HOOK-ARCHITECTURE-SPEC.md | — | The write guard drops program-body reading and the interpreter scratch exemption |
+| SC-2810 | The write guard is cut to an accident guard of at most two thousand lines | lib/bash-write-guard.ts, test/bash-write-guard.test.ts, hooks/BashWriteGuard.hook.ts, specs/HOOK-ARCHITECTURE-SPEC.md | — | The write guard drops program-body reading and the interpreter scratch exemption |
