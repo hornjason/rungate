@@ -1013,8 +1013,9 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
     expect(r.after).toContain("| Placement | What the value means |");
     expect(r.after).not.toContain("| Criteria |");
     // ADR-026 Decision 6: what is left of the table is the meanings, under
-    // its own heading, so no placement reader reads its ids.
-    expect(r.after).toContain(`\n${PLACEMENT_MEANINGS_HEADING}\n`);
+    // its own heading, so no placement reader reads its ids. The heading's
+    // own text after the prefix stays with it (#2805).
+    expect(r.after).toContain(`\n${PLACEMENT_MEANINGS_HEADING} — every criterion has exactly one home\n`);
     expect(r.after).not.toContain(PLACEMENT_HEADING);
     expect(parsePlacementRows(r.after).map(row => [row.placement, row.ids])).toEqual([
       ["Phase 1", ["CRC-A1", "CRC-A2"]],
@@ -1101,8 +1102,9 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
   });
 
   // #2797: a table whose only other column was its criteria has nothing left
-  // to say once they move into lines.
-  const TWO_COLUMN = plant({})
+  // to say once they move into lines. Its heading is bare: text after the
+  // prefix goes where the heading goes (#2805), which a case below covers.
+  const TWO_COLUMN = plant({ heading: PLACEMENT_HEADING })
     .replace("| Placement | Criteria | What the value means |", "| Placement | Criteria |")
     .replace("|---|---|---|", "|---|---|")
     .replace("| **Phase 1** | CRC-A1, CRC-A2 | because |", "| **Phase 1** | CRC-A1, CRC-A2 |")
@@ -1136,6 +1138,49 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
     expect(c.after).toContain(`${PLACEMENT_MEANINGS_HEADING}\n\n${prose}\n`);
     expect(c.after.split("\n").filter(l => l.startsWith("|"))).toEqual([]);
     expect(c.after).not.toMatch(/\n\n\n/);
+  });
+
+  // #2805: text after the heading's prefix is the author's, and goes where the
+  // heading goes.
+  test("#2805: a heading's text after the prefix is kept after the new heading", () => {
+    const headingOf = (after: string) => after.split("\n").find(l => l.startsWith(PLACEMENT_MEANINGS_HEADING));
+    for (const tail of [" — with notes", " — every criterion has exactly one home", ": in order"]) {
+      const c = convertPlacement(plant({ heading: `${PLACEMENT_HEADING}${tail}` }));
+      if (!("after" in c)) throw new Error(`did not convert: ${JSON.stringify(c)}`);
+      expect(c.meanings).toBe("kept");
+      expect(headingOf(c.after), tail).toBe(`${PLACEMENT_MEANINGS_HEADING}${tail}`);
+    }
+    // A heading with nothing after the prefix converts exactly as it did.
+    for (const bare of [PLACEMENT_HEADING, `${PLACEMENT_HEADING}   `]) {
+      const c = convertPlacement(plant({ heading: bare }));
+      if (!("after" in c)) throw new Error(`did not convert: ${JSON.stringify(c)}`);
+      expect(headingOf(c.after), JSON.stringify(bare)).toBe(PLACEMENT_MEANINGS_HEADING);
+    }
+  });
+
+  test("#2805: a heading whose text would go with a removed table, or that runs on past the prefix, refuses by name", async () => {
+    // The table holds nothing but its placements, so it goes, and its heading
+    // with it: the heading's own text would go too.
+    const noted = TWO_COLUMN.replace(`${PLACEMENT_HEADING}\n`, `${PLACEMENT_HEADING} — with notes\n`);
+    expect(noted).toContain(`${PLACEMENT_HEADING} — with notes\n`);
+    const c = convertPlacement(noted);
+    expect("refusal" in c ? c.refusal.join("\n") : JSON.stringify(c)).toMatch(/line \d+: .*"— with notes"/);
+    const r = await run(["--convert-placement", "--write"], noted);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(r.stderr).toContain("— with notes");
+    expect(r.after).toBe(noted);
+    // Prose under the heading keeps it, so the heading's text stays with it.
+    const prose = TWO_COLUMN.replace(`${PLACEMENT_HEADING}\n\n`, `${PLACEMENT_HEADING} — with notes\n\nA note.\n\n`);
+    const kept = convertPlacement(prose);
+    if (!("after" in kept)) throw new Error(`did not convert: ${JSON.stringify(kept)}`);
+    expect(kept.after).toContain(`${PLACEMENT_MEANINGS_HEADING} — with notes\n\nA note.\n`);
+    // A heading the reader reads that runs on into its last word cannot be
+    // retitled as written: a letter in any script, a digit or a hyphen (#2811 review).
+    for (const tail of ["s", "é", "ś", "2", "-notes", "(s)"]) {
+      const runOn = convertPlacement(plant({ heading: `${PLACEMENT_HEADING}${tail}` }));
+      expect("refusal" in runOn ? runOn.refusal.join("\n") : JSON.stringify(runOn), tail).toContain(`runs on past`);
+      if ("refusal" in runOn) expect(runOn.refusal.join("\n")).toContain(`"${tail}"`);
+    }
   });
 
   test("#2797: --convert-placement says it removes a placements-only table rather than retitling it", async () => {

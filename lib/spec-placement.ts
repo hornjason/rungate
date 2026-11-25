@@ -429,7 +429,9 @@ export type PlacementConversion =
  * Decision 5): each id the table lists becomes a `placement:` line at the end
  * of its criterion's block, beside `needs:` and `proved-by:`, and the table
  * loses its criteria column. A table left with no column but its placements
- * is removed (#2797). Refused, with nothing returned to write, when
+ * is removed (#2797). The heading's own text after its prefix is kept after
+ * the new heading, and refused by name when the heading would go with the
+ * table (#2805). Refused, with nothing returned to write, when
  * {@link placementConversionDiff} finds anything the conversion would change,
  * when the spec states one id in two criterion blocks (#2788), or when a row
  * lists no criterion or holds other text in its criteria cell (#2804 review).
@@ -484,7 +486,18 @@ export function convertPlacement(content: string): PlacementConversion {
   // cell: a row it skips would lose a placement nobody read (#2782 review),
   // so one in the table refuses the conversion instead.
   const start = lines.findIndex(l => l.startsWith(PLACEMENT_HEADING));
-  if (start >= 0) lines[start] = PLACEMENT_MEANINGS_HEADING;
+  // Text after the heading's prefix is the author's, and goes where the
+  // heading goes (#2805): kept after the new heading while the heading stays,
+  // refused by name below when it would go with the table. A tail kept as
+  // written starts with a space or a colon; one starting with anything else
+  // (a letter in any script, a digit, a hyphen) runs on into the heading's
+  // last word, which the reader matches by the same prefix but which cannot
+  // be retitled as written (#2811 review).
+  const tail = start >= 0 ? lines[start]!.slice(PLACEMENT_HEADING.length).trimEnd() : "";
+  if (tail !== "" && !/^[\s:]/.test(tail)) {
+    return { refusal: [`line ${start + 1}: the heading runs on past \`${PLACEMENT_HEADING}\` into "${tail}", so it cannot be retitled as written; rename it first`] };
+  }
+  if (start >= 0) lines[start] = `${PLACEMENT_MEANINGS_HEADING}${tail}`;
   const read = new Set(table.map(r => r.line - 1));
   const unread: number[] = [];
   for (let i = start + 1; start >= 0 && i < lines.length; i++) {
@@ -520,7 +533,16 @@ export function convertPlacement(content: string): PlacementConversion {
     let end = start + 1;
     while (end < lines.length && !/^#{1,3} /.test(lines[end]!)) end++;
     const rest = lines.slice(start + 1, end).filter(l => l !== REMOVED);
-    if (rest.every(l => l.trim() === "")) for (let i = start; i < end; i++) lines[i] = REMOVED;
+    if (rest.every(l => l.trim() === "")) {
+      if (tail.trim() !== "") {
+        return {
+          refusal: [
+            `line ${start + 1}: the heading's text after \`${PLACEMENT_HEADING}\`, "${tail.trim()}", would go with the table, which holds nothing but its placements; move the text out of the heading first`,
+          ],
+        };
+      }
+      for (let i = start; i < end; i++) lines[i] = REMOVED;
+    }
   }
   if (unread.length > 0) {
     return {
