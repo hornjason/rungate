@@ -28,7 +28,7 @@ import { spawnSync } from "child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { parseDeclaredCloses } from "../scripts/check-state-record-closes";
+import { parseDeclaredCloses, parseIssueStatesFile } from "../scripts/check-state-record-closes";
 import {
   issueNumber,
   missingStateVerdict,
@@ -583,6 +583,14 @@ describe("#2817: one reading of an issue number in a session's lists", () => {
       doc.session = { number: 1, date: "d", summary: "s", suite: "t", issues_closed: [item] };
       const refused = projectStateViolations(doc).some(v => v.startsWith("session.issues_closed[0]"));
       expect(refused, JSON.stringify(item)).toBe(issueNumber(item) === null);
+    }
+  });
+
+  test("the closures check reads a state-file key the same way (#2821 review)", () => {
+    for (const item of [...ITEMS, ...GENERATED].filter((x): x is string => typeof x === "string")) {
+      const file = JSON.stringify({ [item]: "OPEN" });
+      if (issueNumber(item) === null) expect(() => parseIssueStatesFile(file, "s.json"), JSON.stringify(item)).toThrow();
+      else expect(parseIssueStatesFile(file, "s.json").states, JSON.stringify(item)).toEqual({ [issueNumber(item)!]: "OPEN" });
     }
   });
 

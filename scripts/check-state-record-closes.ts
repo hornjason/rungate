@@ -243,6 +243,19 @@ export function closingReferences(
  * An entry that is not a number THROWS rather than being dropped, because
  * dropping it would make a typo the cheapest way past the comparison.
  */
+/**
+ * The issue number one entry or state-file key names, or null: the rule
+ * `issueNumber` in lib/project-state-shape.ts reads, spelled here because this
+ * script stays import-free for its mutation battery. Both readers below use
+ * it, and test/project-state-shape.test.ts holds it equal to `issueNumber`
+ * over generated inputs (#2817, #2821 review).
+ */
+function issueNumberOf(item: unknown): number | null {
+  const n =
+    typeof item === "number" ? item : typeof item === "string" && /^#?\d+$/.test(item) ? Number(item.replace(/^#/, "")) : NaN;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
 export function parseDeclaredCloses(raw: unknown): number[] {
   if (raw === undefined || raw === null) return [];
   const parts = Array.isArray(raw)
@@ -250,12 +263,8 @@ export function parseDeclaredCloses(raw: unknown): number[] {
     : String(raw).split(/[,\s]+/).filter(Boolean);
   const out: number[] = [];
   for (const part of parts) {
-    // The rule `issueNumber` in lib/project-state-shape.ts reads, spelled
-    // here because this script stays import-free for its mutation battery;
-    // test/project-state-shape.test.ts holds the two equal (#2817).
-    const n =
-      typeof part === "number" ? part : typeof part === "string" && /^#?\d+$/.test(part) ? Number(part.replace(/^#/, "")) : NaN;
-    if (!Number.isSafeInteger(n) || n <= 0) {
+    const n = issueNumberOf(part);
+    if (n === null) {
       throw new StateCloseRefused(
         `"Issues closed:" holds ${JSON.stringify(part)}, which is not an issue number — ` +
           `the comparison cannot tell a typo from a closure nobody declared`,
@@ -518,8 +527,8 @@ export function parseIssueStatesFile(raw: string, source: string): IssueStateRea
   }
   const states: Record<number, IssueState> = {};
   for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
-    const n = Number(String(key).replace(/^#/, "").trim());
-    if (!Number.isSafeInteger(n) || n <= 0) {
+    const n = issueNumberOf(key);
+    if (n === null) {
       throw new StateCloseRefused(`${source} holds the key ${JSON.stringify(key)}, which is not an issue number`);
     }
     const state = String(value).toUpperCase();
