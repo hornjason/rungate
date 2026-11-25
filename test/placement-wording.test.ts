@@ -161,14 +161,9 @@ export function sourceStrings(path: string, source: string, constants: Map<strin
   };
   const plus = (node: ts.Node): node is ts.BinaryExpression =>
     ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken;
-  /** The node a chain member sits in, past any parentheses. */
-  const holder = (node: ts.Node): ts.Node => {
-    let n = node.parent;
-    while (n !== undefined && ts.isParenthesizedExpression(n)) n = n.parent;
-    return n;
-  };
   const visit = (node: ts.Node): void => {
-    if (plus(node) && !plus(holder(node))) {
+    // A chain inside parentheses inside another is flattened into the outer one and never visited alone.
+    if (plus(node) && !plus(node.parent)) {
       const parts: ts.Node[] = [];
       const flatten = (n: ts.Node): void => {
         const b = bare(n);
