@@ -532,7 +532,11 @@ const UNCLAIMED_RATCHET = 150;
 // prints the placement view and converts a table, a reading of the command
 // that no registered pattern expresses; the `SC-2808` describe in
 // test/plan-spec.test.ts names it (2026-11-24).
-const CLAIMED_UNBINDABLE = 212;
+// 213: SC-2807 (#2765) ticked by `sync-sc-status --only SC-2807` — promotion
+// writes a `placement:` line beneath the criterion it adds in a spec that uses
+// them, a reading of the promotion writer that no registered pattern expresses;
+// the `SC-2807` describe in test/finding-promotion.test.ts names it (2026-11-25).
+const CLAIMED_UNBINDABLE = 213;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

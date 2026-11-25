@@ -346,9 +346,11 @@ run time. ADR-009 draws the boundary.
       needs: test
       proved-by: test/spec-evidence.test.ts "SC-2806: a placement line leaves the criterion's text and fingerprint unchanged"
       fingerprint: f5c413a8
-- [ ] SC-2807: `finding-promotion --phase N` places the criterion it adds, in a spec that uses placement lines, by writing `placement: Phase N` beneath it and changing no other line of the spec; in a spec that still has a Phase placement table it appends to the table as before (ADR-026, #2488)
+- [x] SC-2807: `finding-promotion --phase N` places the criterion it adds, in a spec that uses placement lines, by writing `placement: Phase N` beneath it and changing no other line of the spec; in a spec that still has a Phase placement table it appends to the table as before (ADR-026, #2488)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
+      proved-by: test/finding-promotion.test.ts "SC-2807: --phase writes a placement line in a spec that uses them, and the table row otherwise"
+      fingerprint: 1e4d07fc
 - [x] SC-2808: `plan-spec <spec> --placement` prints each placement value with its criteria, read from the placement lines, in phase order, and writes nothing; `plan-spec <spec> --convert-placement --write` writes every table id beneath its criterion and removes the table's criteria column, and refuses without writing if `placementReading` would read any criterion's placement differently afterwards or any criterion's fingerprint would change (ADR-026, #2488)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
