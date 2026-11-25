@@ -275,18 +275,12 @@ describe("#2792: homePath names a path under home, never home itself or a settin
   });
 
   // #2810 review: judged on the path, not on its spelling.
-  test("#2810: a case variant, a trailing slash, a path out of home and back, and a symlink are refused", () => {
+  // Symlinks are #2806's (#2810 review, round 4).
+  test("#2810: a case variant, a trailing slash, and a path out of home and back are refused", () => {
     const h = join(root, "link-home");
     mkdirSync(join(h, ".claude"), { recursive: true });
     mkdirSync(join(h, ".pai"), { recursive: true });
     writeFileSync(join(h, ".claude", "settings.json"), "{}");
-    symlinkSync(join(h, ".claude"), join(h, ".pai", "to-claude"));
-    symlinkSync(join(h, ".claude", "settings.json"), join(h, ".pai", "s.json"));
-    // Dangling: a link to a settings file that does not exist yet (#2810 review, round 3).
-    symlinkSync(join(h, ".claude", "settings.local.json"), join(h, ".pai", "later.json"));
-    // A link to somewhere harmless is refused too: no link is followed.
-    mkdirSync(join(h, "elsewhere"));
-    symlinkSync(join(h, "elsewhere"), join(h, ".pai", "to-elsewhere"));
     const refused = [
       [".Claude", "settings.json"],
       [".CLAUDE", "Settings.JSON"],
@@ -294,18 +288,13 @@ describe("#2792: homePath names a path under home, never home itself or a settin
       [".Claude", "Settings.Local.JSON"],
       [".claude/settings.json/"],
       ["..", "link-home", ".claude", "settings.json"],
-      [".pai", "to-claude", "settings.json"],
-      // Absent, behind a symlinked directory: followed through the nearest ancestor that exists.
-      [".pai", "to-claude", "settings.local.json"],
-      [".pai", "s.json"],
-      [".pai", "later.json"],
-      [".pai", "to-elsewhere", "x"],
     ];
     for (const segments of refused) expect(() => homePathAt(h, ...segments), segments.join(" | ")).toThrow();
-    for (const linked of [[".pai", "s.json"], [".pai", "later.json"], [".pai", "to-claude", "settings.local.json"]]) {
-      expect(() => homePathAt(h, ...linked), linked.join(" | ")).toThrow("symlink");
-    }
     expect(() => homePathAt(h, "..", "elsewhere")).toThrow("outside");
     expect(homePathAt(h, ".pai", "hooks")).toBe(join(h, ".pai", "hooks"));
+    // A home whose .pai is itself a link, as a dotfiles checkout makes it, still names its hooks.
+    mkdirSync(join(h, "dotfiles", "pai"), { recursive: true });
+    symlinkSync(join(h, "dotfiles", "pai"), join(h, ".pai-linked"));
+    expect(homePathAt(h, ".pai-linked", "hooks")).toBe(join(h, ".pai-linked", "hooks"));
   });
 });

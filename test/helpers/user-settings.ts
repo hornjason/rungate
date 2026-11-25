@@ -26,7 +26,7 @@
  * nothing to keep in step: the census reads what it always read.
  */
 
-import { lstatSync, readFileSync } from "fs";
+import { readFileSync } from "fs";
 import { homedir } from "os";
 import { join, resolve, sep } from "path";
 import {
@@ -298,12 +298,10 @@ export const liveUserSettingsMentions = (needle: string) => settingsMentions(liv
  * compared with each settings file case-folded, since the volume this runs on
  * may not tell `.Claude` from `.claude`.
  *
- * A path through a symlink under home is refused, not followed (#2810 review,
- * round 3). Following one means resolving where it points, and a link to a
- * file that does not exist yet points nowhere until the file is made: each of
- * rounds 1 to 3 found another such link. A path with no link on it can only
- * name what it spells, which the comparison above judges. No caller needs a
- * link: the one path tests take this way is `~/.pai/hooks`.
+ * What a symlink under home means is #2806's to decide, moved there at #2810's
+ * round 4. Following one has to resolve where it points, and a dangling link
+ * points nowhere until its file is made. Refusing every link breaks a machine
+ * whose `~/.pai` is itself a link. This judges the path as it is spelled.
  */
 export function homePathAt(home: string, ...segments: string[]): string {
   if (segments.length === 0) throw new Error("homePath names a path under the home directory, never the directory itself");
@@ -314,20 +312,6 @@ export function homePathAt(home: string, ...segments: string[]): string {
   const settings = [join(root, ".claude", "settings.json"), join(root, ".claude", "settings.local.json")];
   if (settings.some(f => fold(p) === fold(f))) {
     throw new Error("a settings file under ~/.claude is read through the functions above");
-  }
-  let at = root;
-  for (const part of p.slice(root.length + 1).split(sep)) {
-    at = join(at, part);
-    let link: boolean;
-    try {
-      link = lstatSync(at).isSymbolicLink();
-    } catch (e) {
-      const code = (e as NodeJS.ErrnoException).code;
-      // Absent: nothing deeper exists either, so no link can be on the rest of the path.
-      if (code === "ENOENT" || code === "ENOTDIR") break;
-      throw e;
-    }
-    if (link) throw new Error(`homePath names no path through a symlink, so none can reach a settings file: ${at.slice(root.length + 1)} is one`);
   }
   return p;
 }
