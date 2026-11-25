@@ -57,6 +57,16 @@ if (!command) {
   process.exit(UNKNOWN_COMMAND_EXIT);
 }
 
+// `rungate <command> --help` prints the command's registry entry and runs
+// nothing (#2834). Each script used to decide what `--help` meant, and
+// `create-spec` took it as a spec title and wrote `specs/HELP-SPEC.md` into
+// the consumer's repository. Answered before the install check, so a command's
+// help works from an install that cannot load a dependency, as `--help` does.
+if (rest.some(a => a === "--help" || a === "-h")) {
+  console.log(`rungate ${name} — ${command.summary}\n\nUsage: ${command.usage}`);
+  process.exit(0);
+}
+
 // #2479: a half-written install crashes inside the script on a missing
 // module, naming a temp path. Asked here, after the command is known and
 // before it runs, so `--version`, `--help` and an unknown command still work
