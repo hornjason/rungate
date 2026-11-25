@@ -372,7 +372,8 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
     if (Array.isArray(value)) return value.flatMap((v, i) => offList(v, `${at}[${i}]`));
     if (value === null || typeof value !== "object") return [];
     return Object.entries(value).flatMap(([k, v]) => {
-      const check = FIELDS[k];
+      // Own keys only: an inherited `constructor` or `toString` is no listed field (#2819 review, round 4).
+      const check = Object.hasOwn(FIELDS, k) ? FIELDS[k] : undefined;
       if (check === undefined) return [`${at}.${k}: not on the allow-list`];
       const leaves = Array.isArray(v) ? v : [v];
       const bad = leaves.filter(x => (x === null || typeof x !== "object") && !check(x));
@@ -425,6 +426,7 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
 
   test("the check refuses a field it does not list, and a listed field holding planted text", () => {
     expect(offList({ hook: "Alpha", raw: "anything" })).toEqual(["result.raw: not on the allow-list"]);
+    expect(offList({ constructor: "x", toString: "y" })).toEqual(["result.constructor: not on the allow-list", "result.toString: not on the allow-list"]);
     expect(offList({ detail: "bun /srv/x/Beta.hook.ts" })).toEqual([]);
     const leaked = plantedText().find(t => PLANTED.test(t))!;
     const report = offList([{ detail: `it ran ${leaked}` }]);
