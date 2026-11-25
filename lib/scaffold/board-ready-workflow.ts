@@ -67,7 +67,7 @@ export const BOARD_READY_COMMAND = "board-ready";
  */
 export function buildBoardReadyGateScript(): string {
   return `if [ -z "$GH_TOKEN" ]; then
-  echo "::warning::UNMEASURED — BOARD_PROJECT_TOKEN is not set, so the acting identity could not be authorised and nothing was read. This run is UNMEASURED, not clean."
+  echo "::warning::UNMEASURED — RUNGATE_PROJECT_TOKEN is not set, so the acting identity could not be authorised and nothing was read. This run is UNMEASURED, not clean."
   echo "trusted=false" >> "$GITHUB_OUTPUT"
   exit 0
 fi

@@ -46,6 +46,7 @@ const doc = () =>
   Bun.YAML.parse(yml()) as {
     on: { issues: { types: string[] }; pull_request_target: { types: string[] } };
     permissions: Record<string, string>;
+    concurrency?: { group: string; "cancel-in-progress": boolean };
     jobs: Record<string, { steps: Step[] }>;
   };
 const steps = () => doc().jobs[BOARD_FLOW_JOB]!.steps;
@@ -144,5 +145,25 @@ describe("#2481: a tree with no board.id is UNMEASURED, not a red run, and every
 
   test("#2481: a write that worked exits 0", () => {
     expect(run({ code: 0, stderr: "" }).code).toBe(0);
+  });
+});
+
+/**
+ * #2837: the trust gate's warning names the secret the gate reads.
+ */
+describe("#2837: the gate names the secret it reads", () => {
+  test("the warning for a missing token names the secret the gate's GH_TOKEN comes from", () => {
+    const gate = steps().find(s => s.id === "gate")!;
+    const secret = /secrets\.([A-Z_]+)/.exec(gate.env?.GH_TOKEN ?? "")?.[1];
+    expect(secret, "the gate reads no secret").toBeDefined();
+    const warning = gate.run!.split("\n").find(l => l.includes("::warning::"))!;
+    expect(warning, "the warning names a secret nothing reads").toContain(`${secret} is not set`);
+  });
+  // No concurrency group (review of #2840): GitHub keeps one pending run per
+  // group, so a close queued behind a running assignment is superseded by a
+  // later assignment and Done is never written. The writer decides from the
+  // event, not from the issue's state, so a group trades a race for a drop.
+  test("board-flow.yml declares no concurrency group, which would drop queued lane writes", () => {
+    expect(doc().concurrency).toBeUndefined();
   });
 });
