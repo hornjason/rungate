@@ -328,8 +328,11 @@ export const liveRegistrationCurrency = (input: Omit<Parameters<typeof registrat
     registryCommands: input.registryCommands,
     git: input.git,
   });
+/** Where a home's settings scopes live, built field by field. Paths only; nothing is read. */
+export const scopePathsAt = (repoRoot: string, home: string) =>
+  settingsScopePaths(repoRoot, home).map(s => ({ scope: s.scope, path: s.path, ownership: s.ownership }));
 /** Where this machine's settings scopes live. Paths only; nothing is read. */
-export const liveScopePaths = (repoRoot: string) => settingsScopePaths(repoRoot, homedir());
+export const liveScopePaths = (repoRoot: string) => scopePathsAt(repoRoot, homedir());
 /** This machine's user settings file, for naming in a message. */
 export const liveUserSettingsPath = () => join(homedir(), ".claude", "settings.json");
 /** {@link settingsMentions} over this machine's user settings file. */

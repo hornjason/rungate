@@ -29,6 +29,7 @@ import {
   hookRegistrationAt,
   registrationCensusAt,
   registrationCurrencyAt,
+  scopePathsAt,
   scopeReadability,
   settingsMentions,
   treeCensusAt,
@@ -37,6 +38,11 @@ import {
 } from "./helpers/user-settings";
 
 const PLANTED = /planted2792/;
+/**
+ * Whether planted text is in a value, as a boolean: an assertion on it prints
+ * true or false when it fails, never the value it found (#2819 review, round 2).
+ */
+const crossed = (value: unknown): boolean => PLANTED.test(typeof value === "string" ? value : JSON.stringify(value ?? null));
 let root: string;
 let repo: string;
 let home: string;
@@ -70,7 +76,8 @@ beforeAll(() => {
               // A hook named and not executed: the census reads it as unparsed (#2798 round 4).
               { type: "command", command: 'sh -c "bun ${X_DIR}/Gamma.hook.ts --token=gho_planted2792"' },
               { type: "command", command: 'TOKEN="a b gho_planted2792" bun /srv/x/Delta.hook.ts' },
-              // Unresolved, and its command carries a token the census quotes in its reason.
+              // Unresolved: no scope defines its directory. The census keeps the command, token and
+              // all, on the reading; its detail and reason quote only the path, ${UNDEFINED_DIR}/Zeta.hook.ts.
               { type: "command", command: "GITHUB_TOKEN=gho_planted2792 bun ${UNDEFINED_DIR}/Zeta.hook.ts" },
             ],
           },
@@ -105,7 +112,7 @@ describe("#2792: every verdict is the census's own, with no command or value in 
 
   test("wrongTreeAt: the same violations, a named-not-executed hook included, commands withheld", () => {
     const got = wrongTreeAt(repo, home, OWNED);
-    expect(JSON.stringify(got)).not.toMatch(PLANTED);
+    expect(crossed(got), "planted text in wrongTreeAt's result").toBe(false);
     const docs = settingsScopePaths(repo, home).map(s => raw(s.path)).filter((d): d is string => d !== null);
     const want = wrongTreeViolations(OWNED, settingsCommands(docs));
     // The census's own details quote the command, token and all, so withholding them is doing work.
@@ -120,7 +127,7 @@ describe("#2792: every verdict is the census's own, with no command or value in 
 
   test("treeCensusAt: the same targets and spellings, every command and detail withheld", () => {
     const got = treeCensusAt(repo, home, REGISTRY, OWNED);
-    expect(JSON.stringify(got)).not.toMatch(PLANTED);
+    expect(crossed(got), "planted text in treeCensusAt's result").toBe(false);
     const want = registeredTreeCensus(OWNED, readRegistrationScopes(repo, home, raw, REGISTRY), readEnvScopes(repo, home, raw), repo);
     // The census keeps each command on its readings; the copy here does not.
     expect(JSON.stringify(want)).toMatch(PLANTED);
@@ -136,14 +143,14 @@ describe("#2792: every verdict is the census's own, with no command or value in 
   test("registrationCensusAt and hookRegistrationAt: the census's verdicts exactly", () => {
     const want = registrationCensus(OWNED, readRegistrationScopes(repo, home, raw, REGISTRY));
     const got = registrationCensusAt(repo, home, REGISTRY, OWNED);
+    expect(crossed(got), "planted text in registrationCensusAt's result").toBe(false);
     expect(got).toEqual(want);
-    expect(JSON.stringify(got)).not.toMatch(PLANTED);
     expect(hookRegistrationAt(repo, home, REGISTRY, "Beta")).toEqual(want.find(r => r.hook === "Beta")!);
   });
 
   test("scopeReadability, commandsExecutingAt and unplacedHooksAt: scopes, counts and names only", () => {
     const readable = scopeReadability(repo, home, REGISTRY);
-    expect(JSON.stringify(readable)).not.toMatch(PLANTED);
+    expect(crossed(readable), "planted text in scopeReadability's result").toBe(false);
     expect(readable.every(r => r.readable)).toBe(true);
     // A home with no settings: its scopes are named unreadable, with a reason and no text.
     const nowhere = join(root, "no-home");
@@ -153,7 +160,7 @@ describe("#2792: every verdict is the census's own, with no command or value in 
     expect(commandsExecutingAt(repo, home, REGISTRY, "user-settings", "Beta")).toBe(1);
     expect(commandsExecutingAt(repo, nowhere, REGISTRY, "user-settings", "Beta")).toBeNull();
     const placed = unplacedHooksAt(repo, home, REGISTRY, OWNED, ["Delta"]);
-    expect(JSON.stringify(placed)).not.toMatch(PLANTED);
+    expect(crossed(placed), "planted text in unplacedHooksAt's result").toBe(false);
     // Only the repo-owned scopes place a hook: Alpha in the committed file, Reg in the registry.
     expect(placed.unplaced.sort()).toEqual(["Beta", "Eps", "Gamma", "Zeta"]);
   });
@@ -167,7 +174,7 @@ describe("#2792: every verdict is the census's own, with no command or value in 
       registryCommands: REGISTRY,
       git: () => ({ ok: false, stdout: "", stderr: "no git in this planted tree", status: 128 }) as never,
     });
-    expect(JSON.stringify(currency)).not.toMatch(PLANTED);
+    expect(crossed(currency), "planted text in registrationCurrencyAt's result").toBe(false);
     expect(currency.examined).toBeGreaterThan(0);
   });
 });
@@ -210,14 +217,21 @@ describe("#2810: no error message leaves the helper, and the count is the census
     ];
     let threw = 0;
     for (const [name, call] of calls) {
+      // The call alone is tried, so a failed assertion is never read as the helper's own error.
+      let result: unknown = null;
+      let message: string | null = null;
       try {
-        expect(JSON.stringify(call() ?? null), name).not.toMatch(PLANTED);
+        result = call();
       } catch (e) {
-        threw += 1;
-        const message = e instanceof Error ? e.message : String(e);
-        expect(message, name).not.toMatch(PLANTED);
-        expect(message, name).toContain("withheld");
+        message = e instanceof Error ? e.message : String(e);
       }
+      if (message === null) {
+        expect(crossed(result), `planted text in ${name}'s result`).toBe(false);
+        continue;
+      }
+      threw += 1;
+      expect(crossed(message), `planted text in ${name}'s error`).toBe(false);
+      expect(message.includes("withheld"), `${name}'s error says the text was withheld`).toBe(true);
     }
     // Every census reading parses the file, so each of them threw; only the count reads it as text.
     expect(threw).toBe(calls.length - 1);
@@ -297,7 +311,10 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
   const noPlanted = (v: string) => plantedText().every(t => !v.includes(t));
   // The stated exception: where a registration resolves to is what the census
   // and the currency reading are about, so it crosses as an absolute path.
-  const absolutePath = (v: string) => v.startsWith("/");
+  // A resolved path or directory is under a directory the fixture planted: an absolute path
+  // anywhere else, such as one built from an unmarked token in an env value, is refused
+  // (#2819 review, round 2).
+  const absolutePath = (v: string) => [repo, home, hookDir, "/srv/x"].some(r => v === r || v.startsWith(`${r}/`));
 
   /**
    * Each field a result may carry, and what its value may be. A field not
@@ -322,6 +339,8 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
     command: v => v === COMMAND_WITHHELD,
     resolved: v => v === null || (typeof v === "string" && absolutePath(v)),
     dir: v => typeof v === "string" && absolutePath(v),
+    path: v => typeof v === "string" && absolutePath(v),
+    ownership: v => v === "repo" || v === "machine",
     reading: v => v === "MEASURED" || v === "UNMEASURED",
     state: v => v === "current" || v === "behind" || v === "unmeasured",
     base: v => v === "origin/main",
@@ -349,7 +368,9 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
       if (check === undefined) return [`${at}.${k}: not on the allow-list`];
       const leaves = Array.isArray(v) ? v : [v];
       const bad = leaves.filter(x => (x === null || typeof x !== "object") && !check(x));
-      return [...bad.map(x => `${at}.${k}: ${JSON.stringify(x)}`), ...offList(v, `${at}.${k}`)];
+      // A refused string is withheld by length: it may be the planted text the check exists to keep in.
+      const shown = (x: unknown) => (typeof x === "string" ? `a string of ${x.length} characters, withheld` : JSON.stringify(x));
+      return [...bad.map(x => `${at}.${k}: ${shown(x)}`), ...offList(v, `${at}.${k}`)];
     });
   };
 
@@ -372,6 +393,7 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
   test("each function's result carries only listed fields, each holding a value its field allows", () => {
     const results: [string, unknown][] = [
       ["scopeReadability", scopeReadability(repo, home, REGISTRY)],
+      ["scopePathsAt", scopePathsAt(repo, home)],
       ["hookRegistrationAt", hookRegistrationAt(repo, home, REGISTRY, "Alpha")],
       ["registrationCensusAt", registrationCensusAt(repo, home, REGISTRY, OWNED)],
       ["unplacedHooksAt", unplacedHooksAt(repo, home, REGISTRY, OWNED, ["Delta"])],
@@ -396,7 +418,12 @@ describe("#2813: every field of every verdict is on the helper's allow-list", ()
     expect(offList({ hook: "Alpha", raw: "anything" })).toEqual(["result.raw: not on the allow-list"]);
     expect(offList({ detail: "bun /srv/x/Beta.hook.ts" })).toEqual([]);
     const leaked = plantedText().find(t => PLANTED.test(t))!;
-    expect(offList([{ detail: `it ran ${leaked}` }])).toEqual([`result[0].detail: ${JSON.stringify(`it ran ${leaked}`)}`]);
+    const report = offList([{ detail: `it ran ${leaked}` }]);
+    expect(report).toEqual([`result[0].detail: a string of ${`it ran ${leaked}`.length} characters, withheld`]);
+    expect(crossed(report)).toBe(false);
+    // A path outside every planted directory is refused, such as one built from a token in an env value.
+    expect(offList({ resolved: "/home/u/gho_AbC123xyz/Alpha.hook.ts" })).toEqual(["result.resolved: a string of 35 characters, withheld"]);
+    expect(offList({ resolved: join(hookDir, "Alpha.hook.ts") })).toEqual([]);
   });
 
   test("no result in the helper is built by spreading another object", () => {
