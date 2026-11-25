@@ -25,7 +25,7 @@
  * hand-edited file wants the whole list, and a validator that stops at the
  * first finding turns one bad edit into four round-trips.
  */
-import { issueNumber } from "./issue-number";
+import { issueList, issueNumber } from "./issue-number";
 import { localCalendarDay } from "./local-calendar-day";
 
 // The shape check refuses what `issueNumber` refuses, and the renderer prints
@@ -150,20 +150,14 @@ export function projectStateViolations(raw: unknown): string[] {
           );
           continue;
         }
-        // A list naming one issue twice would render it twice (#2821 review).
-        const seen = new Map<number, number>();
-        v.forEach((item, i) => {
-          const n = issueNumber(item);
-          if (n === null) {
-            out.push(
-              `session.${k}[${i}] is ${JSON.stringify(item)}, expected an issue number`,
-            );
-          } else if (seen.has(n)) {
-            out.push(`session.${k}[${i}] names #${n} again, already named at [${seen.get(n)}]`);
-          } else {
-            seen.set(n, i);
-          }
-        });
+        // A list naming one issue twice would render it twice (#2821 review); one list reader (#2825).
+        for (const x of issueList(v).violations) {
+          out.push(
+            x.first === null
+              ? `session.${k}[${x.index}] is ${JSON.stringify(x.item)}, expected an issue number`
+              : `session.${k}[${x.index}] names #${issueNumber(x.item)} again, already named at [${x.first}]`,
+          );
+        }
       }
     }
   }

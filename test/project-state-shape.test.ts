@@ -37,6 +37,7 @@ import {
   selectRecentSessions,
   sessionAheadOfStamp,
 } from "../lib/project-state-shape";
+import { issueList } from "../lib/issue-number";
 
 const REPO = join(import.meta.dir, "..");
 const SCRIPT = join(REPO, "scripts", "update-project-state.ts");
@@ -612,6 +613,51 @@ describe("#2817: one reading of an issue number in a session's lists", () => {
     }
     // The rule is spelled where the readers import it from.
     expect(readFileSync(join(root, "lib/issue-number.ts"), "utf-8").includes("/^#?\\d+$/")).toBe(true);
+  });
+
+  test("#2825: over generated lists, the shape check, the declared list and the state-file keys give one answer", () => {
+    let seed = 2825;
+    const next = (k: number) => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed % k;
+    };
+    const pool = [...ITEMS, ...GENERATED.slice(0, 400), "1675", "#1675", "01675", 1675];
+    let refused = 0;
+    let keyLists = 0;
+    for (let i = 0; i < 800; i++) {
+      const list: unknown[] = Array.from({ length: 1 + next(5) }, () => pool[next(pool.length)]);
+      if (next(3) === 0) list.push(list[next(list.length)]); // a repeat, exact or by another spelling
+      const answer = issueList(list).violations.length > 0;
+      const doc = good() as any;
+      doc.session = { number: 1, date: "d", summary: "s", suite: "t", issues_closed: list };
+      const shapeRefuses = projectStateViolations(doc).some(v => v.startsWith("session.issues_closed"));
+      let declaredThrows = false;
+      try {
+        parseDeclaredCloses(list);
+      } catch {
+        declaredThrows = true;
+      }
+      expect(shapeRefuses, JSON.stringify(list)).toBe(answer);
+      expect(declaredThrows, JSON.stringify(list)).toBe(answer);
+      const strings = list.filter((x): x is string => typeof x === "string");
+      if (strings.length > 0) {
+        // A state file's keys are strings, and an object holds one entry per exact key.
+        const keys = [...new Set(strings)];
+        keyLists++;
+        let fileThrows = false;
+        try {
+          parseIssueStatesFile(JSON.stringify(Object.fromEntries(keys.map(k => [k, "OPEN"]))), "s.json");
+        } catch {
+          fileThrows = true;
+        }
+        expect(fileThrows, JSON.stringify(keys)).toBe(issueList(keys).violations.length > 0);
+      }
+      if (answer) refused++;
+    }
+    // Both answers, and the key reader, are exercised.
+    expect(refused).toBeGreaterThan(100);
+    expect(refused).toBeLessThan(800);
+    expect(keyLists).toBeGreaterThan(50);
   });
 
   test("the closures check reads each entry the same way", () => {

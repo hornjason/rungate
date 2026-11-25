@@ -373,10 +373,19 @@ describe("#590 AC-6: zeroing the exit constant turns the real refusals green", (
   test("an unparseable entry in 'Issues closed:' refuses, and the mutant does not", () => {
     const path = stateFile("bad-list", {
       number: 49, date: "2026-10-17", suite: "green",
-      issues_closed: "508,not-a-number",
+      issues_closed: [508, "not-a-number"],
       summary: "#582 closed #508.",
     });
     expectRefused(["--state", path, "--repo", REPO], /not an issue number/);
+  });
+
+  test("a record holding its closed list as a string refuses, and the mutant does not (#2825)", () => {
+    const path = stateFile("string-list", {
+      number: 49, date: "2026-10-17", suite: "green",
+      issues_closed: "508,509",
+      summary: "#582 closed #508.",
+    });
+    expectRefused(["--state", path, "--repo", REPO], /holds an array of issue numbers/);
   });
 
   test("an unknown option refuses, and the mutant does not", () => {

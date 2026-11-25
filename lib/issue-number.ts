@@ -10,6 +10,35 @@
  * nothing, so that script's mutation battery can copy it beside the mutant
  * (#2821 review, round 4: before, the script spelled the rule again inline).
  */
+/** One refused entry of an issue list: not an issue number (`first` null), or a number named at `first` already. */
+export interface IssueListViolation {
+  index: number;
+  item: unknown;
+  first: number | null;
+}
+
+/**
+ * The numbers an issue list names, in order, and every entry it refuses: one
+ * that is not an issue number, and one naming a number already named. The one
+ * list reader (#2825): the session shape check, the closures check's declared
+ * list and its state-file keys all call it, so one list gets one answer.
+ */
+export function issueList(items: readonly unknown[]): { numbers: number[]; violations: IssueListViolation[] } {
+  const numbers: number[] = [];
+  const violations: IssueListViolation[] = [];
+  const seen = new Map<number, number>();
+  items.forEach((item, index) => {
+    const n = issueNumber(item);
+    if (n === null) violations.push({ index, item, first: null });
+    else if (seen.has(n)) violations.push({ index, item, first: seen.get(n)! });
+    else {
+      seen.set(n, index);
+      numbers.push(n);
+    }
+  });
+  return { numbers, violations };
+}
+
 export function issueNumber(item: unknown): number | null {
   const n =
     typeof item === "number" ? item : typeof item === "string" && /^#?\d+$/.test(item) ? Number(item.replace(/^#/, "")) : NaN;
