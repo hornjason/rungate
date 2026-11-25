@@ -132,34 +132,6 @@ describe("update-project-state", () => {
     expect(src).toContain("state.updated = projectStateDay();");
   });
 
-  // #2807 review: a session date is typed by hand, so the writer refuses one
-  // ahead of the day it stamps, before writing, rather than leaving it for the
-  // currency test after the merge.
-  test("#2785: the writer refuses a session dated after the day it stamps, and writes nothing", () => {
-    const ahead = {
-      updated: "2026-01-01", priorities: [], phases: [],
-      session: { number: 9, date: "2999-01-01", summary: "s", suite: "t" },
-      sessions: [{ date: "2999-01-01 session 9", items: ["x"] }],
-    };
-    writeTestJson(ahead);
-    const before = readFileSync(STATE_JSON, "utf-8");
-    const r = exec();
-    expect(r.status, r.out).toBe(1);
-    expect(r.out).toContain("the newest session is dated 2999-01-01");
-    expect(r.out, "the writer named itself as the way out of its own refusal").not.toContain("run `bun scripts/update-project-state.ts`");
-    expect(r.out).toContain("nothing was written");
-    expect(readFileSync(STATE_JSON, "utf-8"), "the writer stamped a record it refused").toBe(before);
-    // An entry in sessions[] dated ahead is refused too (#2807 review).
-    writeTestJson({ ...ahead, session: { ...ahead.session, date: projectStateDay() }, sessions: [{ date: "2999-01-01 session 9", items: ["x"] }] });
-    const entry = exec();
-    expect(entry.status, entry.out).toBe(1);
-    expect(entry.out).toContain("sessions[0] is dated 2999-01-01");
-    // Dated today in the record's zone, it writes.
-    const today = projectStateDay();
-    writeTestJson({ ...ahead, session: { ...ahead.session, date: today }, sessions: [{ date: `${today} session 9`, items: ["x"] }] });
-    expect(exec().status).toBe(0);
-  });
-
   test("generates markdown from JSON", () => {
     writeTestJson({
       updated: "2026-01-01",

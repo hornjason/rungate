@@ -329,65 +329,43 @@ export const RENDERED_PRIORITIES_MAX = 12;
  */
 export const PROJECT_STATE_ZONE = "America/New_York";
 
+/** The day `at` falls on in {@link PROJECT_STATE_ZONE}: what `updated` is stamped with. */
+export function projectStateDay(at: Date = new Date()): string {
+  return localCalendarDay(at, PROJECT_STATE_ZONE);
+}
+
 /**
- * Every session in a state dated after its `updated` stamp, as one reason
- * each; empty when there is none (#2785).
+ * Why the newest session's date is after the record's `updated` stamp, or
+ * null when it is not (#2785). The currency test calls it on the committed
+ * record.
  *
- * A session's date is typed by hand, by the DA; only `updated` is stamped by
- * the writer, with the day it runs in {@link PROJECT_STATE_ZONE}. A session
- * dated later than that was dated by a day the record had not reached:
- * session 105 was written on the New York evening of 2026-11-24 and typed as
- * 2026-11-25, the UTC day, which hides every merge on the day in between from
- * the currency comparison.
+ * The session's date is typed by hand; only `updated` is stamped, by the
+ * writer, with the day it runs in {@link PROJECT_STATE_ZONE}. A session dated
+ * later than that was dated by a day the record had not reached: session 105
+ * was written on the New York evening of 2026-11-24 and typed as 2026-11-25,
+ * the UTC day, which hid every merge of that evening from the currency
+ * comparison. Only a date AHEAD of the stamp can be seen this way: one typed
+ * by the UTC day and written after New York midnight passes. One reader of
+ * what a session is, and the writer producing the date, are #2809.
  *
- * Every date is read, with the renderer's own reader: the top-level
- * `session`, which must start with a day, and each `sessions[]` entry that
- * does. An entry with no day is left to the renderer, which already ranks it
- * below every dated one (#2807 review).
- *
- * `caller` decides the remedy the reason names. The writer has just stamped
- * today, so for it the only way out is re-dating the session. On a committed
- * record `updated` may instead be stale, so re-running the writer comes first.
- * The writer and the currency test both call this: one decider.
+ * Both days are read with the renderer's `ISO_DATE`, so a date this reads is
+ * one the handoff ranks, and a timestamped date is undated to both.
  */
-export function sessionsAheadOfStamp(state: unknown, caller: "writer" | "record"): string[] {
-  // The renderer's own reader, `ISO_DATE`, so a date this check accepts is
-  // one `selectRecentSessions` ranks, and one it rejects is one the renderer
-  // calls undated (#2807 review, round 3: a second, looser reader let a
-  // timestamped session pass here and vanish from the handoff).
+export function sessionAheadOfStamp(updated: unknown, sessionDate: unknown): string | null {
   const day = (v: unknown): string | null => {
     const m = typeof v === "string" ? ISO_DATE.exec(v) : null;
     return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
   };
-  const st = (state ?? {}) as { updated?: unknown; session?: unknown; sessions?: unknown };
-  const stamp = day(st.updated);
-  if (stamp === null) return [`updated is ${JSON.stringify(st.updated)}, which is not a calendar day`];
-  const remedy =
-    caller === "writer"
-      ? `updated was stamped just now, so the session's date is ahead of the day: it is typed by hand, so date it by the day in ${PROJECT_STATE_ZONE} it was written.`
-      : `Either updated is stale: run \`bun scripts/update-project-state.ts\`, which stamps the day it runs in ${PROJECT_STATE_ZONE}. Or, if it still reads ${stamp}, the date was typed ahead of the day: date it by the day in ${PROJECT_STATE_ZONE} it was written.`;
-  const out: string[] = [];
-  // A session that is not an object is named, not thrown on (#2807 review).
-  if (st.session !== undefined && (st.session === null || typeof st.session !== "object" || Array.isArray(st.session))) {
-    out.push(`the top-level session is ${JSON.stringify(st.session)}, not an object with a date`);
-  } else if (st.session !== undefined && "date" in st.session) {
-    const date = (st.session as { date?: unknown }).date;
-    const d = day(date);
-    if (d === null) out.push(`the newest session's date is ${JSON.stringify(date)}, which starts with no calendar day`);
-    else if (d > stamp) out.push(`the newest session is dated ${d} and updated reads ${stamp}. ${remedy}`);
-  }
-  if (Array.isArray(st.sessions)) {
-    st.sessions.forEach((e: unknown, i: number) => {
-      const d = day((e as { date?: unknown } | null)?.date);
-      if (d !== null && d > stamp) out.push(`sessions[${i}] is dated ${d} and updated reads ${stamp}. ${remedy}`);
-    });
-  }
-  return out;
-}
-
-/** The day `at` falls on in {@link PROJECT_STATE_ZONE}: what `updated` is stamped with. */
-export function projectStateDay(at: Date = new Date()): string {
-  return localCalendarDay(at, PROJECT_STATE_ZONE);
+  const stamp = day(updated);
+  const session = day(sessionDate);
+  if (stamp === null) return `updated is ${JSON.stringify(updated)}, which is not a calendar day`;
+  if (session === null) return `the newest session's date is ${JSON.stringify(sessionDate)}, which starts with no calendar day`;
+  if (session <= stamp) return null;
+  return (
+    `the newest session is dated ${session} and updated reads ${stamp}. Either updated is stale: run ` +
+    `\`bun scripts/update-project-state.ts\`, which stamps the day it runs in ${PROJECT_STATE_ZONE}. Or, if it ` +
+    `still reads ${stamp}, the date was typed ahead of the day: date it by the day in ${PROJECT_STATE_ZONE} it was written.`
+  );
 }
 
 /** The priorities to render, and how many were left in the json. Pure. */
