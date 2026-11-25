@@ -52,7 +52,7 @@ When the owner merges the ADR with `status: accepted`, [`.github/workflows/adr-a
 
 ### Phases become milestones, and order becomes edges
 
-A planned spec carries a **Phase placement** table that puts every criterion in exactly one phase.
+A planned spec puts every criterion in exactly one phase, with a `placement:` line beneath it. A spec written before that keeps its phases in an older **Phase placement** table, which is still read.
 
 - `rungate plan-spec` turns the phases into GitHub milestones (here, `Pipeline Phase 0` to `Pipeline Phase 9`).
 - `rungate plan-deps` writes the phase order onto the tracker as GitHub `blocked by` edges. "What's next" is then everything unblocked, worked out by GitHub instead of read from a sentence (rule 4).
