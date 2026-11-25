@@ -154,6 +154,8 @@ describe("#2802: a quoted leading assignment is read, spaces and all", () => {
       "bun /x/A.hook.ts 2>/dev/null",
       "(bun /x/A.hook.ts)",
       "bun /x/A.hook.ts!",
+      // A backslash ending the line escapes nothing; the shell keeps it (round 5).
+      "bun /x/A.hook.ts\\",
       // The rest of the line is held to the same set.
       "bun /x/A.hook.ts; echo $(date)",
       "bun /x/A.hook.ts --name $(echo x # y)",

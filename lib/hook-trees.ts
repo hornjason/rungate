@@ -280,13 +280,14 @@ function shellWords(command: string): ShellWord[] | null {
       // A line continuation: neither character is part of any word.
       i++;
     } else if (c === "\\") {
+      // A backslash ending the line escapes nothing, and the shell keeps it:
+      // a path this reader does not account for (#2815 review, round 5).
+      if (i + 1 >= command.length) return null;
       inWord = true;
       raw += c;
-      if (i + 1 < command.length) {
-        text += command[i + 1]!;
-        raw += command[i + 1]!;
-        i++;
-      }
+      text += command[i + 1]!;
+      raw += command[i + 1]!;
+      i++;
     } else if (c === "'" || c === '"') {
       inWord = true;
       quote = c;
