@@ -27,14 +27,19 @@ import { join } from "path";
 import {
   NON_PHASE_PLACEMENTS,
   PLACEMENT_HEADING,
+  PLACEMENT_MEANINGS_HEADING,
+  convertPlacement,
   milestoneBody,
   milestonePlan,
   parsePhaseHeadings,
   parsePlacementRows,
+  placementConversionDiff,
   placementCoverage,
   placementReading,
+  placementsById,
   uncoveredByMilestone,
 } from "../lib/spec-placement";
+import { criterionFingerprint, parseCriteria } from "../lib/spec-evidence";
 import { REFUSAL_EXIT, main as planSpecMain } from "../scripts/plan-spec";
 import type { PlanSpecGitHub } from "../scripts/plan-spec";
 
@@ -857,5 +862,197 @@ describe("the live convergence spec, against this parser", () => {
       expect(a.title, `Phase ${a.phase} has no "### Phase ${a.phase} — …" heading to name a milestone from`)
         .not.toBe(`Convergence Phase ${a.phase}`);
     }
+  });
+});
+
+/**
+ * Covers SC-2808 (SPEC-TO-BOARD-PIPELINE-SPEC.md; ADR-026 row 3).
+ *
+ * `--placement` prints the view the table used to store, and writes nothing.
+ * `--convert-placement --write` moves a table into placement lines, and refuses
+ * without writing when any criterion would read differently afterwards. Every
+ * case runs the command against a planted spec with a GitHub client that
+ * throws, so a run that reached the network fails rather than passing quietly.
+ */
+describe("SC-2808: plan-spec prints the placement view and converts a table", () => {
+  const NO_NETWORK = new Proxy(
+    {},
+    {
+      get: () => () => {
+        throw new Error("plan-spec reached the network");
+      },
+    },
+  ) as unknown as PlanSpecGitHub;
+
+  async function run(argv: string[], spec: string) {
+    const dir = mkdtempSync(join(tmpdir(), "rg-plan-spec-2808-"));
+    const out: string[] = [];
+    const err: string[] = [];
+    const log = console.log;
+    const error = console.error;
+    console.log = (...a: unknown[]) => void out.push(a.join(" "));
+    console.error = (...a: unknown[]) => void err.push(a.join(" "));
+    try {
+      writeFileSync(join(dir, "SPEC.md"), spec);
+      const code = await planSpecMain(["--project-root", dir, "SPEC.md", ...argv], NO_NETWORK);
+      return { code, stdout: out.join("\n"), stderr: err.join("\n"), after: readFileSync(join(dir, "SPEC.md"), "utf-8") };
+    } finally {
+      console.log = log;
+      console.error = error;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  const LINES = [
+    "---",
+    "doc-type: spec",
+    "---",
+    "",
+    "# Planted",
+    "",
+    "- [ ] CRC-A1: one",
+    "      placement: Phase 2",
+    "- [ ] CRC-A2: two",
+    "      needs: test",
+    "      placement: Done",
+    "- [ ] CRC-A3: three",
+    "      placement: Phase 1",
+    "- [ ] CRC-A4: four",
+    "      placement: Phase 2",
+    "",
+  ].join("\n");
+  const viewLines = (stdout: string) => stdout.split("\n").map(l => l.trim()).filter(l => /^(Phase \d+|Done|Blocked)\b/.test(l));
+  const fingerprints = (spec: string) => new Map(parseCriteria(spec).map(c => [c.id, criterionFingerprint(c.text)]));
+
+  test("--placement prints each value with its criteria, phases in order, and writes nothing", async () => {
+    const r = await run(["--placement"], LINES);
+    expect(r.code, r.stderr).toBe(0);
+    expect(viewLines(r.stdout)).toEqual(["Phase 1: CRC-A3", "Phase 2: CRC-A1, CRC-A4", "Done: CRC-A2"]);
+    expect(r.after).toBe(LINES);
+  });
+
+  test("--placement reads a spec that still has a table through the same parser", async () => {
+    const r = await run(["--placement"], plant({}));
+    expect(r.code, r.stderr).toBe(0);
+    expect(viewLines(r.stdout)).toEqual(["Phase 1: CRC-A1, CRC-A2", "Phase 2: CRC-A3"]);
+  });
+
+  test("--convert-placement without --write says what it would write, and writes nothing", async () => {
+    const before = plant({});
+    const r = await run(["--convert-placement"], before);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("would write 3 placement line(s)");
+    expect(r.after).toBe(before);
+  });
+
+  test("--convert-placement --write moves every table id beneath its criterion and drops the criteria column", async () => {
+    const before = plant({});
+    const r = await run(["--convert-placement", "--write"], before);
+    expect(r.code, r.stderr).toBe(0);
+    expect([...placementsById(r.after)]).toEqual([...placementsById(before)]);
+    expect(placementReading(r.after).reading).toBe("MEASURED");
+    expect(fingerprints(r.after)).toEqual(fingerprints(before));
+    for (const c of parseCriteria(r.after)) expect(c.placements.length, c.id).toBe(1);
+    // The table keeps its other columns and loses the criteria one.
+    expect(r.after).toContain("| Placement | What the value means |");
+    expect(r.after).not.toContain("| Criteria |");
+    // ADR-026 Decision 6: what is left of the table is the meanings, under
+    // its own heading, so no placement reader reads its ids.
+    expect(r.after).toContain(`\n${PLACEMENT_MEANINGS_HEADING}\n`);
+    expect(r.after).not.toContain(PLACEMENT_HEADING);
+    expect(parsePlacementRows(r.after).map(row => [row.placement, row.ids])).toEqual([
+      ["Phase 1", ["CRC-A1", "CRC-A2"]],
+      ["Phase 2", ["CRC-A3"]],
+    ]);
+  });
+
+  test("it refuses without writing when a criterion would read differently afterwards", async () => {
+    const unknown = plant({ rows: [["**Phase 1**", "CRC-A1, CRC-A2, CRC-A9"], ["**Phase 2**", "CRC-A3"]] });
+    const doubled = plant({ rows: [["**Phase 1**", "CRC-A1, CRC-A2"], ["**Phase 2**", "CRC-A3, CRC-A1"]] });
+    for (const [spec, named] of [[unknown, "CRC-A9"], [doubled, "CRC-A1"]] as const) {
+      const r = await run(["--convert-placement", "--write"], spec);
+      expect(r.code).toBe(REFUSAL_EXIT);
+      expect(r.stderr).toContain("nothing written");
+      expect(r.stderr).toContain(named);
+      expect(r.after).toBe(spec);
+    }
+  });
+
+  test("a spec already in placement lines has nothing to convert, and is not touched", async () => {
+    const r = await run(["--convert-placement", "--write"], LINES);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("nothing to convert");
+    expect(r.after).toBe(LINES);
+  });
+
+  test("placementConversionDiff names a criterion whose placement or fingerprint would change", () => {
+    const before = plant({});
+    const converted = convertPlacement(before);
+    if (!("after" in converted)) throw new Error(`the planted spec did not convert: ${JSON.stringify(converted)}`);
+    expect(placementConversionDiff(before, converted.after)).toEqual([]);
+    const reworded = converted.after.replace("criterion number 1", "criterion number one");
+    expect(placementConversionDiff(before, reworded).join("\n")).toContain("CRC-A1: its fingerprint would change");
+    const moved = converted.after.replace("placement: Phase 2", "placement: Phase 1");
+    expect(placementConversionDiff(before, moved).join("\n")).toContain("CRC-A3: placed Phase 2 before and Phase 1 after");
+  });
+
+  // A meanings column that names criteria would read as a second table of
+  // them once the criteria column is gone; the convergence spec's does.
+  test("both of rungate's placed specs convert, in memory, with nothing refused", () => {
+    for (const name of ["SPEC-TO-BOARD-PIPELINE-SPEC.md", "CODE-REVIEW-CONVERGENCE-SPEC.md"]) {
+      const c = convertPlacement(readFileSync(join(REPO, "specs", name), "utf-8"));
+      expect("refusal" in c ? c.refusal : [], name).toEqual([]);
+      expect("after" in c, name).toBe(true);
+    }
+  });
+
+  // #2782 review: the column drop touches exactly the rows the parser reads.
+  test("a row the placement reader skips refuses the conversion, so its criteria cannot be dropped unseen", () => {
+    const spec = plant({}).replace("| **Phase 2** | CRC-A3 | because |", "|Phase 2|CRC-A3|because|");
+    const c = convertPlacement(spec);
+    expect("refusal" in c).toBe(true);
+    if ("refusal" in c) expect(c.refusal.join("\n")).toMatch(/line \d+ .*reader skips/);
+  });
+
+  test("a table written without closing pipes still loses its criteria column", () => {
+    const spec = plant({})
+      .replace("| Placement | Criteria | What the value means |", "| Placement | Criteria")
+      .replace("|---|---|---|", "|---|---")
+      .replace("| **Phase 1** | CRC-A1, CRC-A2 | because |", "| **Phase 1** | CRC-A1, CRC-A2")
+      .replace("| **Phase 2** | CRC-A3 | because |", "| **Phase 2** | CRC-A3");
+    const c = convertPlacement(spec);
+    if (!("after" in c)) throw new Error(`did not convert: ${JSON.stringify(c)}`);
+    const meanings = c.after.slice(c.after.indexOf(PLACEMENT_MEANINGS_HEADING));
+    expect(meanings).not.toMatch(/CRC-A\d/);
+    expect([...placementsById(c.after)]).toEqual([["CRC-A1", "Phase 1"], ["CRC-A2", "Phase 1"], ["CRC-A3", "Phase 2"]]);
+  });
+
+  // #2782 review round 2: the milestone plan and the placement view are one reading.
+  test("two table rows with one phase value give the milestone every criterion the view prints", async () => {
+    const spec = plant({ rows: [["**Phase 1**", "CRC-A1"], ["**Phase 1**", "CRC-A2"], ["**Phase 2**", "CRC-A3"]] });
+    const r = await run(["--placement"], spec);
+    expect(viewLines(r.stdout)).toEqual(["Phase 1: CRC-A1, CRC-A2", "Phase 2: CRC-A3"]);
+    const { actions } = milestonePlan(spec, [], "Planted");
+    expect(actions.map(a => [a.phase, a.criteria])).toEqual([[1, ["CRC-A1", "CRC-A2"]], [2, ["CRC-A3"]]]);
+    expect(uncoveredByMilestone(actions, []).flatMap(u => u.uncovered)).toEqual(["CRC-A1", "CRC-A2", "CRC-A3"]);
+  });
+
+  test("a row that only starts like the header is not exempt: it refuses rather than losing its criteria", () => {
+    const spec = plant({}).replace("| **Phase 2** | CRC-A3 | because |", "| Placement 2 | CRC-A3 | because |");
+    const c = convertPlacement(spec);
+    expect("refusal" in c ? c.refusal.join("\n") : JSON.stringify(c)).toMatch(/line \d+ .*reader skips/);
+  });
+
+  test("a spec stating one id twice converts, and the count compares criteria with criteria", () => {
+    const spec = plant({ criteria: ["CRC-A1", "CRC-A2", "CRC-A1"], rows: [["**Phase 1**", "CRC-A1, CRC-A2"]] });
+    expect(placementConversionDiff(spec, spec)).toEqual([]);
+    const dropped = spec.replace("- [ ] CRC-A1: criterion number 3\n", "");
+    expect(placementConversionDiff(spec, dropped)).toContain("the spec would state 2 criteria, not 3");
+  });
+
+  test("--placement and --convert-placement together are refused", async () => {
+    const r = await run(["--placement", "--convert-placement"], LINES);
+    expect(r.code).toBe(REFUSAL_EXIT);
+    expect(r.after).toBe(LINES);
   });
 });
