@@ -22,8 +22,10 @@
  * `--placement` prints each placement value with its criteria, in phase
  * order, read through the one parser whichever form the spec uses, and
  * writes nothing. `--convert-placement` moves a `### Phase placement` table
- * into a `placement:` line beneath each criterion, drops the table's criteria
- * column and retitles what is left `### What each placement means`; it writes the spec only with `--write`, and refuses
+ * into a `placement:` line beneath each criterion and drops the table's criteria
+ * column. What is left is retitled `### What each placement means` when it
+ * still has a column of meanings, and removed when it has only its placements
+ * (#2797). It writes the spec only with `--write`, and refuses
  * without writing when any criterion would read differently afterwards.
  * Neither reaches the network or needs `--repo` or `--prefix`.
  *
@@ -171,8 +173,9 @@ rungate plan-spec <spec.md> --convert-placement [--write] [--json]
              nothing (ADR-026, SC-2808).
   --convert-placement
              move the spec's placement table into a placement: line
-             beneath each criterion, drop the table's criteria column and
-             retitle the rest "What each placement means".
+             beneath each criterion and drop the table's criteria column.
+             The rest is retitled "What each placement means" when it has
+             a column of meanings, and removed when it has none.
              Writes only with --write, and refuses without writing when any
              criterion would read differently afterwards (SC-2808).`;
 

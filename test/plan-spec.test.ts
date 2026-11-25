@@ -1148,6 +1148,14 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
     expect(wrote.after).not.toContain(PLACEMENT_MEANINGS_HEADING);
   });
 
+  // #2804 review: the usage text says both outcomes, not only the retitle.
+  test("#2797: the usage text says a placements-only table is removed and one with meanings is retitled", async () => {
+    const r = await run([], TWO_COLUMN);
+    const usage = r.stderr.slice(r.stderr.indexOf("--convert-placement"));
+    expect(usage).toContain('retitled "What each placement means" when it has');
+    expect(usage).toContain("removed when it has none");
+  });
+
   // #2782 review round 2: the milestone plan and the placement view are one reading.
   test("two table rows with one phase value give the milestone every criterion the view prints", async () => {
     const spec = plant({ rows: [["**Phase 1**", "CRC-A1"], ["**Phase 1**", "CRC-A2"], ["**Phase 2**", "CRC-A3"]] });
