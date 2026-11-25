@@ -98,10 +98,13 @@
  *      exit written with a literal code would slip past the mutation, and the
  *      case guarding it would become indistinguishable from one passing by
  *      accident.
- *   2. No relative imports. The mutant runs from a temp directory, and a
- *      relative import of anything under lib/ would make it die on module
- *      resolution — a non-zero exit that reads as the mutation having been
- *      rejected on the merits.
+ *   2. Relative imports only of what the battery carries. The mutant runs
+ *      from a temp directory, and the battery copies each module in its
+ *      CARRIED list beside it (today `../lib/issue-number`), asserting the
+ *      script imports exactly those and that each imports nothing. Any other
+ *      relative import would make the mutant die on module resolution — a
+ *      non-zero exit that reads as the mutation having been rejected on the
+ *      merits (#2821 review).
  *
  * Both guards look at the whole file, prose included, for the reason
  * scripts/rook-review-scope.ts gives: a detector that first strips comments
@@ -529,7 +532,11 @@ export function parseIssueStatesFile(raw: string, source: string): IssueStateRea
       );
     }
     keyFor.set(n, key);
-    const state = String(value).toUpperCase();
+    // Only a string names a state: String(["CLOSED"]) would read as "CLOSED" (#2821 review).
+    if (typeof value !== "string") {
+      throw new StateCloseRefused(`${source} says #${n} is ${JSON.stringify(value)} — a state is a string: OPEN, CLOSED or UNMEASURED`);
+    }
+    const state = value.toUpperCase();
     if (state !== "OPEN" && state !== "CLOSED" && state !== "UNMEASURED") {
       throw new StateCloseRefused(
         `${source} says #${n} is ${JSON.stringify(value)} — only OPEN, CLOSED or UNMEASURED can be read`,
@@ -604,12 +611,13 @@ export function recordFromState(state: unknown, args: Record<string, string>): S
  * The credential, resolved the way `resolveGitHubToken` in `lib/github.ts`
  * resolves it — and deliberately NOT by importing it.
  *
- * This file must have no relative imports. `test/state-record-closes-mutation.test.ts`
- * asserts that, because its mutants are copied to a temp directory and run
- * there: a `from "../lib/…"` makes every mutant die on module resolution,
- * which is a non-zero exit that reads as a rejected mutation. So the one
- * rule this repository has about credentials — one decider — cannot be
- * satisfied here by calling it.
+ * This file may import only what its mutation battery carries.
+ * `test/state-record-closes-mutation.test.ts` copies each module in its
+ * CARRIED list beside the mutant, and each must import nothing. `lib/github.ts`
+ * imports other modules, so it cannot be carried, and a `from "../lib/github"`
+ * would make every mutant die on module resolution, which is a non-zero exit
+ * that reads as a rejected mutation. So the one rule this repository has
+ * about credentials — one decider — cannot be satisfied here by calling it.
  *
  * What is done instead is the repository's documented alternative for an
  * import-free file: the value is bound by an AGREEMENT ASSERTION. The grid
