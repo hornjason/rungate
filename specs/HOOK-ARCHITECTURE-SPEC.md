@@ -533,7 +533,7 @@ hooks are driven as subprocesses rather than matched as text.
 - [x] SC-1661: lib/scaffold/defaults.ts contains [disabledReason] — the inventory is generated- so a decision recorded only in `.claude/rungate/hooks.json` is a decision the next scaffold repair overwrites
 - [x] SC-1662: test/hook-registration-reconciler.test.ts contains [an entry that is off must say why] — off and never-registered look identical in a file- and the fastest way to resolve that ambiguity is to turn it back on
 - [ ] SC-2810: lib/bash-write-guard.ts is between [100] and [2000] lines
-- [ ] SC-2811: An interpreter body naming a protected artifact is refused by the bash write guard whatever directory it names, with no program body read to decide where it writes (behavioral)
+- [ ] SC-2811: An interpreter body that names a protected artifact beside a declared write verb is refused by the bash write guard whatever directory it names (behavioral)
 
 ### An inventory with no reconciler, half-fixed (#199, #479)
 

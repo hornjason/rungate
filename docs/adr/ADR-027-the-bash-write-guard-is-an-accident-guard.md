@@ -42,7 +42,7 @@ updated: 2026-11-25
 
 ## Decision
 
-The guard catches accidents and says so. It refuses a shell command that writes a protected artifact, and any interpreter body that names one, wherever it points. It reads no program to find out where that program writes. Plain shell writes into a scratch directory stay exempt, decided by the target's real directory. The module shrinks to under 2,000 lines.
+The guard catches accidents and says so. It refuses a shell command that writes a protected artifact. It also refuses an interpreter body that names one beside a declared write verb, wherever it points. It reads no program to find out where that program writes. Reads, and the sanctioned `writeWorkflowState` repair, stay allowed. Plain shell writes into a scratch directory stay exempt, decided by the target's real directory. The module shrinks to under 2,000 lines.
 
 ## Decisions
 
@@ -50,7 +50,7 @@ The guard catches accidents and says so. It refuses a shell command that writes 
 2. **Program-body reading and the interpreter scratch exemption are deleted — Jason, 2026-11-25.** No real command uses the exemption, and every review of it found a bypass. What goes:
    - `bodyTargets`, `callWrites`, the assignment and tuple readers, `codeMask` and the write-callee identity;
    - `lib/interpreter-calls.ts`, once nothing imports it.
-3. **An interpreter body that names a protected artifact is refused, wherever it points.** This is the existing refusal ("runs an interpreter … naming"), without the exemption in front of it. By the measurement above, it newly refuses no real command. The sanctioned writer, `writeWorkflowState()`, does not spell the file name.
+3. **An interpreter body that names a protected artifact beside a declared write verb is refused, wherever it points.** This is the existing write-intent arm (`WRITE_INTENT`) unchanged, with only the scratch exemption in front of it removed. It refuses only when a declared write verb is near the name, so a read of `workflow-state.json` stays allowed. So does the repair the harness prints, `bun -e … writeWorkflowState('…/workflow-state.json', …)`: the arm's docblock records why it must, and `test/bash-write-guard.test.ts` pins it. Only a command the exemption allowed today can become refused, and the measurement above found 0 such real commands. Review round 1 of #2843 corrected the first draft, which dropped the write-verb condition.
 4. **Shell writes keep a scratch exemption, decided by the real directory of the target.** The parent is resolved with `realpath` at decision time, and the target is exempt when that lands under a fixed scratch root. This replaces the link-chain and step-order machinery (#1367). The cut's corpus sweep reports every command it newly refuses or newly allows, by name.
 5. **What stays:**
    - the shell reader;
@@ -68,7 +68,7 @@ The guard catches accidents and says so. It refuses a shell command that writes 
 Written in `specs/HOOK-ARCHITECTURE-SPEC.md`, reserved in `specs/sc-reservations.json`:
 
 - SC-2810: `lib/bash-write-guard.ts` is between [100] and [2000] lines. The shell reader alone is about 1,350 lines, so this is about half of today's file.
-- SC-2811: An interpreter body naming a protected artifact is refused by the bash write guard whatever directory it names, with no program body read to decide where it writes (behavioral).
+- SC-2811: An interpreter body that names a protected artifact beside a declared write verb is refused by the bash write guard whatever directory it names (behavioral).
 
 ## Decomposition
 
@@ -76,5 +76,5 @@ The first row's pull request also says `Fixes` for #2705, #2731 and #2772. Their
 
 | Criterion | Outcome | Files | Milestone | Blocked by |
 |---|---|---|---|---|
-| SC-2811 | The write guard refuses interpreter bodies naming a protected artifact and reads no program body | lib/bash-write-guard.ts, lib/interpreter-calls.ts, test/bash-write-guard.test.ts, test/interpreter-calls.test.ts | — | — |
-| SC-2810 | The write guard is cut to an accident guard under two thousand lines | lib/bash-write-guard.ts, test/bash-write-guard.test.ts, hooks/BashWriteGuard.hook.ts, specs/HOOK-ARCHITECTURE-SPEC.md | — | The write guard refuses interpreter bodies naming a protected artifact and reads no program body |
+| SC-2811 | The write guard drops program-body reading and the interpreter scratch exemption | lib/bash-write-guard.ts, lib/interpreter-calls.ts, test/bash-write-guard.test.ts, test/interpreter-calls.test.ts | — | — |
+| SC-2810 | The write guard is cut to an accident guard under two thousand lines | lib/bash-write-guard.ts, test/bash-write-guard.test.ts, hooks/BashWriteGuard.hook.ts, specs/HOOK-ARCHITECTURE-SPEC.md | — | The write guard drops program-body reading and the interpreter scratch exemption |
