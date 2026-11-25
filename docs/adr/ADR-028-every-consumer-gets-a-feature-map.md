@@ -59,7 +59,7 @@ Nothing changes when this ADR merges. Once every row below ships:
 3. **One page: the overview map plus a card per feature — the DA recommends.** A consumer that already generates maps can later read the same manifest rather than keep a second model.
 4. **Declare-or-fail and the typed-by-hand scan start as reports — Jason decides.** Each becomes a refusal for a consumer once that consumer's report is empty, so no consumer goes red on the day it upgrades. The typed-by-hand scan's thresholds are first values measured on DDB at `8a8b3b96`: a quoted list counts when 2 or more of its items, and 60% or more of them, are registered names; and a cue-word filter drops historical counts. They are re-measured on the second consumer before either check refuses anything.
 5. **Live status is optional — the DA recommends.** A manifest may name a read-only status endpoint. Without one, the card says "not measured", never "fresh".
-6. **DDB is the pilot consumer — the DA recommends.** Its adapter is a DDB issue, built on its own inventory and system map once they land.
+6. **DDB is the pilot consumer — the DA recommends.** Its adapter is a DDB issue. It builds on DDB's ADR-061 work: the outside-source inventory (DDB's SC-113, which records how each source is found and who approved each fixed target) and the generated system map (DDB's SC-114, whose module-to-module links come from `dependsOn`). It also reads each module's own registry declarations (`sources`, `dependsOn`), which already exist and which DDB's refresh-matrix test keeps current.
 7. **Agents read the manifest JSON directly until a query service is decided — the DA recommends.** No second model is kept for agents.
 
 ## Not decided here
