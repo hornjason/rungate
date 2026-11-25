@@ -418,6 +418,13 @@ export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, op
     ...pressureFindings(surface, owners),
     ...danglingPathFindings(surface, owners, projectPlaces(surface.root), recordingProbe(surface.root, projectUnread)),
   );
+  // #2835: a project-owned finding in a file the scaffold keeps only because
+  // it predates the stamp says how to take the generator's version.
+  for (const f of findings) {
+    const text = surface.files.get(f.file);
+    const note = f.owner === "consumer" && text !== undefined ? preStampNote(f.file, text) : null;
+    if (note !== null) f.message = `${f.message} (${note})`;
+  }
   const projectLine = unreadLine("project", projectUnread, "");
   const unmeasured = projectLine === null ? [] : [projectLine];
   if (opts.home === undefined) return { root: surface.root, lints: [...PROMPT_AUDIT_LINTS], findings, user: null, unmeasured: [...unmeasured, USER_SURFACE_UNREAD] };
