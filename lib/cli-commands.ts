@@ -195,7 +195,7 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   // consumer's repository.
   "plan-spec": {
     script: "scripts/plan-spec.ts",
-    summary: "Derive a repository's milestones from a spec's Phase placement table",
+    summary: "Derive a repository's milestones from each criterion's placement line, or an older placement table",
     usage: "rungate plan-spec <spec.md> --repo <owner/name> --prefix <name> [--rename-from <old name>] [--write] [--json] | <spec.md> --placement | <spec.md> --convert-placement [--write]",
     projectRootFlag: true,
   },

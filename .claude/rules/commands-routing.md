@@ -1,6 +1,6 @@
 ---
 description: Every command the rungate CLI exposes in this project, generated from its command registry
-generated-sha: 9ef55cab05f3f378
+generated-sha: 35e4a6cfe7f4e47b
 ---
 
 ## Command Routing
@@ -19,7 +19,7 @@ Generated from the CLI's command registry. Run one as
 | `audit-specs` | Report which success criteria are matched, unmatched or uncovered |
 | `sync-sc-status` | Tick each criterion a passing test claims, in this project's specs |
 | `audit-spec-evidence` | Refuse a ticked criterion that does not name what proved it |
-| `plan-spec` | Derive a repository's milestones from a spec's Phase placement table |
+| `plan-spec` | Derive a repository's milestones from each criterion's placement line, or an older placement table |
 | `criterion-inventory` | Trace every criterion to the tests, issues and pull requests that name it |
 | `board-mirror` | Show every spec's criteria, and what is ready to pick up, on the project board |
 | `board-conformance` | Whether the board says what the spec says, reading by reading |

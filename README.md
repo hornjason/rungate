@@ -27,7 +27,7 @@ This is how work moves in this repository. The ten rules behind it are in [`AGEN
 
 ```mermaid
 flowchart TD
-  S["Spec: success criteria and a Phase placement table"] --> A["ADR with a Decomposition table"]
+  S["Spec: success criteria, each with a placement line"] --> A["ADR with a Decomposition table"]
   A -->|"owner merges it as accepted"| W["adr-accepted.yml"]
   W --> I["Issues, one per table row"]
   W --> M["Milestones from phases, blocked-by edges"]
