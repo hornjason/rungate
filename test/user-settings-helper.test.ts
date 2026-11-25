@@ -35,7 +35,8 @@ const PLANTED = {
   env: {
     GH_TOKEN: "gho_planted2792",
     OTHER_KEY: "sk-planted2792",
-    RUNGATE_HOOKS_DIR: "/srv/rungate/hooks",
+    // A directory on disk, which is what the copy keeps of env.
+    RUNGATE_HOOKS_DIR: tmpdir(),
   },
   apiKeyHelper: "echo sk-planted2792-helper",
   hooks: {
@@ -59,7 +60,7 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
     const out = redactSettings(JSON.stringify(PLANTED, null, 2));
     expect(out).not.toMatch(/planted2792/);
     const doc = JSON.parse(out);
-    expect(doc.env).toEqual({ RUNGATE_HOOKS_DIR: "/srv/rungate/hooks" });
+    expect(doc.env).toEqual({ RUNGATE_HOOKS_DIR: tmpdir() });
     expect(Object.keys(doc).sort()).toEqual(["env", "hooks"]);
     // No event name or matcher survives; only the reduced commands, in order.
     expect(Object.keys(doc.hooks)).toEqual([REDUCED_EVENT]);
@@ -123,10 +124,17 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
     }
   });
 
-  test("#2798 round 3: an env value is kept when it is an absolute path, whoever reads it, and dropped otherwise", () => {
+  test("#2798 round 3: an env value is kept when it names a directory on disk, whoever reads it, and dropped otherwise", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rg-2798-dir-"));
+    const file = join(dir, "a-file");
+    writeFileSync(file, "x");
     const env = {
-      UNREAD_DIR: "/srv/nobody/reads/this",
-      READ_DIR: "/srv/rungate/hooks",
+      UNREAD_DIR: dir,
+      READ_DIR: tmpdir(),
+      // A token that happens to be path-shaped is not a directory (security review).
+      SLASH_TOKEN: "/AbC0dEf9/gHiJ",
+      A_FILE: file,
+      MISSING_DIR: join(dir, "not-there"),
       TILDE: "~/hooks",
       RELATIVE: "hooks",
       SPACED: "/srv/My Hooks",
@@ -135,8 +143,12 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
       JSONKEY: '{"private_key":"planted2792"}',
       NUMBER: 3,
     };
-    const doc = JSON.parse(redactSettings(JSON.stringify({ env, hooks: {} })));
-    expect(doc.env).toEqual({ UNREAD_DIR: "/srv/nobody/reads/this", READ_DIR: "/srv/rungate/hooks" });
+    try {
+      const doc = JSON.parse(redactSettings(JSON.stringify({ env, hooks: {} })));
+      expect(doc.env).toEqual({ UNREAD_DIR: dir, READ_DIR: tmpdir() });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("every hook path resolves the same through the copies as through the originals, across scopes", () => {
@@ -154,6 +166,9 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
     };
     const pick = <T,>(xs: T[]): T => xs[Math.floor(rand() * xs.length)]!;
     const VARS = ["A", "B", "C"];
+    // Values the copy keeps are directories on disk, so the battery's are.
+    const valueRoot = mkdtempSync(join(tmpdir(), "rg-2798-values-"));
+    const VALUES = ["v1", "v2"].map(v => (mkdirSync(join(valueRoot, v)), join(valueRoot, v)));
     const kinds = new Map<string, number>();
     let crossScope = 0;
     let registryReads = 0;
@@ -171,7 +186,7 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
           const env: Record<string, string> = scope === 0 ? {} : { GH_TOKEN: "gho_planted2798" };
           for (const v of VARS) {
             if (rand() < 0.35) {
-              env[v] = pick(["/v1", "/v2"]);
+              env[v] = pick(VALUES);
               (definedIn.get(v) ?? definedIn.set(v, new Set()).get(v)!).add(scope);
             }
           }
@@ -219,6 +234,7 @@ describe("#2792: the helper keeps what the census reads and nothing else", () =>
         rmSync(home, { recursive: true, force: true });
       }
     }
+    rmSync(valueRoot, { recursive: true, force: true });
     // The battery reached every outcome the defect could change, and the axis it sits on.
     expect(kinds.get("resolved") ?? 0).toBeGreaterThan(10);
     expect(kinds.get("twice") ?? 0).toBeGreaterThan(10);

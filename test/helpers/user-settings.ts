@@ -7,14 +7,14 @@
  * the output. Making each assertion careful about what it prints fixed one
  * site per round. This makes it structural: a machine-owned scope is reduced,
  * on read, to what the census suites use — the hook files the commands execute,
- * and the `env` values that are absolute paths — and nothing else ever reaches
+ * and the `env` values that name directories on disk — and nothing else ever reaches
  * a test. AC-11, which asks a wider question than the census, gets a
  * count taken over the raw file instead, never the file.
  *
  * `test/user-settings-helper.test.ts` refuses any other reader in `test/`.
  */
 
-import { readFileSync } from "fs";
+import { readFileSync, statSync } from "fs";
 import { homedir } from "os";
 import { join, posix } from "path";
 import ts from "typescript";
@@ -56,16 +56,29 @@ const NOT_JSON = "a machine settings file is not JSON, so it was not read; nothi
 
 /**
  * An `env` value the copy keeps: an absolute path, with no whitespace and no
- * shell or quoting character. What the census reads `env` for is to resolve a
- * hook path, and a hook path's variable holds a directory. No token format on
- * this machine starts with `/` (`gho_`, `sk-lf-`, `pk-lf-`, a JSON key).
+ * shell or quoting character, naming a directory that exists on this machine.
+ * What the census reads `env` for is to resolve a hook path, and a hook path's
+ * variable holds a directory. The shape alone would keep a token that happens
+ * to start with `/` (base64 can); a token is not a directory on disk (security
+ * review of #2798).
  */
 const PATH_VALUE = /^\/[^\s"'`$;|&<>(){}\\]*$/;
+
+function isDirectoryValue(v: unknown): v is string {
+  if (typeof v !== "string" || !PATH_VALUE.test(v)) return false;
+  try {
+    return statSync(v).isDirectory();
+  } catch {
+    // Absent or unreadable: not a directory this machine can show, so the
+    // value is dropped and a path through it reads as unresolved (UNMEASURED).
+    return false;
+  }
+}
 
 /**
  * A settings document rebuilt from an allowlist, never redacted in place:
  * `hooks` with each command reduced to the hook file it executes, and each
- * `env` value that is an absolute path. Throws, quoting nothing, when the
+ * `env` value that names a directory on this machine. Throws, quoting nothing, when the
  * document is not JSON.
  *
  * **Decided by the value, not by who reads it** (#2798 review, round 3). The
@@ -75,10 +88,10 @@ const PATH_VALUE = /^\/[^\s"'`$;|&<>(){}\\]*$/;
  * missed: another scope, then the registry. A rule over the value cannot miss
  * an input.
  *
- * The limits, stated: a variable a hook reads whose value is not an absolute
- * path is dropped, so the census reads that hook's path as unresolved, an
- * UNMEASURED reading and never a pass; and an absolute path is kept whether or
- * not anything reads it, because a location is not a secret.
+ * The limits, stated: a variable a hook reads whose value is not an existing
+ * directory is dropped, so the census reads that hook's path as unresolved, an
+ * UNMEASURED reading and never a pass; and a directory is kept whether or not
+ * anything reads it, because a location is not a secret.
  */
 export function redactSettings(src: string): string {
   let doc: { env?: unknown };
@@ -91,7 +104,7 @@ export function redactSettings(src: string): string {
   const env: Record<string, unknown> = {};
   const given = doc?.env;
   if (given !== null && typeof given === "object" && !Array.isArray(given)) {
-    for (const [k, v] of Object.entries(given as Record<string, unknown>)) if (typeof v === "string" && PATH_VALUE.test(v)) env[k] = v;
+    for (const [k, v] of Object.entries(given as Record<string, unknown>)) if (isDirectoryValue(v)) env[k] = v;
   }
   return JSON.stringify({ hooks, env }, null, 2);
 }
