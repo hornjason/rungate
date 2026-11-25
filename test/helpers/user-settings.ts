@@ -13,12 +13,23 @@
  * counts cross the boundary, and so does the path a registration resolves
  * to. A command never does, and neither does an error's message.
  *
+ * **Field by field** (#2813). Every result is built from named fields, never
+ * by spreading a census object, so a field the census adds later reaches no
+ * result until it is named here. `test/user-settings-helper.test.ts` lists
+ * each field a result may carry and what it may hold, and refuses any other.
+ *
  * An `env` value crosses only as part of a resolved path, when a registration
  * reaches its hook through it. That path is what the tree census and the
  * currency reading are about: the census says which copy a registration runs,
  * and the currency reading runs git in its directory and has to name it, so
  * withholding it would blind both (#2810 review). A token kept as a value,
  * which is how a settings file holds one, never crosses.
+ *
+ * The boundary, stated (#2819 review, round 3): a token someone writes into
+ * a variable's NAME or a directory's NAME crosses with the spelling or the
+ * resolved path, because names and paths are what the census reports.
+ * `test/user-settings-helper.test.ts` pins that, so the limit is a fact a
+ * test states rather than a gap a review finds.
  *
  * A first design (#2798, not merged) gave tests a reduced COPY of each file
  * instead. Each of its four review rounds found a census reader the copy
@@ -86,10 +97,19 @@ export interface ScopeReadability {
   unreadable?: string;
 }
 
-const readability = (r: ScopeReading): ScopeReadability => ({
-  scope: r.scope,
-  readable: r.commands !== null,
-  ...(r.unreadable !== undefined ? { unreadable: r.unreadable } : {}),
+const readability = (r: ScopeReading): ScopeReadability => {
+  const out: ScopeReadability = { scope: r.scope, readable: r.commands !== null };
+  if (r.unreadable !== undefined) out.unreadable = r.unreadable;
+  return out;
+};
+
+/** A registration verdict, field by field. It names scopes, never a command. */
+const verdict = (r: HookRegistration): HookRegistration => ({
+  hook: r.hook,
+  verdict: r.verdict,
+  registeredIn: [...r.registeredIn],
+  unreadable: [...r.unreadable],
+  detail: r.detail,
 });
 
 /** Each scope, and whether it could be read. */
@@ -99,7 +119,7 @@ export function scopeReadability(repoRoot: string, home: string, registry: strin
 
 /** `hookRegistration` over the raw scopes: a verdict naming scopes, never a command. */
 export function hookRegistrationAt(repoRoot: string, home: string, registry: string[], hook: string): HookRegistration {
-  return guarded("hookRegistrationAt", () => hookRegistration(hook, readings(repoRoot, home, registry)));
+  return guarded("hookRegistrationAt", () => verdict(hookRegistration(hook, readings(repoRoot, home, registry))));
 }
 
 /**
@@ -123,7 +143,7 @@ export function commandsExecutingAt(
 
 /** `registrationCensus` over the raw scopes: one verdict per hook, naming scopes, never a command. */
 export function registrationCensusAt(repoRoot: string, home: string, registry: string[], hooks: string[]): HookRegistration[] {
-  return guarded("registrationCensusAt", () => registrationCensus(hooks, readings(repoRoot, home, registry)));
+  return guarded("registrationCensusAt", () => registrationCensus(hooks, readings(repoRoot, home, registry)).map(verdict));
 }
 
 /**
@@ -191,7 +211,15 @@ export function wrongTreeAt(
 /** A target reading with its command withheld and a detail that names none. */
 function safeTarget(r: TargetReading): TargetReading {
   const where = r.resolved === null ? "which did not resolve" : `which resolves to ${r.resolved}`;
-  return { ...r, command: COMMAND_WITHHELD, detail: `through ${r.spelling}, ${where}` };
+  return {
+    hook: r.hook,
+    scope: r.scope,
+    command: COMMAND_WITHHELD,
+    spelling: r.spelling,
+    target: r.target,
+    resolved: r.resolved,
+    detail: `through ${r.spelling}, ${where}`,
+  };
 }
 
 /**
@@ -206,7 +234,8 @@ export function treeCensusAt(repoRoot: string, home: string, registry: string[],
   );
   const replaced = new Map(census.unresolved.map(r => [r.detail, safeTarget(r).detail]));
   return {
-    ...census,
+    reading: census.reading,
+    examined: census.examined,
     unmeasuredReasons: census.unmeasuredReasons.map(reason => replaced.get(reason) ?? reason),
     inRepo: census.inRepo.map(safeTarget),
     foreign: census.foreign.map(safeTarget),
@@ -224,7 +253,23 @@ export function registrationCurrencyAt(input: {
   git: GitRunner;
 }): RegistrationCurrency {
   const census = treeCensusAt(input.repoRoot, input.home, input.registryCommands, input.ownedHooks);
-  return guarded("registrationCurrencyAt", () => registrationCurrency(census, input.base, input.git));
+  const c = guarded("registrationCurrencyAt", () => registrationCurrency(census, input.base, input.git));
+  return {
+    reading: c.reading,
+    unmeasuredReasons: [...c.unmeasuredReasons],
+    directories: c.directories.map(d => ({
+      dir: d.dir,
+      state: d.state,
+      behind: d.behind,
+      base: d.base,
+      baseSha: d.baseSha,
+      headSha: d.headSha,
+      registrations: d.registrations,
+      detail: d.detail,
+    })),
+    unresolved: c.unresolved,
+    examined: c.examined,
+  };
 }
 
 /**
@@ -281,9 +326,19 @@ export const liveWrongTree = (repoRoot: string, owned: string[]) => wrongTreeAt(
 export const liveTreeCensus = (repoRoot: string, registry: string[], owned: string[]) =>
   treeCensusAt(repoRoot, homedir(), registry, owned);
 export const liveRegistrationCurrency = (input: Omit<Parameters<typeof registrationCurrencyAt>[0], "home">) =>
-  registrationCurrencyAt({ ...input, home: homedir() });
+  registrationCurrencyAt({
+    repoRoot: input.repoRoot,
+    home: homedir(),
+    base: input.base,
+    ownedHooks: input.ownedHooks,
+    registryCommands: input.registryCommands,
+    git: input.git,
+  });
+/** Where a home's settings scopes live, built field by field. Paths only; nothing is read. */
+export const scopePathsAt = (repoRoot: string, home: string) =>
+  settingsScopePaths(repoRoot, home).map(s => ({ scope: s.scope, path: s.path, ownership: s.ownership }));
 /** Where this machine's settings scopes live. Paths only; nothing is read. */
-export const liveScopePaths = (repoRoot: string) => settingsScopePaths(repoRoot, homedir());
+export const liveScopePaths = (repoRoot: string) => scopePathsAt(repoRoot, homedir());
 /** This machine's user settings file, for naming in a message. */
 export const liveUserSettingsPath = () => join(homedir(), ".claude", "settings.json");
 /** {@link settingsMentions} over this machine's user settings file. */
