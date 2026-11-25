@@ -5,14 +5,18 @@
  * reports. It files nothing: every draft is a file for the user to read first
  * (`.claude/rules/reporting-upstream.md`).
  *
- * Usage: rungate prompt-audit [--project-root <dir>] [--out <dir>]
+ * Usage: rungate prompt-audit [--project-root <dir>] [--out <dir>] [--user]
+ *
+ * `--user` also lints `~/.claude/CLAUDE.md` and the user's agents, skills and
+ * commands, read-only, as the user's own findings (#2778). Without it the
+ * report says that part of what every session loads was not read.
  *
  * Exit 0 with a report, findings or not; it is an audit, not a gate. Exit
  * `PROMPT_AUDIT_UNMEASURED_EXIT` when the tree is not one rungate rendered,
  * because nothing was measured and an empty report would say otherwise.
  */
 import { mkdtempSync } from "fs";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 import { join, resolve } from "path";
 
 import { formatAudit, promptAudit, upstreamBodies, writeUpstreamBodies } from "../lib/prompt-audit";
@@ -32,7 +36,7 @@ if (import.meta.main) {
   const root = resolve(arg("--project-root", argv) ?? process.cwd());
   let audit;
   try {
-    audit = promptAudit(root);
+    audit = promptAudit(root, undefined, argv.includes("--user") ? { home: homedir() } : {});
   } catch (e) {
     if (!(e instanceof NotRenderedSurface)) throw e;
     console.error(`prompt-audit: ${e.message}`);

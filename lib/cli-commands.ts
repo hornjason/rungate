@@ -126,7 +126,7 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
   "prompt-audit": {
     script: "scripts/prompt-audit.ts",
     summary: "Lint what this project's agents load, sort findings by owner, and draft rungate's as upstream reports",
-    usage: "rungate prompt-audit [--out <dir>]",
+    usage: "rungate prompt-audit [--out <dir>] [--user]",
     projectRootFlag: true,
   },
   "create-sc": {
