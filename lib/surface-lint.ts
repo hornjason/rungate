@@ -209,7 +209,18 @@ export function readUserSurface(home: string): UserSurface {
       unreadable.push(`${rel} (${codeOf(e)})`);
     }
   };
-  for (const f of USER_SURFACE_FILES) if (existsSync(join(root, f))) read(f);
+  // Present means lstat finds an entry, not that `existsSync` can follow it:
+  // a dangling or looping link is present and unreadable, and is named as
+  // such (review round 2 of #2844). Only a missing entry is absent.
+  for (const f of USER_SURFACE_FILES) {
+    try {
+      lstatSync(join(root, f));
+    } catch (e) {
+      if (codeOf(e) !== "ENOENT") unreadable.push(`${f} (${codeOf(e)})`);
+      continue;
+    }
+    read(f);
+  }
   for (const d of USER_SURFACE_DIRS) for (const f of mdInFollowingLinks(root, d, unreadable)) read(f);
   return { root, files, unreadable };
 }

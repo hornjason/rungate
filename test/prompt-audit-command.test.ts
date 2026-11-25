@@ -383,6 +383,18 @@ describe("#2778: the user-level surface is reported unread by default and linted
     }
   });
 
+  // Review round 2 of #2844: `existsSync` follows a link, so a dangling or
+  // looping CLAUDE.md read as absent and was never named.
+  test("a user CLAUDE.md that is a dangling link or a link to itself is named as unread, and a missing one is not", () => {
+    for (const target of ["nowhere.md", "CLAUDE.md"]) {
+      const home = fakeHome(["agents/a.md", "An agent."]);
+      symlinkSync(target, join(home, ".claude", "CLAUDE.md"));
+      const audit = promptAudit(rendered, undefined, { home });
+      expect(audit.unmeasured.join("\n"), target).toContain(`${USER_PREFIX}CLAUDE.md`);
+    }
+    expect(promptAudit(rendered, undefined, { home: fakeHome(["agents/a.md", "An agent."]) }).unmeasured).toEqual([]);
+  });
+
   test("node_modules and dot-directories under a skill are not read: no session loads them", () => {
     const linked = mkdtempSync(join(scratch, "linked-checkout-"));
     writeFileSync(join(linked, "SKILL.md"), "A skill.\n");
