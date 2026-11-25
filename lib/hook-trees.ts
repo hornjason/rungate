@@ -480,9 +480,14 @@ export interface TreeViolation {
  * `wrongTreeViolations` and `registeredTreeCensus` agree on which strings
  * mention a hook, and each reports a mention it does not read as an
  * execution rather than skipping it (#2820).
+ *
+ * The name starts at a boundary: `Foo.hook.ts` inside `OtherFoo.hook.ts`
+ * names OtherFoo, not Foo (#2826 review). Over-broad about where a name sits,
+ * never about which name it is.
  */
 export function mentionsHook(command: string, hook: string): boolean {
-  return command.includes(`${hook}.hook.ts`);
+  const name = `${hook}.hook.ts`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^A-Za-z0-9_-])${name}`).test(command);
 }
 
 export function wrongTreeViolations(owned: string[], commands: string[]): TreeViolation[] {

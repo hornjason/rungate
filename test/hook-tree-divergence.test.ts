@@ -955,6 +955,21 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
     }
   });
 
+  test("#2826: a hook whose name ends another's is not named by that other's registration", () => {
+    const env = envs({ "user-settings": { RUNGATE_HOOKS_DIR: `${REPO}/hooks` } });
+    for (const [owned, other] of [["Foo", "OtherFoo"], ["MergeGuard", "PreMergeGuard"], ["Close-Guard", "Issue-Close-Guard"]] as const) {
+      const command = RG(other);
+      const census = registeredTreeCensus([owned, other], cmds({ "user-settings": [command] }), env, REPO);
+      expect(census.reading, command).toBe("MEASURED");
+      expect(census.examined, command).toBe(1);
+      expect(census.unresolved, command).toEqual([]);
+      expect(wrongTreeViolations([owned], [command]), command).toEqual([]);
+    }
+    // At a boundary the name is still selected, wherever it sits.
+    for (const command of ['sh -c "bun ${RUNGATE_HOOKS_DIR}/Foo.hook.ts"', "run --for Foo.hook.ts", "Foo.hook.ts.bak"]) {
+      expect(wrongTreeViolations(["Foo"], [command]).map(v => v.tree), command).toEqual(["unparsed"]);
+    }
+  });
   test("AC-R3: a variable nothing defines is UNRESOLVED, never 'this repo'", () => {
     // Fail-open one. An undefined variable is the state CI is in, and the
     // tempting reading is that `${RUNGATE_HOOKS_DIR}` obviously means the
