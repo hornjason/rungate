@@ -1,4 +1,4 @@
-# generated-sha: eaddb998ae40f80a
+# generated-sha: 0a740b5e7fde0489
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -6933,10 +6933,9 @@ jobs:
               # alternative to accept: an absolute path is the only spelling the
               # reviewer can have used, because it is the only one it was given.
               #
-              # POLICY: this ANNOTATES and does not refuse — the one deliberate
-              # asymmetry with the conventions check, argued at
-              # `AI_REVIEW_INTENT_UNREAD_TITLE` and reversible by changing
-              # `::warning` to `::error` and adding the exit.
+              # POLICY: this refuses, like the conventions check. It annotated and
+              # passed until #2833, while the read/skip population was measured; the
+              # month that promoted it is recorded at `AI_REVIEW_INTENT_UNREAD_TITLE`.
               #
               # An UNMEASURED intent file is skipped rather than warned about: on a
               # `merge_group` run there is no pull request, so there was nothing to
@@ -6953,7 +6952,8 @@ jobs:
               if [ "${AI_REVIEW_INTENT_STATE:-}" = "supplied" ]; then
                 if [ -s "${AI_REVIEW_EXECUTION_FILE:-}" ]; then
                   if ! intent_p=$(escape_ere "${AI_REVIEW_INTENT_PATH}"); then
-                    echo "::warning title=AI review intent unread::UNMEASURED, and NOT a refusal: the reviewer concluded without reading the pull request's stated intent. The file is at the path in AI_REVIEW_INTENT_PATH, written by this job from the event and outside this checkout, and no tool call in the execution transcript names it. So this review did not ask whether the change does what the author says it does — the commonest thing an automated review misses. This is a warning rather than a red check on purpose, because the behaviour is new and this annotation is how its skip rate gets measured. It becomes a refusal once that rate is known."
+                    echo "::error title=AI review intent unread::Refused: the reviewer concluded without reading the pull request's stated intent. The file is at the path in AI_REVIEW_INTENT_PATH, written by this job from the event and outside this checkout, and no tool call in the execution transcript names it. So this review did not ask whether the change does what the author says it does — the commonest thing an automated review misses. Re-run the review: the intent was read on all 723 runs measured before this became a refusal." >&2
+                    exit 1
                   else
                     intent_a='"name"[[:space:]]*:[[:space:]]*"Read"[^{}]*\{[^{}]*"file_path"[[:space:]]*:[[:space:]]*"'"${intent_p}"'"'
                     intent_b='"file_path"[[:space:]]*:[[:space:]]*"'"${intent_p}"'"[^{}]*\}[^{}]*"name"[[:space:]]*:[[:space:]]*"Read"'
@@ -6965,11 +6965,13 @@ jobs:
                     if [ "${intent_all}" = 1 ]; then
                       echo "::notice title=AI review intent read::The reviewer read the pull request's stated intent before it concluded — a tool call naming the AI_REVIEW_INTENT_PATH path is in the action's execution transcript. This says the claim was LOADED. It says nothing about whether the findings compare it against the diff, which is the behaviour CRC-B1 actually asks for and which nothing here reads."
                     else
-                      echo "::warning title=AI review intent unread::UNMEASURED, and NOT a refusal: the reviewer concluded without reading the pull request's stated intent. The file is at the path in AI_REVIEW_INTENT_PATH, written by this job from the event and outside this checkout, and no tool call in the execution transcript names it. So this review did not ask whether the change does what the author says it does — the commonest thing an automated review misses. This is a warning rather than a red check on purpose, because the behaviour is new and this annotation is how its skip rate gets measured. It becomes a refusal once that rate is known."
+                      echo "::error title=AI review intent unread::Refused: the reviewer concluded without reading the pull request's stated intent. The file is at the path in AI_REVIEW_INTENT_PATH, written by this job from the event and outside this checkout, and no tool call in the execution transcript names it. So this review did not ask whether the change does what the author says it does — the commonest thing an automated review misses. Re-run the review: the intent was read on all 723 runs measured before this became a refusal." >&2
+                      exit 1
                     fi
                   fi
                 else
-                  echo "::warning title=AI review intent unread::UNMEASURED, and NOT a refusal: the reviewer concluded without reading the pull request's stated intent. The file is at the path in AI_REVIEW_INTENT_PATH, written by this job from the event and outside this checkout, and no tool call in the execution transcript names it. So this review did not ask whether the change does what the author says it does — the commonest thing an automated review misses. This is a warning rather than a red check on purpose, because the behaviour is new and this annotation is how its skip rate gets measured. It becomes a refusal once that rate is known."
+                  echo "::error title=AI review intent unread::Refused: the reviewer concluded without reading the pull request's stated intent. The file is at the path in AI_REVIEW_INTENT_PATH, written by this job from the event and outside this checkout, and no tool call in the execution transcript names it. So this review did not ask whether the change does what the author says it does — the commonest thing an automated review misses. Re-run the review: the intent was read on all 723 runs measured before this became a refusal." >&2
+                  exit 1
                 fi
               fi
 

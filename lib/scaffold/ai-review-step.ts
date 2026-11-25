@@ -2334,22 +2334,17 @@ should say so. A fix that is silent about its own cause is the finding.`;
 export const AI_REVIEW_INTENT_TITLE = "AI review intent read";
 
 /**
- * It did not. **A warning, and the step still exits zero** — deliberately,
- * and this is the one line to change when the rate is known.
+ * It did not. **An `::error` and an `AI_REVIEW_REQUIRED_EXIT`**, matching
+ * the conventions check, since #2833.
  *
- * `ai-review` is a sampled instrument: four false positives are already
- * recorded in `specs/CODE-REVIEW-CONVERGENCE-SPEC.md`, two of them on a pair
- * whose heads differ by eighteen lines of an unrelated test file. Making a
- * NEW required behaviour fatal on an instrument known to be
- * non-deterministic means the first thing measured is the flake rate, not
- * the compliance rate, and every false red is a pull request blocked on
- * something no author can fix.
- *
- * **Promotion condition, so it is not left to whoever reads this next:** when
- * the read/skip population over a month of runs shows the skip rate at or
- * near zero, this becomes an `::error` and an `AI_REVIEW_REQUIRED_EXIT`,
- * matching the conventions check. Until then the annotation IS the
- * measurement — it is what makes the population countable at all.
+ * It was a warning first, deliberately: `ai-review` is a sampled instrument
+ * with four false positives recorded in `specs/CODE-REVIEW-CONVERGENCE-SPEC.md`,
+ * and a NEW required behaviour made fatal on it would have measured the flake
+ * rate before the compliance rate. The promotion condition was a month of
+ * runs with the skip rate at or near zero. It was met, read from each job's
+ * check-run annotations: from 2026-10-24 to 2026-11-21, a quarter of each
+ * week's runs, the intent was read 427 times and skipped 0 times; from
+ * 2026-11-22 to 2026-11-25, every run, 296 times and 0.
  */
 export const AI_REVIEW_INTENT_UNREAD_TITLE = "AI review intent unread";
 
@@ -7107,22 +7102,17 @@ export function buildReviewRunScript(version: string, depth: ReviewDepthDecision
     `nothing about whether the findings compare it against the diff, which ` +
     `is the behaviour CRC-B1 actually asks for and which nothing here reads.`;
 
-  // ANNOTATES, and the step still exits zero. See
-  // `AI_REVIEW_INTENT_UNREAD_TITLE` for why, and for the condition under
-  // which this becomes a refusal: this is a NEW required behaviour on an
-  // instrument with four recorded false positives, so making it fatal today
-  // would measure the flake rate rather than the compliance rate. The
-  // annotation is what makes the read/skip population countable at all.
+  // A refusal since #2833. See `AI_REVIEW_INTENT_UNREAD_TITLE` for the month
+  // of runs that promoted it from a warning.
   const intentUnread =
-    `UNMEASURED, and NOT a refusal: the reviewer concluded without reading ` +
-    `the pull request's stated intent. The file is at the path in ` +
+    `Refused: the reviewer concluded without reading the pull request's ` +
+    `stated intent. The file is at the path in ` +
     `${AI_REVIEW_INTENT_PATH_VAR}, written by this job from the event and ` +
     `outside this checkout, and no tool call in the execution transcript ` +
     `names it. So this review did not ask whether the change does what the ` +
     `author says it does — the commonest thing an automated review misses. ` +
-    `This is a warning rather than a red check on purpose, because the ` +
-    `behaviour is new and this annotation is how its skip rate gets ` +
-    `measured. It becomes a refusal once that rate is known.`;
+    `Re-run the review: the intent was read on all 723 runs measured ` +
+    `before this became a refusal.`;
 
   // The second refusal, and it refuses rather than warning — which was the
   // other way round until the premise behind warning was MEASURED and turned
@@ -7711,10 +7701,9 @@ ${roundTranscriptsShell("round_execs", "    ")}
     # alternative to accept: an absolute path is the only spelling the
     # reviewer can have used, because it is the only one it was given.
     #
-    # POLICY: this ANNOTATES and does not refuse — the one deliberate
-    # asymmetry with the conventions check, argued at
-    # \`AI_REVIEW_INTENT_UNREAD_TITLE\` and reversible by changing
-    # \`::warning\` to \`::error\` and adding the exit.
+    # POLICY: this refuses, like the conventions check. It annotated and
+    # passed until #2833, while the read/skip population was measured; the
+    # month that promoted it is recorded at \`AI_REVIEW_INTENT_UNREAD_TITLE\`.
     #
     # An UNMEASURED intent file is skipped rather than warned about: on a
     # \`merge_group\` run there is no pull request, so there was nothing to
@@ -7731,7 +7720,8 @@ ${roundTranscriptsShell("round_execs", "    ")}
     if [ "\${${AI_REVIEW_INTENT_STATE_VAR}:-}" = "${AI_REVIEW_INTENT_SUPPLIED}" ]; then
       if [ -s "\${${AI_REVIEW_EXECUTION_FILE_VAR}:-}" ]; then
         if ! intent_p=\$(escape_ere "\${${AI_REVIEW_INTENT_PATH_VAR}}"); then
-          echo "::warning title=${AI_REVIEW_INTENT_UNREAD_TITLE}::${intentUnread}"
+          echo "::error title=${AI_REVIEW_INTENT_UNREAD_TITLE}::${intentUnread}" >&2
+          exit ${AI_REVIEW_REQUIRED_EXIT}
         else
           intent_a='"name"[[:space:]]*:[[:space:]]*"Read"[^{}]*\\{[^{}]*"file_path"[[:space:]]*:[[:space:]]*"'"\${intent_p}"'"'
           intent_b='"file_path"[[:space:]]*:[[:space:]]*"'"\${intent_p}"'"[^{}]*\\}[^{}]*"name"[[:space:]]*:[[:space:]]*"Read"'
@@ -7743,11 +7733,13 @@ ${roundTranscriptsShell("round_execs", "    ")}
           if [ "\${intent_all}" = 1 ]; then
             echo "::notice title=${AI_REVIEW_INTENT_TITLE}::${intentRead}"
           else
-            echo "::warning title=${AI_REVIEW_INTENT_UNREAD_TITLE}::${intentUnread}"
+            echo "::error title=${AI_REVIEW_INTENT_UNREAD_TITLE}::${intentUnread}" >&2
+            exit ${AI_REVIEW_REQUIRED_EXIT}
           fi
         fi
       else
-        echo "::warning title=${AI_REVIEW_INTENT_UNREAD_TITLE}::${intentUnread}"
+        echo "::error title=${AI_REVIEW_INTENT_UNREAD_TITLE}::${intentUnread}" >&2
+        exit ${AI_REVIEW_REQUIRED_EXIT}
       fi
     fi
 

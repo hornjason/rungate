@@ -31,7 +31,7 @@
 
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -61,6 +61,9 @@ import {
   AI_REVIEW_INTENT_PATH_VAR,
   AI_REVIEW_INTENT_UNMEASURED,
   AI_REVIEW_INTENT_UNREAD_TITLE,
+  AI_REVIEW_INTENT_TITLE,
+  AI_REVIEW_EXECUTION_FILE_VAR,
+  buildReviewRunScript,
   AI_REVIEW_INTENT_OUTPUT,
   AI_REVIEW_INTENT_SUPPLIED,
   AI_REVIEW_INTENT_NONE,
@@ -81,6 +84,7 @@ import {
 } from "../lib/scaffold/ai-review-step.ts";
 import { structuralCut } from "../lib/source-slice.ts";
 import { gitFixtureTestTimeout } from "./helpers/git-fixture-budget";
+import { stubBunx } from "./helpers/stub-bunx";
 
 /**
  * The second file in the state #1402 was filed about, and it was NOT the one
@@ -1316,32 +1320,109 @@ describe("AC-S8 (CRC-B1): the intent reaches the reviewer, and the body never re
     expect(prompt.toLowerCase()).toContain("a gap between the claim and");
   });
 
-  test("AC-S8h: the read-check annotates and does NOT refuse — deliberately, and this is the line to change", () => {
-    // The promotion condition is recorded at `AI_REVIEW_INTENT_UNREAD_TITLE`:
-    // this becomes an `::error` and an exit once the skip rate is known.
-    // Until then a new required behaviour on a sampled instrument with four
-    // recorded false positives would measure flake, not compliance.
+  test("AC-S8h: every emission of the unread title is an ::error followed by the refusal's exit (#2833)", () => {
+    // Promoted from a warning by #2833, on the condition recorded at
+    // `AI_REVIEW_INTENT_UNREAD_TITLE`: over 2026-10-24 to 2026-11-21, a quarter
+    // of each week's runs, the intent was read 427 times and skipped 0 times;
+    // over 2026-11-22 to 2026-11-25, every run, 296 and 0.
     //
-    // Asserted so that promoting it is a deliberate edit to a case that
-    // states why, rather than a quiet tightening nobody reviewed.
     // Scoped to the lines that carry the title, not to a window of N
-    // characters around the first one (#664). The window was the weaker
-    // instrument in both directions: it could run off the end of the
-    // construct into a neighbouring step, and it read only the FIRST
-    // occurrence while the generator emits three. The population is stated
-    // and asserted, so a fourth emission added as an `::error` is caught.
-    const carrying = yml.split("\n").filter(l => l.includes(AI_REVIEW_INTENT_UNREAD_TITLE));
-    expect(
-      carrying.length,
-      "the intent read-check is gone from the generated workflow",
-    ).toBeGreaterThan(0);
-    for (const line of carrying) expect(line).toContain("::warning");
-    expect(
-      /::error[^\n]*AI review intent unread/.test(yml),
-      "the intent read-check now refuses. That may be correct — the " +
-        "promotion condition is in `AI_REVIEW_INTENT_UNREAD_TITLE` — but " +
-        "update this case and say the skip rate that justified it.",
-    ).toBe(false);
+    // characters around the first one (#664). The population is stated and
+    // asserted, so a fourth emission added as a warning is caught.
+    const lines = yml.split("\n");
+    const carrying = lines.flatMap((l, i) => (l.includes(AI_REVIEW_INTENT_UNREAD_TITLE) ? [i] : []));
+    expect(carrying.length, "the intent read-check emits its title somewhere other than its three sites").toBe(3);
+    for (const i of carrying) {
+      expect(lines[i]).toContain("::error");
+      expect(lines[i + 1]!.trim(), `the unread intent at line ${i + 1} does not exit`).toBe(`exit ${AI_REVIEW_REQUIRED_EXIT}`);
+    }
+  });
+});
+
+/**
+ * #2833 / CRC-B1: the report step refuses a review that never read the pull
+ * request's stated intent. Driven through the real step with a clean payload
+ * and an adjudicator that answers CLEAN, so exit 0 means the review went on
+ * to adjudication and `AI_REVIEW_REQUIRED_EXIT` means a refusal before it.
+ * The workspace has no conventions file, so the conventions check is skipped
+ * (`ai-review-conventions.test.ts` AC-C3) and every case is about the intent.
+ */
+function runIntentReport(opts: {
+  /** The transcript, given the intent file's path and the workspace. */
+  transcript: (intent: string, workspace: string) => string;
+  state?: string;
+  script?: string;
+}) {
+  // Resolved: macOS's tmpdir is a symlink, and the step sees the physical path.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "ai-review-intent-")));
+  try {
+    const intent = join(dir, "intent.txt");
+    writeFileSync(intent, "What this change is for.\n");
+    const findings = join(dir, "ai-review-findings.json");
+    writeFileSync(findings, '{"findings": [], "verdict": "PASS"}');
+    const exec = join(dir, "claude-execution-output.json");
+    writeFileSync(exec, opts.transcript(intent, dir));
+    writeFileSync(join(dir, "github_output"), "");
+    const sh = join(dir, "report.sh");
+    writeFileSync(sh, opts.script ?? buildReviewRunScript("0.0.0-fixture"));
+    const r = spawnSync("bash", ["-e", sh], {
+      cwd: dir,
+      encoding: "utf8",
+      timeout: 60_000,
+      env: {
+        PATH: stubBunx(`echo "${AI_REVIEW_OUTCOME_LINE} CLEAN"; exit 0`),
+        HOME: process.env.HOME ?? dir,
+        GITHUB_OUTPUT: join(dir, "github_output"),
+        GITHUB_WORKSPACE: dir,
+        AI_REVIEW_MODE: "vertex",
+        AI_REVIEW_ACTION_OUTCOME: "success",
+        [AI_REVIEW_FINDINGS_PATH_VAR]: findings,
+        [AI_REVIEW_EXECUTION_FILE_VAR]: exec,
+        [AI_REVIEW_INTENT_PATH_VAR]: intent,
+        [AI_REVIEW_INTENT_STATE_VAR]: opts.state ?? AI_REVIEW_INTENT_SUPPLIED,
+      },
+    });
+    return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** A transcript whose one tool call reads `path`. */
+const readOnly = (path: string) =>
+  JSON.stringify([
+    { type: "assistant", message: { content: [{ type: "tool_use", id: "toolu_01", name: "Read", input: { file_path: path } }] } },
+    { type: "result", subtype: "success", is_error: false, num_turns: 3 },
+  ]);
+
+describe("#2833 / CRC-B1: a review that did not read the stated intent is refused", () => {
+  test("a transcript that never reads the intent file refuses before adjudication", () => {
+    const r = runIntentReport({ transcript: (_i, ws) => readOnly(join(ws, "lib", "x.ts")) });
+    expect(r.status, `not refused:\n${r.stdout}\n${r.stderr}`).toBe(AI_REVIEW_REQUIRED_EXIT);
+    expect(r.stderr).toContain(`::error title=${AI_REVIEW_INTENT_UNREAD_TITLE}::`);
+    expect(r.stdout, "the adjudication ran after the refusal").not.toContain(AI_REVIEW_OUTCOME_LINE);
+  });
+  test("CONTROL: a transcript that reads it goes on to adjudication, and says it read it", () => {
+    const r = runIntentReport({ transcript: intent => readOnly(intent) });
+    expect(r.status, `refused:\n${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toContain(`::notice title=${AI_REVIEW_INTENT_TITLE}::`);
+    expect(r.stdout).toContain(AI_REVIEW_OUTCOME_LINE);
+  });
+  test("CONTROL: an event with no intent to read is not refused", () => {
+    const r = runIntentReport({ transcript: (_i, ws) => readOnly(join(ws, "lib", "x.ts")), state: AI_REVIEW_INTENT_NONE });
+    expect(r.status, `refused:\n${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout + r.stderr).not.toContain(AI_REVIEW_INTENT_UNREAD_TITLE);
+  });
+  test("THE MUTANT: with the refusal's exits zeroed, the same review passes", () => {
+    const real = buildReviewRunScript("0.0.0-fixture");
+    const mutant = real.replace(
+      new RegExp(`(${AI_REVIEW_INTENT_UNREAD_TITLE}::[^\\n]*\\n\\s*)exit ${AI_REVIEW_REQUIRED_EXIT}`, "g"),
+      "$1exit 0",
+    );
+    expect(mutant, "the mutation did not apply").not.toBe(real);
+    const ignored = (_i: string, ws: string) => readOnly(join(ws, "lib", "x.ts"));
+    expect(runIntentReport({ transcript: ignored }).status, "the real script did not refuse").toBe(AI_REVIEW_REQUIRED_EXIT);
+    expect(runIntentReport({ transcript: ignored, script: mutant }).status, "the mutant still refused — this case witnesses nothing").toBe(0);
   });
 });
 
