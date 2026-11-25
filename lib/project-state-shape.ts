@@ -25,6 +25,7 @@
  * hand-edited file wants the whole list, and a validator that stops at the
  * first finding turns one bad edit into four round-trips.
  */
+import { localCalendarDay } from "./local-calendar-day";
 
 /** Every shape violation in a parsed `project-state.json`, in document order. */
 export function projectStateViolations(raw: unknown): string[] {
@@ -314,6 +315,58 @@ export function selectRecentSessions<T extends { date: string }>(
  * so recording state no longer grows the document that reports it.
  */
 export const RENDERED_PRIORITIES_MAX = 12;
+
+/**
+ * The one timezone the session record's calendar days are read in (#766,
+ * #2785).
+ *
+ * `test/project-state-currency.test.ts` compares the day each PR merged with
+ * the newest session's day, and both are days in this zone.
+ * `scripts/update-project-state.ts` stamps `updated` in it too. It used to
+ * stamp in the process zone, and the test's comment said the two "must move
+ * together"; with the constant in the test, the writer could not read it, so
+ * nothing made them. Here, both import it.
+ */
+export const PROJECT_STATE_ZONE = "America/New_York";
+
+/** The day `at` falls on in {@link PROJECT_STATE_ZONE}: what `updated` is stamped with. */
+export function projectStateDay(at: Date = new Date()): string {
+  return localCalendarDay(at, PROJECT_STATE_ZONE);
+}
+
+/**
+ * Why the newest session's date is after the record's `updated` stamp, or
+ * null when it is not (#2785). The currency test calls it on the committed
+ * record.
+ *
+ * The session's date is typed by hand; only `updated` is stamped, by the
+ * writer, with the day it runs in {@link PROJECT_STATE_ZONE}. A session dated
+ * later than that was dated by a day the record had not reached: session 105
+ * was written on the New York evening of 2026-11-24 and typed as 2026-11-25,
+ * the UTC day, which hid every merge of that evening from the currency
+ * comparison. Only a date AHEAD of the stamp can be seen this way: one typed
+ * by the UTC day and written after New York midnight passes. One reader of
+ * what a session is, and the writer producing the date, are #2809.
+ *
+ * Both days are read with the renderer's `ISO_DATE`, so a date this reads is
+ * one the handoff ranks, and a timestamped date is undated to both.
+ */
+export function sessionAheadOfStamp(updated: unknown, sessionDate: unknown): string | null {
+  const day = (v: unknown): string | null => {
+    const m = typeof v === "string" ? ISO_DATE.exec(v) : null;
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+  };
+  const stamp = day(updated);
+  const session = day(sessionDate);
+  if (stamp === null) return `updated is ${JSON.stringify(updated)}, which is not a calendar day`;
+  if (session === null) return `the newest session's date is ${JSON.stringify(sessionDate)}, which starts with no calendar day`;
+  if (session <= stamp) return null;
+  return (
+    `the newest session is dated ${session} and updated reads ${stamp}. Either updated is stale: run ` +
+    `\`bun scripts/update-project-state.ts\`, which stamps the day it runs in ${PROJECT_STATE_ZONE}. Or, if it ` +
+    `still reads ${stamp}, the date was typed ahead of the day: date it by the day in ${PROJECT_STATE_ZONE} it was written.`
+  );
+}
 
 /** The priorities to render, and how many were left in the json. Pure. */
 export function boundedPriorities(

@@ -34,6 +34,7 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 
 import { localCalendarDay } from "../lib/local-calendar-day";
+import { PROJECT_STATE_ZONE, selectRecentSessions, sessionAheadOfStamp } from "../lib/project-state-shape";
 
 const ROOT = join(import.meta.dir, "..");
 const STATE = join(ROOT, "project-state.json");
@@ -114,9 +115,10 @@ export function sessionNumberIn(date: unknown): number | null {
  * meaning without a zone. Before this was declared, the two sides were
  * computed in two DIFFERENT zones and neither was this one:
  *
- *   - the session date is stamped by `scripts/update-project-state.ts`
- *     through `localCalendarDay()` (#600), which uses the PROCESS zone — the
- *     DA's machine;
+ *   - the session date, which the DA types by hand, and `updated`, which
+ *     `scripts/update-project-state.ts` stamped through `localCalendarDay()`
+ *     (#600) in the PROCESS zone, the DA's machine, until #2785 stamped it in
+ *     this zone;
  *   - the probe took `%cI`.slice(0, 10), and `%cI` renders each commit in
  *     ITS OWN RECORDED OFFSET, which varies commit to commit on one branch.
  *
@@ -124,11 +126,13 @@ export function sessionNumberIn(date: unknown): number | null {
  * process zone is UTC, so the same probe over the same tree could answer
  * differently locally and in CI.
  *
- * This is the zone the stamper runs in. If that ever stops being true, both
- * must move together — which is the argument for there being exactly one
- * place to change, rather than a `slice(0, 10)` at each use site.
+ * Since #2785 the writer and this comparison read the zone from one constant,
+ * `PROJECT_STATE_ZONE` in `lib/project-state-shape.ts`, so they cannot drift.
+ * The session date is still typed by hand; `sessionAheadOfStamp` refuses a
+ * newest one dated past the stamp, below. The writer producing the date is
+ * #2809.
  */
-export const CURRENCY_ZONE = "America/New_York";
+export const CURRENCY_ZONE = PROJECT_STATE_ZONE;
 
 /**
  * The calendar day a commit instant falls on, in the one frame.
@@ -339,6 +343,27 @@ describe("project-state currency", () => {
         `where the project is, so a date behind the tree is the file lying. Add a session entry ` +
         `— the narrative is the point, so write what the change WAS, not that it happened.`,
     ).toEqual([]);
+  });
+
+  test("#2785: the newest session is not dated after the day the record was stamped", () => {
+    expect(sessionAheadOfStamp(state.updated, latestDate)).toBeNull();
+  });
+
+  test("#2785: a session dated after the stamp is refused, naming both days", () => {
+    const ahead = sessionAheadOfStamp("2026-11-24", "2026-11-25");
+    expect(ahead).toContain("dated 2026-11-25");
+    expect(ahead).toContain("updated reads 2026-11-24");
+    expect(sessionAheadOfStamp("2026-11-25", "2026-11-25")).toBeNull();
+    expect(sessionAheadOfStamp("2026-11-26", "2026-11-25 session 106 (gist)")).toBeNull();
+    expect(sessionAheadOfStamp(undefined, "2026-11-25")).toContain("not a calendar day");
+    expect(sessionAheadOfStamp("2026-11-25", "session 106")).toContain("starts with no calendar day");
+    // On a committed record both ways out are named, re-running the writer first.
+    expect(ahead).toContain("bun scripts/update-project-state.ts");
+    expect(ahead).toContain("date it by the day in");
+    // Read with the renderer's own reader: a timestamped date is undated to both.
+    expect(sessionAheadOfStamp("2026-11-25", "2026-11-25T14:00 session 106")).toContain("starts with no calendar day");
+    expect(selectRecentSessions([{ date: "2026-11-25T14:00 session 106" }], 3).undated).toHaveLength(1);
+    expect(sessionAheadOfStamp("2026-11-25", "2026-11-251 session 106")).toContain("starts with no calendar day");
   });
 
   test("the staleness comparison fires on a date that IS stale", () => {
