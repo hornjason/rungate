@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "fs";
-import { homedir } from "os";
+import { liveRegistrationScopes, liveUserSettingsPath } from "./helpers/user-settings";
 import { join } from "path";
 
 import { loadRungateConfig } from "../lib/config-loader";
 import {
   hookRegistration,
-  readRegistrationScopes,
   type ScopeReading,
 } from "../lib/hook-scopes";
 import { settingsCommands } from "../lib/hook-trees";
@@ -54,16 +53,14 @@ import { settingsCommands } from "../lib/hook-trees";
 
 const repoRoot = join(__dirname, "..");
 const projectSettingsPath = join(repoRoot, ".claude", "settings.json");
-const userSettingsPath = join(homedir(), ".claude", "settings.json");
+const userSettingsPath = liveUserSettingsPath();
 
 const SLOT_HOOKS = ["TestSuiteGuard.hook.ts", "TestSuiteRelease.hook.ts"];
 
 /** Every scope, with the ones not on this machine named rather than dropped. */
 function liveScopeReadings(): ScopeReading[] {
-  return readRegistrationScopes(
+  return liveRegistrationScopes(
     repoRoot,
-    homedir(),
-    p => (existsSync(p) ? readFileSync(p, "utf-8") : null),
     (loadRungateConfig(repoRoot) as { hooks: { command?: string }[] }).hooks.map(
       h => h.command ?? "",
     ),

@@ -140,7 +140,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "fs";
-import { homedir } from "os";
+import { homePath, liveEnvScopes, liveRegistrationScopes, liveScopePaths, liveSettingsReader } from "./helpers/user-settings";
 import { join } from "path";
 
 import { loadRungateConfig } from "../lib/config-loader";
@@ -149,13 +149,10 @@ import {
   type ScopeReading,
   IncompleteScopeReadingError,
   REGISTRATION_SCOPES,
-  readRegistrationScopes,
-  settingsScopePaths,
 } from "../lib/hook-scopes";
 import {
   type EnvReading,
   pathSpelling,
-  readEnvScopes,
   registeredTreeCensus,
   resolvePath,
   settingsEnv,
@@ -270,7 +267,7 @@ const FOREIGN_SPELLING_RATCHET: string[] = ["RUNGATE_HOOKS_DIR", "PAI_HOOKS_DIR"
  * without deleting this entry in the same commit fails.
  */
 
-const PAI_HOOKS = join(homedir(), ".pai", "hooks");
+const PAI_HOOKS = homePath(".pai", "hooks");
 const RUNGATE_HOOKS = join(ROOT, "hooks");
 
 /** `readdirSync`, with an unreadable directory reported as `null` rather than `[]`. */
@@ -303,9 +300,11 @@ function readableScopes(): { docs: string[]; names: string[]; missing: string[] 
   const docs: string[] = [];
   const names: string[] = [];
   const missing: string[] = [];
-  for (const { scope, path } of settingsScopePaths(ROOT, homedir())) {
-    if (!existsSync(path)) { missing.push(scope); continue; }
-    docs.push(readFileSync(path, "utf-8"));
+  const read = liveSettingsReader(ROOT);
+  for (const { scope, path } of liveScopePaths(ROOT)) {
+    const doc = read(path);
+    if (doc === null) { missing.push(scope); continue; }
+    docs.push(doc);
     names.push(scope);
   }
   return { docs, names, missing };
@@ -1166,8 +1165,6 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
     // than skip it. On a runner `~/.claude/settings.json` does not exist, the
     // reading is UNMEASURED, and the refusal is asserted. On a machine that
     // has one, the ratchet holds the line in both directions.
-    const readIfPresent = (p: string): string | null =>
-      existsSync(p) ? readFileSync(p, "utf-8") : null;
     const registry = (loadRungateConfig(ROOT) as { hooks: { command?: string }[] }).hooks.map(h =>
       String(h?.command ?? h),
     );
@@ -1183,8 +1180,8 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
 
     const census = registeredTreeCensus(
       owned,
-      readRegistrationScopes(ROOT, homedir(), readIfPresent, registry),
-      readEnvScopes(ROOT, homedir(), readIfPresent),
+      liveRegistrationScopes(ROOT, registry),
+      liveEnvScopes(ROOT),
       ROOT,
     );
 

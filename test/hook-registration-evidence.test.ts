@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "fs";
-import { homedir, tmpdir } from "os";
+import { tmpdir } from "os";
+import { liveRegistrationScopes } from "./helpers/user-settings";
 import { dirname, join } from "path";
 
 import {
@@ -242,10 +243,8 @@ describe("#910 AC-3: the live reading of the two hooks #910 called unregistered"
   /** Every scope, read for real, with the ones that are not there named. */
   function liveReadings(): ScopeReading[] {
     const registry = join(ROOT, ".claude", "rungate", "hooks.json");
-    return readRegistrationScopes(
+    return liveRegistrationScopes(
       ROOT,
-      homedir(),
-      p => (existsSync(p) ? readFileSync(p, "utf-8") : null),
       (JSON.parse(readFileSync(registry, "utf-8")) as { command?: string }[])
         .map(h => h.command ?? "")
         .filter(Boolean),

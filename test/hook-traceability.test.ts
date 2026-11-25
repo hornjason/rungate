@@ -1,13 +1,11 @@
 import { describe, test, expect } from "bun:test";
 import { readFileSync, readdirSync, existsSync } from "fs";
-import { homedir } from "os";
+import { liveRegistrationScopes, liveScopePaths } from "./helpers/user-settings";
 import { join, resolve } from "path";
 import { loadRungateConfig } from "../lib/config-loader";
 import {
   hookRegistration,
-  readRegistrationScopes,
   registrationCensus,
-  settingsScopePaths,
   unplacedHooks,
   type HookRegistration,
   type ScopeReading,
@@ -130,12 +128,7 @@ const unregisteredDeclaration = (file: string): string | null =>
  * to read one.
  */
 function liveScopeReadings(): ScopeReading[] {
-  return readRegistrationScopes(HARNESS_ROOT, homedir(), readIfPresent, registryCommands());
-}
-
-/** `readFileSync`, with an absent file reported as `null` rather than `""`. */
-function readIfPresent(path: string): string | null {
-  return existsSync(path) ? readFileSync(path, "utf-8") : null;
+  return liveRegistrationScopes(HARNESS_ROOT, registryCommands());
 }
 
 /** The census over every hook file on disk. */
@@ -224,7 +217,7 @@ describe("#898: the four hook positions agree, named rather than counted", () =>
     // invisible to `reconcile` and is exactly the state `ProjectStateSync`
     // and `TestSuiteRelease` were in when #898 declared them unregistered.
     const repoOwned = new Set(
-      settingsScopePaths(HARNESS_ROOT, homedir())
+      liveScopePaths(HARNESS_ROOT)
         .filter(s => s.ownership === "repo")
         .map(s => s.scope),
     );

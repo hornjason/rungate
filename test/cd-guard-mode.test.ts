@@ -54,10 +54,11 @@
 import { afterAll, describe, test, expect } from "bun:test";
 import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs";
-import { homedir, tmpdir } from "os";
+import { tmpdir } from "os";
 import { join } from "path";
 import { CD_GUARD_DEFAULT_MODE, CD_GUARD_MODE_VAR, cdGuardMode } from "../lib/top-level-cd";
 import { isHarnessProject } from "../lib/harness-project";
+import { liveUserSettings } from "./helpers/user-settings";
 
 const ROOT = join(import.meta.dir, "..");
 const HOOK = join(ROOT, "hooks", "TopLevelCdGuard.hook.ts");
@@ -107,17 +108,15 @@ function run(cwd: string, command: string, env: Record<string, string> = {}) {
 }
 
 /**
- * The user settings file's text, or null when it does not exist. Absence is the
- * only reading that skips AC-11: an unreadable file is an error, never a pass
- * (#2787 review).
+ * AC-11's assertion, as a function its own test drives on a planted file, so
+ * reverting it to an assertion that prints its subject turns that test red
+ * (#2792). `null` is a machine with no user settings (CI). The live file comes
+ * from `liveUserSettings`, already reduced to what the census reads.
  */
-function userSettingsText(path: string): string | null {
-  try {
-    return readFileSync(path, "utf-8");
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw e;
-  }
+function assertNoUserRegistration(src: string | null): void {
+  if (src === null) return;
+  expect(cdGuardRegistrations(src), "~/.claude/settings.json registers TopLevelCdGuard — not done by this branch")
+    .toBe(0);
 }
 
 /**
@@ -336,14 +335,9 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
     // Stated as a reading rather than a promise. If a future change
     // registers it at user level this arm says so on the author's machine
     // and is simply absent on a runner — recorded as a limit, not hidden.
-    const user = join(homedir(), ".claude", "settings.json");
-    const src = userSettingsText(user);
-    if (src === null) return; // no user settings here (CI)
-    // Asserts on the string values that name the guard, never the whole file:
-    // a failing `not.toContain` prints its whole subject, and this file holds
-    // the machine's tokens in `env` (#2786).
-    expect(cdGuardRegistrations(src), "~/.claude/settings.json registers TopLevelCdGuard — not done by this branch")
-      .toBe(0);
+    // A count, never the file: a failing `not.toContain` prints its whole
+    // subject (#2786), and the file is read through the helper (#2792).
+    assertNoUserRegistration(liveUserSettings(ROOT));
   });
 
   test("#2786: AC-11's reading counts where the guard is registered, and its failure prints no text from the file", () => {
@@ -367,10 +361,11 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
     for (const d of registered) {
       for (const src of [JSON.stringify(d, null, 2), JSON.stringify(d)]) {
         expect(cdGuardRegistrations(src), src).toBe(1);
-        // The failure AC-11 would print, captured: a count, and no text of the file.
+        // AC-11's own assertion, driven on the planted file and its failure
+        // captured: a count, and no text of the file (#2792).
         let printed = "";
         try {
-          expect(cdGuardRegistrations(src), "registers TopLevelCdGuard").toBe(0);
+          assertNoUserRegistration(src);
         } catch (e) {
           printed = String((e as Error).message);
         }
@@ -388,8 +383,4 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
     expect(() => run(harnessed("dir"), ALLOWED, { PATH: "/nonexistent-path-2787" })).toThrow();
   });
 
-  test("#2787: AC-11's settings read is absent only when the file does not exist; any other error is thrown", () => {
-    expect(userSettingsText(join(tmp(), "absent.json"))).toBeNull();
-    expect(() => userSettingsText(tmp())).toThrow(); // a directory: EISDIR, not absence
-  });
 });
