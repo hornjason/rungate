@@ -46,12 +46,20 @@ The guard catches accidents and says so. It refuses a shell command that writes 
 
 ## Decisions
 
-1. **The guard is an accident guard, not a boundary — Jason, 2026-11-25.** A userland reader of command text cannot stop an agent running as the files' owner, and the code already admits it. The docblock and `specs/HOOK-ARCHITECTURE-SPEC.md` say so plainly, and no comment claims more.
+1. **The guard is an accident guard, not a boundary — Jason, 2026-11-25.** A userland reader of command text cannot stop an agent running as the files' owner, and the code already admits it, but only in the `WRITE_INTENT` docblock. The cut writes it into the hook's docblock (`hooks/BashWriteGuard.hook.ts`) and into the BashWriteGuard row of `specs/HOOK-ARCHITECTURE-SPEC.md`, and leaves no comment claiming more.
 2. **Program-body reading and the interpreter scratch exemption are deleted — Jason, 2026-11-25.** No real command uses the exemption, and every review of it found a bypass. What goes:
    - `bodyTargets`, `callWrites`, the assignment and tuple readers, `codeMask` and the write-callee identity;
    - `lib/interpreter-calls.ts`, once nothing imports it.
-3. **An interpreter body that names a protected artifact beside a declared write verb is refused, wherever it points.** This is the existing write-intent arm (`WRITE_INTENT`) unchanged, with only the scratch exemption in front of it removed. It refuses only when a declared write verb is near the name, so a read of `workflow-state.json` stays allowed. So does the repair the harness prints, `bun -e … writeWorkflowState('…/workflow-state.json', …)`: the arm's docblock records why it must, and `test/bash-write-guard.test.ts` pins it. Only a command the exemption allowed today can become refused, and the measurement above found 0 such real commands. Review round 1 of #2843 corrected the first draft, which dropped the write-verb condition.
-4. **Shell writes keep a scratch exemption, decided by the real directory of the target.** The parent is resolved with `realpath` at decision time, and the target is exempt when that lands under a fixed scratch root. This replaces the link-chain and step-order machinery (#1367). The cut's corpus sweep reports every command it newly refuses or newly allows, by name.
+3. **An interpreter body that names a protected artifact beside a declared write verb is refused, wherever it points.** This is the write-intent window (`writesNear`, reading `WRITE_INTENT`), with the scratch exemption in front of it removed. It refuses only when a declared write verb is near the name, so a read of `workflow-state.json` stays allowed. So does the repair the harness prints, `bun -e … writeWorkflowState('…/workflow-state.json', …)`: the arm's docblock records why it must, and `test/bash-write-guard.test.ts` pins it.
+
+   The arm is narrower than today's, in one direction. Today it is `writesNear || callWrites`, and `callWrites` is program-body reading, deleted by decision 2. So a body that hides its write verb from the window becomes allowed, where today it is refused. Two examples: an `open(…, 'w')` nested three calls deep, and a copy whose verb sits more than 80 characters before the name. That is the accident guard's trade: those shapes are written on purpose, and decision 1 says a purposeful agent is not what this stops.
+
+   Both directions were measured on main over every unique Bash command in this machine's transcripts:
+   - with the exemption cut short to `false`, 0 of 108,310 change (above);
+   - with `callWrites` cut short to `false`, 0 of 109,328 change. Main refuses 65 of those, and `callWrites` alone decides none of them.
+
+   Review round 1 of #2843 corrected the first draft, which dropped the write-verb condition. Round 2 corrected "unchanged".
+4. **Shell writes keep a scratch exemption, decided by where the target really is.** At decision time, the target is resolved with `realpath` when it exists, so a link at the leaf is followed; when it does not exist yet, its parent is resolved instead. The target is exempt only when the resolved path lands under a fixed scratch root and is not itself a protected artifact. So `echo x > /tmp/g`, with `/tmp/g` a link to `workflow-state.json`, is refused: that write-through is the case the old machinery's docblock exists for. This replaces the link-chain and step-order machinery (#1367). The cut's corpus sweep reports every command it newly refuses or newly allows, by name.
 5. **What stays:**
    - the shell reader;
    - `interpreterPrograms` (`lib/issue-create-override.ts`);
