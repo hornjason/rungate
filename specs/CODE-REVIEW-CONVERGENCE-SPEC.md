@@ -472,9 +472,11 @@ check proving it can fail against this file and not against a fixture.
       waived-by: rayford (agent; not countersigned by jason)
       waived-until: 2026-12-31
       placement: Phase 1
-- [ ] CRC-B8: **Every finding is answered** — fixed, or resolved with a stated reason. A finding is never silently dropped and never becomes a tracker item by default.
+- [x] CRC-B8: **Every finding is answered** — fixed, or resolved with a stated reason. A finding is never silently dropped and never becomes a tracker item by default.
       needs: test
       placement: Phase 4
+      proved-by: test/ai-review-finding-answered.test.ts "CRC-B8 (#2832): which earlier finding threads are unanswered"
+      fingerprint: 78f03abe
 - [x] CRC-B9: Review depth is configurable per repo as **Quick / Standard / Deep**.
       needs: test
       proved-by: test/ai-review-turn-budget.test.ts "CRC-B9: review depth is configurable per repo as Quick, Standard or Deep (#1655)"
