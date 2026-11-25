@@ -100,7 +100,40 @@ describe("#2802: a quoted leading assignment is read, spaces and all", () => {
     // A quoted NAME=value is a command word to the shell, not an assignment.
     expect(executedHookPath('"A=1" bun /x/A.hook.ts')).toBeNull();
     // A comment ends at its line; a newline ends the first command.
-    expect(executedHookPath("bun /x/A.hook.ts # note\necho \"x")).toBeNull();
+    // A newline ends the line the shell runs first, so a quote left open on a later line does not stop it (#2815 review, round 3).
+    expect(executedHookPath("bun /x/A.hook.ts # note\necho \"x")).toBe("/x/A.hook.ts");
+    expect(executedHookPath('bun /x/A.hook.ts\necho "open')).toBe("/x/A.hook.ts");
     expect(executedHookPath("bun /x/A.hook.ts # it's\necho done")).toBe("/x/A.hook.ts");
+  });
+
+  test("#2815: a line continuation joins, and a word holding whitespace is no hook path (review, round 3)", () => {
+    // Backslash-newline is removed, quoted or not.
+    expect(executedHookPath("bun \\\n  /x/A.hook.ts")).toBe("/x/A.hook.ts");
+    expect(executedHookPath("A=1 \\\nbun /x/A.hook.ts")).toBe("/x/A.hook.ts");
+    expect(executedHookPath('bun "/x/A\\\n.hook.ts"')).toBe("/x/A.hook.ts");
+    // A whole command quoted as one word is looked up as a program and cannot run.
+    expect(executedHookPath('"bun /srv/x/IssueCloseGuard.hook.ts"')).toBeNull();
+    expect(executedHookPath("'bun /srv/x/IssueCloseGuard.hook.ts'")).toBeNull();
+    // So is a path with a space in it: the loud direction, stated.
+    expect(executedHookPath('bun "/x/a dir/A.hook.ts"')).toBeNull();
+  });
+
+  test("#2815: a command substitution is part of its word, spaces, nesting and quotes included (review, round 3)", () => {
+    for (const command of [
+      "TOKEN=$(cat ~/.token) bun /x/A.hook.ts",
+      "TOKEN=`cat x y` bun /x/A.hook.ts",
+      'T="$(a "b c")" bun /x/A.hook.ts',
+      "T=$(a $(b c) \")\") bun /x/A.hook.ts",
+      "T=$((1 + 2)) bun /x/A.hook.ts",
+    ]) {
+      expect(executedHookPath(command), command).toBe("/x/A.hook.ts");
+    }
+    // One left open is an open quote: nothing runs.
+    expect(executedHookPath("TOKEN=$(cat x bun /x/A.hook.ts")).toBeNull();
+    expect(executedHookPath("TOKEN=`cat x bun /x/A.hook.ts")).toBeNull();
+    // A substitution standing for the command word is not read as an interpreter.
+    expect(executedHookPath("$(which bun) /x/A.hook.ts")).toBeNull();
+    // Inside single quotes it is plain text.
+    expect(executedHookPath("T='$(a b' bun /x/A.hook.ts")).toBe("/x/A.hook.ts");
   });
 });

@@ -199,15 +199,79 @@ interface ShellWord {
  * - Outside quotes, whitespace ends a word, a backslash escapes the next
  *   character, and `'` or `"` opens a quote.
  * - Inside single quotes nothing is special until the closing quote.
- * - Inside double quotes a backslash escapes `"`, `\`, `$`, a backquote or
- *   a newline, and is kept before anything else.
- * - An unquoted `;`, `|`, `&` or newline ends the first command. A `#` that
- *   starts a word starts a comment, to the end of its line. A `#` inside a
- *   word is part of it.
- * - The whole line is scanned for an open quote, past the first command: the
- *   shell parses the line before it runs any of it, so a quote left open
- *   anywhere means nothing runs.
+ * - Inside double quotes a backslash escapes `"`, `\`, `$` or a backquote,
+ *   and is kept before anything else.
+ * - A backslash before a newline, quoted or not, is a line continuation: both
+ *   go, as in the shell (#2815 review, round 3).
+ * - An unquoted `;`, `|` or `&` ends the first command. A `#` that starts a
+ *   word starts a comment, to the end of its line. A `#` inside a word is
+ *   part of it.
+ * - The rest of the first line is scanned for an open quote, past the first
+ *   command: the shell parses a line before it runs any of it, so a quote
+ *   left open there means nothing runs. An unquoted newline ends the scan,
+ *   since the shell runs a line before it reads the next (#2815 review,
+ *   round 3).
+ * - A command substitution, `$(…)` or backquotes, quoted or not, is part of
+ *   the word it sits in, nested parentheses and quotes included, so a space
+ *   inside it ends no word. One left open is an open quote: nothing runs
+ *   (#2815 review, round 3).
  */
+/**
+ * The index just past a backquoted substitution opened at `open`, or -1 when
+ * it is never closed.
+ */
+function backquoteEnd(s: string, open: number): number {
+  for (let j = open + 1; j < s.length; j++) {
+    if (s[j] === "\\") j++;
+    else if (s[j] === "`") return j + 1;
+  }
+  return -1;
+}
+
+/**
+ * The index just past a `$(…)` whose `(` is at `open`, or -1 when it is
+ * never closed. Quotes, nested substitutions and backquotes inside it are
+ * skipped whole, so a parenthesis inside them does not count.
+ */
+function substitutionEnd(s: string, open: number): number {
+  let depth = 1;
+  for (let j = open + 1; j < s.length; j++) {
+    const c = s[j]!;
+    if (c === "\\") {
+      j++;
+    } else if (c === "'") {
+      const k = s.indexOf("'", j + 1);
+      if (k < 0) return -1;
+      j = k;
+    } else if (c === '"') {
+      let k = j + 1;
+      for (; k < s.length && s[k] !== '"'; k++) {
+        if (s[k] === "\\") k++;
+        else if (s[k] === "$" && s[k + 1] === "(") {
+          const e = substitutionEnd(s, k + 1);
+          if (e < 0) return -1;
+          k = e - 1;
+        } else if (s[k] === "`") {
+          const e = backquoteEnd(s, k);
+          if (e < 0) return -1;
+          k = e - 1;
+        }
+      }
+      if (k >= s.length) return -1;
+      j = k;
+    } else if (c === "`") {
+      const e = backquoteEnd(s, j);
+      if (e < 0) return -1;
+      j = e - 1;
+    } else if (c === "(") {
+      depth++;
+    } else if (c === ")" && --depth === 0) {
+      return j + 1;
+    }
+  }
+  return -1;
+}
+
 function shellWords(command: string): ShellWord[] | null {
   const words: ShellWord[] = [];
   let text = "";
@@ -223,6 +287,16 @@ function shellWords(command: string): ShellWord[] | null {
   };
   for (let i = 0; i < command.length; i++) {
     const c = command[i]!;
+    // A substitution, outside quotes or inside double ones, is taken whole.
+    if (quote !== "'" && ((c === "$" && command[i + 1] === "(") || c === "`")) {
+      const e = c === "`" ? backquoteEnd(command, i) : substitutionEnd(command, i + 1);
+      if (e < 0) return null;
+      inWord = true;
+      text += command.slice(i, e);
+      raw += command.slice(i, e);
+      i = e - 1;
+      continue;
+    }
     if (quote === "'") {
       raw += c;
       if (c === "'") quote = null;
@@ -232,14 +306,20 @@ function shellWords(command: string): ShellWord[] | null {
     if (quote === '"') {
       raw += c;
       if (c === '"') quote = null;
-      else if (c === "\\" && i + 1 < command.length && '"\\$`\n'.includes(command[i + 1]!)) {
+      else if (c === "\\" && command[i + 1] === "\n") {
+        raw += "\n";
+        i++;
+      } else if (c === "\\" && i + 1 < command.length && '"\\$`'.includes(command[i + 1]!)) {
         text += command[i + 1]!;
         raw += command[i + 1]!;
         i++;
       } else text += c;
       continue;
     }
-    if (c === "\\") {
+    if (c === "\\" && command[i + 1] === "\n") {
+      // A line continuation: neither character is part of any word.
+      i++;
+    } else if (c === "\\") {
       inWord = true;
       raw += c;
       if (i + 1 < command.length) {
@@ -254,7 +334,11 @@ function shellWords(command: string): ShellWord[] | null {
     } else if (c === "#" && !inWord) {
       // A comment runs to the end of its line; the newline then ends the command.
       while (i + 1 < command.length && command[i + 1] !== "\n") i++;
-    } else if (c === "\n" || c === ";" || c === "|" || c === "&") {
+    } else if (c === "\n") {
+      // The shell runs this line before it reads the next, so nothing after
+      // it can stop the first command running.
+      break;
+    } else if (c === ";" || c === "|" || c === "&") {
       end();
       collecting = false;
     } else if (/\s/.test(c)) {
@@ -314,6 +398,11 @@ export function executedHookPath(command: string): string | null {
   if (i >= words.length) return null;
 
   const arg = words[i]!.text;
+  // A word holding whitespace names a file with spaces in its path, which no
+  // registration here uses, or a whole command quoted as one word, which the
+  // shell looks up as a program and cannot run (#2815 review, round 3). Either
+  // way it is no hook this parse reads: loud, not a registration.
+  if (/\s/.test(arg)) return null;
   const base = arg.slice(arg.lastIndexOf("/") + 1);
   return /^[A-Za-z0-9_-]+\.hook\.ts$/.test(base) ? arg : null;
 }
