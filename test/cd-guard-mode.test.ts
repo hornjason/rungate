@@ -89,9 +89,20 @@ function run(cwd: string, command: string, env: Record<string, string> = {}) {
     timeout: 30000,
     env: { ...process.env, ...env },
   });
+  // A hook that never ran, crashed or printed something unreadable looks
+  // exactly like a silent one, and every silence arm would pass on it. The hook
+  // exits 0 on every rung, so anything else is a failure to run (#2787 review).
+  if (r.error) throw new Error(`the hook did not run: ${r.error.message}`);
+  if (r.status !== 0) throw new Error(`the hook exited ${r.status ?? r.signal}: ${r.stderr}`);
   const stdout = (r.stdout ?? "").trim();
   let decision: string | undefined;
-  try { decision = stdout ? JSON.parse(stdout).decision : undefined; } catch {}
+  if (stdout) {
+    try {
+      decision = JSON.parse(stdout).decision;
+    } catch {
+      throw new Error(`the hook printed something that is not JSON: ${stdout}`);
+    }
+  }
   return { stdout, stderr: r.stderr ?? "", decision, status: r.status };
 }
 
@@ -104,6 +115,20 @@ function run(cwd: string, command: string, env: Record<string, string> = {}) {
  * JSON but names the guard reads as one registration, described without
  * quoting any of it.
  */
+/**
+ * The user settings file's text, or null when it does not exist. Absence is the
+ * only reading that skips AC-11: an unreadable file is an error, never a pass
+ * (#2787 review).
+ */
+function userSettingsText(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+}
+
 function cdGuardRegistrations(src: string): string[] {
   let doc: unknown;
   try {
@@ -118,11 +143,15 @@ function cdGuardRegistrations(src: string): string[] {
     } else if (Array.isArray(v)) {
       v.forEach((x, i) => walk(x, `${path}[${i}]`));
     } else if (v !== null && typeof v === "object") {
-      for (const [k, x] of Object.entries(v)) {
-        const at = path ? `${path}.${k}` : k;
+      Object.entries(v).forEach(([k, x], i) => {
+        // A key is printed only when it is letters alone, as settings keys
+        // are; any other is named by its position, so a token that sits in
+        // a key never reaches the output (#2787 review).
+        const seg = /^[A-Za-z]+$/.test(k) ? k : `{key ${i}}`;
+        const at = path ? `${path}.${seg}` : seg;
         if (k.includes("TopLevelCdGuard")) out.push(`${at} (a key)`);
         walk(x, at);
-      }
+      });
     }
   };
   walk(doc, "");
@@ -314,8 +343,8 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
     // registers it at user level this arm says so on the author's machine
     // and is simply absent on a runner — recorded as a limit, not hidden.
     const user = join(homedir(), ".claude", "settings.json");
-    let src: string;
-    try { src = readFileSync(user, "utf-8"); } catch { return; } // no user settings here (CI)
+    const src = userSettingsText(user);
+    if (src === null) return; // no user settings here (CI)
     // Asserts on the string values that name the guard, never the whole file:
     // a failing `not.toContain` prints its whole subject, and this file holds
     // the machine's tokens in `env` (#2786).
@@ -345,9 +374,25 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
       }
     }
     expect(cdGuardRegistrations(JSON.stringify({ env: { GH_TOKEN: "gho_planted2786" } }))).toEqual([]);
+    // #2787 review: a key is printed only when it is letters alone; any other key
+    // is named by its position, so a token in a key never reaches the output.
+    const inKey = cdGuardRegistrations(JSON.stringify({ env: { "echo gho_planted2786 TopLevelCdGuard": "1" } }));
+    expect(inKey).toEqual(["env.{key 0} (a key)"]);
+    const aboveIt = cdGuardRegistrations(JSON.stringify({ env: { a: "1", gho_planted2786: "bun TopLevelCdGuard.hook.ts" } }));
+    expect(aboveIt).toEqual(["env.{key 1}"]);
     // A file that is not JSON still reads as registered, and prints nothing of itself.
     const broken = cdGuardRegistrations('{ "env": { "GH_TOKEN": "gho_planted2786" }, "x": "TopLevelCdGuard"');
     expect(broken.length).toBe(1);
     expect(broken.join("\n")).not.toContain("planted2786");
+  });
+
+  // #2787 review: a hook that never ran reads exactly like a silent one.
+  test("#2787: a hook that did not run is an error, so no silence arm can pass on a dead hook", () => {
+    expect(() => run(harnessed("dir"), ALLOWED, { PATH: "/nonexistent-path-2787" })).toThrow();
+  });
+
+  test("#2787: AC-11's settings read is absent only when the file does not exist; any other error is thrown", () => {
+    expect(userSettingsText(join(tmp(), "absent.json"))).toBeNull();
+    expect(() => userSettingsText(tmp())).toThrow(); // a directory: EISDIR, not absence
   });
 });
