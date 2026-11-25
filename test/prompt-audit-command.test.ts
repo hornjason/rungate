@@ -26,6 +26,7 @@ import {
   formatAudit,
   generatedNames,
   lineOwners,
+  orphanNote,
   preStampNote,
   looksLikeRepoPath,
   promptAudit,
@@ -249,6 +250,29 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     expect(preStampNote(".claude/rules/our-own.md", "no stamp at all\n"), "a name the generator never writes").toBeNull();
     const stampedEdited = readFileSync(join(rendered, ".claude", "rules", "docs-routing.md"), "utf-8") + "\nan edit\n";
     expect(preStampNote(".claude/rules/docs-routing.md", stampedEdited), "an edited stamped file would lose the edit").toBeNull();
+    // Review of #2852: the scaffold adopts an unstamped file whose body is already its output, so the note says so.
+    expect(preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n")).toContain("unless its body already matches");
+  });
+
+  // Review of #2852: a stamped rule the generator no longer writes is rewritten
+  // by no scaffold, so calling it rungate's drafted an upstream fix that could
+  // never land. It is the project's to delete, and the finding says so.
+  test("#2835: a stamped rule the generator no longer writes is the project's, and its findings say to delete it", () => {
+    const stamped = readFileSync(join(rendered, ".claude", "rules", "docs-routing.md"), "utf-8");
+    expect(lineOwners(".claude/rules/docs-routing.md", stamped).some(o => o === "harness")).toBe(true);
+    expect(lineOwners(".claude/rules/old-rule.md", stamped).every(o => o === "consumer")).toBe(true);
+    expect(orphanNote(".claude/rules/old-rule.md", stamped)).toContain("no longer generates");
+    expect(orphanNote(".claude/rules/docs-routing.md", stamped)).toBeNull();
+    expect(orphanNote(".claude/rules/our-own.md", "no stamp at all\n")).toBeNull();
+
+    const artifact = "Read the files in ${SOURCE_DIRS} first.";
+    const root = restamped(planted([".claude/rules/old-rule.md", `---\ndescription: a rule an older rungate generated\n---\n\n${artifact}\n`]), ".claude/rules/old-rule.md");
+    expect(readFileSync(join(root, ".claude", "rules", "old-rule.md"), "utf-8")).toContain("generated-sha:");
+    const audit = promptAudit(root);
+    const found = audit.findings.filter(f => f.file === ".claude/rules/old-rule.md" && f.lint === "template-artifact");
+    expect(found.map(f => f.owner)).toEqual(["consumer"]);
+    expect(found[0]!.message).toContain("no longer generates");
+    expect([...upstreamBodies(audit).values()].join("\n")).not.toContain("old-rule.md");
   });
 
   // #2835: prompt-audit called a pre-stamp docs-routing.md rungate's and

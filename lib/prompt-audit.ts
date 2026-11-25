@@ -159,8 +159,20 @@ export function preStampNote(file: string, text: string): string | null {
   if (!hasGeneratedName(file) || declaredSha(text) !== null) return null;
   return (
     `it has the name of a file rungate generates and no generated-sha stamp, so it may predate the stamp; ` +
-    `the scaffold keeps it as yours. To take the generator's version, delete it and re-run \`${ACCEPT_GENERATED_RULE}\``
+    `the scaffold keeps it as yours unless its body already matches what the generator writes now, which it adopts and stamps. ` +
+    `To take the generator's version, delete it and re-run \`${ACCEPT_GENERATED_RULE}\``
   );
+}
+
+/**
+ * What a finding adds when its file carries rungate's stamp under a name the
+ * generator no longer writes (review of #2852). No scaffold rewrites it, so it
+ * is not rungate's to fix upstream; it is the project's to delete.
+ */
+export function orphanNote(file: string, text: string): string | null {
+  if (!(file.startsWith(".claude/rules/") || file.startsWith(".claude/commands/"))) return null;
+  if (stampCovers(text) === null || hasGeneratedName(file)) return null;
+  return "rungate wrote this file and no longer generates it, so no scaffold rewrites it; delete it if nothing reads it";
 }
 
 /**
@@ -178,10 +190,12 @@ export function lineOwners(file: string, text: string, packageRoot: string = PAC
   };
   if (file === "AGENTS.md") return harnessExcept(HARD_CONSTRAINTS_SECTION);
   if (file.startsWith(".claude/rules/") || file.startsWith(".claude/commands/")) {
-    // #2835: the scaffold's own reading. A stamp that covers the text is
-    // rungate's; no stamp, or a stamp the text has moved away from, is the
-    // project's, which is what `decideRuleWrite` preserves.
-    return stampCovers(text) === null ? all("consumer") : harnessExcept(PROJECT_OWNED_SECTION);
+    // #2835: the scaffold's own reading. A stamp that covers the text, on a
+    // file the generator still writes, is rungate's. No stamp, a stamp the
+    // text has moved away from, or a name the generator no longer writes is
+    // the project's: `decideRuleWrite` preserves the first two, and no
+    // scaffold step touches the third (review of #2852, `orphanNote`).
+    return stampCovers(text) !== null && hasGeneratedName(file) ? harnessExcept(PROJECT_OWNED_SECTION) : all("consumer");
   }
   if (file.startsWith(".claude/agents/")) {
     const name = file.slice(file.lastIndexOf("/") + 1);
@@ -422,7 +436,7 @@ export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, op
   // it predates the stamp says how to take the generator's version.
   for (const f of findings) {
     const text = surface.files.get(f.file);
-    const note = f.owner === "consumer" && text !== undefined ? preStampNote(f.file, text) : null;
+    const note = f.owner === "consumer" && text !== undefined ? (preStampNote(f.file, text) ?? orphanNote(f.file, text)) : null;
     if (note !== null) f.message = `${f.message} (${note})`;
   }
   const projectLine = unreadLine("project", projectUnread, "");
