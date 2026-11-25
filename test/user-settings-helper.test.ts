@@ -150,6 +150,9 @@ describe("#2792: every verdict is the census's own, with no command or value in 
     expect(absent.map(r => r.scope)).toEqual(["user-settings", "user-local-settings"]);
     expect(absent.every(r => (r.unreadable ?? "").includes("not on this machine"))).toBe(true);
     expect(commandsExecutingAt(repo, home, REGISTRY, "user-settings", "Beta")).toBe(1);
+    // #2802: a quoted assignment with a space in it no longer hides the hook after it.
+    expect(commandsExecutingAt(repo, home, REGISTRY, "user-settings", "Delta")).toBe(1);
+    expect(hookRegistrationAt(repo, home, REGISTRY, "Delta").registeredIn).toContain("user-settings");
     expect(commandsExecutingAt(repo, nowhere, REGISTRY, "user-settings", "Beta")).toBeNull();
     const placed = unplacedHooksAt(repo, home, REGISTRY, OWNED, ["Delta"]);
     expect(JSON.stringify(placed)).not.toMatch(PLANTED);

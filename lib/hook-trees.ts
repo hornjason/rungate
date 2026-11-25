@@ -184,6 +184,17 @@ const SUBCOMMANDS = new Set(["run", "exec"]);
 const SEPARATORS = new Set(["#", ";", "&&", "||", "|", "&"]);
 
 /**
+ * One leading `NAME=value` assignment and the space after it (#2802). The
+ * value is any run of single-quoted parts (no escapes), double-quoted parts
+ * (backslash escapes), and unquoted parts holding no space, quote or
+ * separator, so `TOKEN="a b"` is one assignment where a whitespace split saw
+ * `TOKEN="a` and `b"`. An unterminated quote matches nothing, so the command
+ * reads as executing nothing, as the shell would not run it either. An
+ * unquoted separator still ends the command: `A=x;bun …` is two.
+ */
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"(?:[^"\\]|\\.)*"|[^\s'"#;|&])*(?=\s|$)\s*/;
+
+/**
  * The executed hook file as a PATH — the first positional, un-basenamed.
  *
  * The one parse. `executedHookFile` is its basename projection and
@@ -195,8 +206,20 @@ const SEPARATORS = new Set(["#", ";", "&&", "||", "|", "&"]);
  * disagree about which token ran.
  */
 export function executedHookPath(command: string): string | null {
+  // Leading assignments, and an `env` that introduces more, are read off the
+  // string before it is split on whitespace, since a quoted value may hold a
+  // space or a separator (#2802).
+  let rest = command.trimStart();
+  const assignments = (): void => {
+    for (let m = ASSIGNMENT.exec(rest); m !== null; m = ASSIGNMENT.exec(rest)) rest = rest.slice(m[0].length);
+  };
+  assignments();
+  if (/^env(?=\s|$)/.test(rest)) {
+    rest = rest.slice("env".length).trimStart();
+    assignments();
+  }
   const tokens: string[] = [];
-  for (const raw of command.split(/\s+/).filter(Boolean)) {
+  for (const raw of rest.split(/\s+/).filter(Boolean)) {
     // A separator ends the first command, whether it stands alone or is
     // glued to the token before it (`x.ts;`, `x.ts&&`).
     if (SEPARATORS.has(raw)) break;
@@ -210,12 +233,6 @@ export function executedHookPath(command: string): string | null {
   }
 
   let i = 0;
-  // Leading `VAR=value` assignments, and an `env` prefix that introduces more.
-  while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
-  if (tokens[i] === "env") {
-    i++;
-    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
-  }
   const bare = (t: string) => t.replace(/^['"]+|['"]+$/g, "");
   if (i < tokens.length && INTERPRETERS.has(bare(tokens[i]).split("/").pop() ?? "")) i++;
   if (i < tokens.length && SUBCOMMANDS.has(bare(tokens[i]))) i++;
