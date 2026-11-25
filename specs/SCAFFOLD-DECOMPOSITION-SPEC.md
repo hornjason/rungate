@@ -1412,3 +1412,10 @@ start, and a reading below one did not time a scaffold. A faster runner
 moves both numbers together, which is the same argument that produced
 `BUDGET_MULTIPLE` one issue earlier.
 - [x] SC-2781: lib/scaffold/managed-workflow.ts contains [HARNESS_AUTHORED_PATHS] — re-scaffold over an older generated workflow writes the current value of every path the harness authors, `on.pull_request.types` included; it never reports such a file unchanged while the fresh render differs (#2292, worded by Jason 2026-11-16)
+- [ ] SC-2812: Rungate publishes a feature-manifest schema, and its validator refuses a manifest that names a file, page or route the tree does not hold (behavioral)
+- [ ] SC-2813: The code map lists every route registered on any router a file creates, and every page in the router, and says how many routes it could not attribute to a router (behavioral)
+- [ ] SC-2814: Rungate derives each feature's proof chain (claims, criteria, tests, mutation records) and its ADRs from ADR criteria tables, keeping the source row and the provenance class of every link (behavioral)
+- [ ] SC-2815: rungate feature-map renders one self-contained page, an overview of sources, features and consumers where each node opens a drill-down card, and refuses to render a card whose derived count disagrees with the rows it lists (behavioral)
+- [ ] SC-2816: The generated conformity test refuses a stale feature manifest, and reports every page, route and source file that no feature declares or marks shared (behavioral)
+- [ ] SC-2817: The scaffold ships the feature-map command and a rule that states the adapter contract (behavioral)
+- [ ] SC-2818: Rungate reports what is typed by hand: quoted lists that name registered features, documents nothing generates or checks, and hand-typed totals that disagree with the registry (behavioral)
