@@ -488,11 +488,13 @@ export function convertPlacement(content: string): PlacementConversion {
   const start = lines.findIndex(l => l.startsWith(PLACEMENT_HEADING));
   // Text after the heading's prefix is the author's, and goes where the
   // heading goes (#2805): kept after the new heading while the heading stays,
-  // refused by name below when it would go with the table. A heading that
-  // runs on into a word is read by the same prefix, but cannot be retitled
-  // as written.
+  // refused by name below when it would go with the table. A tail kept as
+  // written starts with a space or a colon; one starting with anything else
+  // (a letter in any script, a digit, a hyphen) runs on into the heading's
+  // last word, which the reader matches by the same prefix but which cannot
+  // be retitled as written (#2811 review).
   const tail = start >= 0 ? lines[start]!.slice(PLACEMENT_HEADING.length).trimEnd() : "";
-  if (/^\w/.test(tail)) {
+  if (tail !== "" && !/^[\s:]/.test(tail)) {
     return { refusal: [`line ${start + 1}: the heading runs on past \`${PLACEMENT_HEADING}\` into "${tail}", so it cannot be retitled as written; rename it first`] };
   }
   if (start >= 0) lines[start] = `${PLACEMENT_MEANINGS_HEADING}${tail}`;

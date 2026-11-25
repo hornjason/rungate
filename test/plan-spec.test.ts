@@ -1174,9 +1174,13 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
     const kept = convertPlacement(prose);
     if (!("after" in kept)) throw new Error(`did not convert: ${JSON.stringify(kept)}`);
     expect(kept.after).toContain(`${PLACEMENT_MEANINGS_HEADING} — with notes\n\nA note.\n`);
-    // A heading the reader reads that runs on into a word cannot be retitled as written.
-    const runOn = convertPlacement(plant({ heading: `${PLACEMENT_HEADING}s` }));
-    expect("refusal" in runOn ? runOn.refusal.join("\n") : JSON.stringify(runOn)).toMatch(/line \d+: .*runs on .*"s"/);
+    // A heading the reader reads that runs on into its last word cannot be
+    // retitled as written: a letter in any script, a digit or a hyphen (#2811 review).
+    for (const tail of ["s", "é", "ś", "2", "-notes", "(s)"]) {
+      const runOn = convertPlacement(plant({ heading: `${PLACEMENT_HEADING}${tail}` }));
+      expect("refusal" in runOn ? runOn.refusal.join("\n") : JSON.stringify(runOn), tail).toContain(`runs on past`);
+      if ("refusal" in runOn) expect(runOn.refusal.join("\n")).toContain(`"${tail}"`);
+    }
   });
 
   test("#2797: --convert-placement says it removes a placements-only table rather than retitling it", async () => {
