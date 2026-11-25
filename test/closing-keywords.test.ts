@@ -719,6 +719,9 @@ describe("#605: the states file, which is how the suite drives the CLI offline",
     // which is the reason parseDeclaredCloses throws.
     expect(() => parseIssueStatesFile('{"662":"probably"}', "s.json")).toThrow(StateCloseRefused);
     expect(() => parseIssueStatesFile('{"not-a-number":"OPEN"}', "s.json")).toThrow(StateCloseRefused);
+    // Past the safe range a key reads as a different number, or as an exponent (#2821 review).
+    expect(() => parseIssueStatesFile('{"1e21":"OPEN"}', "s.json")).toThrow(StateCloseRefused);
+    expect(() => parseIssueStatesFile('{"99999999999999999999":"OPEN"}', "s.json")).toThrow(StateCloseRefused);
     expect(() => parseIssueStatesFile("[]", "s.json")).toThrow(StateCloseRefused);
     expect(() => parseIssueStatesFile("{", "s.json")).toThrow(StateCloseRefused);
   });
