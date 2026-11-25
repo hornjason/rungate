@@ -310,6 +310,12 @@ describe("day-stamp audit — the live tree (#600)", () => {
     const source = readFileSync(join(ROOT, "scripts", "update-project-state.ts"), "utf-8");
     const sites = dayStampSitesIn("scripts/update-project-state.ts", source);
     expect(sites.filter(s => s.kind === "raw")).toEqual([]);
-    expect(sites.filter(s => s.kind === "helper").length).toBe(1);
+    // #2785: it stamps through `projectStateDay`, the record's one zone, and
+    // that function is the helper call.
+    expect(source).toContain("state.updated = projectStateDay();");
+    const shape = readFileSync(join(ROOT, "lib", "project-state-shape.ts"), "utf-8");
+    const shapeSites = dayStampSitesIn("lib/project-state-shape.ts", shape);
+    expect(shapeSites.filter(s => s.kind === "raw")).toEqual([]);
+    expect(shapeSites.filter(s => s.kind === "helper").length).toBe(1);
   });
 });

@@ -13,8 +13,7 @@ import { execSync } from "child_process";
 
 /** How many sessions the handoff shows. One site, so the count can be mutated. */
 const RENDERED_SESSIONS = 3;
-import { PROJECT_STATE_ZONE, boundedPriorities, missingStateVerdict, projectStateViolations, selectRecentSessions } from "../lib/project-state-shape";
-import { localCalendarDay } from "../lib/local-calendar-day";
+import { boundedPriorities, missingStateVerdict, projectStateDay, projectStateViolations, selectRecentSessions } from "../lib/project-state-shape";
 import { openImprovements, stageLadderViolations, type Stage } from "../lib/stage-ladder";
 
 /**
@@ -371,7 +370,7 @@ const state: ProjectState = parsed as ProjectState;
 // the hours when the two disagreed, which is what made #599 intermittent.
 // #2785: then the process zone, which is the currency test's zone only on a
 // machine set to it. Now the zone itself, whatever machine runs this.
-state.updated = localCalendarDay(new Date(), PROJECT_STATE_ZONE);
+state.updated = projectStateDay();
 
 // Sync SC status from spec files (promote-only: specs can mark done, never undo)
 const specStatus = scanSpecSCStatus();

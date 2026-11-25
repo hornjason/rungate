@@ -25,6 +25,7 @@
  * hand-edited file wants the whole list, and a validator that stops at the
  * first finding turns one bad edit into four round-trips.
  */
+import { localCalendarDay } from "./local-calendar-day";
 
 /** Every shape violation in a parsed `project-state.json`, in document order. */
 export function projectStateViolations(raw: unknown): string[] {
@@ -327,6 +328,11 @@ export const RENDERED_PRIORITIES_MAX = 12;
  * nothing made them. Here, both import it.
  */
 export const PROJECT_STATE_ZONE = "America/New_York";
+
+/** The day `at` falls on in {@link PROJECT_STATE_ZONE}: what `updated` is stamped with. */
+export function projectStateDay(at: Date = new Date()): string {
+  return localCalendarDay(at, PROJECT_STATE_ZONE);
+}
 
 /** The priorities to render, and how many were left in the json. Pure. */
 export function boundedPriorities(

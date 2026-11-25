@@ -29,7 +29,7 @@ import { existsSync, readFileSync, writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { spawnSync } from "child_process";
 import { makeProjectStateTempRoot, type ProjectStateTempRoot } from "./helpers/project-state-temp-root";
-import { PROJECT_STATE_ZONE, RENDERED_PRIORITIES_MAX, boundedPriorities } from "../lib/project-state-shape";
+import { PROJECT_STATE_ZONE, RENDERED_PRIORITIES_MAX, boundedPriorities, projectStateDay } from "../lib/project-state-shape";
 import { localCalendarDay } from "../lib/local-calendar-day";
 
 /** The real checkout. Read-only here: used to assert the script is shipped. */
@@ -117,6 +117,19 @@ describe("update-project-state", () => {
     // Before or after: the run may straddle the zone's midnight.
     expect([before, after]).toContain(stamped);
     expect(stamped).not.toBe(localCalendarDay(new Date(), zone!));
+  });
+
+  test("#2785: the stamp is the New York day at instants where UTC and the far zones disagree", () => {
+    // 21:30 EST: UTC is already tomorrow — the #600 defect.
+    expect(projectStateDay(new Date("2026-11-25T02:30:00Z"))).toBe("2026-11-24");
+    // 06:00 EST: UTC+14 is already tomorrow.
+    expect(projectStateDay(new Date("2026-11-25T11:00:00Z"))).toBe("2026-11-25");
+    // 23:59 EDT in summer, an hour off EST.
+    expect(projectStateDay(new Date("2026-07-02T03:59:00Z"))).toBe("2026-07-01");
+    // The writer stamps through it, once, so these instants speak for the writer.
+    const src = readFileSync(join(REPO, "scripts", "update-project-state.ts"), "utf-8");
+    expect(src.match(/\bstate\.updated\s*=/g)?.length).toBe(1);
+    expect(src).toContain("state.updated = projectStateDay();");
   });
 
   test("generates markdown from JSON", () => {
