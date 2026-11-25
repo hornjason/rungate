@@ -7,11 +7,14 @@
  * of #2790 found another message, help line or guide still naming the table as
  * the place a phase is decided, and nothing failed when new wording did it
  * again. This reads that text and refuses, by file and line, a sentence naming
- * a placement table unless "older" qualifies that mention: "older" stands
- * before it with nothing between but words of the same noun phrase, as in
- * "an older spec's Phase placement table". An "older" anywhere else in the
- * sentence, or one qualifying another subject ("older tools decide the
- * placement table"), does not count (#2812 review, rounds 1 and 2).
+ * a placement table unless the mention is one of four fixed phrases: "older
+ * placement table", "older Phase placement table", "older spec's placement
+ * table", "older spec's Phase placement table", with only spaces between the
+ * words. Rounds 1 to 3 of #2812's review each found a sentence that a looser
+ * reading of "older qualifies the table" let through: "older" elsewhere in
+ * the sentence, "older" qualifying another subject, then "older" ending an
+ * earlier clause ("Older, the placement table decides"). A closed phrase has
+ * no reading to loosen.
  *
  * It reads the phrase "placement table". A sentence that says only "the
  * table" is not caught: when this was written, every string saying "table" in
@@ -38,32 +41,16 @@ const ROOT = join(import.meta.dir, "..");
 
 /** A sentence that names a placement table, once backticks and emphasis are gone. */
 const NAMES_TABLE = /placement\W{0,4}table/i;
-/** The mark that a mention names the table as the older form. */
-const OLDER = /^older$/i;
-/**
- * The only words that may stand between "older" and the mention it
- * qualifies: the noun phrase "older spec's Phase placement table" and its
- * shorter forms. A closed list, so a verb or another subject between them
- * breaks the qualification (#2812 review, round 2).
- */
-const NOUN_PHRASE = /^(?:spec's|specs'|spec|phase|the)$/i;
-
-/** Whether "older" qualifies a mention whose preceding words are `before`. */
-function olderQualifies(before: string[]): boolean {
-  const at = before.findLastIndex(w => OLDER.test(w));
-  return at >= 0 && before.slice(at + 1).every(w => NOUN_PHRASE.test(w));
-}
+/** The four phrases that name the table as the older form, and nothing else does (#2812 review, round 3). */
+const OLDER_TABLE = /\bolder (?:spec's )?(?:phase )?placement table/gi;
 
 /** Each sentence of `text` with a placement-table mention that "older" does not qualify. */
 export function sentencesNamingTable(text: string): string[] {
   return text
     .replace(/[`*]/g, "")
     .split(/(?<=[.!?])\s+/)
-    .filter(s =>
-      [...s.matchAll(new RegExp(NAMES_TABLE.source, "gi"))].some(
-        m => !olderQualifies(s.slice(0, m.index).trim().split(/\s+/).map(w => w.replace(/[^\w']/g, ""))),
-      ),
-    )
+    // A sentence is refused when a mention is left once the older-form phrases are taken out.
+    .filter(s => NAMES_TABLE.test(s.replace(/\s+/g, " ").replace(OLDER_TABLE, "")))
     .map(s => s.replace(/\s+/g, " ").trim());
 }
 
@@ -244,6 +231,10 @@ describe("#2800: user-facing text names a placement table only as the older form
       "The spec's Phase placement table decides each phase, and older specs are read too.",
       "Each older criterion's phase is set by the Phase placement table.",
       "Older tools decide the placement table.",
+      // An "older" that ends an earlier clause (#2812 review, round 3).
+      "Older, the placement table decides each criterion's phase.",
+      "This is older; the placement table decides.",
+      "The older, placement table decides.",
     ]) {
       expect(sentencesNamingTable(s), s).toEqual([s]);
     }
