@@ -15,6 +15,7 @@ import { execSync } from "child_process";
 const RENDERED_SESSIONS = 3;
 import {
   boundedPriorities,
+  issueNumber,
   missingStateVerdict,
   projectStateDay,
   projectStateViolations,
@@ -73,9 +74,11 @@ interface CurrentSession {
  */
 function issueList(v: CurrentSession["issues_created"]): string | null {
   if (v === undefined) return null;
-  const items = v.map(String).filter(s => s.trim() !== "");
+  // The number the shared reading gives (#2817). The shape check has already
+  // refused any entry it cannot read, so none is dropped here.
+  const items = v.map(issueNumber).filter((n): n is number => n !== null);
   if (items.length === 0) return null;
-  return items.map(s => (s.startsWith("#") ? s : `#${s}`)).join(", ");
+  return items.map(n => `#${n}`).join(", ");
 }
 
 interface ProjectState {

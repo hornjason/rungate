@@ -117,10 +117,16 @@ const REPO = "hornjason/pai-harness";
 // ── The mutant ───────────────────────────────────────────────────────────
 //
 // Built once, in a temp directory OUTSIDE the repo. Running it from there is
-// what proves the script has no relative imports: a later `from "../lib/..."`
-// would make every mutant die on module resolution, exiting non-zero, which
-// would read as "the mutation was rejected on the merits" when in fact the
-// mutant never ran.
+// what proves the mutant resolves only what the battery carries: any other
+// relative import would make every mutant die on module resolution, exiting
+// non-zero, which would read as "the mutation was rejected on the merits"
+// when in fact the mutant never ran.
+//
+// CARRIED is the closed list of relative modules the script may import, each
+// copied beside the mutant at the same relative path. Each must itself import
+// nothing (#2821 review, round 4: the issue-number rule has one decider,
+// lib/issue-number.ts, rather than a second spelling inline in the script).
+const CARRIED = ["../lib/issue-number"];
 
 let MUTANT = "";
 let MUTANT_DIR = "";
@@ -135,8 +141,14 @@ beforeAll(() => {
         "scripts/check-state-record-closes.ts",
     );
   }
-  MUTANT = join(MUTANT_DIR, "check-state-record-closes.ts");
+  mkdirSync(join(MUTANT_DIR, "scripts"), { recursive: true });
+  MUTANT = join(MUTANT_DIR, "scripts", "check-state-record-closes.ts");
   writeFileSync(MUTANT, mutated);
+  for (const rel of CARRIED) {
+    const to = join(MUTANT_DIR, "scripts", `${rel}.ts`);
+    mkdirSync(join(to, ".."), { recursive: true });
+    writeFileSync(to, readFileSync(join(REPO_ROOT, "scripts", `${rel}.ts`), "utf-8"));
+  }
 
   FIX = mkdtempSync(join(tmpdir(), "state-closes-fix-"));
 });
@@ -227,7 +239,7 @@ describe("#590 AC-6: the refusal is routed through exactly one exit code", () =>
     }
   });
 
-  test("the script has no relative imports", () => {
+  test("the script's relative imports are exactly the modules the battery carries, and those import nothing", () => {
     // Without this, the mutant run from a temp directory dies on module
     // resolution — a non-zero exit that reads as a rejected mutation.
     //
@@ -250,8 +262,17 @@ describe("#590 AC-6: the refusal is routed through exactly one exit code", () =>
       "no import statement found in the script at all — the detector is reading the wrong text, " +
         "and an empty violation list would mean nothing",
     ).toBeGreaterThan(0);
-    const rel = code.join("\n").match(/from\s+["']\.{1,2}\//g) || [];
-    expect(rel, "a relative import would make every mutant run fail to resolve").toEqual([]);
+    const rel = [...code.join("\n").matchAll(/from\s+["'](\.{1,2}\/[^"']+)["']/g)].map(m => m[1]);
+    expect(
+      rel,
+      "a relative import the battery does not carry would make every mutant run fail to resolve — " +
+        "add it to CARRIED, or keep the script from importing it",
+    ).toEqual(CARRIED);
+    for (const r of CARRIED) {
+      const carried = readFileSync(join(REPO_ROOT, "scripts", `${r}.ts`), "utf-8");
+      const imports = carried.split("\n").filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l) && /^\s*import\s|\sfrom\s+["']/.test(l));
+      expect(imports, `${r}.ts is copied beside the mutant alone, so it may import nothing`).toEqual([]);
+    }
   });
 });
 

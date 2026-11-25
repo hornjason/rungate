@@ -28,7 +28,9 @@ import { spawnSync } from "child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { parseDeclaredCloses, parseIssueStatesFile } from "../scripts/check-state-record-closes";
 import {
+  issueNumber,
   missingStateVerdict,
   projectStateViolations,
   readSession,
@@ -191,6 +193,13 @@ describe("#project-state: the shape is checked before the renderer reads it", ()
       [[1675, null], "session.issues_created[1]"],
       [[1675, { n: 1 }], "session.issues_created[1]"],
       [[1675, "not-a-number"], "session.issues_created[1]"],
+      // #2817: Number() read these as numbers the renderer then printed garbled.
+      [[1675, " 1675"], "session.issues_created[1]"],
+      [[1675, "1e3"], "session.issues_created[1]"],
+      [[1675, "0x10"], "session.issues_created[1]"],
+      [[1675, "#12a"], "session.issues_created[1]"],
+      [[1675, "#0"], "session.issues_created[1]"],
+      [[1675, 1.5], "session.issues_created[1]"],
     ] as [unknown, string][]) {
       const doc = good() as any;
       doc.session = { number: 1, date: "d", summary: "s", suite: "t", issues_created: value };
@@ -519,5 +528,97 @@ describe("#2809: one reader decides what a session is and its day, and every cal
     expect(selectRecentSessions([a, b], 2).rendered).toEqual([b, a]);
     // The top-level session carries its number as a field.
     expect(readSession({ number: 106, date: "2026-11-25" }).number).toBe(106);
+  });
+});
+
+// #2817: the shape check, the renderer and the closures check each read an
+// issue number their own way. One rule now: a positive integer, or digits with
+// one optional leading #.
+describe("#2817: one reading of an issue number in a session's lists", () => {
+  const ITEMS: unknown[] = [
+    1675, "1675", "#1675", " 1675", "1675 ", "1e3", "0x10", "#12a", "##12", "0", "#0", 0, -3, 1.5, null, "", "#",
+    // Past the safe range a number prints rounded or as an exponent (#2821 review).
+    2 ** 53 - 1, "9007199254740991", 2 ** 53, "9007199254740992", 1e21, "12345678901234567890", "9".repeat(400), Infinity, NaN,
+  ];
+
+  test("issueNumber reads a positive safe integer, or digits with one optional # that read as one, and nothing else", () => {
+    expect(ITEMS.map(issueNumber)).toEqual([
+      1675, 1675, 1675, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
+      2 ** 53 - 1, 2 ** 53 - 1, null, null, null, null, null, null, null,
+    ]);
+  });
+
+  /** Inputs from a fixed seed, so a failure names an input that reproduces. */
+  const generated = (count: number): unknown[] => {
+    let seed = 2817;
+    const next = (k: number) => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed % k;
+    };
+    const pick = <T,>(xs: readonly T[]) => xs[next(xs.length)]!;
+    const out: unknown[] = [];
+    for (let i = 0; i < count; i++) {
+      const kind = next(4);
+      if (kind === 0) out.push(pick([0, -0, -1, 1, 1.5, 2 ** 53 - 1, 2 ** 53, 2 ** 53 + 2, 1e21, Infinity, -Infinity, NaN, 10 ** next(25)]));
+      else if (kind === 1) out.push((next(2) ? "#" : "") + Array.from({ length: 1 + next(30) }, () => pick([..."0123456789"])).join(""));
+      else if (kind === 2) out.push(Array.from({ length: next(12) }, () => pick([..."#0123456789 e.x-+"])).join(""));
+      else out.push(pick([null, undefined, true, {}, [], "9".repeat(15 + next(400))]));
+    }
+    return out;
+  };
+  const GENERATED = generated(3000);
+
+  test("over generated inputs, what issueNumber accepts prints as #N and reads back as N", () => {
+    // Without this, the case below holds because every input was refused.
+    expect(GENERATED.filter(x => issueNumber(x) !== null).length).toBeGreaterThan(300);
+    for (const item of GENERATED) {
+      const n = issueNumber(item);
+      if (n !== null) expect(issueNumber(`#${n}`), JSON.stringify(item)).toBe(n);
+    }
+  });
+
+  test("the shape check refuses exactly what issueNumber refuses", () => {
+    for (const item of ITEMS) {
+      const doc = good() as any;
+      doc.session = { number: 1, date: "d", summary: "s", suite: "t", issues_closed: [item] };
+      const refused = projectStateViolations(doc).some(v => v.startsWith("session.issues_closed[0]"));
+      expect(refused, JSON.stringify(item)).toBe(issueNumber(item) === null);
+    }
+  });
+
+  test("the closures check reads a state-file key the same way (#2821 review)", () => {
+    for (const item of [...ITEMS, ...GENERATED].filter((x): x is string => typeof x === "string")) {
+      const file = JSON.stringify({ [item]: "OPEN" });
+      if (issueNumber(item) === null) expect(() => parseIssueStatesFile(file, "s.json"), JSON.stringify(item)).toThrow();
+      else expect(parseIssueStatesFile(file, "s.json").states, JSON.stringify(item)).toEqual({ [issueNumber(item)!]: "OPEN" });
+    }
+  });
+
+  test("a session list naming one issue twice is refused, so it cannot render twice (#2821 review)", () => {
+    const doc = good() as any;
+    doc.session = { number: 1, date: "d", summary: "s", suite: "t", issues_created: [1675, "#1675", 1676, "01676"] };
+    expect(projectStateViolations(doc).filter(v => v.startsWith("session.issues_created"))).toEqual([
+      "session.issues_created[1] names #1675 again, already named at [0]",
+      "session.issues_created[3] names #1676 again, already named at [2]",
+    ]);
+  });
+
+  test("one decider: the session-record readers import issueNumber and spell no rule of their own (#2821 review, round 4)", () => {
+    const root = join(import.meta.dir, "..");
+    for (const rel of ["lib/project-state-shape.ts", "scripts/update-project-state.ts", "scripts/check-state-record-closes.ts"]) {
+      const src = readFileSync(join(root, rel), "utf-8");
+      expect(src.includes("/^#?\\d+$/"), `${rel} spells the issue-number rule itself`).toBe(false);
+      expect(/\bissueNumber\b[^;]*\bfrom "\.\.?\/(?:lib\/)?(?:issue-number|project-state-shape)"/s.test(src), `${rel} does not import issueNumber`).toBe(true);
+    }
+    // The rule is spelled where the readers import it from.
+    expect(readFileSync(join(root, "lib/issue-number.ts"), "utf-8").includes("/^#?\\d+$/")).toBe(true);
+  });
+
+  test("the closures check reads each entry the same way", () => {
+    for (const item of [...ITEMS, ...GENERATED]) {
+      const n = issueNumber(item);
+      if (n === null) expect(() => parseDeclaredCloses([item]), JSON.stringify(item)).toThrow();
+      else expect(parseDeclaredCloses([item]), JSON.stringify(item)).toEqual([n]);
+    }
   });
 });

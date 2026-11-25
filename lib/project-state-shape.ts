@@ -25,7 +25,12 @@
  * hand-edited file wants the whole list, and a validator that stops at the
  * first finding turns one bad edit into four round-trips.
  */
+import { issueNumber } from "./issue-number";
 import { localCalendarDay } from "./local-calendar-day";
+
+// The shape check refuses what `issueNumber` refuses, and the renderer prints
+// what it reads; re-exported so callers keep one import (#2817).
+export { issueNumber };
 
 /** Every shape violation in a parsed `project-state.json`, in document order. */
 export function projectStateViolations(raw: unknown): string[] {
@@ -145,12 +150,18 @@ export function projectStateViolations(raw: unknown): string[] {
           );
           continue;
         }
+        // A list naming one issue twice would render it twice (#2821 review).
+        const seen = new Map<number, number>();
         v.forEach((item, i) => {
-          const n = typeof item === "number" ? item : Number(String(item).replace(/^#/, "").trim());
-          if (typeof item === "object" || !Number.isInteger(n) || n <= 0) {
+          const n = issueNumber(item);
+          if (n === null) {
             out.push(
               `session.${k}[${i}] is ${JSON.stringify(item)}, expected an issue number`,
             );
+          } else if (seen.has(n)) {
+            out.push(`session.${k}[${i}] names #${n} again, already named at [${seen.get(n)}]`);
+          } else {
+            seen.set(n, i);
           }
         });
       }

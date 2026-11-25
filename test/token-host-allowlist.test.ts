@@ -371,11 +371,12 @@ describe("one allowlist, declared once, whoever asks it", () => {
   /**
    * The one file that genuinely cannot call the resolver, bound by agreement.
    *
-   * `scripts/check-state-record-closes.ts` must have no relative imports —
-   * `test/state-record-closes-mutation.test.ts` asserts it, because its
-   * mutants are copied to a temp directory and run there, so a
-   * `from "../lib/…"` makes every mutant die on module resolution and read
-   * as a refusal on the merits. The "one resolver" rule therefore cannot be
+   * `scripts/check-state-record-closes.ts` may import only the import-free
+   * modules its mutation battery carries — `test/state-record-closes-mutation.test.ts`
+   * asserts it, because its mutants are copied to a temp directory and run
+   * there. `lib/github.ts` imports other modules, so it cannot be carried, and a
+   * `from "../lib/github"` would make every mutant die on module resolution and
+   * read as a refusal on the merits (#2821 review). The "one resolver" rule therefore cannot be
    * satisfied there by calling `resolveGitHubToken`, and the security scan
    * that found `env.GITHUB_TOKEN ?? env.GH_TOKEN` there proposed exactly
    * that fix. It is blocked, not declined.
