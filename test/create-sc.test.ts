@@ -463,6 +463,27 @@ describe("#2845: create-sc places a criterion after the last one, and --behavior
     expect(lines.indexOf(NEW), "placed inside the example").toBe(lines.lastIndexOf("  ```") + 1);
   });
 
+  // Review round 2 of #2846: three more places the line must not land.
+  test("a comment the last criterion's block holds open is stepped past", () => {
+    const commented = ["# S", "", "- [ ] SC-9100: foo", "<!-- REVIEW: long note", "continues -->", "", "## Notes", ""].join("\n");
+    const lines = placeScLine(commented, NEW).split("\n");
+    expect(lines.indexOf(NEW), "placed inside the comment").toBe(lines.indexOf("continues -->") + 1);
+  });
+
+  test("a CRLF spec gets the line after its last criterion, and stays CRLF", () => {
+    const crlf = SPEC.replace(/\n/g, "\r\n");
+    const out = placeScLine(crlf, NEW);
+    expect(out.replace(/\r\n/g, ""), "a bare LF was written").not.toContain("\n");
+    expect(out.indexOf(NEW)).toBeLessThan(out.indexOf("## Notes"));
+    expect(out.replace(/\r\n/g, "\n")).toBe(placeScLine(SPEC, NEW));
+  });
+
+  test("a spec with a fence nothing closes is refused, criteria or not, naming the line", () => {
+    const open = ["# S", "", "- [ ] SC-9100: foo", "  ```sh", "  echo a", ""].join("\n");
+    expect(() => placeScLine(open, NEW)).toThrow(/line 4 that nothing closes/);
+    expect(() => placeScLine("# Notes\n\n```md\nexample\n", NEW)).toThrow(/line 3 that nothing closes/);
+  });
+
   test("a spec that states no criterion gets the line at its end, as before", () => {
     const bare = "---\ndoc-type: spec\n---\n\n# Nothing yet\n\n```md\n- [ ] SC-9198: only an example\n```\n";
     expect(placeScLine(bare, NEW)).toBe(bare.trimEnd() + "\n" + NEW + "\n");
@@ -504,6 +525,14 @@ describe("#2845: create-sc places a criterion after the last one, and --behavior
       expect(noSentence.exitCode).toBe(1);
       expect(noSentence.stderr).toContain("--behavioral needs the criterion's sentence");
       expect(readFileSync(b, "utf-8"), "a flag was written as a criterion").toBe(before);
+
+      // Review round 2 of #2846: an unclosed fence is refused before anything is written.
+      const openFence = join(dir, "OPEN-SPEC.md");
+      writeFileSync(openFence, SPEC + "```md\nnever closed\n");
+      const refused = runCreateSC(["--behavioral", "X happens", "--spec", openFence]);
+      expect(refused.exitCode).toBe(1);
+      expect(refused.stderr).toContain("nothing closes");
+      expect(readFileSync(openFence, "utf-8")).toBe(SPEC + "```md\nnever closed\n");
 
       const both = runCreateSC(["--behavioral", "X happens", "--pattern", "file-exists", "--params", "{}", "--spec", b]);
       expect(both.exitCode).toBe(1);

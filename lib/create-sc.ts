@@ -703,14 +703,39 @@ export function behavioralStatement(sentence: string): string {
  * #2846): an indented example under the last criterion reads as its
  * continuation up to the first blank line, which can sit inside the fence, so
  * when the block ends inside one the line goes after the fence closes.
+ *
+ * Review round 2 of #2846 added three more places a line must not land:
+ * - **An unclosed fence** is refused, by line. Everything after it renders as
+ *   code, so no place in the file is outside it.
+ * - **An HTML comment the block holds open** is stepped past. `parseCriteria`
+ *   reads a `<!--` line under a criterion as its own, so the block can end
+ *   between a comment's first line and its `-->`.
+ * - **A CRLF spec** is read as LF and written back as CRLF. Otherwise
+ *   `parseCriteria` sees no criterion in it, and the line would be appended at
+ *   the end with a bare LF.
  */
 export function placeScLine(spec: string, scLine: string): string {
-  const lines = spec.split("\n");
-  const { roles } = readFences(lines);
-  const last = parseCriteria(spec).filter(c => roles[c.line - 1] === "prose").at(-1);
-  if (last === undefined) return spec.trimEnd() + "\n" + scLine + "\n";
-  let at = last.end;
-  if (roles[at - 1] !== "prose") while (at < lines.length && roles[at] !== "prose") at++;
-  lines.splice(at, 0, scLine);
-  return lines.join("\n");
+  const crlf = spec.includes("\r\n");
+  const text = crlf ? spec.replace(/\r\n/g, "\n") : spec;
+  const lines = text.split("\n");
+  const { roles, unclosedAt } = readFences(lines);
+  if (unclosedAt !== null) {
+    throw new Error(`the spec opens a fence at line ${unclosedAt + 1} that nothing closes, so every line after it is code; close it before a criterion can be placed`);
+  }
+  const last = parseCriteria(text).filter(c => roles[c.line - 1] === "prose").at(-1);
+  let out: string;
+  if (last === undefined) {
+    out = text.trimEnd() + "\n" + scLine + "\n";
+  } else {
+    let at = last.end;
+    if (roles[at - 1] !== "prose") while (at < lines.length && roles[at] !== "prose") at++;
+    const block = lines.slice(last.line - 1, at).join("\n");
+    if (block.split("<!--").length > block.split("-->").length) {
+      while (at < lines.length && !lines[at].includes("-->")) at++;
+      at = Math.min(at + 1, lines.length);
+    }
+    lines.splice(at, 0, scLine);
+    out = lines.join("\n");
+  }
+  return crlf ? out.replace(/\n/g, "\r\n") : out;
 }
