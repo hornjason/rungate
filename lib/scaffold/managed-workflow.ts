@@ -339,6 +339,9 @@ export const HARNESS_AUTHORED_PATHS: ReadonlyMap<string, AuthoredClaim> = new Ma
   ["on.pull_request.branches", "withdrawn-when-absent"],
   ["on.pull_request.types", "asserted-when-emitted"],
   ["on.issues.types", "asserted-when-emitted"],
+  // #2842: the merging workflow's name, from `board.mergeWorkflow`. A
+  // consumer's copy keeping an old name keeps a trigger that never fires.
+  ["on.workflow_run.workflows", "asserted-when-emitted"],
 ]);
 
 /**

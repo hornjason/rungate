@@ -49,7 +49,7 @@ import {
   AI_REVIEW_WORKFLOW_NAME,
   buildAiReviewUnmeasuredWorkflow,
 } from "./ai-review-unmeasured-workflow";
-import { buildAdrAcceptedWorkflow } from "./adr-accepted-workflow";
+import { buildAdrAcceptedWorkflow, mergeWorkflowWarning } from "./adr-accepted-workflow";
 import { buildSpecsPlacedWorkflow } from "./specs-placed-workflow";
 import { buildConsumerIntakeWorkflow } from "./consumer-intake-workflow";
 import { buildCriterionLabelWorkflow } from "./criterion-label-workflow";
@@ -4642,6 +4642,23 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     milestonePrefix: boardInputs.milestonePrefix,
     mergeWorkflow: boardInputs.mergeWorkflow,
   });
+  // #2842: the trigger matches the merging workflow's `name:` exactly, and
+  // nothing else would say a typo wrote a trigger that never fires.
+  if (boardInputs.mergeWorkflow !== null) {
+    const names: string[] = [];
+    const unreadable: string[] = [];
+    const dir = join(root, ".github", "workflows");
+    for (const f of existsSync(dir) ? readdirSorted(dir).filter(n => /\.ya?ml$/.test(n)) : []) {
+      try {
+        const name = (Bun.YAML.parse(readFileSync(join(dir, f), "utf-8")) as { name?: unknown } | null)?.name;
+        if (typeof name === "string") names.push(name);
+      } catch (e) {
+        unreadable.push(`.github/workflows/${f} (${(e as Error).message})`);
+      }
+    }
+    const warning = mergeWorkflowWarning(boardInputs.mergeWorkflow, names, unreadable);
+    if (warning !== null) actions.push(warning);
+  }
 
   // SC-2780, ADR-018 Decision 1: a push to main that changes specs/ runs
   // every opted-in family through the engine. The families are read at run

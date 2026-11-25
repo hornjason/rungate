@@ -21,7 +21,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { adrPlacement, adrStatus, closedIssueCounts, newlyAccepted } from "../lib/issue-decomposition";
@@ -33,6 +33,8 @@ import {
   ADR_ACCEPTED_JOB,
   ADR_ACCEPTED_WORKFLOW_FILE,
   boardInput,
+  buildMergedGateScript,
+  mergeWorkflowWarning,
 } from "../lib/scaffold/adr-accepted-workflow";
 import { createCiWorkflows } from "../lib/scaffold/steps";
 import { workflowCensus } from "../lib/scaffold/workflow-census";
@@ -590,7 +592,8 @@ describe("SC-2788: a merge-triggered run closes the issues the merged pull reque
 
   test("SC-2788: it runs only on a merge-triggered run, whether or not anything was accepted or a planning step refused", () => {
     // A push run is a person's merge, and GitHub closes its issues itself.
-    expect(close.if).toBe("${{ !cancelled() && github.event_name == 'workflow_run' }}");
+    // #2842: and only when the gate found that something merged.
+    expect(close.if).toBe("${{ !cancelled() && github.event_name == 'workflow_run' && steps.merged.outputs.go != 'false' }}");
     expect(close.if, "gated on an ADR being accepted, so a bot merge of any other change closed nothing").not.toContain("steps.accepted");
   });
 
@@ -611,6 +614,143 @@ describe("SC-2788: a merge-triggered run closes the issues the merged pull reque
       const s: any[] = d.jobs[ADR_ACCEPTED_JOB].steps;
       expect(s.some(x => runOf(x).includes("close-merged-references")), JSON.stringify(board)).toBe(false);
       expect(d.permissions, JSON.stringify(board)).toEqual({ contents: "read", issues: "write" });
+    }
+  });
+});
+
+/**
+ * #2842: three defects in the merge trigger, found by a consumer's upgrade.
+ * The trigger's name was never checked, a changed name was never written
+ * back, and every completion of the merge workflow did a full checkout and
+ * bun setup before asking whether anything merged.
+ */
+describe("#2842: the merge trigger's name is checked, kept current, and a run that merged nothing ends before the checkout", () => {
+  const BOARD = { engineSpec: "specs/ENGINE.md", milestonePrefix: "Engine" };
+  const stepsOf = (yml: string): any[] => (Bun.YAML.parse(yml) as any).jobs[ADR_ACCEPTED_JOB].steps;
+
+  test("with a merge workflow named, the gate is the first step and every step that costs a checkout waits on it", () => {
+    const steps = stepsOf(generated({ ...BOARD, mergeWorkflow: "approve-on-green" }));
+    expect(steps[0].id).toBe("merged");
+    expect(steps[0].if).toBe("${{ github.event_name == 'workflow_run' }}");
+    expect(steps[0].uses, "the gate checks out the tree it is meant to spare").toBeUndefined();
+    const gated = steps.filter(s => String(s.if ?? "").includes("steps.merged.outputs.go != 'false'"));
+    expect(gated.length).toBeGreaterThanOrEqual(5);
+    for (const s of steps.slice(1, 5)) expect(String(s.if), JSON.stringify(s.uses ?? s.name)).toContain("steps.merged.outputs.go != 'false'");
+    expect(steps.find(s => String(s.uses ?? "").startsWith("actions/checkout"))?.if).toBe("${{ steps.merged.outputs.go != 'false' }}");
+  });
+
+  test("with no merge workflow named, the file has no gate at all", () => {
+    expect(generated(BOARD)).not.toContain("steps.merged");
+  });
+
+  // The failure matrix, written before the gate: each row runs the real
+  // script under bash with a stand-in gh that logs its calls.
+  describe("the gate skips only when main has not moved, and an unread answer never skips the work", () => {
+    const run = (env: Record<string, string>, gh: { main?: string; last?: string; fail?: boolean }) => {
+      const dir = mkdtempSync(join(tmpdir(), "rg-2842-gate-"));
+      try {
+        const out = join(dir, "out");
+        const log = join(dir, "calls");
+        writeFileSync(out, "");
+        writeFileSync(
+          join(dir, "gh"),
+          [
+            "#!/bin/bash",
+            `echo "$*" >> ${JSON.stringify(log)}`,
+            gh.fail ? "exit 1" : "",
+            `case "$2" in *commits/*) echo ${JSON.stringify(gh.main ?? "")} ;; *runs*) echo ${JSON.stringify(gh.last ?? "")} ;; esac`,
+          ].join("\n"),
+        );
+        chmodSync(join(dir, "gh"), 0o755);
+        const r = spawnSync("bash", ["-e", "-c", buildMergedGateScript()], {
+          encoding: "utf-8",
+          env: { PATH: `${dir}:${process.env.PATH}`, GITHUB_OUTPUT: out, GITHUB_REPOSITORY: "o/r", GITHUB_REF_NAME: "main", ...env },
+        });
+        return { status: r.status, stdout: r.stdout, go: readFileSync(out, "utf-8").trim(), calls: existsSync(log) ? readFileSync(log, "utf-8") : "" };
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+
+    // Review round 1 of #2847: a skipped run still concludes success and its
+    // head becomes the next range base, so a skip while main moved hides the
+    // merge. A merge can land before a later step of the merge workflow fails.
+    test("a merge workflow that concluded failure after main moved still runs: the merge may have landed first", () => {
+      const r = run({ CONCLUSION: "failure" }, { main: "a", last: "b" });
+      expect([r.status, r.go]).toEqual([0, "go=true"]);
+    });
+    test("a run started by a fork's pull request still runs when main moved: the job is this repository's own file", () => {
+      const r = run({ HEAD_REPO: "fork/r" }, { main: "a", last: "b" });
+      expect([r.status, r.go]).toEqual([0, "go=true"]);
+    });
+    test("the gate reads only main and this workflow's last success, nothing about the triggering run", () => {
+      expect(buildMergedGateScript()).not.toMatch(/CONCLUSION|HEAD_REPO|workflow_run\./);
+    });
+    test("nothing reached main since the last successful placement: skip", () => {
+      expect(run({}, { main: "abc", last: "abc" }).go).toBe("go=false");
+    });
+    test("main moved since the last successful placement: run", () => {
+      expect(run({}, { main: "abc", last: "old" }).go).toBe("go=true");
+    });
+    test("no successful placement yet: run", () => {
+      expect(run({}, { main: "abc", last: "" }).go).toBe("go=true");
+    });
+    test("the API refused: whether anything merged is UNMEASURED, so the full work runs", () => {
+      const r = run({}, { fail: true });
+      expect([r.status, r.go]).toEqual([0, "go=true"]);
+      expect(r.stdout).toContain("UNMEASURED");
+    });
+  });
+
+  test("scaffold warns by name when board.mergeWorkflow names no workflow, and is silent when one has that name", () => {
+    expect(mergeWorkflowWarning("Approve", ["CI", "Approve"])).toBeNull();
+    expect(mergeWorkflowWarning(null, [])).toBeNull();
+    const warn = mergeWorkflowWarning("Aprove", ["CI", "Approve"], [".github/workflows/x.yml (bad)"])!;
+    for (const part of ['"Aprove"', '"Approve"', '"CI"', "x.yml", "UNMEASURED", "never fires"]) expect(warn, part).toContain(part);
+
+    const root = mkdtempSync(join(tmpdir(), "rg-2842-name-"));
+    try {
+      const config = (mergeWorkflow: string) =>
+        writeFileSync(
+          join(root, ".claude", "rungate", "config.json"),
+          JSON.stringify({ project: "fixture", repo: "fixture/fixture", ci: { bunVersion: "1.3.14" }, test: { command: "bun test" }, board: { ...BOARD, mergeWorkflow } }),
+        );
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+      writeFileSync(join(root, ".github", "workflows", "approve.yml"), "name: Approve\non: pull_request\njobs: {}\n");
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture", version: "0.0.0" }));
+      config("Aprove");
+      const typo: string[] = [];
+      createCiWorkflows(root, typo, { force: true });
+      expect(typo.filter(a => a.startsWith("WARN: board.mergeWorkflow"))).toHaveLength(1);
+      config("Approve");
+      const exact: string[] = [];
+      createCiWorkflows(root, exact, { force: true });
+      expect(exact.filter(a => a.startsWith("WARN: board.mergeWorkflow"))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a changed board.mergeWorkflow is written into an existing adr-accepted.yml by a plain re-scaffold", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-2842-rename-"));
+    try {
+      const config = (mergeWorkflow: string) =>
+        writeFileSync(
+          join(root, ".claude", "rungate", "config.json"),
+          JSON.stringify({ project: "fixture", repo: "fixture/fixture", ci: { bunVersion: "1.3.14" }, test: { command: "bun test" }, board: { ...BOARD, mergeWorkflow } }),
+        );
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture", version: "0.0.0" }));
+      config("Old name");
+      createCiWorkflows(root, [], { force: true });
+      const path = join(root, ".github", "workflows", ADR_ACCEPTED_WORKFLOW_FILE);
+      expect((Bun.YAML.parse(readFileSync(path, "utf-8")) as any).on.workflow_run.workflows).toEqual(["Old name"]);
+      config("New name");
+      createCiWorkflows(root, []);
+      expect((Bun.YAML.parse(readFileSync(path, "utf-8")) as any).on.workflow_run.workflows).toEqual(["New name"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });
