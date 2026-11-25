@@ -396,8 +396,10 @@ export function homeSettingsReads(source: string): number[] {
         const had = rootedVars.get(name);
         if (tail !== null && had === undefined) { rootedVars.set(name, tail); grew = true; }
         else if (tail !== null && had !== undefined && !conflicted.has(`r:${name}`) && (had.text !== tail.text || had.unknown !== tail.unknown)) {
-          // Two readings of one name: keep the one that reaches furthest, and mark it unknown.
-          rootedVars.set(name, { text: had.text.length >= tail.text.length ? had.text : tail.text, unknown: true });
+          // Two readings of one name, which a scope-blind scan cannot pick
+          // between: keep the one under ~/.claude if either is, marked unknown.
+          const underClaude = (t: Tail) => /(^|\/)\.claude(\/|$)/.test(normalisedTail(t.text));
+          rootedVars.set(name, { text: (underClaude(tail) && !underClaude(had) ? tail : had).text, unknown: true });
           conflicted.add(`r:${name}`);
           grew = true;
         }

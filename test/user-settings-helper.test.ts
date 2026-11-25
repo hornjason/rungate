@@ -288,6 +288,9 @@ describe("#2792: no test reads a machine settings scope except through the helpe
       ['const d = join(homedir(), ".claude");\nconst f = "settings.local.json";\nreadFileSync(join(d, f));', [3]],
       // One name declared twice reads as unknown, and the scan still ends.
       ['function a() { const f = "x.json"; }\nfunction b() { const f = "settings.json"; return join(homedir(), ".claude", f); }', [2]],
+      ['function a() { const d = join(homedir(), ".pai"); }\nfunction b(f: string) { const d = join(homedir(), ".claude"); return join(d, f); }', [2]],
+      // A path normalised to a settings file, however it is spelled.
+      ['join(homedir(), ".claude", "settings.json", ".");', [1]],
     ];
     for (const [src, lines] of named) expect(homeSettingsReads(src), src).toEqual(lines);
     // An unreadable name outside ~/.claude, and ~/.claude itself, are not settings files.
