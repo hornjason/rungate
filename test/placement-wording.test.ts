@@ -84,8 +84,10 @@ const UNRESOLVED = "\u0000";
 const OPAQUE = ["placement", "table"].map(word => new RegExp(NAMES_TABLE.source.replace(word, UNRESOLVED), NAMES_TABLE.flags));
 /** A passage built with UNRESOLVED marks, as the text a reader sees and whether it fails closed. */
 function passage(line: number, raw: string): Passage {
-  const opaque = OPAQUE.some(r => r.test(raw.replace(/[`*]/g, "")));
-  return opaque ? { line, text: raw.replaceAll(UNRESOLVED, "X"), opaqueTable: true } : { line, text: raw.replaceAll(UNRESOLVED, "X") };
+  // Read as sentencesNamingTable reads: emphasis gone and whitespace collapsed, so the two windows agree (#2830 review).
+  const opaque = OPAQUE.some(r => r.test(raw.replace(/[`*]/g, "").replace(/\s+/g, " ")));
+  const text = raw.replaceAll(UNRESOLVED, "X");
+  return opaque ? { line, text, opaqueTable: true } : { line, text };
 }
 
 /**
@@ -116,10 +118,10 @@ export const LITERALS_ONLY: Reader = { readings: () => null, isString: () => fal
 const MAX_READINGS = 16;
 
 /**
- * The reader the TypeScript type checker gives (#2824). A string, number or
- * boolean literal type reads as its text, and a union of them as each member.
- * A number, bigint, boolean, null or undefined that is not one literal reads
- * as `X`: no such value spells a word. Anything else, a wide `string`, `any`,
+ * The reader the TypeScript type checker gives (#2824). A string or number
+ * literal type reads as its text, and a union of them as each member. Any
+ * other number, bigint, boolean, null or undefined reads as `X`: no such value
+ * spells a word. Anything else, a wide `string`, `any`,
  * a template literal type, is unread. The checker follows every import,
  * alias, export list and re-export the compiler does, so no expression shape
  * is modelled here: #2823's rounds 1 to 4 each found one more shape a
@@ -173,9 +175,15 @@ export function programOf(roots: string[], planted: Map<string, string> = new Ma
   return ts.createProgram(roots, options, host);
 }
 
-/** Every pair of a reading of `a` followed by one of `b`, or one unread mark past MAX_READINGS. */
+/**
+ * Every pair of a reading of `a` followed by one of `b`. Past MAX_READINGS,
+ * each side's readings beside an unread mark for the other, so neither side is
+ * dropped (#2830 review: the left side alone left a right-hand value holding
+ * the phrase unread). A phrase inside one side is read there, and one split
+ * across the two puts a word beside the mark, which fails closed.
+ */
 function cross(a: string[], b: string[]): string[] {
-  if (a.length * b.length > MAX_READINGS) return a.map(x => x + UNRESOLVED);
+  if (a.length * b.length > MAX_READINGS) return [...a.map(x => x + UNRESOLVED), ...b.map(y => UNRESOLVED + y)];
   return a.flatMap(x => b.map(y => x + y));
 }
 
@@ -327,6 +335,58 @@ export function placementWordingViolations(): string[] {
 }
 
 /**
+ * Every template span or `+` part in `files` whose value is PLACEMENT_HEADING,
+ * selected by the symbol the checker resolves, never by spelling (#2823
+ * review, #2824): through an import alias, and through a variable whose
+ * initializer is the heading, const or let (#2830 review). `unread` is each
+ * site the reader does not read as exactly the heading.
+ */
+function headingSites(program: ts.Program, files: string[]): { sites: string[]; unread: string[] } {
+  const checker = program.getTypeChecker();
+  const reader = checkerReader(checker);
+  const home = program.getSourceFile(join(ROOT, "lib", "spec-placement.ts"));
+  if (home === undefined) throw new Error("lib/spec-placement.ts is not in the program, so the heading has no declaration to resolve to");
+  const declared = home.statements
+    .filter(ts.isVariableStatement)
+    .flatMap(st => st.declarationList.declarations)
+    .find(d => ts.isIdentifier(d.name) && d.name.text === "PLACEMENT_HEADING");
+  if (declared?.initializer === undefined) throw new Error("PLACEMENT_HEADING is not declared with a value in lib/spec-placement.ts");
+  const heading = JSON.stringify(reader.readings(declared.initializer));
+  if (heading !== JSON.stringify(["### Phase placement"])) throw new Error(`the heading reads as ${heading}`);
+  const isHeading = (e: ts.Node, depth = 0): boolean => {
+    const n = unwrapped(e);
+    const at = ts.isPropertyAccessExpression(n) ? n.name : n;
+    let sym = checker.getSymbolAtLocation(at);
+    if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
+    if (sym?.declarations?.includes(declared)) return true;
+    const v = sym?.valueDeclaration;
+    return depth < 8 && v !== undefined && ts.isVariableDeclaration(v) && v.initializer !== undefined && isHeading(v.initializer, depth + 1);
+  };
+  const sites: string[] = [];
+  const unread: string[] = [];
+  for (const f of files) {
+    const file = program.getSourceFile(f);
+    if (file === undefined) throw new Error(`${relative(ROOT, f)} is not in the program`);
+    const check = (e: ts.Expression) => {
+      if (!isHeading(e)) return;
+      const where = `${relative(ROOT, f)}:${file.getLineAndCharacterOfPosition(e.getStart(file)).line + 1}`;
+      sites.push(where);
+      if (JSON.stringify(reader.readings(unwrapped(e) as ts.Expression)) !== heading) unread.push(where);
+    };
+    const visit = (n: ts.Node): void => {
+      if (ts.isTemplateSpan(n)) check(n.expression);
+      else if (isPlus(n)) {
+        check(n.left);
+        check(n.right);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(file);
+  }
+  return { sites, unread };
+}
+
+/**
  * Sentences kept as they are, each for a reason that is not this suite's to
  * overrule. Matched by file and a phrase of the sentence, since a workflow
  * template's text runs on with no full stop, and each must match exactly one
@@ -337,7 +397,7 @@ const KEPT: { file: string; phrase: string; why: string }[] = [
   {
     file: "lib/spec-placement.ts",
     phrase: "names a table — placement: X",
-    why: "renders a criterion's own placement line, `placement: <phase>`; the value is the phase, so it can never be the word table (#2824)",
+    why: "renders a criterion's own placement line, `placement: <value>`, echoing the value the spec wrote; whatever that value says is the spec's wording, read from the spec, not wording this code chose (#2824, #2830 review)",
   },
   {
     file: "lib/spec-placement.ts",
@@ -516,49 +576,29 @@ describe("#2800: user-facing text names a placement table only as the older form
   }, 30_000);
 
   test("#2816, #2824: every interpolation of PLACEMENT_HEADING in lib/ and scripts/ reads as the heading", () => {
-    // Selected by the symbol the checker resolves it to, through any alias or
-    // export, never by its spelling (#2823 review, #2824).
     const { program, sources } = treeProgram();
-    const checker = program.getTypeChecker();
-    const reader = checkerReader(checker);
-    const home = program.getSourceFile(join(ROOT, "lib", "spec-placement.ts"))!;
-    const declared = home.statements
-      .filter(ts.isVariableStatement)
-      .flatMap(st => st.declarationList.declarations)
-      .find(d => ts.isIdentifier(d.name) && d.name.text === "PLACEMENT_HEADING")!;
-    const heading = reader.readings(declared.initializer!)!;
-    expect(heading).toEqual(["### Phase placement"]);
-    const isHeading = (e: ts.Node): boolean => {
-      const n = unwrapped(e);
-      const at = ts.isPropertyAccessExpression(n) ? n.name : n;
-      let sym = checker.getSymbolAtLocation(at);
-      if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
-      return sym?.declarations?.includes(declared) ?? false;
-    };
-    const sites: string[] = [];
-    const unread: string[] = [];
-    for (const f of sources) {
-      const file = program.getSourceFile(f)!;
-      const check = (e: ts.Expression) => {
-        if (!isHeading(e)) return;
-        const where = `${relative(ROOT, f)}:${file.getLineAndCharacterOfPosition(e.getStart(file)).line + 1}`;
-        sites.push(where);
-        if (JSON.stringify(reader.readings(unwrapped(e) as ts.Expression)) !== JSON.stringify(heading)) unread.push(where);
-      };
-      const visit = (n: ts.Node): void => {
-        if (ts.isTemplateSpan(n)) check(n.expression);
-        else if (isPlus(n)) {
-          check(n.left);
-          check(n.right);
-        }
-        ts.forEachChild(n, visit);
-      };
-      visit(file);
-    }
+    const { sites, unread } = headingSites(program, sources);
     expect(sites.length, "no interpolation of the heading was found, so this reads nothing").toBeGreaterThanOrEqual(5);
     // An imported use is among them, so the import alias was followed to the declaration.
     expect(sites.some(s => s.startsWith("scripts/")), sites.join(", ")).toBe(true);
     expect(unread).toEqual([]);
+  }, 30_000);
+
+  test("#2830 review: the census counts an interpolation through a variable holding the heading, and a wide one is unread", () => {
+    const at = join(ROOT, "lib", "planted.ts");
+    const source = [
+      'import { PLACEMENT_HEADING } from "./spec-placement";',
+      "const H = PLACEMENT_HEADING;",
+      "let L = PLACEMENT_HEADING;",
+      "const a = `the ${H} heading`;",
+      "const b = `the ${L} heading`;",
+      "const c = `the ${PLACEMENT_HEADING} heading`;",
+    ].join("\n");
+    const program = programOf([at], new Map([[at, source]]));
+    const { sites, unread } = headingSites(program, [at]);
+    expect(sites).toEqual(["lib/planted.ts:4", "lib/planted.ts:5", "lib/planted.ts:6"]);
+    // `let` widens the heading to string, so the census reports it unread rather than missing it.
+    expect(unread).toEqual(["lib/planted.ts:5"]);
   }, 30_000);
 
   test("#2823, #2824: a value the guard cannot read, where the phrase would name the table, fails closed", () => {
@@ -582,10 +622,17 @@ describe("#2800: user-facing text names a placement table only as the older form
       "const i = `${name} decided. The table is read.`;",
       // Emphasis around the value does not widen the window: it is stripped, as sentencesNamingTable strips it.
       "const j = `the **\\`${name}\\`**: table decides`;",
+      // More readings than MAX_READINGS: each side is still read, beside an unread mark for the other (#2830 review).
+      'declare const kind: "the " | "a " | "b " | "c "; declare const word: "placement table decides" | "p1" | "p2" | "p3" | "p4";',
+      "const k = `${kind}${word}`;",
+      // Whitespace is collapsed before the window, as sentencesNamingTable collapses it (#2830 review).
+      "const l = `the ${name}      table decides`;",
     ].join("\n");
     const program = programOf([at], new Map([[at, source]]));
     const passages = sourceStrings(program.getSourceFile(at)!, checkerReader(program.getTypeChecker()));
-    expect(passages.filter(p => p.opaqueTable).map(p => p.line)).toEqual([4, 5, 6, 7, 8, 13]);
+    expect(passages.filter(p => p.opaqueTable).map(p => p.line)).toEqual([4, 5, 6, 7, 8, 13, 16]);
+    // Past MAX_READINGS the right-hand value is still read, beside an unread mark, so its phrase is refused by name.
+    expect(passages.filter(p => p.line === 15).flatMap(p => sentencesNamingTable(p.text))).toEqual(["Xplacement table decides"]);
     expect(passages.find(p => p.line === 4)!.text).toBe("the X table decides");
     expect(passages.find(p => p.line === 9)!.text).toBe("line X: table rows are read");
   }, 30_000);
