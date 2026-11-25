@@ -1011,7 +1011,7 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
     const spec = plant({}).replace("| **Phase 2** | CRC-A3 | because |", "|Phase 2|CRC-A3|because|");
     const c = convertPlacement(spec);
     expect("refusal" in c).toBe(true);
-    if ("refusal" in c) expect(c.refusal.join("\n")).toMatch(/line \d+ .*do not start with/);
+    if ("refusal" in c) expect(c.refusal.join("\n")).toMatch(/line \d+ .*reader skips/);
   });
 
   test("a table written without closing pipes still loses its criteria column", () => {
@@ -1025,6 +1025,29 @@ describe("SC-2808: plan-spec prints the placement view and converts a table", ()
     const meanings = c.after.slice(c.after.indexOf(PLACEMENT_MEANINGS_HEADING));
     expect(meanings).not.toMatch(/CRC-A\d/);
     expect([...placementsById(c.after)]).toEqual([["CRC-A1", "Phase 1"], ["CRC-A2", "Phase 1"], ["CRC-A3", "Phase 2"]]);
+  });
+
+  // #2782 review round 2: the milestone plan and the placement view are one reading.
+  test("two table rows with one phase value give the milestone every criterion the view prints", async () => {
+    const spec = plant({ rows: [["**Phase 1**", "CRC-A1"], ["**Phase 1**", "CRC-A2"], ["**Phase 2**", "CRC-A3"]] });
+    const r = await run(["--placement"], spec);
+    expect(viewLines(r.stdout)).toEqual(["Phase 1: CRC-A1, CRC-A2", "Phase 2: CRC-A3"]);
+    const { actions } = milestonePlan(spec, [], "Planted");
+    expect(actions.map(a => [a.phase, a.criteria])).toEqual([[1, ["CRC-A1", "CRC-A2"]], [2, ["CRC-A3"]]]);
+    expect(uncoveredByMilestone(actions, []).flatMap(u => u.uncovered)).toEqual(["CRC-A1", "CRC-A2", "CRC-A3"]);
+  });
+
+  test("a row that only starts like the header is not exempt: it refuses rather than losing its criteria", () => {
+    const spec = plant({}).replace("| **Phase 2** | CRC-A3 | because |", "| Placement 2 | CRC-A3 | because |");
+    const c = convertPlacement(spec);
+    expect("refusal" in c ? c.refusal.join("\n") : JSON.stringify(c)).toMatch(/line \d+ .*reader skips/);
+  });
+
+  test("a spec stating one id twice converts, and the count compares criteria with criteria", () => {
+    const spec = plant({ criteria: ["CRC-A1", "CRC-A2", "CRC-A1"], rows: [["**Phase 1**", "CRC-A1, CRC-A2"]] });
+    expect(placementConversionDiff(spec, spec)).toEqual([]);
+    const dropped = spec.replace("- [ ] CRC-A1: criterion number 3\n", "");
+    expect(placementConversionDiff(spec, dropped)).toContain("the spec would state 2 criteria, not 3");
   });
 
   test("--placement and --convert-placement together are refused", async () => {

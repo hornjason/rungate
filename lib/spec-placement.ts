@@ -386,12 +386,17 @@ export function placementConversionDiff(before: string, after: string): string[]
   if (ra.reading !== rb.reading) {
     out.push(`the reading would be ${ra.reading} afterwards, not ${rb.reading}: ${ra.unmeasuredReasons.join("; ")}`);
   }
-  const prints = new Map(parseCriteria(before).map(c => [c.id, criterionFingerprint(c.text)]));
-  const afterCriteria = parseCriteria(after);
-  for (const c of afterCriteria) {
-    if (prints.get(c.id) !== criterionFingerprint(c.text)) out.push(`${c.id}: its fingerprint would change`);
+  // Criterion by criterion, in document order: a conversion adds lines and
+  // reorders nothing, and a spec may state one id twice (#2782 review).
+  const was2 = parseCriteria(before);
+  const now2 = parseCriteria(after);
+  if (now2.length !== was2.length) out.push(`the spec would state ${now2.length} criteria, not ${was2.length}`);
+  else {
+    now2.forEach((c, i) => {
+      const b = was2[i]!;
+      if (c.id !== b.id || criterionFingerprint(c.text) !== criterionFingerprint(b.text)) out.push(`${b.id}: its fingerprint would change`);
+    });
   }
-  if (afterCriteria.length !== prints.size) out.push(`the spec would state ${afterCriteria.length} criteria, not ${prints.size}`);
   return out;
 }
 
@@ -444,7 +449,10 @@ export function convertPlacement(content: string): PlacementConversion {
     const l = lines[i]!;
     if (/^#{1,3} /.test(l)) break;
     if (!l.startsWith("|")) continue;
-    if (!read.has(i) && !l.startsWith("|---") && !l.startsWith("| Placement")) {
+    // The header is the row the separator follows, whatever it says: a row
+    // that merely starts like it is skipped by the reader, so it refuses.
+    const header = lines[i + 1]?.startsWith("|---") === true;
+    if (!read.has(i) && !l.startsWith("|---") && !header) {
       unread.push(i + 1);
       continue;
     }
@@ -456,7 +464,7 @@ export function convertPlacement(content: string): PlacementConversion {
   if (unread.length > 0) {
     return {
       refusal: [
-        `line ${unread.join(", ")} of the \`${PLACEMENT_HEADING}\` table: rows that do not start with "| ", which the placement reader skips, so converting would drop their criteria unseen; fix them first`,
+        `line ${unread.join(", ")} of the \`${PLACEMENT_HEADING}\` table: rows the placement reader skips (one not starting "| ", or one starting "| Placement" that is not the header), so converting would drop their criteria unseen; fix them first`,
       ],
     };
   }
@@ -1030,9 +1038,11 @@ export function milestonePlan(
   renameFrom?: string,
 ): { actions: MilestoneAction[]; unmanaged: LiveMilestone[]; conflicts: FamilyConflict[] } {
   const headings = new Map(parsePhaseHeadings(content).map(h => [h.number, h]));
-  const rows = parsePlacementRows(content);
+  // Read through the placement view, so two table rows with one value give
+  // the milestone every criterion `plan-spec --placement` prints for it
+  // (#2782 review).
   const byPhase = new Map<number, string[]>();
-  for (const r of rows) {
+  for (const r of placementView(content)) {
     const m = r.placement.match(PHASE_VALUE);
     if (m) byPhase.set(Number(m[1]), r.ids);
   }
