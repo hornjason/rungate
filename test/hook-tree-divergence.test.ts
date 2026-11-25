@@ -155,6 +155,7 @@ import {
   pathSpelling,
   registeredTreeCensus,
   resolvePath,
+  unreadableHookFile,
   settingsEnv,
 } from "../lib/hook-target-tree";
 import {
@@ -965,6 +966,10 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
       expect(census.unresolved, command).toEqual([]);
       expect(wrongTreeViolations([owned], [command]), command).toEqual([]);
     }
+    // A line the parse reads as running the hook is selected however the name is spelled (round 3).
+    for (const spelled of ["bun ${PAI_HOOKS_DIR}/Foo\\.hook.ts", 'bun ${PAI_HOOKS_DIR}/"Foo".hook.ts']) {
+      expect(wrongTreeViolations(["Foo"], [spelled]).map(v => v.hook), spelled).toEqual(["Foo"]);
+    }
     // At a boundary the name is still selected, wherever it sits.
     for (const command of ['sh -c "bun ${RUNGATE_HOOKS_DIR}/Foo.hook.ts"', "run --for Foo.hook.ts", "Foo.hook.ts.bak"]) {
       expect(wrongTreeViolations(["Foo"], [command]).map(v => v.tree), command).toEqual(["unparsed"]);
@@ -972,12 +977,29 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
   });
   test("#2826: a hook file whose name is built from a variable makes the reading UNMEASURED, beside a clean one", () => {
     const env = envs({ "user-settings": { RUNGATE_HOOKS_DIR: `${REPO}/hooks`, HOOK: "ProjectStateSync" } });
-    for (const command of ["bun ${RUNGATE_HOOKS_DIR}/${HOOK}.hook.ts", "bun /x/$HOOK.hook.ts", "bun /x/pre-${HOOK}.hook.ts --flag=1"]) {
+    for (const command of [
+      "bun ${RUNGATE_HOOKS_DIR}/${HOOK}.hook.ts",
+      "bun /x/$HOOK.hook.ts",
+      "bun /x/pre-${HOOK}.hook.ts --flag=1",
+      // A substitution with a space in the name: fail closed, not one more spelling (round 3).
+      "bun ${RUNGATE_HOOKS_DIR}/$(printf ProjectStateSync).hook.ts",
+    ]) {
       const census = registeredTreeCensus(["ProjectStateSync"], cmds({ "user-settings": [RG("ProjectStateSync"), command] }), env, REPO);
       expect(census.reading, command).toBe("UNMEASURED");
       expect(census.inRepo.map(r => r.hook), command).toEqual(["ProjectStateSync"]);
-      expect(census.unmeasuredReasons.join(" "), command).toContain("whose name is built from a variable");
+      expect(census.unmeasuredReasons.join(" "), command).toContain("whose name this census cannot read");
       expect(census.unmeasuredReasons.join(" "), command).not.toContain(command);
+    }
+    // The name test reads back to the path or word before it, so a plain name stays readable (round 3).
+    for (const [command, unreadable] of [
+      ["bun /x/$(printf Foo).hook.ts", true],
+      ["bun /x/${HOOK}.hook.ts", true],
+      ["bun /x/Foo\\.hook.ts", true],
+      ["bun --inspect Foo.hook.ts", false],
+      ['sh -c "bun /x/Foo.hook.ts"', false],
+      ["bun /x/A.hook.ts --for B.hook.ts", false],
+    ] as const) {
+      expect(unreadableHookFile(command), command).toBe(unreadable);
     }
     // A variable only in the directory leaves the name readable: that is the ordinary path, still clean.
     const clean = registeredTreeCensus(["ProjectStateSync"], cmds({ "user-settings": [RG("ProjectStateSync")] }), env, REPO);

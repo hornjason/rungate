@@ -89,8 +89,21 @@ import {
  * `.claude/rungate/hooks.json` is scaffolded into the project settings and
  * has the same reach.
  */
-/** A path segment ending `.hook.ts` whose name holds a `$`: a hook file named by a variable (#2826 review). */
-const VARIABLE_HOOK_FILE = /(?:^|[\/\s"'=])[^\/\s"'=]*\$[^\/\s"'=]*\.hook\.ts(?![A-Za-z0-9_-])/;
+/**
+ * Whether `command` holds a hook file whose name is not plainly readable: an
+ * occurrence of `.hook.ts` whose name, back to the path or word before it, is
+ * anything but name characters. A variable, a substitution, an escape or a
+ * quote in the name all qualify. The census fails closed on these rather than
+ * recognising each spelling (#2826 review, round 3).
+ */
+export function unreadableHookFile(command: string): boolean {
+  for (const m of command.matchAll(/\.hook\.ts(?![A-Za-z0-9_-])/g)) {
+    const before = command.slice(0, m.index);
+    const name = before.slice(Math.max(before.lastIndexOf("/"), before.search(/[\s"'=][^\s"'=]*$/)) + 1);
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) return true;
+  }
+  return false;
+}
 
 const PROJECT_DIR_SCOPES: RegistrationScope[] = [
   "project-settings",
@@ -360,11 +373,12 @@ export function registeredTreeCensus(
             `repo's copy; it is no reading at all`,
         });
       }
-      // A hook file whose NAME is built from a variable names no hook this census
-      // can read, owned or not: a reason, so the reading is not clean (#2826 review).
-      if (raw === null && VARIABLE_HOOK_FILE.test(command) && !owned.some(h => mentionsHook(command, h))) {
+      // A line the parse refuses, holding a hook file whose NAME is not plainly
+      // readable, names no hook this census can read, owned or not: a reason,
+      // so the reading is not clean (#2826 review, rounds 2 and 3).
+      if (raw === null && unreadableHookFile(command)) {
         reasons.push(
-          `a registration in ${reading.scope} executes a hook file whose name is built from a variable, so ` +
+          `a registration in ${reading.scope} runs a hook file whose name this census cannot read, so ` +
             `which hook it runs, and in which tree, could not be read`,
         );
       }

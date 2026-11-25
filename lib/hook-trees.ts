@@ -391,6 +391,25 @@ export function hookRegistrationPath(command: string, hook: string): string | nu
 }
 
 /**
+ * Does `command` NAME `<hook>.hook.ts`, or does the parse read it as RUNNING
+ * that hook: the selection both census readers make, deliberately over-broad
+ * (see `wrongTreeViolations`' table). One binding, so `wrongTreeViolations`
+ * and `registeredTreeCensus` agree on which strings concern a hook, and each
+ * reports one it does not read as an execution rather than skipping it (#2820).
+ *
+ * The name starts at a boundary: `Foo.hook.ts` inside `OtherFoo.hook.ts`
+ * names OtherFoo, not Foo (#2826 review). And a line the parse reads as
+ * running the hook is selected however its file name is spelled, such as
+ * `IssueCloseGuard\\.hook.ts` or `"IssueCloseGuard".hook.ts`, so the two
+ * readers cannot disagree about it (#2826 review, round 3).
+ */
+export function mentionsHook(command: string, hook: string): boolean {
+  if (executedHookFile(command) === `${hook}.hook.ts`) return true;
+  const name = `${hook}.hook.ts`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?:^|[^A-Za-z0-9_-])${name}`).test(command);
+}
+
+/**
  * Does `command` EXECUTE `<hook>.hook.ts`?
  *
  * The single predicate every registration reading goes through, so there is
@@ -477,22 +496,6 @@ export interface TreeViolation {
  * the boundary, stated, because a stated limit is an answer and silence reads
  * as coverage.
  */
-/**
- * Does `command` NAME `<hook>.hook.ts` anywhere: the selection both census
- * readers make, deliberately over-broad (see the table above). One binding, so
- * `wrongTreeViolations` and `registeredTreeCensus` agree on which strings
- * mention a hook, and each reports a mention it does not read as an
- * execution rather than skipping it (#2820).
- *
- * The name starts at a boundary: `Foo.hook.ts` inside `OtherFoo.hook.ts`
- * names OtherFoo, not Foo (#2826 review). Over-broad about where a name sits,
- * never about which name it is.
- */
-export function mentionsHook(command: string, hook: string): boolean {
-  const name = `${hook}.hook.ts`.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?:^|[^A-Za-z0-9_-])${name}`).test(command);
-}
-
 export function wrongTreeViolations(owned: string[], commands: string[]): TreeViolation[] {
   const out: TreeViolation[] = [];
   for (const hook of owned) {
