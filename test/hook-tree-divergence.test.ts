@@ -155,11 +155,13 @@ import {
   pathSpelling,
   registeredTreeCensus,
   resolvePath,
-  unreadableHookFile,
   settingsEnv,
 } from "../lib/hook-target-tree";
 import {
+  hookFileKind,
   hookTreeCensus,
+  mayNameHook,
+  readWholeLine,
   registrationTree,
   settingsCommands,
   wrongTreeViolations,
@@ -931,27 +933,24 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
     expect(census.inRepo.map(r => r.hook)).toEqual(["ProjectStateSync"]);
   });
 
-  test("#2820: a registration the parse does not read is counted and reported, never skipped", () => {
+  test("#2820: a registration the census does not read is counted and reported, never skipped", () => {
     const env = envs({ "user-settings": { RUNGATE_HOOKS_DIR: `${REPO}/hooks` } });
-    const refused = [
+    for (const command of [
       // The parse refuses the line.
       "bun ${RUNGATE_HOOKS_DIR}/ProjectStateSync.hook.ts --name $(echo x # y)",
       // Named inside a quoted string, not executed.
       'sh -c "bun ${RUNGATE_HOOKS_DIR}/ProjectStateSync.hook.ts"',
       // Named, while another hook executes.
       "bun ${RUNGATE_HOOKS_DIR}/Other.hook.ts --for ProjectStateSync.hook.ts",
-    ];
-    for (const command of refused) {
+    ]) {
       // Beside an in-repo registration of the same hook, which alone reads clean (AC-R2).
       const census = registeredTreeCensus(["ProjectStateSync"], cmds({ "user-settings": [RG("ProjectStateSync"), command] }), env, REPO);
       expect(census.reading, command).toBe("UNMEASURED");
-      expect(census.examined, command).toBe(2);
       expect(census.inRepo.map(r => r.hook), command).toEqual(["ProjectStateSync"]);
-      expect(census.unresolved.map(r => [r.hook, r.spelling]), command).toEqual([["ProjectStateSync", "unparsed"]]);
-      expect(census.unmeasuredReasons.join(" "), command).toContain("does not read as executing it");
-      // The detail names no command, so no setting crosses into a reason.
-      expect(census.unresolved[0]!.detail, command).not.toContain(command);
-      // The two readers agree: the tree census reports the same string unparsed.
+      expect(census.unmeasuredReasons.join(" "), command).toContain("1 registration in user-settings could not be read completely");
+      // The reason quotes no command, so no setting crosses into it.
+      expect(census.unmeasuredReasons.join(" "), command).not.toContain(command);
+      // The tree census reports the same string unparsed.
       expect(wrongTreeViolations(["ProjectStateSync"], [command]).map(v => v.tree), command).toEqual(["unparsed"]);
     }
   });
@@ -975,35 +974,111 @@ describe("#713 point 4: the tree the settings REGISTER is the tree the repo TEST
       expect(wrongTreeViolations(["Foo"], [command]).map(v => v.tree), command).toEqual(["unparsed"]);
     }
   });
-  test("#2826: a hook file whose name is built from a variable makes the reading UNMEASURED, beside a clean one", () => {
-    const env = envs({ "user-settings": { RUNGATE_HOOKS_DIR: `${REPO}/hooks`, HOOK: "ProjectStateSync" } });
-    for (const command of [
-      "bun ${RUNGATE_HOOKS_DIR}/${HOOK}.hook.ts",
-      "bun /x/$HOOK.hook.ts",
-      "bun /x/pre-${HOOK}.hook.ts --flag=1",
-      // A substitution with a space in the name: fail closed, not one more spelling (round 3).
+  test("#2828: the census reads only a line it reads completely, and any other line that may name a hook is UNMEASURED", () => {
+    const env = envs({
+      "user-settings": {
+        RUNGATE_HOOKS_DIR: `${REPO}/hooks`,
+        PAI_HOOKS_DIR: "/home/u/.pai/hooks",
+        HOOK: "ProjectStateSync",
+        K: "ok",
+        BIN: "/usr/local/bin/notifier",
+        SPLIT: "notify.ts /home/u/.pai/hooks/ProjectStateSync.hook.ts",
+      },
+    });
+    // A later segment runs the same hook from another tree (#2826 round 4), after every separator.
+    const laterSegment = ["&&", ";", "|", "||", "&", "\n"].map(
+      sep => `bun \${RUNGATE_HOOKS_DIR}/ProjectStateSync.hook.ts ${sep} bun \${PAI_HOOKS_DIR}/ProjectStateSync.hook.ts`,
+    );
+    const unread = [
+      ...laterSegment,
+      // A refused line that splits the suffix with quotes (round 4).
+      'bun --inspect ${PAI_HOOKS_DIR}/ProjectStateSync.hook"."ts',
+      // A substitution in the file name, and a variable no scope defines (round 3).
       "bun ${RUNGATE_HOOKS_DIR}/$(printf ProjectStateSync).hook.ts",
-    ]) {
+      "bun /x/${NOPE}.hook.ts",
+      "bun /x/ProjectStateSync.ho${NOPE}.ts",
+      // A variable whose value the shell would split into two words, the second a hook it only passes.
+      "bun /x/${SPLIT}",
+      // A program that runs what its arguments say, a file run by a flag, and a hook passed to another hook.
+      'sh -c "bun ${PAI_HOOKS_DIR}/ProjectStateSync.hook.ts"',
+      "bun --preload=${PAI_HOOKS_DIR}/ProjectStateSync.hook.ts /x/real.ts",
+      "bun ${RUNGATE_HOOKS_DIR}/Other.hook.ts --for ${PAI_HOOKS_DIR}/ProjectStateSync.hook.ts",
+      // The word spelled so the text never shows it: quotes, a case the filesystem may fold.
+      'bun --inspect /x/ProjectStateSync.ho"o"k.ts',
+      "bun /x/ProjectStateSync.HOOK.ts",
+    ];
+    for (const command of unread) {
+      // Beside an in-repo registration of the same hook, which alone reads clean (AC-R2).
       const census = registeredTreeCensus(["ProjectStateSync"], cmds({ "user-settings": [RG("ProjectStateSync"), command] }), env, REPO);
       expect(census.reading, command).toBe("UNMEASURED");
+      expect(census.examined, command).toBe(1);
       expect(census.inRepo.map(r => r.hook), command).toEqual(["ProjectStateSync"]);
-      expect(census.unmeasuredReasons.join(" "), command).toContain("whose name this census cannot read");
-      expect(census.unmeasuredReasons.join(" "), command).not.toContain(command);
+      expect(census.foreign, command).toEqual([]);
+      const why = census.unmeasuredReasons.join(" ");
+      expect(why, command).toContain("1 registration in user-settings could not be read completely");
+      // The reason names the scope and quotes no command, so no setting crosses into it.
+      expect(why, command).not.toContain(command);
     }
-    // The name test reads back to the path or word before it, so a plain name stays readable (round 3).
-    for (const [command, unreadable] of [
-      ["bun /x/$(printf Foo).hook.ts", true],
-      ["bun /x/${HOOK}.hook.ts", true],
-      ["bun /x/Foo\\.hook.ts", true],
-      ["bun --inspect Foo.hook.ts", false],
-      ['sh -c "bun /x/Foo.hook.ts"', false],
-      ["bun /x/A.hook.ts --for B.hook.ts", false],
+    // The tree census reads a later segment the same way: never the clean first command alone.
+    for (const command of laterSegment) {
+      expect(readWholeLine(command).read, command).toBe(false);
+      expect(wrongTreeViolations(["ProjectStateSync"], [command]).map(v => v.tree), command).toEqual(["unparsed"]);
+    }
+    // Two such lines in one scope are counted in one reason.
+    const two = registeredTreeCensus(["ProjectStateSync"], cmds({ "user-settings": [RG("ProjectStateSync"), unread[0]!, unread[1]!] }), env, REPO);
+    expect(two.unmeasuredReasons.join(" ")).toContain("2 registrations in user-settings could not be read completely");
+
+    // Read completely, a line is read as the hook it runs, however its name is spelled: quotes
+    // inside one command, or a variable a scope defines once.
+    for (const [command, resolved] of [
+      ['bun ${PAI_HOOKS_DIR}/ProjectStateSync.hook"."ts', "/home/u/.pai/hooks/ProjectStateSync.hook.ts"],
+      ["bun ${RUNGATE_HOOKS_DIR}/${HOOK}.hook.ts", `${REPO}/hooks/ProjectStateSync.hook.ts`],
+      ["bun /x/$HOOK.hook.ts", "/x/ProjectStateSync.hook.ts"],
+      ["bun /x/ProjectStateSync.ho${K}.ts", "/x/ProjectStateSync.hook.ts"],
     ] as const) {
-      expect(unreadableHookFile(command), command).toBe(unreadable);
+      const census = registeredTreeCensus(["ProjectStateSync"], cmds({ "user-settings": [command] }), env, REPO);
+      expect(census.reading, command).toBe("MEASURED");
+      expect([...census.inRepo, ...census.foreign].map(r => r.resolved), command).toEqual([resolved]);
     }
-    // A variable only in the directory leaves the name readable: that is the ordinary path, still clean.
-    const clean = registeredTreeCensus(["ProjectStateSync"], cmds({ "user-settings": [RG("ProjectStateSync")] }), env, REPO);
-    expect(clean.reading).toBe("MEASURED");
+
+    // A line read completely that runs no hook, one more registration with a comment, and an
+    // unread line that cannot name a hook, all leave the reading clean.
+    for (const command of [
+      "bun ${RUNGATE_HOOKS_DIR}/ProjectStateSync.hook.ts # runs once",
+      "afplay /System/Library/Sounds/Glass.aiff",
+      // A program named by a variable a scope defines once.
+      "${BIN} notify done",
+      "echo done; afplay /System/Library/Sounds/Glass.aiff",
+    ]) {
+      const census = registeredTreeCensus(["ProjectStateSync"], cmds({ "user-settings": [RG("ProjectStateSync"), command] }), env, REPO);
+      expect(census.reading, command).toBe("MEASURED");
+    }
+
+    // What a run file's name says, and what may name a hook: the word in any quoting or case, or a
+    // character that can build a name the text does not show.
+    for (const [name, kind] of [
+      ["Foo.hook.ts", "hook"],
+      ["notify.ts", "other"],
+      ["Foo.HOOK.ts", "unreadable"],
+      ["Foo.hook.ts.bak", "unreadable"],
+      ["${F}", "unreadable"],
+    ] as const) {
+      expect(hookFileKind(name), name).toBe(kind);
+    }
+    for (const [command, may] of [
+      ["echo done; afplay /x.aiff", false],
+      ["echo done; bun /x/Foo.ho''ok.ts", true],
+      ["echo done; bun /x/Foo.ho\\\nok.ts", true],
+      ["echo done; bun /x/Foo.HoOk.ts", true],
+      ["echo done; bun /x/${F}", true],
+      ["echo done; bun /x/Foo.h*.ts", true],
+      ["echo done; bun /x/Foo.h?ok.ts", true],
+      ["echo done; bun /x/Foo.h[o]ok.ts", true],
+      ["echo done; bun /x/Foo.h{o,o}k.ts", true],
+      ["echo done; bun `cat /x/f`", true],
+    ] as const) {
+      expect(mayNameHook(command), command).toBe(may);
+    }
   });
 
   test("AC-R3: a variable nothing defines is UNRESOLVED, never 'this repo'", () => {

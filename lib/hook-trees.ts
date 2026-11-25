@@ -203,8 +203,10 @@ function parameterLength(s: string, i: number): number {
 }
 
 /**
- * The words of a command line's first command, or null when the line holds
- * anything this reader does not account for (#2802, #2815 review).
+ * The words of a command line's first command, and whether that command is
+ * the whole line, or null when the line holds anything this reader does not
+ * account for (#2802, #2815 review). A separator, or anything after a
+ * newline, means the line is more than one command (#2828).
  *
  * It accepts, and refuses everything else: rounds 1 to 3 of #2815's review
  * each found one more shell construct a general reader misread, so a path is
@@ -232,13 +234,15 @@ function parameterLength(s: string, i: number): number {
  *   unquoted newline ends the scan, since the shell runs a line before it
  *   reads the next.
  */
-function shellWords(command: string): ShellWord[] | null {
+function shellLine(command: string): { words: ShellWord[]; whole: boolean } | null {
   const words: ShellWord[] = [];
   let text = "";
   let raw = "";
   let inWord = false;
   let quote: "'" | '"' | null = null;
   let collecting = true;
+  // Whether the first command is the whole line: no separator, and nothing after a newline (#2828).
+  let whole = true;
   const end = () => {
     if (inWord && collecting) words.push({ text, raw });
     text = "";
@@ -298,11 +302,14 @@ function shellWords(command: string): ShellWord[] | null {
       while (i + 1 < command.length && command[i + 1] !== "\n") i++;
     } else if (c === "\n") {
       // The shell runs this line before it reads the next, so nothing after
-      // it can stop the first command running.
+      // it can stop the first command running. Anything after it is another
+      // command, so the line is not one command.
+      if (command.slice(i + 1).trim() !== "") whole = false;
       break;
     } else if (c === ";" || c === "|" || c === "&") {
       end();
       collecting = false;
+      whole = false;
     } else if (c === " " || c === "\t") {
       end();
     } else if (PLAIN.test(c)) {
@@ -315,7 +322,7 @@ function shellWords(command: string): ShellWord[] | null {
   }
   if (quote !== null) return null;
   end();
-  return words;
+  return { words, whole };
 }
 
 /**
@@ -327,11 +334,48 @@ function shellWords(command: string): ShellWord[] | null {
  *
  * The path is what `wrongTreeViolations` classifies, and the basename is what
  * every registration reading compares. Both come from here; they cannot
- * disagree about which token ran. Its words come from {@link shellWords}.
+ * disagree about which token ran. Its words come from {@link shellLine}.
  */
 export function executedHookPath(command: string): string | null {
-  const words = shellWords(command);
-  if (words === null) return null;
+  const line = shellLine(command);
+  const run = line === null ? null : executedWord(line.words);
+  if (run === null) return null;
+  return hookFileKind(run.word.slice(run.word.lastIndexOf("/") + 1)) === "hook" ? run.word : null;
+}
+
+/** A plain hook file name: name characters, then `.hook.ts`. */
+const HOOK_NAME = /^[A-Za-z0-9_-]+\.hook\.ts$/;
+
+/**
+ * What a file name a command runs says (#2828): a plain hook file, a file
+ * that is no hook, or a name that could be a hook and is not plain. A
+ * parameter in it hides the name, and a case-folding filesystem runs
+ * `X.HOOK.ts` as `X.hook.ts`, so both are `unreadable`.
+ */
+export function hookFileKind(name: string): "hook" | "other" | "unreadable" {
+  if (HOOK_NAME.test(name)) return "hook";
+  return name.includes("$") || /hook/i.test(name) ? "unreadable" : "other";
+}
+
+/**
+ * Whether text may name a hook a reader cannot see (#2828). With line
+ * continuations, quotes and backslashes taken out, it holds the text `hook`
+ * in any case, or it holds a character that can build a name the text does
+ * not show: a parameter or a substitution (`$`, a backquote), a glob (`*`,
+ * `?`, `[`) or a brace. No spelling of any one hook is recognised, so no
+ * review round finds one more (#2826 review, round 4).
+ */
+export function mayNameHook(text: string): boolean {
+  const plain = text.replace(/\\\n/g, "").replace(/["'\\]/g, "");
+  return /hook/i.test(plain) || /[$`*?[{]/.test(text);
+}
+
+/**
+ * The word a command's argv walk lands on as the file it runs, and its index,
+ * or null when the walk refuses: a bare flag, no positional, or a word holding
+ * whitespace. The one walk: `executedHookPath` and `readWholeLine` both read it.
+ */
+function executedWord(words: ShellWord[]): { word: string; index: number } | null {
   // A leading assignment is a word written `NAME=` before any quote: a quoted
   // `"A=1"` is a command word to the shell, not an assignment.
   const assignment = (w: ShellWord | undefined) => w !== undefined && /^[A-Za-z_][A-Za-z0-9_]*=/.test(w.raw);
@@ -367,8 +411,32 @@ export function executedHookPath(command: string): string | null {
   // shell looks up as a program and cannot run (#2815 review, round 3). Either
   // way it is no hook this parse reads: loud, not a registration.
   if (/\s/.test(arg)) return null;
-  const base = arg.slice(arg.lastIndexOf("/") + 1);
-  return /^[A-Za-z0-9_-]+\.hook\.ts$/.test(base) ? arg : null;
+  return { word: arg, index: i };
+}
+
+/** How a census may read one settings line (#2828). */
+export type LineReading = { read: true; word: string } | { read: false };
+
+/**
+ * Whether a census may read this line, and the word it runs if so (#2828).
+ *
+ * It may only when the line is ONE command whose every character this reader
+ * accounts for, and no word but the one it runs may name a hook: a program
+ * such as `sh -c` runs what its arguments say, and `bun --preload=…` runs a
+ * file it does not execute. The caller judges the run word's name with
+ * {@link hookFileKind}, once any variable in it is expanded. Anything else is
+ * `read: false`, and is never read as clean: #2826's review found, round
+ * after round, one more spelling a census read as clean, the last a later
+ * segment re-running the hook from another tree.
+ */
+export function readWholeLine(command: string): LineReading {
+  const line = shellLine(command);
+  if (line === null || !line.whole) return { read: false };
+  const run = executedWord(line.words);
+  if (run === null) return { read: false };
+  const others = line.words.filter((_, i) => i !== run.index).map(w => w.raw).join(" ");
+  if (mayNameHook(others)) return { read: false };
+  return { read: true, word: run.word };
 }
 
 /** The executed hook file as a BASENAME. A projection of `executedHookPath`. */
@@ -489,6 +557,7 @@ export interface TreeViolation {
  * | a wrapper script that `exec`s the hook without naming it | not selected at all, so not reported |
  * | `sh -c "bun ${PAI_HOOKS_DIR}/X.hook.ts"` | selected, reported `unparsed` — the quoting is not unwrapped, so the tree is not read |
  * | `make x && bun ${PAI_HOOKS_DIR}/X.hook.ts` — executed in a LATER segment | selected, reported `unparsed` |
+ * | `bun ${RUNGATE_HOOKS_DIR}/X.hook.ts && bun ${PAI_HOOKS_DIR}/X.hook.ts` — more than one command, the first from this tree | selected, reported `unparsed`, never `rungate` (#2828) |
  *
  * The first two are the ones nothing here can reach: a string that does not
  * contain the hook's file name cannot be selected by any reading of these
@@ -501,7 +570,10 @@ export function wrongTreeViolations(owned: string[], commands: string[]): TreeVi
   for (const hook of owned) {
     // SELECTION stays over-broad on purpose — see the table above.
     for (const command of commands.filter(c => mentionsHook(c, hook))) {
-      const path = hookRegistrationPath(command, hook);
+      // A line that is not one command read completely is never read as the
+      // tree its first command names: a later segment can run the hook from
+      // another tree (#2828).
+      const path = readWholeLine(command).read ? hookRegistrationPath(command, hook) : null;
       if (path === null) {
         const executes = executedHookFile(command);
         out.push({
