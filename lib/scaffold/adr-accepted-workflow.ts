@@ -85,6 +85,58 @@ export interface AdrAcceptedWorkflowOptions {
   mergeWorkflow: string | null;
 }
 
+/**
+ * The first step's script on a merge-triggered run (#2842). The merge
+ * workflow completes about three times a push in a consumer, and each run did
+ * a full-depth checkout and set up bun before anything asked whether it had
+ * merged. This decides `go` first, from three readings:
+ *
+ * - the triggering run concluded `success`, so it may have merged;
+ * - it ran for this repository, not a fork's head;
+ * - the default branch's head differs from this workflow's newest successful
+ *   run, so something reached main since the last placement.
+ *
+ * A reading the API could not give is not "nothing merged": `go` stays
+ * true and the run does today's full work, which is idempotent. Only a
+ * definite answer skips it.
+ */
+export function buildMergedGateScript(): string {
+  return [
+    `go=true`,
+    `if [ "$CONCLUSION" != "success" ]; then`,
+    `  echo "The merge workflow concluded '$CONCLUSION', so it merged nothing."; go=false`,
+    `elif [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then`,
+    `  echo "The merge workflow ran for $HEAD_REPO, not $GITHUB_REPOSITORY, so its run is not trusted to have merged here."; go=false`,
+    `else`,
+    `  main=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha) || main=""`,
+    `  last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${ADR_ACCEPTED_WORKFLOW_FILE}/runs?status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""') || last=""`,
+    `  if [ -z "$main" ]; then`,
+    `    echo "::notice::The head of $GITHUB_REF_NAME could not be read, so whether anything merged is UNMEASURED; running the full placement."`,
+    `  elif [ -n "$last" ] && [ "$main" = "$last" ]; then`,
+    `    echo "Nothing reached $GITHUB_REF_NAME since this workflow last succeeded at $last."; go=false`,
+    `  fi`,
+    `fi`,
+    `echo "go=$go" >> "$GITHUB_OUTPUT"`,
+  ].join("\n");
+}
+
+/**
+ * The warning a scaffold prints when `board.mergeWorkflow` names no workflow
+ * under `.github/workflows` (#2842), or null when one has that `name:`. The
+ * trigger matches the merging workflow's `name:` exactly, so a typo writes a
+ * trigger that never fires and nothing else reports it.
+ */
+export function mergeWorkflowWarning(mergeWorkflow: string | null, names: readonly string[], unreadable: readonly string[] = []): string | null {
+  if (mergeWorkflow === null || names.includes(mergeWorkflow)) return null;
+  const unread = unreadable.length === 0 ? "" : ` ${unreadable.join(", ")} could not be read, so whether one of them has it is UNMEASURED.`;
+  return (
+    `WARN: board.mergeWorkflow is ${JSON.stringify(mergeWorkflow)}, and no workflow under .github/workflows has that name ` +
+    `(${names.length === 0 ? "none found" : names.map(n => JSON.stringify(n)).join(", ")}).${unread} ` +
+    `adr-accepted.yml's workflow_run trigger names it, so it never fires and a merge made by automation places nothing. ` +
+    `Set board.mergeWorkflow to the merging workflow's name: exactly, and re-run rungate scaffold.`
+  );
+}
+
 /** The whole `adr-accepted.yml` body. */
 export function buildAdrAcceptedWorkflow(opts: AdrAcceptedWorkflowOptions): string {
   const spec = boardInput("engineSpec", opts.engineSpec);
@@ -116,13 +168,32 @@ export function buildAdrAcceptedWorkflow(opts: AdrAcceptedWorkflowOptions): stri
   actions: read
   # The merged pull requests, and the issues each declares closed (SC-2788).
   pull-requests: read`;
+  // #2842: on a merge-triggered run, whether anything merged is decided
+  // before the checkout, and every step after it is gated on the answer. A
+  // push run skips the gate, so its output is empty and nothing is skipped.
+  const gate = mergeName === null ? "" : ` && steps.merged.outputs.go != 'false'`;
+  const stepIf = mergeName === null ? "" : `
+        if: \${{ steps.merged.outputs.go != 'false' }}`;
+  const gateStep =
+    mergeName === null
+      ? ""
+      : `
+      - id: merged
+        name: Did the merge workflow merge anything?
+        if: \${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+          CONCLUSION: \${{ github.event.workflow_run.conclusion }}
+          HEAD_REPO: \${{ github.event.workflow_run.head_repository.full_name }}
+        run: |
+${buildMergedGateScript().split("\n").map(l => `          ${l}`).join("\n")}`;
   const fetchStep =
     mergeName === null
       ? ""
       : `
       # The range read below holds GITHUB_TOKEN on a merge-triggered run, so
       # the package is fetched here first, by a step that holds no token.
-      - name: Fetch rungate before any step holds a token
+      - name: Fetch rungate before any step holds a token${stepIf}
         run: ${cli} --version`;
   const acceptedEnv =
     mergeName === null
@@ -157,7 +228,7 @@ export function buildAdrAcceptedWorkflow(opts: AdrAcceptedWorkflowOptions): stri
       : `
 
       - name: Close the issues a merge made by automation declared
-        if: \${{ !cancelled() && github.event_name == 'workflow_run' }}
+        if: \${{ !cancelled() && github.event_name == 'workflow_run'${gate} }}
         env:
           GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}
         run: ${cli} close-merged-references --since-last-run ${ADR_ACCEPTED_WORKFLOW_FILE} --repo "$GITHUB_REPOSITORY" --write`;
@@ -222,18 +293,18 @@ jobs:
     env:
       SPEC: ${envValue(spec)}
       PREFIX: ${envValue(prefix)}
-    steps:
+    steps:${gateStep}
       # fetch-depth 0: the acceptance read compares each ADR with the commit
       # before this push, and refuses when that commit is not in the clone.
-      - uses: ${opts.checkout}
+      - uses: ${opts.checkout}${stepIf}
         with:
           fetch-depth: 0
-      - uses: ${opts.setupBun}
+      - uses: ${opts.setupBun}${stepIf}
         with:
 ${opts.setupBunWith}
 ${opts.setupBunEnv}${fetchStep}
       - id: accepted
-        name: Which ADRs did this push accept?
+        name: Which ADRs did this push accept?${stepIf}
         env:${acceptedEnv}
         run: |${mergeWarning}
           ${acceptedRead}
