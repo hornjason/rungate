@@ -746,12 +746,16 @@ export function writeScaffoldedConfig(
   return { status: "created", path: dirPath };
 }
 
+/**
+ * The project's compliance rules, or null when it has none. Read through
+ * {@link treeAccess}, as every other config file is (#2875 review round 1):
+ * `existsSync` read a dangling `compliance.json` as no compliance config,
+ * while `resolveConfig` on the same tree named it unreadable.
+ */
 export function loadComplianceConfig(projectRoot: string): ComplianceConfig | null {
-  const dirPath = join(projectRoot, ".claude", "rungate", "compliance.json");
-  if (existsSync(dirPath)) {
-    return readJson(dirPath);
-  }
-  return null;
+  const files = treeAccess(projectRoot);
+  const rel = `${DIR_REL}/compliance.json`;
+  return files.exists(rel) ? JSON.parse(files.read(rel)) : null;
 }
 
 export function buildDirToCompMap(compliance: ComplianceConfig): Record<string, string> {

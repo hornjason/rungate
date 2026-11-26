@@ -40,7 +40,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { enginePrefixReading, loadRoleConfig, readBoardConfig, readBoardInputs, readProjectSlug, readRemoteHosts } from "../lib/config-readers";
-import { ConfigUnreadable, configLocation, resolveConfig, tryLoadRungateConfig } from "../lib/config-loader";
+import { ConfigUnreadable, configLocation, loadComplianceConfig, resolveConfig, tryLoadRungateConfig } from "../lib/config-loader";
 import { loadRegistry } from "../lib/create-sc";
 import { loadValidRoles, loadRoleBriefPaths } from "../scripts/grade-deterministic";
 import { getProjectSlug } from "../scripts/parallel-ship";
@@ -453,6 +453,33 @@ describe("#2875: a config that is there and cannot be read is never read as abse
     const root = makeRoot("directory");
     try {
       expect(withMode(join(root, ".claude", "rungate"), 0o000, () => configLocation(root))).toBe(join(root, CONFIG));
+    } finally {
+      cleanup();
+    }
+  });
+
+  test.skipIf(asRoot)("loadComplianceConfig names an unreadable compliance.json, as resolveConfig does, never null (review round 1)", () => {
+    const root = makeRoot("directory");
+    const compliance = join(root, ".claude", "rungate", "compliance.json");
+    /** What loadComplianceConfig did: null, an object, or the unreadable path and code it threw. */
+    const loaded = (): string => {
+      try {
+        const c = loadComplianceConfig(root);
+        return c === null ? "null" : "object";
+      } catch (e) {
+        if (e instanceof ConfigUnreadable) return `unreadable ${e.path.slice(root.length + 1)} (${e.code})`;
+        throw e;
+      }
+    };
+    try {
+      expect(loaded(), "CONTROL: no compliance.json").toBe("null");
+      symlinkSync("nowhere.json", compliance);
+      expect(loaded(), "a dangling compliance.json read as no compliance config").toBe(`unreadable .claude/rungate/compliance.json (ENOENT)`);
+      expect(reading(root), "the two readers of one file disagree").toBe(`unreadable .claude/rungate/compliance.json (ENOENT)`);
+      rmSync(compliance);
+      writeFileSync(compliance, JSON.stringify({ rules: {} }));
+      expect(loaded(), "CONTROL: a readable compliance.json").toBe("object");
+      expect(withMode(compliance, 0o000, loaded)).toBe(`unreadable .claude/rungate/compliance.json (EACCES)`);
     } finally {
       cleanup();
     }
