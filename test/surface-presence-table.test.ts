@@ -250,7 +250,9 @@ const CALLERS: Caller[] = [
       return named(owners.includes("harness") ? "harness" : "consumer", namedWhy(recorder.unreadable, template) ?? namedWhy(recorder.unreadable, dirname(template)));
     },
     expected: {
-      absent: "consumer", file: "harness", dir: "consumer, named EISDIR", fifo: "consumer, named not a regular file",
+      // Whether a template exists is a question, not a read: a directory or
+      // FIFO at its name is no template, and nothing failed to read (round 1).
+      absent: "consumer", file: "harness", dir: "consumer", fifo: "consumer",
       mode000: "harness", dangling: "consumer, named ENOENT", underUnsearchable: "consumer, named EACCES",
     },
   },
@@ -266,6 +268,18 @@ describe("#2878: every caller takes the decider's three answers, for every kind 
       });
     }
   }
+});
+
+describe("#2878 review round 1: an existence question names nothing that is merely the wrong kind", () => {
+  test("a regular file at a backticked path's directory is no finding, and no UNMEASURED line names it", () => {
+    const root = renderedTree();
+    rmSync(join(root, "docs"), { recursive: true, force: true });
+    writeFileSync(join(root, "docs"), "A file where a directory might be.\n");
+    const home = mkdtempSync(join(scratch, "home-"));
+    const audit = promptAudit(root, mkdtempSync(join(scratch, "pkg-")), { home });
+    expect(audit.findings.filter(f => f.lint === "dangling-path")).toEqual([]);
+    expect(audit.unmeasured.join("\n"), "a path read fine was reported as unread").not.toContain("docs (");
+  });
 });
 
 describe("#2878: presence is decided in one place in both files", () => {

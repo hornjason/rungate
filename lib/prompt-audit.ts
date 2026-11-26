@@ -212,8 +212,10 @@ export function lineOwners(file: string, text: string, presence: PresenceCheck, 
     // Through the presence the audit reads with, so a template that cannot be
     // read, or a directory at its name, is named on the UNMEASURED line, not
     // taken for absent or for a template (#2876 review, #2878).
-    return onPresence(presence(join(packageRoot, "templates", "agent-briefs", name), "file"), {
-      present: () => harnessExcept(BRIEF_CONSTRAINTS_SECTION),
+    // Whether a template exists is a question, not a read, so a directory or
+    // FIFO at its name is no template and is not named (#2878 review round 1).
+    return onPresence(presence(join(packageRoot, "templates", "agent-briefs", name), "either"), {
+      present: kind => (kind === "file" ? harnessExcept(BRIEF_CONSTRAINTS_SECTION) : all("consumer")),
       unread: () => all("consumer"),
       absent: () => all("consumer"),
     });
@@ -330,7 +332,9 @@ function danglingPathFindings(
         // surface's presence names it as unread, so it is never reported as missing
         // (review round 4 of #2844).
         // Every place is asked, so each one that could not be read is named.
-        const dirThere = at.map(p => onPresence(presence(dirname(p), "dir"), { present: () => true, unread: () => false, absent: () => false }));
+        // Whether a directory is there is a question, not a read: a regular
+        // file at that name is no directory, and is not named (#2878 review round 1).
+        const dirThere = at.map(p => onPresence(presence(dirname(p), "either"), { present: kind => kind === "dir", unread: () => false, absent: () => false }));
         if (!dirThere.some(Boolean)) continue;
         const fileThere = at.map(p => onPresence(presence(p, "either"), { present: () => true, unread: () => true, absent: () => false }));
         if (fileThere.some(Boolean)) continue;

@@ -25,7 +25,13 @@ import { codeOf, probePath } from "./path-probe";
 import { readFences } from "./markdown-fence";
 import { isPathScoped } from "../scripts/check-instruction-surface";
 
-/** What a caller expects at a path (#2878). */
+/**
+ * What a caller expects at a path (#2878). `file` and `dir` are for a caller
+ * that will read or walk what it finds, so something of the other kind there
+ * is named: it could not be read as expected. A caller that only asks whether
+ * something is there asks `either` and reads `kind`, so nothing it merely
+ * finds is reported as unread (review round 1).
+ */
 export type Expect = "file" | "dir" | "either";
 
 /**
