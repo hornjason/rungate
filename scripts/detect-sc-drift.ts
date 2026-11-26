@@ -46,17 +46,24 @@ export type PathToken =
   | { kind: "listed"; path: string }
   | { kind: "unread-file" | "alias" | "absolute" | "pattern" | "url" | "none" };
 
+/** What may follow a path inside its token and still name it: a line reference or an anchor (#2907 review). */
+const LOCATION_SUFFIX = /^(?::L?\d+(?:[-–:]L?\d+)*|#[\w.-]*)$/;
+
 /**
  * One token of criterion prose, read as a path, by the rules tabled in
  * `test/sc-drift.test.ts` (#2897). Both readers below call it, so they cannot
  * disagree about what a path is. `bound` is false when a separator, a
- * sentence end or a closing bracket follows the path: such a token ends a
- * naming, so it cannot be the subject of the clause after it.
+ * sentence end, a closing bracket, a possessive or other text follows the
+ * path: such a token ends a naming, so it cannot be the subject of the clause
+ * after it.
  *
- * - Quotes and backticks around a token are not part of it, nor is an opening
- *   parenthesis or bracket. A possessive (`lib/x.ts's code`) names the file,
- *   and what follows belongs to it, so it does not bind.
- * - A line reference (`lib/x.ts:42`) names the file.
+ * - Quotes, backticks, emphasis and angle brackets around a token are not
+ *   part of it, nor is an opening parenthesis or bracket.
+ * - The path is the token's first run of path characters that reads as one,
+ *   so a prefix (`key:lib/x.ts`) is not part of it. What follows it
+ *   is a line reference or anchor (`lib/x.ts:10-20`, `lib/x.ts#L42`), which
+ *   still names the file, or text, which ends the naming. The extension ends
+ *   where the run ends, so `lib/parser.tsx` is not `lib/parser.ts`.
  * - A URL, a glob, an alias (`@/`, `~/`) and an absolute path outside the
  *   project are not paths in this tree. A root-relative `/lib/x.ts` is
  *   `lib/x.ts`, because its first segment is a listed directory.
@@ -66,30 +73,43 @@ export type PathToken =
  * - Anything else with a file extension is a file this reader does not read.
  */
 export function classifyPathToken(raw: string): { token: PathToken; bound: boolean } {
-  let core = raw.replace(/^[`'"([]+/, "");
+  let core = raw.replace(/^[`'"([<*]+/, "");
   let bound = true;
   for (let prev = ""; prev !== core; ) {
     prev = core;
-    const separated = core.replace(/[,.;:)\]]+$/, "").replace(/['’]s$/, "");
+    const separated = core.replace(/[,.;:?!)\]—–]+$/, "").replace(/['’]s$/, "");
     if (separated !== core) bound = false;
-    core = separated.replace(/[`'"]+$/, "");
+    core = separated.replace(/[`'">*]+$/, "");
   }
-  core = core.replace(/:\d+(?::\d+)?$/, "");
   const of = (token: PathToken) => ({ token, bound });
-  if (core === "") return of({ kind: "none" });
   if (core.includes("://")) return of({ kind: "url" });
   if (/[*?{}<>|]/.test(core)) return of({ kind: "pattern" });
-  if (/^[@~]/.test(core)) return of({ kind: "alias" });
-  core = core.replace(/^\.\//, "");
-  if (core.startsWith("/")) {
-    const rest = core.slice(1);
-    if (!LISTED_DIRS.has(rest.split("/")[0])) return of({ kind: "absolute" });
-    core = rest;
+  // The token's path is its first run of path characters that reads as one;
+  // a prefix before it (`key:lib/x.ts`) is not part of it.
+  for (const run of core.matchAll(/[\w.@~/+-]+/g)) {
+    const text = run[0].replace(/\.+$/, "");
+    const token = pathRun(text);
+    if (token.kind === "none") continue;
+    const rest = core.slice(run.index! + text.length);
+    if (rest !== "" && !LOCATION_SUFFIX.test(rest)) bound = false;
+    return of(token);
   }
-  if (!/\.[A-Za-z][A-Za-z0-9]*$/.test(core)) return of({ kind: "none" });
-  const dirs = core.split("/").slice(0, -1);
-  if (!READ_EXTENSIONS.test(core) || !dirs.some(d => LISTED_DIRS.has(d))) return of({ kind: "unread-file" });
-  return of({ kind: "listed", path: core });
+  return of({ kind: "none" });
+}
+
+/** One run of path characters, read as a path. */
+function pathRun(text: string): PathToken {
+  if (/^[@~]/.test(text)) return { kind: "alias" };
+  let path = text.replace(/^\.\//, "");
+  if (path.startsWith("/")) {
+    const tail = path.slice(1);
+    if (!LISTED_DIRS.has(tail.split("/")[0])) return { kind: "absolute" };
+    path = tail;
+  }
+  if (!/\.[A-Za-z][A-Za-z0-9]*$/.test(path)) return { kind: "none" };
+  const dirs = path.split("/").slice(0, -1);
+  if (!READ_EXTENSIONS.test(path) || !dirs.some(d => LISTED_DIRS.has(d))) return { kind: "unread-file" };
+  return { kind: "listed", path };
 }
 
 /**
@@ -161,14 +181,16 @@ export function containsClauses(statement: string): Array<{ path: string | null;
   for (const m of statement.matchAll(/(?<!not )contains \[([^\]]+)\]/g)) {
     const head = statement.slice(0, m.index);
     // The token directly before the clause names its file (#2897's table).
-    // A listed path binds it; a word names no file, so the keywords apply to
-    // every path, as before; any other file is this reader's to skip, and its
-    // keywords are checked nowhere rather than lent to other files (#2287).
+    // A listed path binds it, unless text after it ends the naming; a word
+    // names no file, so the keywords apply to every path, as before. Any
+    // other file is this reader's to skip, punctuated or not, and its
+    // keywords are checked nowhere rather than lent to other files (#2287,
+    // #2907 review).
     const last = /\S+$/.exec(head.trimEnd())?.[0] ?? "";
     const { token, bound } = classifyPathToken(last);
     const keywords = m[1].split(",").map(k => k.trim()).filter(Boolean);
-    if (!bound || token.kind === "none") out.push({ path: null, keywords });
-    else if (token.kind === "listed") out.push({ path: token.path, keywords });
+    if (token.kind === "listed") out.push({ path: bound ? token.path : null, keywords });
+    else if (token.kind === "none") out.push({ path: null, keywords });
   }
   return out;
 }

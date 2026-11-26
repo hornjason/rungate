@@ -341,6 +341,8 @@ describe("#2883: a path is read whole, from its start, never from a segment nest
     expect(keywordsFor("`lib/a.ts` contains [foo] and `lib/b.ts` contains [bar]", "lib/a.ts")).toEqual(["foo"]);
     expect(keywordsFor("`src/lib/x.ts` contains [foo] and scripts/bar.ts contains [baz]", "scripts/bar.ts")).toEqual(["baz"]);
     expect(keywordsFor("SUCCESS.md contains [foo] and lib/a.ts exists", "lib/a.ts")).toEqual([]);
+    // Punctuated, the unread file still keeps its clause to itself (#2907 review).
+    expect(keywordsFor("hooks/pre-commit.sh, contains [set -e] and lib/a.ts contains [foo]", "lib/a.ts")).toEqual(["foo"]);
     // CONTROL: a clause that names no file is still checked in every path, as before.
     expect(keywordsFor("lib/a.ts is wired so that it contains [wired]", "lib/a.ts")).toEqual(["wired"]);
   });
@@ -393,6 +395,19 @@ const PATH_TOKEN_RULES: Array<{ token: string; reads: string[]; subject: Subject
   { token: "lib/*.ts", reads: [], subject: "dropped", main: { reads: ["lib/*.ts"], subject: "lib/*.ts" }, rule: "a glob is a pattern, not a file" },
   { token: "https://example.com/lib/x.ts", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "a URL is not a path in this tree" },
   { token: "wired", reads: [], subject: null, main: { reads: [], subject: null }, rule: "a plain word names no file" },
+  // #2907 review: what may follow or precede a path inside its token.
+  { token: "lib/x.ts:10-20", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "a line range names the file" },
+  { token: "lib/x.ts:L42", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "an L-prefixed line names the file" },
+  { token: "lib/x.ts#L42", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "a line anchor names the file" },
+  { token: "lib/a.md#some-heading", reads: ["lib/a.md"], subject: "lib/a.md", main: { reads: ["lib/a.md"], subject: null }, rule: "a heading anchor names the file" },
+  { token: "lib/x.ts?", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a question mark ends the naming" },
+  { token: "lib/x.ts—the", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "text joined by a dash ends the naming" },
+  { token: "<lib/x.ts>", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "angle brackets are not part of the path" },
+  { token: "**lib/x.ts**", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "emphasis is not part of the path" },
+  { token: "key:lib/x.ts", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: "lib/x.ts" }, rule: "a prefix before the path is not part of it" },
+  { token: "hooks/pre-commit.sh,", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "an unread file is skipped, punctuated or not" },
+  { token: "SUCCESS.md's", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "an unread file is skipped, possessive or not" },
+  { token: "src/*/lib/x.ts", reads: [], subject: "dropped", main: { reads: ["lib/x.ts"], subject: "lib/x.ts" }, rule: "a glob anywhere in the token is a pattern" },
 ];
 
 describe("#2897: one table of token rules, run through both readers", () => {
@@ -407,6 +422,6 @@ describe("#2897: one table of token rules, run through both readers", () => {
 
   test("the table names main's reading for every row, and says which rows changed", () => {
     const changed = PATH_TOKEN_RULES.filter(r => JSON.stringify(r.main) !== JSON.stringify({ reads: r.reads, subject: r.subject })).map(r => r.token);
-    expect(changed).toEqual(["/home/u/proj/lib/y.ts", "node_modules/@scope/pkg/scripts/run.js", "lib/x.ts:42", ".github/workflows/release.yml", "lib/parser.tsx", "hooks/pre-commit.sh", "lib/*.ts", "https://example.com/lib/x.ts"]);
+    expect(changed).toEqual(["/home/u/proj/lib/y.ts", "node_modules/@scope/pkg/scripts/run.js", "lib/x.ts:42", ".github/workflows/release.yml", "lib/parser.tsx", "hooks/pre-commit.sh", "lib/*.ts", "https://example.com/lib/x.ts", "lib/x.ts:10-20", "lib/x.ts:L42", "lib/x.ts#L42", "lib/a.md#some-heading", "<lib/x.ts>", "**lib/x.ts**", "hooks/pre-commit.sh,", "SUCCESS.md's", "src/*/lib/x.ts"]);
   });
 });
