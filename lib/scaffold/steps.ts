@@ -49,7 +49,7 @@ import {
   AI_REVIEW_WORKFLOW_NAME,
   buildAiReviewUnmeasuredWorkflow,
 } from "./ai-review-unmeasured-workflow";
-import { buildAdrAcceptedWorkflow, mergeWorkflowNotAStringWarning, mergeWorkflowWarning } from "./adr-accepted-workflow";
+import { buildAdrAcceptedWorkflow, mergeWorkflowIgnoredWarning, mergeWorkflowWarning } from "./adr-accepted-workflow";
 import { buildSpecsPlacedWorkflow } from "./specs-placed-workflow";
 import { buildConsumerIntakeWorkflow } from "./consumer-intake-workflow";
 import { buildCriterionLabelWorkflow } from "./criterion-label-workflow";
@@ -4658,7 +4658,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     const warning = mergeWorkflowWarning(boardInputs.mergeWorkflow, names, unreadable);
     if (warning !== null) actions.push(warning);
   }
-  if (boardInputs.mergeWorkflowNotAString !== null) actions.push(mergeWorkflowNotAStringWarning(boardInputs.mergeWorkflowNotAString));
+  if (boardInputs.mergeWorkflowIgnored !== null) actions.push(mergeWorkflowIgnoredWarning(boardInputs.mergeWorkflowIgnored));
 
   // SC-2780, ADR-018 Decision 1: a push to main that changes specs/ runs
   // every opted-in family through the engine, and with board.mergeWorkflow

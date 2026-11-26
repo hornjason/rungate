@@ -142,15 +142,15 @@ export function mergeWorkflowWarning(mergeWorkflow: string | null, names: readon
 }
 
 /**
- * The warning a scaffold prints when `board.mergeWorkflow` is present and not
- * a string (#2872 review), given it as written. It reads as unset, so no
- * workflow_run trigger is written and nothing else would say why.
+ * The warning a scaffold prints when `board.mergeWorkflow` is present and
+ * reads as unset — not a string, or blank (#2872 review) — given it as
+ * written. No workflow_run trigger is written, and nothing else would say why.
  */
-export function mergeWorkflowNotAStringWarning(written: string): string {
+export function mergeWorkflowIgnoredWarning(written: string): string {
   return (
-    `WARN: board.mergeWorkflow is ${written}, which is not a string, so it is read as unset. ` +
+    `WARN: board.mergeWorkflow is ${written}, which names no workflow, so it is read as unset. ` +
     `adr-accepted.yml and specs-placed.yml get no workflow_run trigger, and a merge made by automation places nothing. ` +
-    `Set board.mergeWorkflow to the merging workflow's name: as a string, and re-run rungate scaffold.`
+    `Set board.mergeWorkflow to the merging workflow's name:, or remove it, and re-run rungate scaffold.`
   );
 }
 

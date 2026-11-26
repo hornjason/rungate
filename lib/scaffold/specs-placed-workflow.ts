@@ -93,13 +93,16 @@ export const SPECS_PLACED_GROUP = "specs-placed";
  * Each file is an `F` line, and a rename adds a `P` line for its old name
  * (#2872 review): a spec moved out of specs/ changed specs/, as the push
  * trigger's path filter reads it. The ceiling counts `F` lines, one per file.
+ * Both read the listing from a here-string, never a pipe: `grep -q` stops at
+ * its first match, and under `pipefail` the writer it cut off would turn a
+ * found spec into "nothing changed" (#2872 review).
  */
 export const SPECS_CHANGED_CHECK: readonly string[] = [
   `if [ "$go" = true ] && [ -n "$last" ] && [ -n "$main" ]; then`,
   `  if files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$last...$main?per_page=100" --jq '.files[] | "F \\(.filename)", ((.previous_filename // empty) | "P \\(.)")'); then`,
-  `    if [ "$(printf '%s\\n' "$files" | grep -c '^F ')" -ge 300 ]; then`,
+  `    if [ "$(grep -c '^F ' <<< "$files")" -ge 300 ]; then`,
   `      echo "::notice::300 or more files changed since $last, so whether specs/ changed is UNMEASURED; running the full placement."`,
-  `    elif ! printf '%s\\n' "$files" | grep -q '^[FP] specs/'; then`,
+  `    elif ! grep -q '^[FP] specs/' <<< "$files"; then`,
   `      echo "Nothing under specs/ changed between $last and $main."; go=false`,
   `    fi`,
   `  else`,

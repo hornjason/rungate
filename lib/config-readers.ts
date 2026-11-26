@@ -168,16 +168,16 @@ export function readBoardInputs(projectRoot: string): {
    */
   mergeWorkflow: string | null;
   /**
-   * `board.mergeWorkflow` as written, when it is present and not a string
-   * (#2872 review). It reads as unset, so the generated files are push-only,
-   * and only the scaffold can say why; otherwise `null`.
+   * `board.mergeWorkflow` as written, when it is present and reads as unset:
+   * not a string, or blank (#2872 review). The generated files are then
+   * push-only, and only the scaffold can say why; otherwise `null`.
    */
-  mergeWorkflowNotAString: string | null;
+  mergeWorkflowIgnored: string | null;
 } {
   const config = tryLoadRungateConfig(projectRoot);
   const board = (config as Record<string, unknown> | null)?.board;
   if (!board || typeof board !== "object" || Array.isArray(board)) {
-    return { engineSpec: null, milestonePrefix: null, mergeWorkflow: null, mergeWorkflowNotAString: null };
+    return { engineSpec: null, milestonePrefix: null, mergeWorkflow: null, mergeWorkflowIgnored: null };
   }
   const row = board as Record<string, unknown>;
   const read = (key: string): string | null => {
@@ -191,7 +191,8 @@ export function readBoardInputs(projectRoot: string): {
     engineSpec: read("engineSpec"),
     milestonePrefix: read("milestonePrefix"),
     mergeWorkflow: read("mergeWorkflow"),
-    mergeWorkflowNotAString: merge === undefined || merge === null || typeof merge === "string" ? null : JSON.stringify(merge),
+    mergeWorkflowIgnored:
+      merge === undefined || merge === null || (typeof merge === "string" && merge.trim() !== "") ? null : JSON.stringify(merge),
   };
 }
 

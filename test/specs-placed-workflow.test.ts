@@ -16,7 +16,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "os";
 import { join } from "path";
 import { CLI_COMMANDS } from "../lib/cli-commands";
-import { ADR_ACCEPTED_WORKFLOW_FILE, mergeWorkflowNotAStringWarning } from "../lib/scaffold/adr-accepted-workflow";
+import { ADR_ACCEPTED_WORKFLOW_FILE, mergeWorkflowIgnoredWarning } from "../lib/scaffold/adr-accepted-workflow";
 import {
   SPECS_PLACED_COMMANDS,
   SPECS_PLACED_GROUP,
@@ -376,8 +376,9 @@ describe("#2862: a merge made by automation runs specs-placed.yml too", () => {
    * Run the gate step's own script with a stub `gh`; hand back what it wrote
    * to GITHUB_OUTPUT. `files` is the compare API's file list, put through the
    * step's own `--jq` filter by a real jq; `null` is a compare call that fails.
+   * `flags` are bash's: `shell: bash` in a workflow runs `-eo pipefail`.
    */
-  function gate(main: string, last: string, files: Record<string, unknown>[] | null = [{ filename: "specs/A.md" }]): string {
+  function gate(main: string, last: string, files: Record<string, unknown>[] | null = [{ filename: "specs/A.md" }], flags: string[] = ["-e"]): string {
     const dir = mkdtempSync(join(tmpdir(), "rg-specs-placed-gate-"));
     try {
       const fixture = join(dir, "compare.json");
@@ -387,7 +388,7 @@ describe("#2862: a merge made by automation runs specs-placed.yml too", () => {
       chmodSync(join(dir, "gh"), 0o755);
       const out = join(dir, "out.txt");
       writeFileSync(out, "");
-      spawnSync("bash", ["-e", "-c", runOf(steps[0])], {
+      spawnSync("bash", [...flags, "-c", runOf(steps[0])], {
         encoding: "utf-8",
         env: { PATH: `${dir}:/usr/bin:/bin`, GITHUB_OUTPUT: out, GITHUB_REPOSITORY: "o/r", GITHUB_REF_NAME: "main" },
       });
@@ -442,6 +443,18 @@ describe("#2862: a merge made by automation runs specs-placed.yml too", () => {
     expect(gate("abc", "def", [{ filename: "docs/FOO.md", previous_filename: "lib/FOO.md", status: "renamed" }])).toBe("go=false");
   });
 
+  test("#2872 review: a listing larger than a pipe's buffer, under pipefail, still sees the spec change", () => {
+    // a spec first, then enough long names that the listing passes 64 KB: an
+    // early-exiting reader on a pipe would cut the writer off mid-listing
+    const long = Array.from({ length: 298 }, (_, i) => ({ filename: `lib/${"d".repeat(240)}/f${i}.ts` }));
+    const files = [{ filename: "specs/A.md" }, ...long];
+    expect(JSON.stringify(files).length).toBeGreaterThan(70_000);
+    expect(gate("abc", "def", files, ["-eo", "pipefail"])).toBe("go=true");
+    expect(gate("abc", "def", files)).toBe("go=true");
+    // CONTROL: the same listing with no spec skips, under both shells
+    expect(gate("abc", "def", [{ filename: "lib/A.md" }, ...long], ["-eo", "pipefail"])).toBe("go=false");
+  });
+
   test("a changed-file list it cannot read, or one at the API's ceiling, is UNMEASURED: the full placement runs", () => {
     expect(gate("abc", "def", null)).toBe("go=true");
     const lib = (n: number) => Array.from({ length: n }, (_, i) => ({ filename: `lib/f${i}.ts` }));
@@ -450,17 +463,17 @@ describe("#2862: a merge made by automation runs specs-placed.yml too", () => {
     expect(gate("abc", "def", lib(299).map(f => ({ ...f, previous_filename: `old/${f.filename}` })))).toBe("go=false");
   });
 
-  test("#2872 review: a board.mergeWorkflow that is not a string writes no trigger, and the scaffold says why", () => {
-    for (const value of [["Approve on green"], 7, true]) {
+  test("#2872 review: a board.mergeWorkflow that is not a string, or is blank, writes no trigger, and the scaffold says why", () => {
+    for (const value of [["Approve on green"], 7, true, "", "   "]) {
       const actions: string[] = [];
       expect(generated({ mergeWorkflow: value }, actions), JSON.stringify(value)).toBe(YML);
-      expect(actions.filter(a => a.includes("board.mergeWorkflow"))).toEqual([mergeWorkflowNotAStringWarning(JSON.stringify(value))]);
+      expect(actions.filter(a => a.includes("board.mergeWorkflow"))).toEqual([mergeWorkflowIgnoredWarning(JSON.stringify(value))]);
     }
     // CONTROL: absent, null and a string are not this warning
     for (const board of [{}, { mergeWorkflow: null }, { mergeWorkflow: "Approve on green" }]) {
       const actions: string[] = [];
       generated(board, actions);
-      expect(actions.some(a => a.includes("not a string")), JSON.stringify(board)).toBe(false);
+      expect(actions.some(a => a.includes("names no workflow")), JSON.stringify(board)).toBe(false);
     }
   });
 

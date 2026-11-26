@@ -203,8 +203,8 @@ describe("SC-1449: the accessors read the directory layout, which is what the ol
    * tree that has everything it needs on the command line.
    */
   test("engineSpec and milestonePrefix read independently, and absent is null per key — #1718", () => {
-    // `mergeWorkflowNotAString` is null unless a row says otherwise (#2872 review).
-    const rows: { why: string; board: unknown; want: { engineSpec: string | null; milestonePrefix: string | null; mergeWorkflow: string | null; mergeWorkflowNotAString?: string } }[] =
+    // `mergeWorkflowIgnored` is null unless a row says otherwise (#2872 review).
+    const rows: { why: string; board: unknown; want: { engineSpec: string | null; milestonePrefix: string | null; mergeWorkflow: string | null; mergeWorkflowIgnored?: string } }[] =
       [
         { why: "no board key at all", board: undefined, want: { engineSpec: null, milestonePrefix: null, mergeWorkflow: null } },
         { why: "an empty board", board: {}, want: { engineSpec: null, milestonePrefix: null, mergeWorkflow: null } },
@@ -237,7 +237,12 @@ describe("SC-1449: the accessors read the directory layout, which is what the ol
         {
           why: "a non-string merge workflow is absent as well, and kept as written so the scaffold can say so (#2872 review)",
           board: { mergeWorkflow: ["Approve on green"] },
-          want: { engineSpec: null, milestonePrefix: null, mergeWorkflow: null, mergeWorkflowNotAString: '["Approve on green"]' },
+          want: { engineSpec: null, milestonePrefix: null, mergeWorkflow: null, mergeWorkflowIgnored: '["Approve on green"]' },
+        },
+        {
+          why: "a blank merge workflow likewise (#2872 review)",
+          board: { mergeWorkflow: "   " },
+          want: { engineSpec: null, milestonePrefix: null, mergeWorkflow: null, mergeWorkflowIgnored: '"   "' },
         },
         {
           why: "whitespace around a real value is trimmed, not refused",
@@ -252,7 +257,7 @@ describe("SC-1449: the accessors read the directory layout, which is what the ol
     try {
       for (const row of rows) {
         writeFileSync(at, JSON.stringify(row.board === undefined ? {} : { board: row.board }));
-        expect(readBoardInputs(root), row.why).toEqual({ mergeWorkflowNotAString: null, ...row.want });
+        expect(readBoardInputs(root), row.why).toEqual({ mergeWorkflowIgnored: null, ...row.want });
       }
     } finally {
       cleanup();
