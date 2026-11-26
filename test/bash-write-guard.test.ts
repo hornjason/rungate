@@ -3643,12 +3643,10 @@ describe("#2704: the new verbs do not open the scratch exemption", () => {
 });
 
 /**
- * #2858, ADR-027 decisions 2 and 3: the behaviour that criterion SC-2811 in
- * HOOK-ARCHITECTURE-SPEC.md states. Written as a citation and not a claim on
- * purpose: the criterion is tagged behavioural, and ticking it would raise
- * the behavioural ratchet in `test/behavioral-sc-ratchet.test.ts`, which only
- * falls. Whether the tag goes is the criterion owner's call, recorded on the
- * pull request.
+ * Covers SC-2811 (HOOK-ARCHITECTURE-SPEC.md), #2858 and ADR-027 decisions 2
+ * and 3. This block only cited the criterion while it was tagged behavioural,
+ * since ticking a tagged one raised a ratchet that only falls; Jason dropped
+ * the tag on 2026-11-26 (#2898).
  *
  * An interpreter body that names a protected artifact beside a declared write
  * verb is refused, whatever directory it names. Before #2858 a body whose

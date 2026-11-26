@@ -541,7 +541,12 @@ const UNCLAIMED_RATCHET = 150;
 // additions merge cleanly where the table form conflicts, a reading of the
 // specs and of `git merge-file` that no registered pattern expresses; the
 // `SC-2809` describe in test/spec-placement-merge.test.ts names it (2026-11-25).
-const CLAIMED_UNBINDABLE = 214;
+// 215: SC-2811 (#2898) ticked by `sync-sc-status --only SC-2811` once Jason
+// dropped its behavioural tag — an interpreter body naming a protected
+// artifact beside a write verb is refused wherever it points, a reading of the
+// write guard that no registered pattern expresses; the #2858 describe in
+// test/bash-write-guard.test.ts covers it (2026-11-26).
+const CLAIMED_UNBINDABLE = 215;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

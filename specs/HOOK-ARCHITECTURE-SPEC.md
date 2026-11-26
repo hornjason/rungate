@@ -534,7 +534,8 @@ hooks are driven as subprocesses rather than matched as text.
 - [x] SC-1662: test/hook-registration-reconciler.test.ts contains [an entry that is off must say why] — off and never-registered look identical in a file- and the fastest way to resolve that ambiguity is to turn it back on
 - [x] SC-2810: lib/bash-write-guard.ts is between [100] and [2000] lines
       proved-by: test/bash-write-guard.test.ts "SC-2810: lib/bash-write-guard.ts is between 100 and 2000 lines"
-- [ ] SC-2811: An interpreter body that names a protected artifact beside a declared write verb is refused by the bash write guard whatever directory it names
+- [x] SC-2811: An interpreter body that names a protected artifact beside a declared write verb is refused by the bash write guard whatever directory it names
+      proved-by: test/bash-write-guard.test.ts
 
 ### An inventory with no reconciler, half-fixed (#199, #479)
 
