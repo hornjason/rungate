@@ -2475,19 +2475,18 @@ describe("#1240 WITNESS: a program handed to an interpreter on stdin", () => {
   });
 
   /**
-   * The arm asks for an ABSOLUTE path, and that is measured rather than
-   * cautious. Accepting a relative spelling newly refused 23 real commands
-   * in the 5,602-command corpus, every one of them an agent building hook
-   * FIXTURES in a `/tmp` tree with an assembled path: the only word carrying
-   * `.hook.ts` is the relative suffix, which cannot be shown to be scratch,
-   * so the fail-closed reading correctly declines to exempt it — and the
-   * work #1175 exists to unblock would have been refused by the arm added
-   * beside it. With the absolute requirement the same sweep newly blocks 15,
-   * and all 15 write a live `workflow-state.json` in the run store.
+   * REVERSED by #2858. #1240 asked this arm for an ABSOLUTE path, because a
+   * relative spelling could not be shown to be scratch and refusing it
+   * refused 23 hook-fixture builds the exemption existed for. The exemption
+   * is gone (ADR-027), so a relative spelling of a write is the same write,
+   * and the `-c` spelling of this body was always refused. Review of #2863,
+   * round 2, found the absolute-only reading allowing a relative write from
+   * the run store and any absolute path with a space in it.
    */
-  test("a relative spelling in a body is not evidence of a protected artifact", () => {
+  test("REVERSED (#2858): a relative spelling beside a write verb is refused, as its -c spelling is", () => {
     const assembled = `python3 <<'PY'\nimport os\nopen(os.path.join(dst, n + ".hook.ts"), "w").write("// stand-in")\nPY`;
-    expect(decideBashWrite(assembled).blocked).toBe(false);
+    expect(decideBashWrite(assembled).blocked).toBe(true);
+    expect(decideBashWrite(`python3 -c 'import os; open(os.path.join(dst, n + ".hook.ts"), "w").write("// stand-in")'`).blocked).toBe(true);
     // and the absolute spelling of the same write is refused, so the row
     // above is not passing because the arm is dead
     const absolute = `python3 <<'PY'\nopen("${LIVE}/hooks/X.hook.ts", "w").write("// stand-in")\nPY`;
@@ -3901,6 +3900,17 @@ describe("#2858: an interpreter body naming a protected artifact beside a write 
     const t = performance.now();
     expect(decideBashWrite(cmd).blocked).toBe(true);
     expect(performance.now() - t).toBeLessThan(2000);
+  });
+
+  // Review of #2863, round 2: a space inside a path, a relative name on
+  // stdin, and a body attached to its flag.
+  test.each([
+    ["a stdin path with a space in it", `python3 - <<'PY'\nopen('/Users/alice/Library/Application Support/rungate/${STATE}','w').write('{}')\nPY`],
+    ["a relative name on stdin", `python3 - <<'PY'\nopen('${STATE}','w').write('{}')\nPY`],
+    ["a long directory, then a space before the name", `python3 -c "open('/home/runner/work/some-very-long-checkout-directory-name/another-directory-segment-here-x/and-more-nested/My Notes/${STATE}','w')"`],
+    ["a body attached to its -c flag", `python3 -c'import os;open("/x/${SALT}","w").close()'`],
+  ])("WITNESS: %s is refused", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
   // Review of #2863, round 1: three spellings the window missed. A directory

@@ -2455,8 +2455,14 @@ function writesNear(body: string, protectedName: string): boolean {
   return windowWrites();
 }
 
-/** What ends a path word in an interpreter body. */
-const PATH_STOPS = new Set([' ', '\t', '\n', '\r', "'", '"', '`', '(', ',', '=', '[', '{', ';', '+']);
+/**
+ * What ends a path word in an interpreter body. Not a space or a tab: a path
+ * can hold one (`Application Support`), and a stop inside it opened the
+ * window past the verb (review of #2863, round 2). Every argument separator
+ * that is not whitespace still stops it, so the window opens no earlier than
+ * the literal or the call the path sits in.
+ */
+const PATH_STOPS = new Set(['\n', '\r', "'", '"', '`', '(', ',', '=', '[', '{', ';', '+']);
 
 /**
  * Verbs that modify a named file in place, with no redirect for
@@ -2687,32 +2693,6 @@ function namesOutsideScratch(text: string, list: string[], exempt: Exemption): s
 }
 
 /**
- * Protected names in a program body, counting only ABSOLUTE spellings
- * (#1240). Since #2858 no spelling is exempt for sitting in a scratch tree:
- * the stdin arm asks only whether a declared write verb is near the name.
- *
- * The stricter reading exists because of what it costs otherwise, measured
- * rather than reasoned: scanning an interpreter body for a protected NAME
- * newly refused **23** real commands, and every one of them was an agent
- * building hook FIXTURES in a `/tmp` tree with an assembled path —
- * `open(os.path.join(dst, n), "w")`, where the only word carrying
- * `.hook.ts` is the relative suffix itself. A relative fragment cannot be
- * shown to be scratch, so the fail-closed reading in `isScratchPath`
- * correctly refuses to exempt it, and the result is that the fixture work
- * #1175 exists to unblock gets refused by the arm added beside it.
- * (Measured before #2858, when the scratch exemption still applied here.)
- *
- * So this arm asks for an absolute path. The spelling it is there to catch
- * — `open("<run store>/workflow-state.json", "w")` inside a heredoc — is
- * absolute, and the 23 are not. The arm it mirrors (arm 3, the `-c` form)
- * keeps its looser reading: that behaviour is pre-existing and measured,
- * and tightening it is not this change's business.
- */
-function absoluteProtectedNames(text: string): string[] {
-  return ALL_PROTECTED.filter(p => pathWordsContaining(text, p).some(w => w.startsWith('/')));
-}
-
-/**
  * The `-c`/`-e` program of an interpreter segment, with only its OUTER
  * quoting removed (#1277).
  *
@@ -2728,7 +2708,10 @@ function absoluteProtectedNames(text: string): string[] {
  * is the fail-closed direction.
  */
 export function programBody(segment: string): string {
-  const m = /\s-[a-z]*[ce]\s+([\s\S]+)$/.exec(segment);
+  // `\s*`, not `\s+`: `python3 -c'open(…)'` hands python the body with no
+  // space after the flag, and an empty view here hid its quoted `open` mode
+  // (review of #2863, round 2).
+  const m = /\s-[a-z]*[ce]\s*([\s\S]+)$/.exec(segment);
   if (!m) return '';
   const raw = m[1].trim();
   const q = raw[0];
@@ -2840,9 +2823,18 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
     // #2858 (ADR-027): arm 3's write-verb question, and no scratch
     // exemption in front of it. A stdin program is the arm 3 body reached by
     // another route; a declared write verb near a protected name refuses it
-    // whatever directory the name sits in. Unlike arm 3, it counts only a
-    // name spelled as an absolute path — see `absoluteProtectedNames`.
-    const pf = absoluteProtectedNames(program).find(p => writesNear(program, p) || (quoted !== undefined && writesNear(quoted, p)));
+    // whatever directory the name sits in, and however it is spelled.
+    //
+    // #1240 counted only absolute spellings here, because a relative
+    // fragment could not be shown to be scratch and refusing it refused 23
+    // fixture builds the exemption existed for. With the exemption gone a
+    // relative spelling is the same write, and the absolute-only reading
+    // allowed `open('workflow-state.json','w')` from the run store, and any
+    // absolute path with a space in it, which the word split cut in two
+    // (review of #2863, round 2).
+    const pf = ALL_PROTECTED.find(
+      p => names(program, [p]) !== null && (writesNear(program, p) || (quoted !== undefined && writesNear(quoted, p))),
+    );
     if (pf) {
       return {
         blocked: true,
