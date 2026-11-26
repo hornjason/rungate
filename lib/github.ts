@@ -498,6 +498,9 @@ export interface OpenIssue {
    * caller that has something to lose.
    */
   authorAssociation: string;
+  /** The author's login and account type (`User`, `Bot`), verbatim; absent when the API gave none (#2901). */
+  authorLogin?: string;
+  authorType?: string;
 }
 
 /**
@@ -521,6 +524,21 @@ export const TRUSTED_ASSOCIATIONS: ReadonlySet<string> = new Set([
   "MEMBER",
   "COLLABORATOR",
 ]);
+
+/**
+ * The account a workflow in THIS repository writes as with its own token.
+ * An accepted ADR's plan files its issues this way, with association `NONE`,
+ * so without it the duplicate check never compared a filing against the
+ * plan's own issues (#2901). A fork's pull-request run gets a read-only
+ * token and cannot open an issue as it, so its text is the repository's.
+ */
+export const WORKFLOW_BOT_LOGIN = "github-actions[bot]";
+
+/** Whether an issue's text may be used to suppress something: a trusted association, or this repository's workflow bot. */
+export function trustedAuthor(issue: Pick<OpenIssue, "authorAssociation" | "authorLogin" | "authorType">): boolean {
+  if (TRUSTED_ASSOCIATIONS.has(issue.authorAssociation)) return true;
+  return issue.authorType === "Bot" && issue.authorLogin === WORKFLOW_BOT_LOGIN;
+}
 
 /**
  * Open issues, newest first, **pull requests excluded** (#1261).
@@ -630,6 +648,8 @@ export async function listOpenIssues(
       // membership test in `TRUSTED_ASSOCIATIONS`, which is the reading a
       // caller should get when GitHub did not say.
       authorAssociation: typeof row.author_association === "string" ? row.author_association : "",
+      authorLogin: typeof row.user?.login === "string" ? row.user.login : undefined,
+      authorType: typeof row.user?.type === "string" ? row.user.type : undefined,
     });
   }
   // `>=` and not `>`: a full page is the only observation available, and the

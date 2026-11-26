@@ -70,6 +70,12 @@
       "from": 2820,
       "to": 2822,
       "note": "ADR-030 criteria (#2917); starts above SC-2819, which ADR-029's unmerged PR #2900 reserves as its only id"
+    },
+    {
+      "owner": "rg/2901-bot-dedupe",
+      "from": 290,
+      "to": 291,
+      "namespace": "FG"
     }
   ]
 }

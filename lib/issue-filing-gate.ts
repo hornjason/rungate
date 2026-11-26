@@ -106,6 +106,8 @@ import {
   listPRs,
   parseOwnerRepo,
   TRUSTED_ASSOCIATIONS,
+  trustedAuthor,
+  WORKFLOW_BOT_LOGIN,
   type GitHubClient,
   type OpenIssuePage,
 } from "./github";
@@ -3195,13 +3197,13 @@ export function trustedCorpus(page: OpenIssuePage): CorpusReading {
   }
   for (const issue of issues) {
     const id = String(issue.number);
-    if (!TRUSTED_ASSOCIATIONS.has(issue.authorAssociation)) {
+    if (!trustedAuthor(issue)) {
       dropped.push({
         id,
         reason: "untrusted-author",
         detail:
           `author association ${issue.authorAssociation === "" ? "(absent)" : issue.authorAssociation}` +
-          ` is not one of ${[...TRUSTED_ASSOCIATIONS].join("/")}`,
+          ` is not one of ${[...TRUSTED_ASSOCIATIONS].join("/")}, and the author is not this repository's workflow bot (${WORKFLOW_BOT_LOGIN})`,
       });
       continue;
     }

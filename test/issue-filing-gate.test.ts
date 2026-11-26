@@ -1104,6 +1104,28 @@ describe("#1261 the four suppression classes", () => {
     }
   });
 
+  // #2901: an accepted ADR's plan files its issues from this repository's
+  // own workflow, so their author is `github-actions[bot]` with association
+  // NONE. Dropping them meant a duplicate of a placed issue was never caught.
+  test("FG-290: an issue this repository's workflow bot filed is in the corpus", () => {
+    const planIssue = trusted({ authorAssociation: "NONE", authorLogin: "github-actions[bot]", authorType: "Bot" });
+    expect(kept(trustedCorpus(page([planIssue]))), "the plan's own issue is compared against").toHaveLength(1);
+  });
+
+  test("FG-291 CONTROL: any other NONE author is still untrusted, and the drop names the bot rule", () => {
+    for (const author of [
+      { authorLogin: "dependabot[bot]", authorType: "Bot" },
+      { authorLogin: "github-actions[bot]", authorType: "User" },
+      { authorLogin: "stranger", authorType: "User" },
+      {},
+    ]) {
+      const r = trustedCorpus(page([trusted({ authorAssociation: "NONE", ...author })]));
+      expect(kept(r), `${JSON.stringify(author)} is not trusted`).toEqual([]);
+      const drop = r.dropped.find(d => d.reason === "untrusted-author");
+      expect(drop?.detail, "the drop says which bot would have been trusted").toContain("github-actions[bot]");
+    }
+  });
+
   test("FG-35: one issue cannot name enough to match everything", () => {
     const stuffed = Array.from({ length: MAX_KEYS_PER_EXISTING_ISSUE + 10 }, (_, i) => `\`symbolNumber${i}\``).join(" ");
     expect(kept(trustedCorpus(page([trusted({ body: stuffed })]))), "over the cap, so dropped whole").toEqual([]);
