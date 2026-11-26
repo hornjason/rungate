@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync } from "fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
-import { detectDrift, extractKeywords } from "../scripts/detect-sc-drift";
+import { containsSubject, detectDrift, extractKeywords } from "../scripts/detect-sc-drift";
 
 const ROOT = join(import.meta.dir, "..");
 /** Created in `beforeAll`, not at module scope — see #437. */
@@ -269,5 +270,51 @@ describe("#2287: the keywords are looked for in the file the contains clause nam
     );
     const stale = detectDrift(TEMP_SPECS, TEMP_DIR).stale.get("test-subject-empty.md")!;
     expect(stale.map(s => s.path)).toEqual(["scripts/subject-empty.ts"]);
+  });
+});
+
+describe("#2883: a path is read from its start, never from a segment nested inside another path", () => {
+  test("src/lib/x.ts is not read as lib/x.ts: present or missing, it reports no lib/ drift, and a missing lib/ path still does", () => {
+    const root = mkdtempSync(join(tmpdir(), "rungate-2883-"));
+    try {
+      mkdirSync(join(root, "specs"));
+      mkdirSync(join(root, "src", "lib"), { recursive: true });
+      writeFileSync(join(root, "src", "lib", "present.ts"), "export const present = 1;\n");
+      writeFileSync(
+        join(root, "specs", "nested.md"),
+        [
+          "---",
+          "doc-type: spec",
+          "---",
+          "",
+          "## Success Criteria",
+          "",
+          "- [ ] SC-9540: src/lib/present.ts exists",
+          "- [ ] SC-9541: src/lib/missing.ts exists",
+          "- [ ] SC-9542: lib/missing.ts exists",
+          "- [ ] SC-9543: node_modules/pkg/scripts/run.js exists",
+          "- [ ] SC-9544: the file `lib/also-missing.ts` exists",
+          "",
+        ].join("\n"),
+      );
+      const result = detectDrift(join(root, "specs"), root);
+      const drifted = (result.drifted.get("nested.md") ?? []).map(d => `${d.scId} ${d.path}`).sort();
+      // Only the criteria that name a top-level lib/ path drift; the nested ones are not read as lib/ or scripts/ paths.
+      expect(drifted).toEqual(["SC-9542 lib/missing.ts", "SC-9544 lib/also-missing.ts"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("containsSubject reads no lib/x.ts out of src/lib/x.ts, and still reads a top-level lib/x.ts", () => {
+    expect(containsSubject("src/lib/x.ts contains [someKeyword]")).toBeNull();
+    expect(containsSubject("pkg-lib/x.ts contains [someKeyword]")).toBeNull();
+    expect(containsSubject("lib/x.ts contains [someKeyword]")).toBe("lib/x.ts");
+    expect(containsSubject("the reader in (lib/x.ts contains [someKeyword]")).toBe("lib/x.ts");
+  });
+
+  test("both readers share one path pattern, so they cannot disagree about where a path starts", () => {
+    const source = readFileSync(join(ROOT, "scripts", "detect-sc-drift.ts"), "utf-8");
+    expect(source.split("(?:lib|scripts|test|gates|workflows|hooks)").length - 1).toBe(1);
   });
 });

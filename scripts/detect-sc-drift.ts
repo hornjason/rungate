@@ -36,13 +36,22 @@ export interface StaleDetail {
 }
 
 /**
+ * A file path in a criterion, read only from its start (#2883). A listed
+ * directory that follows `/`, a word character, `.` or `-` is a segment of
+ * some other path, not the start of this one, so a consumer's
+ * `src/lib/x.ts` is never read as `lib/x.ts` and reported missing. Both
+ * readers below build on this one source, so they cannot disagree about
+ * where a path starts.
+ */
+const PATH_SOURCE = String.raw`(?<![\w./-])((?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]]+\.(?:ts|js|md|json))`;
+
+/**
  * Extract file paths from SC statement text.
  * Matches patterns like: lib/foo.ts, scripts/bar.ts, test/baz.test.ts, etc.
  */
 function extractFilePaths(statement: string): string[] {
   const paths: string[] = [];
-  // Match file paths: (lib|scripts|test|gates|workflows|hooks)/...(.ts|.js|.md|.json|.hook.ts)
-  const pathPattern = /((?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]]+\.(?:ts|js|md|json))/g;
+  const pathPattern = new RegExp(PATH_SOURCE, "g");
   let match;
   while ((match = pathPattern.exec(statement)) !== null) {
     paths.push(match[1]);
@@ -103,7 +112,7 @@ export function containsSubject(statement: string): string | null {
 export function containsClauses(statement: string): Array<{ path: string | null; keywords: string[] }> {
   const out: Array<{ path: string | null; keywords: string[] }> = [];
   for (const m of statement.matchAll(/(?<!not )contains \[([^\]]+)\]/g)) {
-    const before = statement.slice(0, m.index).match(/((?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]]+\.(?:ts|js|md|json))\s+$/);
+    const before = statement.slice(0, m.index).match(new RegExp(String.raw`${PATH_SOURCE}\s+$`));
     out.push({ path: before ? before[1] : null, keywords: m[1].split(",").map(k => k.trim()).filter(Boolean) });
   }
   return out;
