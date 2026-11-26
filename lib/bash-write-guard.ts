@@ -2431,7 +2431,10 @@ export function argumentsOf(segment: string): string[] {
  * whole string literal instead, and the corpus sweep then newly refused 3
  * real commands, all editing a spec or a plan that names a hook file. An
  * accident guard that refuses that work is the worse trade, so the window
- * stays where round 2 put it and a CONCESSION row pins the spelling.
+ * stays where round 2 put it and a CONCESSION row pins the spelling. A space
+ * in a long file name after the protected name is the same class: the tail
+ * ends at whitespace, so a mode more than 80 characters past it is out of
+ * reach (the security review of round 3; same trade, same answer).
  *
  * The path starts are found in one forward pass, and every match in the
  * same path is tested as ONE window, from 80 before the path to 80 after
