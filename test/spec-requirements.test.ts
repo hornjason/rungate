@@ -343,6 +343,9 @@ describe("SC-2623: a spec says which SUCCESS.md claim it serves", () => {
     expect(successClaimNumbers(CLAIMS_MD.replace(/\n/g, "\r\n"))).toEqual([1, 2, 7]);
     // the same list under the template's claims heading is the claims
     expect(successClaimNumbers("# S\n## The claims\n\n1. **Every gate can fail, observed failing.**\n")).toEqual([1]);
+    // round 4: a top-level heading after the claims ends them; the leading title does not
+    expect(successClaimNumbers("# S\n## The claims\n\n1. **Every gate can fail, observed failing.**\n\n# Appendix\n\n2. **Read the appendix before filing.**\n")).toEqual([1]);
+    expect(successClaimNumbers("# S\n\n1. **Every gate can fail, observed failing.**\n")).toEqual([1]);
   });
 
   test("SC-2623 (#2868): the refusals name no section, and no stated claims is not 'could not be read'", () => {

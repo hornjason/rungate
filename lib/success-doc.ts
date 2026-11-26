@@ -183,6 +183,10 @@ export function parseSuccessDoc(text: string): SuccessDoc {
     if (roles[i] === "code") continue;
     const h2 = /^##(?!#)\s+(.*?)\s*$/.exec(line); // `\s*$` takes a CRLF's \r
     if (h2) section = h2[1].trim();
+    // A top-level heading after a section has begun ends it too (#2868 round
+    // 4); the document's leading `# ` title opens none.
+    const h1 = /^#(?!#)\s+(.*?)\s*$/.exec(line);
+    if (h1 && section !== null) section = h1[1].trim();
 
     let heading: RegExpExecArray | null = null;
     for (const [k, form] of CLAIM_FORMS.entries()) {
