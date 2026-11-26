@@ -31,14 +31,14 @@ import { workflowCensus } from "../lib/scaffold/workflow-census";
 
 const ROOT = join(import.meta.dir, "..");
 
-/** Scaffold a throwaway consumer; hand back the generated specs-placed.yml. */
-function generated(): string {
+/** Scaffold a throwaway consumer; hand back the generated specs-placed.yml. `board` is its config's board block. */
+function generated(board?: Record<string, unknown>): string {
   const root = mkdtempSync(join(tmpdir(), "rg-specs-placed-"));
   try {
     mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
     writeFileSync(
       join(root, ".claude", "rungate", "config.json"),
-      JSON.stringify({ project: "fixture", repo: "fixture/fixture", ci: { bunVersion: "1.3.14" }, test: { command: "bun test" } }),
+      JSON.stringify({ project: "fixture", repo: "fixture/fixture", ci: { bunVersion: "1.3.14" }, test: { command: "bun test" }, ...(board ? { board } : {}) }),
     );
     writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture", version: "0.0.0" }));
     createCiWorkflows(root, [], { force: true });
@@ -354,5 +354,89 @@ describe("a repository with no board: the Criteria step warns and passes instead
     expect(r.code).toBe(2);
     expect(r.out).not.toContain("::warning");
     expect(r.calls.map(c => c.replace(/^bunx rungate@\S+ /, ""))).toStrictEqual(["board-id"]);
+  });
+});
+
+/**
+ * #2862: with `board.mergeWorkflow` set, a merge that workflow makes with
+ * GITHUB_TOKEN starts no push run, so specs-placed.yml runs on its
+ * `workflow_run` too: ADR-022's reasoning, applied to the second workflow it
+ * covers. The failure matrix, written before the build: no earlier run, an
+ * earlier ADR placement still running, a merge-workflow run that merged
+ * nothing, and a name the config gets wrong.
+ */
+describe("#2862: a merge made by automation runs specs-placed.yml too", () => {
+  const MERGED = generated({ mergeWorkflow: "Approve on green" });
+  // biome-ignore lint: the parsed workflow is untyped YAML.
+  const doc = Bun.YAML.parse(MERGED) as any;
+  // biome-ignore lint: the parsed workflow is untyped YAML.
+  const steps: any[] = doc?.jobs?.[SPECS_PLACED_JOB]?.steps ?? [];
+
+  /** Run the gate step's own script with a stub `gh`; hand back what it wrote to GITHUB_OUTPUT. */
+  function gate(main: string, last: string, compare = "echo specs/A.md"): string {
+    const dir = mkdtempSync(join(tmpdir(), "rg-specs-placed-gate-"));
+    try {
+      writeFileSync(join(dir, "gh"), `#!/bin/bash\ncase "$*" in *compare/*) ${compare} ;; *commits/*) echo ${JSON.stringify(main)} ;; *runs*) echo ${JSON.stringify(last)} ;; esac\n`);
+      chmodSync(join(dir, "gh"), 0o755);
+      const out = join(dir, "out.txt");
+      writeFileSync(out, "");
+      spawnSync("bash", ["-e", "-c", runOf(steps[0])], {
+        encoding: "utf-8",
+        env: { PATH: `${dir}:/usr/bin:/bin`, GITHUB_OUTPUT: out, GITHUB_REPOSITORY: "o/r", GITHUB_REF_NAME: "main" },
+      });
+      return readFileSync(out, "utf-8").trim();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("unset: the file is today's push-only one, byte for byte", () => {
+    expect(generated({ mergeWorkflow: null })).toBe(YML);
+    expect(YML).not.toContain("workflow_run:");
+  });
+
+  test("set: a workflow_run trigger on that workflow's completion, beside the unchanged push trigger", () => {
+    expect(doc.on.workflow_run).toEqual({ workflows: ["Approve on green"], types: ["completed"] });
+    expect(doc.on.push).toEqual(DOC.on.push);
+  });
+
+  test("a merge-workflow run that merged nothing: a gate decides first, and every step after it is skipped", () => {
+    expect(steps[0].id).toBe("merged");
+    expect(String(steps[0].if)).toContain("github.event_name == 'workflow_run'");
+    expect(runOf(steps[0])).toContain(`actions/workflows/${SPECS_PLACED_WORKFLOW_FILE}/runs?status=success`);
+    // the wait, the checkout, bun and the families read sit behind the gate;
+    // every later step already hangs off the families read
+    for (const s of steps.slice(1, 5)) expect(String(s.if ?? ""), String(s.name ?? s.uses)).toContain("steps.merged.outputs.go != 'false'");
+    for (const s of steps.slice(5)) expect(String(s.if ?? ""), String(s.name)).toContain("steps.families.outputs.any == 'true'");
+    expect(gate("abc", "abc")).toBe("go=false");
+  });
+
+  test("no earlier successful run, or main moved since it: the gate goes ahead", () => {
+    expect(gate("abc", "")).toBe("go=true");
+    expect(gate("abc", "def")).toBe("go=true");
+  });
+
+  test("an earlier ADR placement still running: the wait runs on a merge-triggered run, and is the push run's wait", () => {
+    // the same script, so the push cases above (#2464's same-second race
+    // included) are this run's cases too
+    expect(runOf(steps[1])).toBe(runOf(STEPS[0]));
+    expect(runOf(steps[1])).toContain(ADR_ACCEPTED_WORKFLOW_FILE);
+    expect(String(steps[1].if)).not.toContain("event_name");
+  });
+
+  test("main moved but nothing under specs/ changed: skip, as the push trigger's path filter would", () => {
+    expect(gate("abc", "def", "printf 'lib/a.ts\\nREADME.md\\n'")).toBe("go=false");
+    expect(gate("abc", "def", "printf 'lib/a.ts\\nspecs/B.md\\n'")).toBe("go=true");
+  });
+
+  test("a changed-file list it cannot read, or one at the API's ceiling, is UNMEASURED: the full placement runs", () => {
+    expect(gate("abc", "def", "exit 1")).toBe("go=true");
+    expect(gate("abc", "def", "for i in $(seq 1 300); do echo lib/f$i.ts; done")).toBe("go=true");
+  });
+
+  test("a name the config gets wrong: no trigger is written, and every run says so", () => {
+    const bad = generated({ mergeWorkflow: "Approve\non green" });
+    expect(bad).not.toContain("workflow_run:");
+    expect(bad).toContain("Merge workflow trigger UNMEASURED");
   });
 });

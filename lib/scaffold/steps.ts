@@ -4660,7 +4660,8 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
   }
 
   // SC-2780, ADR-018 Decision 1: a push to main that changes specs/ runs
-  // every opted-in family through the engine. The families are read at run
+  // every opted-in family through the engine, and with board.mergeWorkflow
+  // set so does that workflow's merge (#2862). The families are read at run
   // time by the published CLI, so nothing here names a spec.
   const specsPlacedYml = buildSpecsPlacedWorkflow({
     runsOn,
@@ -4669,6 +4670,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     setupBunWith: bunStep,
     setupBunEnv: setupBunEnv("        "),
     version: harnessVersion(),
+    mergeWorkflow: boardInputs.mergeWorkflow,
   });
 
   // SC-2784, ADR-020 Decision 2: a consumer's issue is triaged when it is

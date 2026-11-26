@@ -162,8 +162,9 @@ export function readBoardInputs(projectRoot: string): {
   milestonePrefix: string | null;
   /**
    * The consumer's merge workflow, by its `name:` (ADR-022, SC-2787). A merge
-   * it makes with GITHUB_TOKEN starts no push run, so adr-accepted.yml also
-   * runs when it completes. Absent means no such workflow, and nothing changes.
+   * it makes with GITHUB_TOKEN starts no push run, so adr-accepted.yml and
+   * specs-placed.yml (#2862) also run when it completes. Absent means no such
+   * workflow, and nothing changes.
    */
   mergeWorkflow: string | null;
 } {

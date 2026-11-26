@@ -47,9 +47,20 @@
  * (`docs/guides/RELEASING.md`, "A command a generated workflow calls ships
  * BEFORE the workflow that calls it"). `--families` and `--place` shipped in
  * 0.8.26.
+ *
+ * ## A merge made by automation runs it too
+ *
+ * A merge made with GITHUB_TOKEN starts no push run, so with
+ * `board.mergeWorkflow` set this also runs when that workflow completes, as
+ * `adr-accepted.yml` does (ADR-022, #2862). It runs the same steps, behind
+ * the same gate `adr-accepted.yml` uses: a completion while main has not
+ * moved since this workflow last succeeded skips everything, and any other
+ * runs the full placement, which is idempotent. The wait for an earlier ADR
+ * placement runs on both events, because a bot merge starts both workflows.
+ * Unset, the file is exactly the push-only one.
  */
 
-import { ADR_ACCEPTED_WORKFLOW_FILE } from "./adr-accepted-workflow";
+import { ADR_ACCEPTED_WORKFLOW_FILE, boardInput, buildMergedGateScript } from "./adr-accepted-workflow";
 import { boardProjectRun } from "./board-project-step";
 
 /** The file this module generates, under `.github/workflows/`. */
@@ -68,6 +79,29 @@ export const SPECS_PLACED_COMMANDS = ["plan-issues", "plan-spec", "plan-deps", "
 /** Its own group: it cancels only its own pending runs, each of which re-reads the tree. */
 export const SPECS_PLACED_GROUP = "specs-placed";
 
+/**
+ * The gate's second question on a merge-triggered run (#2862). The push
+ * trigger filters on `specs/**` and a workflow_run cannot, so after "main
+ * moved" it asks whether any file under specs/ changed between this
+ * workflow's last success and main, and skips when none did. A skip's head
+ * becomes the next base, which is right: nothing in that range touched specs.
+ * A list it cannot read, or one at the compare API's 300-file ceiling, is
+ * UNMEASURED and runs the full placement.
+ */
+export const SPECS_CHANGED_CHECK: readonly string[] = [
+  `if [ "$go" = true ] && [ -n "$last" ] && [ -n "$main" ]; then`,
+  `  if files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$last...$main?per_page=100" --jq '.files[].filename'); then`,
+  `    if [ "$(printf '%s\\n' "$files" | grep -c .)" -ge 300 ]; then`,
+  `      echo "::notice::300 or more files changed since $last, so whether specs/ changed is UNMEASURED; running the full placement."`,
+  `    elif ! printf '%s\\n' "$files" | grep -q '^specs/'; then`,
+  `      echo "Nothing under specs/ changed between $last and $main."; go=false`,
+  `    fi`,
+  `  else`,
+  `    echo "::notice::The files changed since $last could not be read, so whether specs/ changed is UNMEASURED; running the full placement."`,
+  `  fi`,
+  `fi`,
+];
+
 /** How long the first step waits for an earlier ADR placement, in 20-second polls. */
 export const WAIT_POLLS = 90;
 
@@ -84,6 +118,8 @@ export interface SpecsPlacedWorkflowOptions {
   setupBunEnv: string;
   /** The published harness version every step runs through `bunx`. */
   version: string;
+  /** `board.mergeWorkflow`, read through `readBoardInputs` (#2862); null emits the push-only file. */
+  mergeWorkflow: string | null;
 }
 
 /**
@@ -152,6 +188,39 @@ export function buildSpecsPlacedWorkflow(opts: SpecsPlacedWorkflowOptions): stri
     c => `${c} plan-deps --repo "$GITHUB_REPOSITORY" --milestone-prefix "$prefix" --write`,
     "plan-deps",
   );
+  // #2862: a name that would be read as something other than itself is not
+  // written as a trigger, and every run says so (adr-accepted.yml's rule).
+  const merge = opts.mergeWorkflow === null ? null : boardInput("mergeWorkflow", opts.mergeWorkflow);
+  const mergeName = merge?.value ?? null;
+  const mergeWarning =
+    merge !== null && merge.value === null
+      ? `
+          echo "::warning title=Merge workflow trigger UNMEASURED::${merge.why}, so this workflow does not run when the merge workflow completes, and a merge made by automation places nothing. Fix it and re-run rungate scaffold."`
+      : "";
+  const mergeTrigger =
+    mergeName === null
+      ? ""
+      : `
+  # #2862 (ADR-022): a merge the named workflow makes with GITHUB_TOKEN starts
+  # no push run, and a workflow_run event is created even then. Its gate step
+  # skips a completion when nothing under specs/ changed since the last success.
+  workflow_run:
+    workflows: [${JSON.stringify(mergeName)}]
+    types: [completed]`;
+  const stepIf = mergeName === null ? "" : `
+        if: \${{ steps.merged.outputs.go != 'false' }}`;
+  const gateStep =
+    mergeName === null
+      ? ""
+      : `
+      - id: merged
+        name: Did the merge workflow merge anything?
+        if: \${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        run: |
+${indent(buildMergedGateScript(SPECS_PLACED_WORKFLOW_FILE, SPECS_CHANGED_CHECK))}
+`;
 
   return `# Managed by rungate — do not edit. Opt a spec in with
 # board: { scope: active, prefix: <Name> } in its frontmatter and give it a
@@ -175,7 +244,7 @@ name: Specs changed — run every opted-in family through the engine
 on:
   push:
     branches: [main]
-    paths: ["specs/**"]
+    paths: ["specs/**"]${mergeTrigger}
 
 permissions:
   contents: read
@@ -194,20 +263,20 @@ concurrency:
 jobs:
   ${SPECS_PLACED_JOB}:
     runs-on: ${opts.runsOn}
-    steps:
-      - name: Wait for an earlier ADR placement to finish
+    steps:${gateStep}
+      - name: Wait for an earlier ADR placement to finish${stepIf}
         env:
           GH_TOKEN: \${{ github.token }}
-        run: |
+        run: |${mergeWarning}
 ${indent(buildWaitScript())}
 
-      - uses: ${opts.checkout}
-      - uses: ${opts.setupBun}
+      - uses: ${opts.checkout}${stepIf}
+      - uses: ${opts.setupBun}${stepIf}
         with:
 ${opts.setupBunWith}
 ${opts.setupBunEnv}
       # No token: the package is fetched before any step that holds one.
-      - id: families
+      - id: families${stepIf}
         name: Which specs are on the board?
         run: |
           ${cli} plan-issues --families > families.tsv
