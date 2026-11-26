@@ -27,6 +27,7 @@ import type { ThreadReading } from "./ai-review-rounds";
 import { nextCursor } from "./graphql-cursor";
 import { escapeAnnotation, reviewThreadRequests, threadKeyFrom } from "./scaffold/ai-review-findings";
 import type { AiReviewFindingsReading, AiReviewThreadRequest } from "./scaffold/ai-review-findings";
+import { AI_REVIEW_THREAD_KEY_MARKER } from "./scaffold/ai-review-step";
 
 /**
  * One review thread as the GraphQL query returns it, before anything is
@@ -61,6 +62,12 @@ export interface RawReviewThread {
  * A partial response drops fields rather than failing, and a finding answered
  * by an omission is the silent direction of error. Anything that is not
  * exactly `true` reads as open.
+ *
+ * ## A thread holding several findings answers each of them (#2838)
+ *
+ * Findings that share a file and line are posted as one thread, so its body
+ * carries one key marker per finding, and each key is read here with the
+ * thread's own resolution.
  */
 export function threadReading(
   raw: readonly RawReviewThread[] | null | undefined,
@@ -78,11 +85,113 @@ export function threadReading(
     // reading degrades rather than exploding. Dropping is also right on the
     // merits — a node nobody can read names no finding and answers none.
     if (t === null || typeof t !== "object") continue;
-    const key = threadKeyFrom(t.body);
-    if (key === null) continue;
-    threads.push({ key, isResolved: t.isResolved === true });
+    for (const key of threadKeysFrom(t.body)) threads.push({ key, isResolved: t.isResolved === true });
   }
   return { status: "MEASURED", threads };
+}
+
+/**
+ * Every finding key a thread carries, in order and without repeats (#2838).
+ * `threadKeyFrom` reads only the last marker, which was the only one until
+ * findings that share a file and line went up as one thread. Each marker is
+ * still decoded by `threadKeyFrom`, over the body cut just past it, so the
+ * format keeps one reader. Model text cannot spell a marker: `threadBody`
+ * shows its `<!--` as `&lt;!--`.
+ */
+function threadKeysFrom(body: unknown): string[] {
+  if (typeof body !== "string") return [];
+  const opener = `<!-- ${AI_REVIEW_THREAD_KEY_MARKER} `;
+  const keys: string[] = [];
+  for (let at = body.indexOf(opener); at !== -1; at = body.indexOf(opener, at + opener.length)) {
+    const end = body.indexOf("-->", at);
+    if (end === -1) break;
+    const key = threadKeyFrom(body.slice(0, end + 3));
+    if (key !== null && !keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}
+
+/** What separates the findings in a thread that holds more than one (#2838). */
+const THREAD_SECTION_RULE = "\n\n---\n\n";
+
+/**
+ * The most a shared thread's body holds (#2838 review). GitHub refuses a
+ * comment body over 65,536 characters, and the conversation fallback adds a
+ * preface, so a thread that would pass this is split at the same line.
+ */
+export const THREAD_BODY_BUDGET = 60_000;
+
+/** One thread to post: the request, how many findings it holds, and each finding's own body. */
+interface AnchoredThread {
+  request: AiReviewThreadRequest;
+  findings: number;
+  sections: string[];
+}
+
+/**
+ * The threads a round's requests become: one per file and line (#2838).
+ *
+ * Three runs that word one defect three ways at one line are three findings,
+ * and must stay three — two real defects can share a line, and a finding one
+ * run raised is never voted or merged away (CRC-B11). Posting them as three
+ * threads made every reader resolve one defect three times. So the union is
+ * left alone and only the posting is shared: each finding's own body, key
+ * marker included, goes into the one thread, in the reading's order, and a
+ * body identical to one already there is not repeated.
+ *
+ * Only when the shared body would pass {@link THREAD_BODY_BUDGET} does a line
+ * get a second thread. A single finding is never cut, so one that is already
+ * over the limit is sent as it always was.
+ *
+ * A request with no line is never shared. A file-level comment is a finding
+ * whose line was not given, not a finding at the same place as another.
+ */
+function threadsPerAnchor(requests: readonly AiReviewThreadRequest[]): {
+  threads: AnchoredThread[];
+  /** Each line holding two or more findings: where, how many, and in how many threads. */
+  shared: { where: string; findings: number; threads: number }[];
+} {
+  type Section = { body: string; findings: number };
+  const anchors: { request: AiReviewThreadRequest; sections: Section[] }[] = [];
+  const byAnchor = new Map<string, (typeof anchors)[number]>();
+  for (const request of requests) {
+    const anchor = request.line === null ? null : JSON.stringify([request.path, request.line]);
+    const entry = anchor === null ? undefined : byAnchor.get(anchor);
+    if (entry === undefined) {
+      const fresh = { request, sections: [{ body: request.body, findings: 1 }] };
+      anchors.push(fresh);
+      if (anchor !== null) byAnchor.set(anchor, fresh);
+      continue;
+    }
+    const same = entry.sections.find(s => s.body === request.body);
+    if (same !== undefined) same.findings += 1;
+    else entry.sections.push({ body: request.body, findings: 1 });
+  }
+
+  const length = (chunk: readonly Section[]): number =>
+    chunk.reduce((n, s) => n + s.body.length, 0) + THREAD_SECTION_RULE.length * Math.max(0, chunk.length - 1);
+  const threadOf = (request: AiReviewThreadRequest, chunk: readonly Section[]): AnchoredThread => ({
+    request: { ...request, body: chunk.map(s => s.body).join(THREAD_SECTION_RULE) },
+    findings: chunk.reduce((n, s) => n + s.findings, 0),
+    sections: chunk.map(s => s.body),
+  });
+  const threads: AnchoredThread[] = [];
+  const shared: { where: string; findings: number; threads: number }[] = [];
+  for (const { request, sections } of anchors) {
+    const before = threads.length;
+    let chunk: Section[] = [];
+    for (const section of sections) {
+      if (chunk.length > 0 && length([...chunk, section]) > THREAD_BODY_BUDGET) {
+        threads.push(threadOf(request, chunk));
+        chunk = [];
+      }
+      chunk.push(section);
+    }
+    threads.push(threadOf(request, chunk));
+    const findings = sections.reduce((n, s) => n + s.findings, 0);
+    if (findings > 1) shared.push({ where: `${request.path}:${request.line}`, findings, threads: threads.length - before });
+  }
+  return { threads, shared };
 }
 
 /**
@@ -237,6 +346,8 @@ export interface AiReviewThreadsResult {
   demoted: number;
   /** Of those, how many went on the conversation because GitHub refused the file too (#2338). */
   pullComments: number;
+  /** Findings that went into a thread shared with another at the same file and line (#2838); 0 when none did. */
+  together: number;
   /** One sentence per thing worth reading, in the order it happened. */
   detail: string[];
 }
@@ -350,26 +461,40 @@ export async function postReviewThreads(
     detail.push(
       "the review produced no usable reading, so there was nothing to post — this is not a review that found nothing",
     );
-    return { outcome: "UNMEASURED", attempted: 0, posted: 0, demoted: 0, pullComments: 0, detail };
+    return { outcome: "UNMEASURED", attempted: 0, posted: 0, demoted: 0, pullComments: 0, together: 0, detail };
   }
 
   const requests = reviewThreadRequests(reading, keyFor);
   if (requests.length === 0) {
     detail.push("the reading located no finding that could be anchored to a path in this diff");
-    return { outcome: "NOTHING_TO_POST", attempted: 0, posted: 0, demoted: 0, pullComments: 0, detail };
+    return { outcome: "NOTHING_TO_POST", attempted: 0, posted: 0, demoted: 0, pullComments: 0, together: 0, detail };
+  }
+
+  // #2838: one thread per file and line, said before anything is sent so
+  // every outcome below carries it.
+  const { threads, shared: sharedAnchors } = threadsPerAnchor(requests);
+  let together = 0;
+  let shared = 0;
+  for (const anchor of sharedAnchors) {
+    together += anchor.findings;
+    shared += anchor.threads;
+    detail.push(
+      `${anchor.where}: ${anchor.findings} findings share this file and line, so they are posted as ` +
+        (anchor.threads === 1 ? "one thread" : `${anchor.threads} threads, each under GitHub's comment size limit`),
+    );
   }
 
   let posted = 0;
   let demoted = 0;
   let pullComments = 0;
-  const alreadyOnConversation = new Set((comment?.existing ?? []).map(threadKeyFrom).filter((k): k is string => k !== null));
+  const alreadyOnConversation = new Set((comment?.existing ?? []).flatMap(threadKeysFrom));
   /** Keys this call put on the conversation, so a repeat can say WHEN (review of #2358). */
   const postedThisRound = new Set<string>();
   let forbidden = 0;
   let pending = 0;
   let failed = 0;
 
-  for (const request of requests) {
+  for (const { request, sections } of threads) {
     const where = request.line === null ? request.path : `${request.path}:${request.line}`;
     let answer = await post(request);
 
@@ -404,23 +529,32 @@ export async function postReviewThreads(
       !isPendingReviewRefusal(answer) &&
       isOffDiffRefusal(answer)
     ) {
-      const key = threadKeyFrom(request.body);
-      if (key !== null && alreadyOnConversation.has(key)) {
+      // Finding by finding (#2838): only those not already on the
+      // conversation go up, and the thread is a repeat when none is left.
+      const onConversation = (section: string): boolean => {
+        const keys = threadKeysFrom(section);
+        return keys.length > 0 && keys.every(k => alreadyOnConversation.has(k));
+      };
+      const fresh = sections.filter(s => !onConversation(s));
+      if (fresh.length === 0) {
         posted += 1;
         pullComments += 1;
-        const when = postedThisRound.has(key) ? "earlier in this round" : "from an earlier round";
+        const keys = sections.flatMap(threadKeysFrom);
+        const now = keys.filter(k => postedThisRound.has(k)).length;
+        const when =
+          now === keys.length ? "earlier in this round" : now === 0 ? "from an earlier round" : "partly earlier in this round and partly from an earlier round";
         detail.push(`${where}: not in this pull request's diff, and already on its conversation ${when}, so not posted again`);
         continue;
       }
       const viaConversation = await comment.post(
-        `**\`${where}\` is not in this pull request's diff, so this finding could not go on it.** ` +
+        `**\`${where}\` is not in this pull request's diff, so ${fresh.length === 1 ? "this finding" : `these ${fresh.length} findings`} could not go on it.** ` +
           `GitHub refused it ${request.line === null ? "at the file" : "at the line and at the file"}. ` +
           `The branch may be behind its base; rebasing usually puts the file back in the diff.\n\n` +
-          request.body,
+          fresh.join(THREAD_SECTION_RULE),
       );
       if (viaConversation.ok) {
         // Within the round too: a second finding with this key is the same finding (review of #2358).
-        if (key !== null) {
+        for (const key of fresh.flatMap(threadKeysFrom)) {
           alreadyOnConversation.add(key);
           postedThisRound.add(key);
         }
@@ -478,27 +612,29 @@ export async function postReviewThreads(
   // -review lock, and all three outrank a partial success — a round that
   // posted three of four comments has lost a finding and must say so.
   if (failed > 0) {
-    return { outcome: "FAILED", attempted: requests.length, posted, demoted, pullComments, detail };
+    return { outcome: "FAILED", attempted: threads.length, posted, demoted, pullComments, together, detail };
   }
   if (forbidden > 0) {
-    return { outcome: "DEGRADED_NO_WRITE", attempted: requests.length, posted, demoted, pullComments, detail };
+    return { outcome: "DEGRADED_NO_WRITE", attempted: threads.length, posted, demoted, pullComments, together, detail };
   }
   if (pending > 0) {
     return {
       outcome: "BLOCKED_BY_PENDING_REVIEW",
-      attempted: requests.length,
+      attempted: threads.length,
       posted,
       demoted,
       pullComments,
+      together,
       detail,
     };
   }
   detail.push(
     `posted ${posted} review ${posted === 1 ? "comment" : "comments"}` +
       (demoted === 0 ? "" : `, ${demoted} at file level after a line was refused`) +
-      (pullComments === 0 ? "" : `, ${pullComments} on the conversation because the file is not in this pull request's diff`),
+      (pullComments === 0 ? "" : `, ${pullComments} on the conversation because the file is not in this pull request's diff`) +
+      (together === 0 ? "" : `, ${together} findings posted together as ${shared} ${shared === 1 ? "thread" : "threads"} because they share a file and line`),
   );
-  return { outcome: "POSTED", attempted: requests.length, posted, demoted, pullComments, detail };
+  return { outcome: "POSTED", attempted: threads.length, posted, demoted, pullComments, together, detail };
 }
 
 /**
