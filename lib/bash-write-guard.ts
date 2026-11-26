@@ -732,7 +732,7 @@ function collectShell(text: string, depth: number, tag: (i: number) => { at: num
       nested(); // a `mkdir`'s own arguments are not mentions; a substitution in one is
       return;
     }
-    if (isInterpreterWord(word) && /\s-[a-z]*[ce]\b/.test(stripQuoted(seg))) {
+    if (isInterpreterWord(word) && /\s-[A-Za-z]*[ce]\b/.test(stripQuoted(seg))) {
       const shell = isShellWord(word);
       const body = shell ? shellBody(seg) : programBody(seg);
       for (const w of words) if (w !== body && dequote(w) !== body) add(w);
@@ -2411,56 +2411,95 @@ export function argumentsOf(segment: string): string[] {
  * to mention a hook in its data. Associating a call with its argument
  * properly means parsing the language, which this module will not do.
  *
- * #2858 (the criterion says refused "whatever directory it names"): the window opens
- * at the start of the path the name ends, not at the name. Opened at the
- * name, a deep enough directory pushed the verb out of reach — a realpath'd
- * macOS `$TMPDIR` is long enough — so how far a body's write was refused
- * depended on where it pointed. What stays outside the window is a verb
- * separated from the path by other text: a long SOURCE before the
- * destination, or a call nested deeper than `WRITE_INTENT` reads. ADR-027
- * decision 3 concedes those. The name is matched without case, as `names`
- * matches it (#1184).
+ * #2858 (the criterion says refused "whatever directory it names"): the
+ * window spans the STRING LITERAL the name sits in, plus 80 characters on
+ * each side. The literal is bounded by its own quote: the first quote after
+ * the name, and the last quote of that same character before it. So what
+ * the directory holds — its length, a space, a `(`, an apostrophe inside a
+ * double-quoted path — cannot move the verb out of reach, and neither can a
+ * long tail after the name. Three rounds of review of #2863 each found a
+ * character that ended a guessed "path start" early; the literal's own
+ * delimiter is the one boundary the body itself states.
  *
- * The path starts are found in one forward pass, and every match in the
- * same path is tested as ONE window, from 80 before the path to 80 after
- * its last match. A walk back from each match made a body of one name
- * repeated with no separator quadratic — a 40 KB heredoc took 4.6 s against
- * 0.05 s on main — and capping the walk instead put a long enough directory
- * outside the window again (review of #2863, round 1). Paths do not
- * overlap, so the windows together read each character a bounded number of
- * times.
+ * A name in no literal (the dequoted view, where every quote is gone) is
+ * bounded by the separators around it, `PATH_STOPS`, as before.
  *
- * Opening at the path start also means a write verb within the window
- * before a long path that is only READ now refuses, as it always did before
- * a short one: `open('/tmp/o.md','w'); json.load(open('/x/workflow-state.json'))`
- * is refused on main. The depth of the directory no longer decides which.
+ * What stays outside the window is a verb separated from the literal by
+ * other text: a long SOURCE literal before the destination, or a call nested
+ * deeper than `WRITE_INTENT` reads. ADR-027 decision 3 concedes those. The
+ * name is matched without case, as `names` matches it (#1184).
+ *
+ * Every match inside one span is tested as ONE window, and the bounds come
+ * from arrays built in one pass each way, so the cost is linear: a 40 KB body
+ * of one name repeated took 4.6 s with a walk back from every match.
+ *
+ * A write verb near a literal that is only READ refuses, as it always did
+ * for a short path: `open('/tmp/o.md','w'); json.load(open('/x/workflow-state.json'))`
+ * is refused on main.
  */
 function writesNear(body: string, protectedName: string): boolean {
   const WINDOW = 80;
-  let scanned = 0;
-  let lastStop = -1;
-  let pathStart = -1;
-  let lastEnd = -1;
-  const windowWrites = (): boolean =>
-    pathStart >= 0 && WRITE_INTENT.test(body.slice(Math.max(0, pathStart - WINDOW), lastEnd + WINDOW));
-  for (const m of body.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu'))) {
+  const matches = [...body.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu'))];
+  if (matches.length === 0) return false;
+  const { lastQuote, nextQuote, lastStop, nextStop } = spanIndex(body);
+  let from = -1;
+  let to = -1;
+  for (const m of matches) {
     const at = m.index ?? 0;
-    for (; scanned < at; scanned++) if (PATH_STOPS.has(body[scanned])) lastStop = scanned;
-    if (lastStop + 1 !== pathStart) {
-      if (windowWrites()) return true;
-      pathStart = lastStop + 1;
+    const end = at + m[0].length;
+    if (end <= to) continue; // inside the span already read
+    if (from >= 0 && WRITE_INTENT.test(body.slice(Math.max(0, from - WINDOW), to + WINDOW))) return true;
+    const close = nextQuote[end];
+    const open = close >= 0 ? lastQuote[QUOTES.indexOf(body[close])][at] : -1;
+    if (open >= 0) {
+      from = open + 1;
+      to = close;
+    } else {
+      from = lastStop[at] + 1;
+      to = nextStop[end] >= 0 ? nextStop[end] : body.length;
     }
-    lastEnd = at + m[0].length;
   }
-  return windowWrites();
+  return WRITE_INTENT.test(body.slice(Math.max(0, from - WINDOW), to + WINDOW));
+}
+
+const QUOTES = ["'", '"', '`'];
+
+/**
+ * For every offset of `body`: the last quote of each kind before it, the
+ * first quote of any kind at or after it, and the same two for `PATH_STOPS`.
+ * `-1` where there is none.
+ */
+function spanIndex(body: string): { lastQuote: Int32Array[]; nextQuote: Int32Array; lastStop: Int32Array; nextStop: Int32Array } {
+  const n = body.length;
+  const lastQuote = QUOTES.map(() => new Int32Array(n + 1));
+  const lastStop = new Int32Array(n + 1);
+  const seen = [-1, -1, -1];
+  let stop = -1;
+  for (let i = 0; i <= n; i++) {
+    for (let q = 0; q < QUOTES.length; q++) lastQuote[q][i] = seen[q];
+    lastStop[i] = stop;
+    if (i === n) break;
+    const q = QUOTES.indexOf(body[i]);
+    if (q >= 0) seen[q] = i;
+    if (PATH_STOPS.has(body[i])) stop = i;
+  }
+  const nextQuote = new Int32Array(n + 1);
+  const nextStop = new Int32Array(n + 1);
+  let quote = -1;
+  stop = -1;
+  for (let i = n; i >= 0; i--) {
+    if (i < n && QUOTES.includes(body[i])) quote = i;
+    if (i < n && PATH_STOPS.has(body[i])) stop = i;
+    nextQuote[i] = quote;
+    nextStop[i] = stop;
+  }
+  return { lastQuote, nextQuote, lastStop, nextStop };
 }
 
 /**
- * What ends a path word in an interpreter body. Not a space or a tab: a path
- * can hold one (`Application Support`), and a stop inside it opened the
- * window past the verb (review of #2863, round 2). Every argument separator
- * that is not whitespace still stops it, so the window opens no earlier than
- * the literal or the call the path sits in.
+ * What ends a path word outside a string literal. Not a space or a tab: a
+ * path can hold one (`Application Support`), and a stop inside it opened the
+ * window past the verb (review of #2863, round 2).
  */
 const PATH_STOPS = new Set(['\n', '\r', "'", '"', '`', '(', ',', '=', '[', '{', ';', '+']);
 
@@ -2711,7 +2750,7 @@ export function programBody(segment: string): string {
   // `\s*`, not `\s+`: `python3 -c'open(…)'` hands python the body with no
   // space after the flag, and an empty view here hid its quoted `open` mode
   // (review of #2863, round 2).
-  const m = /\s-[a-z]*[ce]\s*([\s\S]+)$/.exec(segment);
+  const m = /\s-[A-Za-z]*[ce]\s*([\s\S]+)$/.exec(segment);
   if (!m) return '';
   const raw = m[1].trim();
   const q = raw[0];
@@ -2900,7 +2939,7 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
     //    this asks for a declared write verb rather than refusing every
     //    interpreter that names a protected artifact, and for what that
     //    concession costs.
-    const isInterpreter = isInterpreterWord(word) && /\s-[a-z]*[ce]\b/.test(code);
+    const isInterpreter = isInterpreterWord(word) && /\s-[A-Za-z]*[ce]\b/.test(code);
     const isMutatingFind = word === 'find' && FIND_MUTATING.test(code);
 
     // 3a. A shell `-c` body is shell. Read it as shell rather than scanning

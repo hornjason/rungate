@@ -3718,11 +3718,11 @@ describe("#2701: the write spellings the verb list missed", () => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
-  // What leaving the new verbs out of WRITE_CALLEES costs, pinned: the
-  // exemption cannot place a literal in a call it does not list, so a
-  // fixture writing a protected name between scratch trees through one of
-  // them is refused. The transcript corpus holds none (see the PR). If this
-  // turns green, a verb joined WRITE_CALLEES: read its docblock first.
+  // A scratch fixture writing a protected name through one of these verbs is
+  // refused. #2701 pinned this as the cost of keeping the verbs out of the
+  // exemption's callee list; since #2858 there is no interpreter exemption
+  // and no list, and every interpreter write beside a protected name is
+  // refused wherever it points.
   test.each([
     ["shutil.copy2", `mkdir -p /tmp/rg2701a /tmp/rg2701b && python3 -I -c "import shutil; shutil.copy2('/tmp/rg2701a/${STATE}', '/tmp/rg2701b/${STATE}')"`],
     ["fs.writeFile", `mkdir -p /tmp/rg2701b && node -e "require('fs').writeFile('/tmp/rg2701b/${STATE}', '{}', () => {})"`],
@@ -3751,12 +3751,11 @@ describe("#2701: the write spellings the verb list missed", () => {
 });
 
 /**
- * #2704 review: a name in WRITE_CALLEES is trusted by its last segment, so a
- * body that binds its own function under it and calls it on a scratch
- * literal exempts itself. Main refused these with `rm`, which it did not
- * list; adding `rm` there allowed them, and matching the binding forms was
- * walked around twice. The new verbs stay out of WRITE_CALLEES, and every
- * form below is refused as it is on main.
+ * #2704 review: the exemption's callee list (deleted with the exemption in
+ * #2858) trusted a name by its last segment, so a body that bound its own
+ * function under it and called it on a scratch literal exempted itself.
+ * Every form below was refused on main and still is: an interpreter body
+ * beside a protected name has no exemption to walk through.
  */
 describe("#2704: the new verbs do not open the scratch exemption", () => {
   const forms: Array<[string, string]> = [
@@ -3900,6 +3899,20 @@ describe("#2858: an interpreter body naming a protected artifact beside a write 
     const t = performance.now();
     expect(decideBashWrite(cmd).blocked).toBe(true);
     expect(performance.now() - t).toBeLessThan(2000);
+  });
+
+  // Review of #2863, round 3: the window spans the literal the name sits in,
+  // so neither a separator inside the directory nor a long tail after the
+  // name moves the verb out of reach; and a grouped flag with a capital is
+  // still `-c`.
+  test.each([
+    ["a witness with a 200-character tail after the name", `python3 -c "open('/home/u/witnesses/${"a".repeat(200)}.json','w').write('{}')"`],
+    ["a ( in a long directory", `python3 -c "open('/Users/alice/Library/Application Support/Claude Desktop Extension Manager Storage Folder/Dev (Beta)/run-store/${STATE}','w')"`],
+    ["a ( in a long directory, f=open then close", `python3 -c "f=open('/Users/dev/Library/Application Support/Acme Workspace Synchronisation Service Folder Archive/Nested Projects Folder (Beta)/${STATE}','w'); f.close()"`],
+    ["an apostrophe in a double-quoted long directory", `python3 -c 'open("/Users/o'"'"'brien/${"b".repeat(100)}/${STATE}","w")'`],
+    ["a grouped -Ic flag", `python3 -Ic "open('/repo/${STATE}','w').write('{}')"`],
+  ])("WITNESS: %s is refused", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
 
   // Review of #2863, round 2: a space inside a path, a relative name on
