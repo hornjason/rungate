@@ -258,15 +258,29 @@ export function scratchExempt(path: string): boolean {
 }
 
 /**
- * A link call in a program or a nested shell body: `symlink` in every
- * spelling, the hard-link calls, `ln` (not the `-ln` of `ls` or `grep`), and
- * `cp` with a link flag, so `bash -c 'cp -sR …'` counts as well as a
- * top-level `cp -s`. Read over the whole command by `makesLink`, so it
- * over-reads prose that says "ln"; that costs a fixture its exemption, the
- * direction this module may be wrong in.
+ * `ln`, `link`, or `cp` with a link flag where a command STARTS: the text's
+ * start, after an operator, `(`, `$(`, `{`, a backtick, a quote, a list
+ * bracket or `find -exec`, and behind a wrapper with whatever words it takes
+ * (`timeout -s KILL 30 ln`, `eval ln`). An argument is not one: `grep -nw ln`
+ * is a read. A wrapped command that only mentions it (`nice grep ln`)
+ * over-reads, the direction this module may be wrong in (#2866).
  */
-export const BODY_LINK_CALL =
-  /\bsymlink(?:Sync|_to|at)?\b|\bhardlink_to\b|\blink(?:Sync|at)?\s*\(|\bos\.link\b|\bFile\.link\b|(?<!-)\bln\b|\bcp\s(?:[^|;&\n]*\s)?['"]?-(?:[A-Za-z]*[ls]|-sy|-l)/;
+const LINK_AT_COMMAND = new RegExp(
+  String.raw`(?:^|[;&|({\x60'"[,]|\$\(|\s-(?:exec|ok)(?:dir)?\s)\s*` +
+    String.raw`(?:(?:sudo|env|nohup|time|command|exec|xargs|nice|timeout|stdbuf|doas|caffeinate|eval)\s+(?:\S+\s+)*?)?` +
+    String.raw`(?:['"]?(?:\S*\/)?(?:ln|link)['"]?(?=[\s,'"\]]|$)|cp\s(?:[^|;&\n)]*\s)?['"]?-(?:[A-Za-z]*[ls]|-sy|-l))`,
+);
+
+/**
+ * A link call in a program or a nested shell body: `symlink` in every
+ * spelling, the hard-link calls, and `LINK_AT_COMMAND`, so `bash -c 'cp -sR
+ * …'` counts as well as a top-level `cp -s`. Read over the whole command,
+ * quotes included, by `makesLink`; it over-reads a quoted "ln -s", which
+ * costs a fixture its exemption, the direction this module may be wrong in.
+ */
+export const BODY_LINK_CALL = new RegExp(
+  String.raw`\bsymlink(?:Sync|_to|at)?\b|\bhardlink_to\b|\blink(?:Sync|at)?\s*\(|\bos\.link\b|\bFile\.link\b|` + LINK_AT_COMMAND.source,
+);
 
 /**
  * One of `cp`'s link flags as the shell hands it over (a dequoted word):
@@ -278,23 +292,16 @@ function isCpLinkFlag(w: string): boolean {
   return w.length > 2 && ('--link'.startsWith(w) || (w.length >= 4 && '--symbolic-link'.startsWith(w)));
 }
 
-/** Wrappers `commandWord` does not skip, whose command comes after flags and numbers. */
-const LINK_WRAPPERS = new Set(['nice', 'timeout', 'stdbuf', 'doas', 'exec', 'caffeinate']);
-
 /**
- * A segment that makes a link: `ln` or `link` as the command (`nice ln` and
- * `xargs ln` too), or `cp` with a link flag. A word `ln` anywhere else is
- * an argument (`grep -nw ln`), not a link.
+ * A segment that makes a link: `LINK_AT_COMMAND` read with quoted spans gone
+ * (a commit message saying "; ln" is not a command), a quoted `"ln"` as the
+ * command word, or `cp` with a link flag as the shell hands it over.
  */
 function segmentLinks(seg: string): boolean {
-  const words = scanSegment(seg).words;
-  let word = commandWord(seg);
-  if (LINK_WRAPPERS.has(word)) {
-    const rest = words.map(w => w.replace(/^.*\//, ''));
-    word = rest.slice(rest.indexOf(word) + 1).find(w => !w.startsWith('-') && !/^\d/.test(w)) ?? '';
-  }
-  if (word === 'ln' || word === 'link') return true;
-  return word === 'cp' && words.some(isCpLinkFlag);
+  const word = commandWord(seg);
+  const view = word === 'eval' ? dequote(seg) : stripQuoted(seg); // `eval` runs its quoted text
+  if (word === 'ln' || word === 'link' || LINK_AT_COMMAND.test(view)) return true;
+  return word === 'cp' && scanSegment(seg).words.some(isCpLinkFlag);
 }
 
 /** Does the command make a link anywhere: a shell verb, `cp`'s flag, or a program's call? */
@@ -1028,8 +1035,8 @@ export function dequote(s: string): string {
   return s.replace(/['"]/g, '');
 }
 
-/** Wrappers that delegate to the real command word rather than being one. */
-const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs)$/;
+/** Wrappers that delegate to the real command word rather than being one (#2866: `timeout`, `nice` too). */
+const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs|nice|timeout|stdbuf|doas|caffeinate|exec)$/;
 
 /**
  * A variable assignment prefix, by the POSIX shape: an identifier, an
@@ -1091,7 +1098,7 @@ export function commandWord(segment: string): string {
       .replace(/^[({\\]+/, '') // `(cmd …`, `{ cmd …`, `\cmd` — alias bypass
       .replace(/^.*\//, ''); // `/usr/bin/python3` -> `python3`
     if (!tok || tok.includes('=') || tok.startsWith('-')) continue;
-    if (WRAPPERS.test(tok)) continue;
+    if (WRAPPERS.test(tok) || /^\d+(?:\.\d+)?[smhd]?$/.test(tok)) continue; // `timeout 30 cp`
     return tok;
   }
   return '';
@@ -1468,7 +1475,8 @@ export function writeTargets(segment: string, whole: string = segment): string[]
   // destination as `src` and never examined the real one.
   const word = commandWord(segment);
   if (word === 'cp' || word === 'mv' || word === 'install' || word === 'rsync') {
-    const args = words.slice(1).filter(a => !a.startsWith('-'));
+    // after the verb, not after a wrapper (`timeout 30 cp a b`, #2866)
+    const args = words.slice(words.findIndex(w => w.replace(/^.*\//, '') === word) + 1).filter(a => !a.startsWith('-'));
     if (args.length >= 2) {
       const dest = args[args.length - 1];
       targets.push(dest);

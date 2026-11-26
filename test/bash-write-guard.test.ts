@@ -3966,6 +3966,45 @@ describe("#2859: an accident guard, sized and judged by the real directory", () 
     });
   });
 
+  // #2866 review round 1: a link verb in a subshell, a substitution, behind
+  // a wrapper that takes words, or behind `eval` is a link verb. Main refused
+  // all but `eval` by reading `ln` anywhere; this reads it where a command
+  // starts, so an argument `ln` stays a read.
+  test("a link verb wherever a command starts is refused by name, and an argument ln keeps a fixture exempt", () => {
+    for (const cmd of [
+      `(timeout 5 ln -s ${LIVE}/run/${STATE} ${FIX}/x)`,
+      `(nice ln -s ${LIVE}/run/${SALT} ${FIX}/x)`,
+      `echo $(ln -s ${LIVE}/run/${STATE} ${FIX}/x)`,
+      `echo \`ln -s ${LIVE}/run/${STATE} ${FIX}/x\``,
+      `eval "ln -s ${LIVE}/run/${STATE} ${FIX}/x"`,
+      `timeout -s KILL 30 ln -s ${LIVE}/run/${SALT} ${FIX}/x`,
+      `env A=1 ln -s ${LIVE}/run/${STATE} ${FIX}/x`,
+      `find . -exec ln -s ${LIVE}/run/${STATE} ${FIX}/x \;`,
+      `echo $(cp -s ${LIVE}/run/${STATE} ${FIX}/x)`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [
+      `grep -nw ln hooks/a.ts; echo '{}' > ${FIX}/${STATE}`,
+      `echo '{}' > ${FIX}/${SALT}; grep -nw ln hooks/Foo.hook.ts`,
+      `git log --oneline -3 && echo '{}' > ${FIX}/${STATE}`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  // #2866 review round 2: the command word looked through `sudo` and `env`
+  // but not `timeout` or `nice`, so a copy behind one wrote unread. Main
+  // allowed these too; the wrapper list is one line.
+  test("a write verb behind timeout, nice, stdbuf or caffeinate is the write verb", () => {
+    for (const cmd of [
+      `timeout 30 cp /tmp/fixture.json ${LIVE}/run/${STATE}`,
+      `nice cp /tmp/f ${LIVE}/run/${STATE}`,
+      `stdbuf -o0 mv /tmp/f ${LIVE}/run/${STATE}`,
+      `caffeinate -i cp /tmp/f ${LIVE}/run/${STATE}`,
+      `nice -n 10 chmod 777 ${LIVE}/hooks/X.hook.ts`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [`timeout 30 cp /tmp/a ${FIX}/${STATE}`, `timeout 30 grep -n x ${LIVE}/run/${STATE}`]) {
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+    }
+  });
+
   test("cp's link flag is read as the shell hands it over, and ln behind a wrapper is ln", () => {
     for (const cmd of [
       `cp '-s' ${LIVE}/run/${STATE} ${FIX}/x.json`,
