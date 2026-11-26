@@ -1055,7 +1055,7 @@ describe("#2838: findings that share a file and line post as one thread", () => 
     }
     // the person resolving it is told that one resolution answers all three (#2874 review)
     expect(r.sent[0]!.body.endsWith(
-      "_These 3 findings share this line. Resolving the thread answers all of them, so reply to each, or leave it open until each is fixed or answered._",
+      "_The findings above share this line. Resolving the thread answers all of them, so reply to each, or leave it open until each is fixed or answered._",
     )).toBe(true);
     expect(r.sent[0]!.body.split("\n")[0]).toBe(`**high** — ${reworded[0]!.summary}`);
     expect(r.result).toMatchObject({ outcome: "POSTED", attempted: 1, posted: 1, together: 3 });
