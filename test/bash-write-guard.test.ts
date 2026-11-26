@@ -4106,6 +4106,26 @@ describe("#2859: an accident guard, sized and judged by the real directory", () 
     }
   });
 
+  // #2870 review round 2: a double-quoted substitution runs (only single
+  // quotes stop it), and its body keeps its own quotes; `-Zt` is `-t`; an
+  // attached wrapper flag with a slash is a flag; a trailing `--suffix .bak`
+  // is a value, not the destination.
+  test("a double-quoted substitution, cp -Zt, env -C/dir cp and a trailing --suffix still name the destination (#2870)", () => {
+    for (const cmd of [
+      `echo "$(cp /tmp/x ${LIVE}/run/${SALT})"`,
+      `echo $(cp /tmp/forged.json "${LIVE}/run/${STATE}")`,
+      `echo "\`cp /tmp/a ${LIVE}/run/${STATE}\`"`,
+      `echo "$(echo x > ${LIVE}/run/${STATE})"`,
+      `cp -Zt ${LIVE}/witnesses/ /tmp/forged.json`,
+      `env -C/tmp/scratch cp /tmp/forged.json ${LIVE}/witnesses/x`,
+      `sudo -D/tmp chmod 777 ${LIVE}/run/${SALT}`,
+      `cp /tmp/a ${LIVE}/run/${STATE} --suffix .bak`,
+      `cp /tmp/a ${LIVE}/run/${STATE} -S .bak`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    // single quotes run nothing
+    expect(decideBashWrite(`echo '$(cp /tmp/x ${LIVE}/run/${SALT})'`).blocked).toBe(false);
+  });
+
   test("cp's link flag is read as the shell hands it over, and ln behind a wrapper is ln", () => {
     for (const cmd of [
       `cp '-s' ${LIVE}/run/${STATE} ${FIX}/x.json`,

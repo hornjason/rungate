@@ -1055,7 +1055,8 @@ const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?=/;
 function verbAt(words: string[], verb: RegExp): number {
   let wrapped = false;
   for (let i = 0; i < words.length; i++) {
-    const w = words[i].replace(/^[({\\]+/, '').replace(/^.*\//, '');
+    const lead = words[i].replace(/^[({\\]+/, ''); // a flag keeps its slash: `env -C/dir cp` (#2870)
+    const w = lead.startsWith('-') ? lead : lead.replace(/^.*\//, '');
     if (!w || ASSIGNMENT.test(words[i]) || /^\d+(?:\.\d+)?[smhd]?$/.test(w)) continue;
     if (verb.test(w)) return i;
     if (WRAPPERS.test(w) || w === 'eval') wrapped = true; // `eval cp`; commandWord keeps `eval` for interpreterPrograms
@@ -1078,9 +1079,9 @@ export function commandWord(segment: string): string {
     // before the path strip takes its `=` (`FOO=/x/grep chmod …`, #1196).
     if (/\s/.test(raw)) continue;
     if (ASSIGNMENT.test(raw)) continue;
-    const tok = raw
-      .replace(/^[({\\]+/, '') // `(cmd …`, `{ cmd …`, `\cmd` — alias bypass
-      .replace(/^.*\//, ''); // `/usr/bin/python3` -> `python3`
+    const lead = raw.replace(/^[({\\]+/, ''); // `(cmd …`, `{ cmd …`, `\cmd` — alias bypass
+    // `/usr/bin/python3` -> `python3`; a flag keeps its slash (`sudo -D/tmp chmod`, #2870)
+    const tok = lead.startsWith('-') ? lead : lead.replace(/^.*\//, '');
     if (!tok || tok.includes('=') || tok.startsWith('-')) continue;
     if (WRAPPERS.test(tok) || /^\d+(?:\.\d+)?[smhd]?$/.test(tok)) continue; // `timeout 30 cp`
     return tok;
@@ -1462,12 +1463,15 @@ export function writeTargets(segment: string, whole: string = segment): string[]
   if (at !== -1) {
     const args: string[] = [];
     let dir: string | null = null; // `-t DIR`, `-tDIR`, `--target=DIR` (any prefix); rsync's `-t` is times
+    const rsync = words[at].endsWith('rsync');
     for (let i = at + 1; i < words.length; i++) {
       const [name, ...value] = words[i].split('=');
       const long = name.length >= 3 && '--target-directory'.startsWith(name);
       // only a run of value-less flags may sit before the `t`: `-Sext` is `-S ext` (#2870)
-      const short = name.startsWith('--') ? null : /^-[abdfHilLnPpRrsuvxcCD]*t(.*)$/.exec(words[i]);
-      if (!words[at].endsWith('rsync') && (long || short)) dir = (long ? value.join('=') : short![1]) || words[++i] || null;
+      const short = name.startsWith('--') ? null : /^-[abdfHilLnPpRrsuvxcCDTZ]*t(.*)$/.exec(words[i]);
+      if (!rsync && (long || short)) dir = (long ? value.join('=') : short![1]) || words[++i] || null;
+      // a value-taking option's separate value is no operand: `--suffix .bak` (#2870)
+      else if (!rsync && /^(?:-[abdfHilLnPpRrsuvxcCDTZ]*[Smog]|--(?:suffix|mode|owner|group|strip-program))$/.test(words[i])) i++;
       else if (!words[i].startsWith('-')) args.push(words[i]);
     }
     // DIR itself too: `xargs cp -t DIR` takes its sources from stdin (#2870)
@@ -1831,10 +1835,14 @@ export function decideBashWrite(cmd: string, depth = 0, linkInCommand = false): 
     }
   }
 
-  // An unquoted command substitution runs a command of its own: `echo $(cp a b)`
-  // (#2870). Quoted text is skipped: a program body quoting `cp …` runs nothing.
-  for (const m of stripQuoted(stripHeredocs(cmd)).matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)) {
-    const inner = decideBashWrite(m[1] ?? m[2] ?? '', depth + 1, links);
+  // A command substitution runs a command of its own, in double quotes too:
+  // `echo "$(cp a b)"` (#2870). Single-quoted text runs nothing, so it is
+  // blanked to find them, and each body is read from the unblanked text.
+  const text = stripHeredocs(cmd);
+  const view = text.replace(/"(?:[^"\\]|\\.)*"|'[^']*'/g, q => (q[0] === "'" ? ' '.repeat(q.length) : q)); // stripQuoted's spans
+  for (const m of view.matchAll(/\$\(([^()]*)\)|(?<!\\)`([^`]*)`/g)) {
+    const open = m.index + (m[1] !== undefined ? 2 : 1);
+    const inner = decideBashWrite(text.slice(open, m.index + m[0].length - 1), depth + 1, links);
     if (inner.blocked) return inner;
   }
 
