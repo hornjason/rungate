@@ -87,8 +87,9 @@ export const ACCEPT_GENERATED_RULE = "rungate scaffold . --fix";
  * The steps are one function, `generatedVersionSteps`, and every surface
  * that advises them calls it: the scaffold's PRESERVED lines through this
  * function, and `prompt-audit`'s pre-stamp note directly. Neither says what
- * the scaffold will do on its own — round 5 found that promise wrong for a
- * file with a `## Project-owned` section, which the scaffold always keeps.
+ * the scaffold will do on its own — round 5 found that promise wrong for an
+ * UNSTAMPED file with a `## Project-owned` section, which the scaffold
+ * always keeps.
  */
 export function acceptGeneratedAdvice(existing: string | null): string {
   if (existing === null || declaredSha(existing) === null) return `to accept it, ${generatedVersionSteps(existing)}`;

@@ -153,7 +153,8 @@ export function hasGeneratedName(file: string): boolean {
 
 /**
  * What a project-owned finding adds when its file has a generated name and no
- * stamp at all: the scaffold preserves it, and here is the way out. A file
+ * stamp at all: what the audit read, and the steps that take the generator's
+ * version. It says nothing about what the scaffold does on its own. A file
  * whose stamp no longer covers it was edited after rungate wrote it, so
  * deleting it would discard the edit; that one gets no note.
  */
