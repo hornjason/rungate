@@ -36,7 +36,7 @@ import {
 } from "../lib/prompt-audit";
 import { symptomKeys } from "../lib/finding-arbiter";
 import { SURFACE_LINTS, USER_SURFACE } from "../lib/surface-lint";
-import { ACCEPT_GENERATED_RULE, acceptGeneratedAdvice, stampProvenance } from "../lib/rule-provenance";
+import { ACCEPT_GENERATED_RULE, acceptGeneratedAdvice, generatedVersionSteps, stampProvenance } from "../lib/rule-provenance";
 import { commitFixture, initFixtureRepo } from "./helpers/git-fixture";
 
 const ROOT = join(import.meta.dir, "..");
@@ -250,9 +250,14 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     expect(preStampNote(".claude/rules/our-own.md", "no stamp at all\n"), "a name the generator never writes").toBeNull();
     const stampedEdited = readFileSync(join(rendered, ".claude", "rules", "docs-routing.md"), "utf-8") + "\nan edit\n";
     expect(preStampNote(".claude/rules/docs-routing.md", stampedEdited), "an edited stamped file would lose the edit").toBeNull();
-    // Review of #2852: the scaffold may adopt or keep an unstamped file, so the note promises neither.
-    expect(preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n")).toContain("decides on its next run");
-    expect(preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n")).not.toContain("keeps it as yours.");
+    // Review of #2852, round 5: the note says what the audit read and gives the
+    // one command; it makes no promise about what the scaffold does on its own,
+    // because each promise it made was wrong for some file (a `## Project-owned`
+    // section is always kept, never adopted).
+    const note = preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n") ?? "";
+    expect(note).toContain("this audit reads it as yours");
+    for (const promise of ["decides", "adopt", "keeps it", "will "]) expect(note, promise).not.toContain(promise);
+    expect(note.endsWith(generatedVersionSteps("no stamp at all\n")), "the note's steps are the shared ones, not a copy").toBe(true);
     // Review of #2852: the scaffold's PRESERVED advice never tells a consumer to delete an edit without saying so.
     expect(acceptGeneratedAdvice("no stamp at all\n")).toContain(`re-run \`${ACCEPT_GENERATED_RULE}\``);
     // Round 3 of #2852: a delete discards a `## Project-owned` section too, and

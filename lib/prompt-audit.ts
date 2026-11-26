@@ -61,7 +61,7 @@ import { BRIEF_CONSTRAINTS_SECTION, HARD_CONSTRAINTS_SECTION, readPreservedSecti
 import { generateScopedRules } from "./generators/agents-md";
 import type { ProjectScan } from "./generators/types";
 import { readFences } from "./markdown-fence";
-import { ACCEPT_GENERATED_RULE, acceptGeneratedAdvice, declaredSha, stampCovers } from "./rule-provenance";
+import { declaredSha, generatedVersionSteps, stampCovers } from "./rule-provenance";
 import { PROJECT_OWNED_SECTION } from "./scaffold/marked-section";
 import { OWNED_FILES } from "./scaffold/owned-files";
 import {
@@ -157,11 +157,9 @@ export function hasGeneratedName(file: string): boolean {
  */
 export function preStampNote(file: string, text: string): string | null {
   if (!hasGeneratedName(file) || declaredSha(text) !== null) return null;
-  return (
-    `it has the name of a file rungate generates and no generated-sha stamp, so it may predate the stamp; ` +
-    `the scaffold decides on its next run whether to keep it as yours or adopt it; ` +
-    `to take the generator's version instead, ${acceptGeneratedAdvice(text).replace(/^to accept it, /, "")}`
-  );
+  // What the audit read, and the one command that changes it. No promise
+  // about what the scaffold does on its own (review of #2852, round 5).
+  return `it has the name of a file rungate generates but no generated-sha stamp, so this audit reads it as yours; to take the generator's version, ${generatedVersionSteps(text)}`;
 }
 
 /**

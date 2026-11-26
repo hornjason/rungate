@@ -82,17 +82,26 @@ export const ACCEPT_GENERATED_RULE = "rungate scaffold . --fix";
  * A file with no stamp may predate it, or may be the project's own; what
  * nobody can tell from here is whether it holds a `## Project-owned` section,
  * so the warning names one (round 3). A stamped file was edited after rungate
- * wrote it, so the advice also offers the way that keeps the edit. One
- * sentence for every PRESERVED line and for `prompt-audit`'s pre-stamp note,
- * so no surface tells a consumer to delete what another warns about.
+ * wrote it, so the advice also offers the way that keeps the edit.
+ *
+ * The steps are one function, `generatedVersionSteps`, and every surface
+ * that advises them calls it: the scaffold's PRESERVED lines through this
+ * function, and `prompt-audit`'s pre-stamp note directly. Neither says what
+ * the scaffold will do on its own — round 5 found that promise wrong for a
+ * file with a `## Project-owned` section, which the scaffold always keeps.
  */
 export function acceptGeneratedAdvice(existing: string | null): string {
-  if (existing === null || declaredSha(existing) === null)
-    return `to accept it, delete the file, which discards everything in it, a \`## Project-owned\` section included, and re-run \`${ACCEPT_GENERATED_RULE}\``;
-  return (
-    `to keep the edit, move it under \`## Project-owned\`; to take the generator's version instead, ` +
-    `delete the file, which discards the edit, and re-run \`${ACCEPT_GENERATED_RULE}\``
-  );
+  if (existing === null || declaredSha(existing) === null) return `to accept it, ${generatedVersionSteps(existing)}`;
+  return `to keep the edit, move it under \`## Project-owned\`; to take the generator's version instead, ${generatedVersionSteps(existing)}`;
+}
+
+/** What taking the generator's version costs and runs, for a file in this state. */
+export function generatedVersionSteps(existing: string | null): string {
+  const loses =
+    existing === null || declaredSha(existing) === null
+      ? "everything in it, a `## Project-owned` section included"
+      : "the edit";
+  return `delete the file, which discards ${loses}, and re-run \`${ACCEPT_GENERATED_RULE}\``;
 }
 
 const FRONTMATTER = /^---\n([\s\S]*?)\n---\n/;
