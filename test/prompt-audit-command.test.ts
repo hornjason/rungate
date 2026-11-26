@@ -26,6 +26,8 @@ import {
   formatAudit,
   generatedNames,
   lineOwners,
+  orphanNote,
+  preStampNote,
   looksLikeRepoPath,
   promptAudit,
   upstreamBodies,
@@ -34,6 +36,7 @@ import {
 } from "../lib/prompt-audit";
 import { symptomKeys } from "../lib/finding-arbiter";
 import { SURFACE_LINTS, USER_SURFACE } from "../lib/surface-lint";
+import { ACCEPT_GENERATED_RULE, acceptGeneratedAdvice, generatedVersionSteps, stampProvenance } from "../lib/rule-provenance";
 import { commitFixture, initFixtureRepo } from "./helpers/git-fixture";
 
 const ROOT = join(import.meta.dir, "..");
@@ -55,6 +58,17 @@ beforeAll(() => {
   });
   expect(r.status, r.stderr).toBe(0);
 }, 180_000);
+
+/**
+ * Restamp each rule or command file in `root` the way the generator would
+ * after writing it (#2835). Ownership is the scaffold's own reading: text a
+ * stamp covers is rungate's, so a test planting rungate-written text into a
+ * generated rule has to stamp it, exactly as a render would.
+ */
+function restamped(root: string, ...files: string[]): string {
+  for (const f of files) writeFileSync(join(root, f), stampProvenance(readFileSync(join(root, f), "utf-8")));
+  return root;
+}
 
 /** A copy of the render with each `[path, text]` appended to (or creating) that file. */
 function planted(...edits: [string, string][]): string {
@@ -173,7 +187,7 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     const registered = [...SURFACE_LINTS.map(l => l.name), "pressure-density", "dangling-path"];
     expect(registered.length).toBeGreaterThanOrEqual(5);
     expect(Object.keys(triggers).sort()).toEqual([...registered].sort());
-    const root = planted(...Object.values(triggers));
+    const root = restamped(planted(...Object.values(triggers)), ".claude/rules/docs-routing.md", ".claude/rules/key-files.md");
     expect([...promptAudit(root).lints].sort()).toEqual([...registered].sort());
     const found = new Set(harnessFindings(root).map(h => h.split(" ")[0]));
     expect(registered.filter(l => !found.has(l)), "these lints found nothing in a render planted for them").toEqual([]);
@@ -202,15 +216,17 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     const underHard = planted();
     writeFileSync(join(underHard, "AGENTS.md"), agents.replace(/^(## Hard Constraints[^\n]*\n)/m, `$1\n${artifact}\n`));
     expect(owners(underHard)).toEqual(["consumer AGENTS.md"]);
-    // A generated rule: rungate's, except under ## Project-owned.
-    expect(owners(planted([".claude/rules/key-files.md", artifact]))).toEqual(["harness .claude/rules/key-files.md"]);
+    // A generated rule: rungate's while its stamp covers the text, except under ## Project-owned (#2835).
+    expect(owners(restamped(planted([".claude/rules/key-files.md", artifact]), ".claude/rules/key-files.md"))).toEqual(["harness .claude/rules/key-files.md"]);
     expect(owners(planted([".claude/rules/key-files.md", `## Project-owned\n\n${artifact}`]))).toEqual(["consumer .claude/rules/key-files.md"]);
-    // A generated rule from a scaffold that did not stamp yet is still rungate's.
+    // Edited outside the section since rungate stamped it: the scaffold keeps it as the project's, and so does this.
+    expect(owners(planted([".claude/rules/key-files.md", artifact]))).toEqual(["consumer .claude/rules/key-files.md"]);
+    // A generated rule from a scaffold that did not stamp yet: the scaffold preserves it, so it is the project's (#2835).
     const unstamped = planted();
     const keyFiles = join(unstamped, ".claude", "rules", "key-files.md");
     writeFileSync(keyFiles, readFileSync(keyFiles, "utf-8").replace(/^generated-sha:.*\n/m, "") + `\n${artifact}\n`);
     expect(readFileSync(keyFiles, "utf-8")).not.toContain("generated-sha:");
-    expect(owners(unstamped)).toEqual(["harness .claude/rules/key-files.md"]);
+    expect(owners(unstamped)).toEqual(["consumer .claude/rules/key-files.md"]);
     // A rule the project wrote is the project's.
     expect(owners(planted([".claude/rules/our-own.md", `---\ndescription: our own rule, written by hand\n---\n\n${artifact}`]))).toEqual(["consumer .claude/rules/our-own.md"]);
     // A brief: rungate's, except under ## Project Constraints; a brief with no template is the project's.
@@ -228,8 +244,103 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
       if (/^generated-sha:/m.test(text)) expect(rules.has(r), `${r} is stamped by the scaffold but not a generated name`).toBe(true);
     }
     expect([...commands].sort()).toEqual(["board.md", "dry-run.md", "work-loop.md"]);
-    expect(lineOwners(".claude/rules/docs-routing.md", "no stamp at all\n").every(o => o === "harness")).toBe(true);
+    // #2835: a generated name decides no owner; it only earns the note.
+    expect(lineOwners(".claude/rules/docs-routing.md", "no stamp at all\n").every(o => o === "consumer")).toBe(true);
+    expect(preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n")).toContain(ACCEPT_GENERATED_RULE);
+    expect(preStampNote(".claude/rules/our-own.md", "no stamp at all\n"), "a name the generator never writes").toBeNull();
+    const stampedEdited = readFileSync(join(rendered, ".claude", "rules", "docs-routing.md"), "utf-8") + "\nan edit\n";
+    expect(preStampNote(".claude/rules/docs-routing.md", stampedEdited), "an edited stamped file would lose the edit").toBeNull();
+    // Review of #2852, round 5: the note says what the audit read and gives the
+    // one command; it makes no promise about what the scaffold does on its own,
+    // because each promise it made was wrong for some file (a `## Project-owned`
+    // section is always kept, never adopted).
+    const note = preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n") ?? "";
+    expect(note).toContain("this audit reads it as yours");
+    for (const promise of ["decides", "adopt", "keeps it", "will "]) expect(note, promise).not.toContain(promise);
+    expect(note.endsWith(generatedVersionSteps("no stamp at all\n")), "the note's steps are the shared ones, not a copy").toBe(true);
+    // Review of #2852: the scaffold's PRESERVED advice never tells a consumer to delete an edit without saying so.
+    expect(acceptGeneratedAdvice("no stamp at all\n")).toContain(`re-run \`${ACCEPT_GENERATED_RULE}\``);
+    // Round 3 of #2852: a delete discards a `## Project-owned` section too, and
+    // both surfaces that advise one say so.
+    for (const advice of [acceptGeneratedAdvice("no stamp at all\n"), acceptGeneratedAdvice(null), preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n") ?? ""]) {
+      expect(advice, advice).toContain("discards everything in it, a `## Project-owned` section included");
+    }
+    expect(acceptGeneratedAdvice(null)).toContain("to accept it, delete the file");
+    expect(acceptGeneratedAdvice(stampedEdited)).toContain("discards the edit");
+    expect(acceptGeneratedAdvice(stampedEdited)).toContain("## Project-owned");
+    // Every PRESERVED line asks the helper: no scaffold file spells the advice itself.
+    for (const f of ["lib/scaffold/steps.ts", "lib/scaffold/write-steps.ts"]) {
+      const src = readFileSync(join(ROOT, f), "utf-8");
+      expect(src.includes("to accept it, delete the file"), `${f} spells the advice instead of calling acceptGeneratedAdvice`).toBe(false);
+      expect(src.includes("acceptGeneratedAdvice("), `${f} does not ask acceptGeneratedAdvice`).toBe(true);
+    }
   });
+
+  // Review of #2852: a stamped rule the generator no longer writes is rewritten
+  // by no scaffold, so calling it rungate's drafted an upstream fix that could
+  // never land. It is the project's to delete, and the finding says so.
+  test("#2835: a stamped rule the generator no longer writes is the project's, and its findings say to delete it", () => {
+    const stamped = readFileSync(join(rendered, ".claude", "rules", "docs-routing.md"), "utf-8");
+    expect(lineOwners(".claude/rules/docs-routing.md", stamped).some(o => o === "harness")).toBe(true);
+    expect(lineOwners(".claude/rules/old-rule.md", stamped).every(o => o === "consumer")).toBe(true);
+    expect(orphanNote(".claude/rules/old-rule.md", stamped)).toContain("no longer generates");
+    expect(orphanNote(".claude/rules/docs-routing.md", stamped)).toBeNull();
+    expect(orphanNote(".claude/rules/our-own.md", "no stamp at all\n")).toBeNull();
+
+    const artifact = "Read the files in ${SOURCE_DIRS} first.";
+    const root = restamped(planted([".claude/rules/old-rule.md", `---\ndescription: a rule an older rungate generated\n---\n\n${artifact}\n`]), ".claude/rules/old-rule.md");
+    expect(readFileSync(join(root, ".claude", "rules", "old-rule.md"), "utf-8")).toContain("generated-sha:");
+    const audit = promptAudit(root);
+    const found = audit.findings.filter(f => f.file === ".claude/rules/old-rule.md" && f.lint === "template-artifact");
+    expect(found.map(f => f.owner)).toEqual(["consumer"]);
+    expect(found[0]!.message).toContain("no longer generates");
+    expect([...upstreamBodies(audit).values()].join("\n")).not.toContain("old-rule.md");
+  });
+
+  // #2835: prompt-audit called a pre-stamp docs-routing.md rungate's and
+  // drafted an upstream report about its counts, while scaffold --fix kept the
+  // same file as hand-authored, so nothing ever fixed it. Both tools are asked
+  // about one file here, together.
+  test("#2835: an unstamped generated rule is the project's to both tools, and the one command they name takes the generator's version", () => {
+    const root = planted();
+    const rule = join(root, ".claude", "rules", "docs-routing.md");
+    writeFileSync(rule, readFileSync(rule, "utf-8").replace(/^generated-sha:.*\n/m, "") + "\n| Decisions | `docs/adr/` (3 files) |\n");
+    const before = readFileSync(rule, "utf-8");
+    const stale = promptAudit(root).findings.filter(f => f.lint === "stale-count" && f.file === ".claude/rules/docs-routing.md");
+    expect(stale.map(f => f.owner)).toEqual(["consumer"]);
+    expect(stale[0]!.message).toContain(ACCEPT_GENERATED_RULE);
+    expect(upstreamBodies(promptAudit(root)).has("stale-count"), "drafted upstream for a file the scaffold keeps").toBe(false);
+
+    const scaffold = () =>
+      spawnSync("bun", [join(ROOT, "bin", "rungate.ts"), "scaffold", root, "--fix"], {
+        cwd: root,
+        encoding: "utf-8",
+        timeout: 120_000,
+        env: { ...process.env, GITHUB_TOKEN: "", GH_TOKEN: "", GITHUB_API_URL: "http://127.0.0.1:1" },
+      });
+    // Review of #2852: a stamped rule edited by hand is preserved too, and its
+    // advice says the delete discards the edit rather than offering it plainly.
+    const edited = join(root, ".claude", "rules", "key-files.md");
+    writeFileSync(edited, readFileSync(edited, "utf-8") + "\nAn edit the project made.\n");
+    const first = scaffold();
+    expect(first.status, first.stderr).toBe(0);
+    expect(first.stdout).toContain("PRESERVED: .claude/rules/docs-routing.md (hand-authored — no harness provenance marker)");
+    expect(first.stdout).toContain(`re-run \`${ACCEPT_GENERATED_RULE}\``);
+    const editedLine = first.stdout.split("\n").find(l => l.trimStart().startsWith("PRESERVED: .claude/rules/key-files.md"));
+    expect(editedLine, first.stdout).toBeDefined();
+    expect(editedLine).toContain("discards the edit");
+    expect(editedLine).not.toContain("to accept it, delete the file");
+    expect(readFileSync(rule, "utf-8"), "the scaffold rewrote a file it reported keeping").toBe(before);
+
+    rmSync(rule);
+    const second = scaffold();
+    expect(second.status, second.stderr).toBe(0);
+    const after = readFileSync(rule, "utf-8");
+    expect(after).toMatch(/^generated-sha:/m);
+    expect(after).not.toContain("(3 files)");
+    expect(promptAudit(root).findings.filter(f => f.file === ".claude/rules/docs-routing.md")).toEqual([]);
+    expect(lineOwners(".claude/rules/docs-routing.md", after).includes("harness")).toBe(true);
+  }, 300_000);
 
   test("rungate's findings become upstream drafts, the project's do not, and nothing is filed", () => {
     const root = planted([".claude/agents/marcus.md", "Read ${SOURCE_DIRS}."], ["CLAUDE.md", PRESSURE]);

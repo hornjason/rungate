@@ -27,11 +27,16 @@
  * Decided per line, from what the scaffold writes:
  *
  * - `AGENTS.md`: rungate's, except under `## Hard Constraints`.
- * - A rule or command rungate writes: rungate's, except under
- *   `## Project-owned`. It is rungate's if it carries the `generated-sha`
- *   stamp, or if its name is one rungate's generator writes: scaffolds before
- *   the stamp wrote the same files unstamped, and their text is still
- *   rungate's. Any other rule is hand-written.
+ * - A rule or command: rungate's, except under `## Project-owned`, exactly
+ *   when its `generated-sha` stamp still covers its text (`stampCovers`)
+ *   AND the generator still writes a file of that name (`hasGeneratedName`).
+ *   The stamp half is the reading `scaffold --fix` writes from, so a file
+ *   this calls rungate's is one the scaffold rewrites (#2835). A stamped file
+ *   under a name the generator no longer writes is the project's: no
+ *   scaffold rewrites it, and its findings say to delete it (`orphanNote`).
+ *   A file with no stamp, a pre-stamp scaffold's output included, is the
+ *   project's; when it has a generated name, its findings say how to take
+ *   the generator's version (`ACCEPT_GENERATED_RULE`).
  * - A brief whose name has a template in rungate's `templates/agent-briefs/`:
  *   rungate's, except under `## Project Constraints`.
  * - Everything else, `CLAUDE.md` included: the consumer's.
@@ -58,7 +63,7 @@ import { BRIEF_CONSTRAINTS_SECTION, HARD_CONSTRAINTS_SECTION, readPreservedSecti
 import { generateScopedRules } from "./generators/agents-md";
 import type { ProjectScan } from "./generators/types";
 import { readFences } from "./markdown-fence";
-import { PROVENANCE_KEY } from "./rule-provenance";
+import { declaredSha, generatedVersionSteps, stampCovers } from "./rule-provenance";
 import { PROJECT_OWNED_SECTION } from "./scaffold/marked-section";
 import { OWNED_FILES } from "./scaffold/owned-files";
 import {
@@ -133,9 +138,42 @@ export function generatedNames(): { rules: Set<string>; commands: Set<string> } 
 
 let names: ReturnType<typeof generatedNames> | null = null;
 
-function stamped(text: string): boolean {
-  const fm = text.match(/^---\n([\s\S]*?)\n---/);
-  return fm !== null && new RegExp(`^${PROVENANCE_KEY}:`, "m").test(fm[1]);
+/**
+ * Whether `file` is a rule or command the generator writes, by name. It
+ * decides no owner (#2835): it only says a file the scaffold preserves may be
+ * a pre-stamp scaffold's output, which deleting and re-scaffolding replaces.
+ */
+export function hasGeneratedName(file: string): boolean {
+  names ??= generatedNames();
+  const name = file.slice(file.lastIndexOf("/") + 1);
+  if (file === `.claude/rules/${name}`) return names.rules.has(name);
+  if (file === `.claude/commands/${name}`) return names.commands.has(name);
+  return false;
+}
+
+/**
+ * What a project-owned finding adds when its file has a generated name and no
+ * stamp at all: what the audit read, and the steps that take the generator's
+ * version. It says nothing about what the scaffold does on its own. A file
+ * whose stamp no longer covers it was edited after rungate wrote it, so
+ * deleting it would discard the edit; that one gets no note.
+ */
+export function preStampNote(file: string, text: string): string | null {
+  if (!hasGeneratedName(file) || declaredSha(text) !== null) return null;
+  // What the audit read, and the one command that changes it. No promise
+  // about what the scaffold does on its own (review of #2852, round 5).
+  return `it has the name of a file rungate generates but no generated-sha stamp, so this audit reads it as yours; to take the generator's version, ${generatedVersionSteps(text)}`;
+}
+
+/**
+ * What a finding adds when its file carries rungate's stamp under a name the
+ * generator no longer writes (review of #2852). No scaffold rewrites it, so it
+ * is not rungate's to fix upstream; it is the project's to delete.
+ */
+export function orphanNote(file: string, text: string): string | null {
+  if (!(file.startsWith(".claude/rules/") || file.startsWith(".claude/commands/"))) return null;
+  if (stampCovers(text) === null || hasGeneratedName(file)) return null;
+  return "rungate wrote this file and no longer generates it, so no scaffold rewrites it; delete it if nothing reads it";
 }
 
 /**
@@ -153,10 +191,21 @@ export function lineOwners(file: string, text: string, packageRoot: string = PAC
   };
   if (file === "AGENTS.md") return harnessExcept(HARD_CONSTRAINTS_SECTION);
   if (file.startsWith(".claude/rules/") || file.startsWith(".claude/commands/")) {
-    names ??= generatedNames();
-    const name = file.slice(file.lastIndexOf("/") + 1);
-    const generated = file.startsWith(".claude/rules/") ? names.rules.has(name) && file === `.claude/rules/${name}` : names.commands.has(name) && file === `.claude/commands/${name}`;
-    return stamped(text) || generated ? harnessExcept(PROJECT_OWNED_SECTION) : all("consumer");
+    // #2835: the scaffold's own reading. A stamp that covers the text, on a
+    // file the generator still writes, is rungate's. No stamp, a stamp the
+    // text has moved away from, or a name the generator no longer writes is
+    // the project's: `decideRuleWrite` preserves the first two, and no
+    // scaffold step touches the third (review of #2852, `orphanNote`).
+    //
+    // What this cannot see (review round 2 of #2852): "the generator writes
+    // this name" is read over the whole generator. A project scaffolded with
+    // `--profile minimal` gets fewer rules, and some rules are written only
+    // when the tree has, say, specs/. The profile is a scaffold-time flag
+    // recorded nowhere (`parseProfile` in scripts/scaffold-project.ts), so no
+    // later reader can know which rules the project's next scaffold writes.
+    // Recording it, and asking `decideRuleWrite` over the project's own
+    // generated set, is a separate change.
+    return stampCovers(text) !== null && hasGeneratedName(file) ? harnessExcept(PROJECT_OWNED_SECTION) : all("consumer");
   }
   if (file.startsWith(".claude/agents/")) {
     const name = file.slice(file.lastIndexOf("/") + 1);
@@ -393,6 +442,13 @@ export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, op
     ...pressureFindings(surface, owners),
     ...danglingPathFindings(surface, owners, projectPlaces(surface.root), recordingProbe(surface.root, projectUnread)),
   );
+  // #2835: a project-owned finding in a file the scaffold keeps only because
+  // it predates the stamp says how to take the generator's version.
+  for (const f of findings) {
+    const text = surface.files.get(f.file);
+    const note = f.owner === "consumer" && text !== undefined ? (preStampNote(f.file, text) ?? orphanNote(f.file, text)) : null;
+    if (note !== null) f.message = `${f.message} (${note})`;
+  }
   const projectLine = unreadLine("project", projectUnread, "");
   const unmeasured = projectLine === null ? [] : [projectLine];
   if (opts.home === undefined) return { root: surface.root, lints: [...PROMPT_AUDIT_LINTS], findings, user: null, unmeasured: [...unmeasured, USER_SURFACE_UNREAD] };

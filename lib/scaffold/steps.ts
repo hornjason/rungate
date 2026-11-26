@@ -75,7 +75,7 @@ import {
 } from "../secret-patterns";
 import { healthPathIn } from "../liveness-contradiction";
 import { localCalendarDay } from "../local-calendar-day";
-import { decideRuleWrite, stampCovers } from "../rule-provenance";
+import { acceptGeneratedAdvice, decideRuleWrite, stampCovers } from "../rule-provenance";
 import { rowDriftClause, ruleRowDrift } from "../rule-row-drift";
 import { actionRef } from "../workflow-actions";
 import {
@@ -252,8 +252,7 @@ export function regenerateOwned(
 
   if (decision.action === "preserve") {
     actions.push(
-      `${SCAFFOLD_REFUSE}: ${label} (${decision.reason}) — generator output withheld; ` +
-        `delete the file and re-run to accept it`,
+      `${SCAFFOLD_REFUSE}: ${label} (${decision.reason}) — generator output withheld; ${acceptGeneratedAdvice(existing)}`,
     );
     return;
   }
@@ -625,7 +624,7 @@ export function generateAgentsMdContent(
       const rows = rowDriftClause(ruleRowDrift(existing!, rule.content));
       actions.push(
         `PRESERVED: .claude/rules/${rule.filename} (${decision.reason}) — ` +
-          `generator output withheld; ${rows}; delete the file and re-run to accept it`,
+          `generator output withheld; ${rows}; ${acceptGeneratedAdvice(existing)}`,
       );
       continue;
     }

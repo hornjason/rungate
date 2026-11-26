@@ -68,6 +68,43 @@ export interface RuleDecision {
 /** The frontmatter key carrying the sha of the body the harness last wrote. */
 export const PROVENANCE_KEY = "generated-sha";
 
+/**
+ * The one command that takes the generator's version of a preserved rule
+ * file, once the file is deleted (#2835). Named in the scaffold's PRESERVED
+ * line and in prompt-audit's note on a file written before the stamp, so the
+ * two tools give a consumer the same way out.
+ */
+export const ACCEPT_GENERATED_RULE = "rungate scaffold . --fix";
+
+/**
+ * How a preserved file reaches the generator's version (review of #2852).
+ * Deleting a file discards everything in it, so the advice says so either way.
+ * A file with no stamp may predate it, or may be the project's own; what
+ * nobody can tell from here is whether it holds a `## Project-owned` section,
+ * so the warning names one (round 3). A stamped file was edited after rungate
+ * wrote it, so the advice also offers the way that keeps the edit.
+ *
+ * The steps are one function, `generatedVersionSteps`, and every surface
+ * that advises them calls it: the scaffold's PRESERVED lines through this
+ * function, and `prompt-audit`'s pre-stamp note directly. Neither says what
+ * the scaffold will do on its own — round 5 found that promise wrong for an
+ * UNSTAMPED file with a `## Project-owned` section, which the scaffold
+ * always keeps.
+ */
+export function acceptGeneratedAdvice(existing: string | null): string {
+  if (existing === null || declaredSha(existing) === null) return `to accept it, ${generatedVersionSteps(existing)}`;
+  return `to keep the edit, move it under \`## Project-owned\`; to take the generator's version instead, ${generatedVersionSteps(existing)}`;
+}
+
+/** What taking the generator's version costs and runs, for a file in this state. */
+export function generatedVersionSteps(existing: string | null): string {
+  const loses =
+    existing === null || declaredSha(existing) === null
+      ? "everything in it, a `## Project-owned` section included"
+      : "the edit";
+  return `delete the file, which discards ${loses}, and re-run \`${ACCEPT_GENERATED_RULE}\``;
+}
+
 const FRONTMATTER = /^---\n([\s\S]*?)\n---\n/;
 
 /**
