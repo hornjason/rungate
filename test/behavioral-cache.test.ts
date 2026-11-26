@@ -243,8 +243,9 @@ describe("behavioral-cache: lookup table structure", () => {
     // 20 → 27 with ADR-028 (#2856), then 27 → 19 with #2898: on 2026-11-26
     // Jason dropped the behavioural tag on SC-2811 and on ADR-028's seven,
     // from SC-2812 to SC-2818. A tagged criterion can never be ticked from a
-    // test, and each of the eight is proved by a test of its own. The ceiling
-    // is what is left, so a new unmapped behavioural criterion turns it red.
+    // test. The first one's tests already exist, and each of the seven gets
+    // its test from its own issue. The ceiling is what is left, so a new
+    // unmapped behavioural criterion turns it red.
     expect(untestable).toBeLessThanOrEqual(19);
   });
 });
