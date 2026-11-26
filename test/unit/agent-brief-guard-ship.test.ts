@@ -17,10 +17,11 @@ import {
   existsSync,
   readdirSync,
   readFileSync,
+  utimesSync,
 } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { validateAgentBrief } from '../../lib/agent-brief-validation';
+import { validateAgentBrief, checkShipActive as readShipMarker } from '../../lib/agent-brief-validation';
 
 let tempDir: string;
 let workDir: string;
@@ -364,6 +365,26 @@ describe('AgentBriefGuard — ship-active enforcement', () => {
       const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
       expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(false);
       expect(r.signalEvents.some(e => e.advisory_reason === 'no_ship_session')).toBe(false);
+    });
+
+    // #2899 review round 2: the reader itself drops an unreadable date, so the
+    // row does not depend on which marker readdir returns first; and a
+    // workflow-state.json is live only while it is fresh.
+    it('the marker reader drops a marker whose date does not parse', () => {
+      createShipMarker('65-bad-date', 65, 'not-a-date');
+      expect(readShipMarker(workDir)).toBeNull();
+    });
+
+    it('a workflow-state.json left by a finished run days ago is no session', () => {
+      const dir = join(workDir, '66-done');
+      mkdirSync(dir, { recursive: true });
+      const wf = join(dir, 'workflow-state.json');
+      writeFileSync(wf, JSON.stringify({ issue: 66, phase: 'DONE' }));
+      const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      utimesSync(wf, old, old);
+      const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+      expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(true);
+      expect(r.signalEvents).toContainEqual(expect.objectContaining({ advisory_reason: 'no_ship_session' }));
     });
 
     it('the permission-mode refusal is unchanged with no ship session', () => {

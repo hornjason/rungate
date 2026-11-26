@@ -122,7 +122,7 @@ function usableMarker(m: ShipMarker): boolean {
   return Boolean(m.issue && m.ts) && Number.isFinite(new Date(m.ts).getTime());
 }
 
-function checkShipActive(workDir: string): ShipMarker | null {
+export function checkShipActive(workDir: string): ShipMarker | null {
   if (!existsSync(workDir)) return null;
   const markers: ShipMarker[] = [];
 
@@ -176,7 +176,9 @@ function checkWorkflowState(workDir: string): ShipMarker | null {
         if (!raw.startsWith('{')) continue;
         const wf = JSON.parse(raw);
         if (wf.issue && wf.phase && BUILD_PHASES.includes(wf.phase)) {
-          return { issue: wf.issue, ts: new Date().toISOString() };
+          // Its age is the file's, not "now": a run that finished or crashed
+          // days ago is no session (#2899 review round 2).
+          return { issue: wf.issue, ts: new Date(statSync(wfPath).mtimeMs).toISOString() };
         }
       } catch {}
     }
@@ -315,11 +317,11 @@ export function validateAgentBrief(
   // only a user can start a ship run, so a block stopped every agent working
   // an issue outside one, and a project in direct-ship mode never starts one.
   if (isEngineer) {
-    // Either source is enough: a stale marker must not hide a live ship run
-    // in workflow-state.json (#2899 review), which carries no age of its own.
-    const marker = checkShipActive(workDir);
-    const markerFresh = marker !== null && Date.now() - new Date(marker.ts).getTime() <= SHIP_MARKER_TTL_MS;
-    if (!markerFresh && checkWorkflowState(workDir) === null) {
+    // Either source is enough, each judged by its own age: a stale marker must
+    // not hide a live ship run in workflow-state.json, and a state file left
+    // by a finished run must not stand for one (#2899 review).
+    const fresh = (m: ShipMarker | null) => m !== null && Date.now() - new Date(m.ts).getTime() <= SHIP_MARKER_TTL_MS;
+    if (!fresh(checkShipActive(workDir)) && !fresh(checkWorkflowState(workDir))) {
       outputs.push(
         `ADVISORY: no ship session — no fresh .ship-active marker in ~/.rungate/. This Engineer spawn runs without what a ship run's SCOPE adds: the issue's scope, its acceptance criteria, DISCOVERY, and sizing. Put them in the brief yourself, or start a ship run if this work needs its gates.`
       );
