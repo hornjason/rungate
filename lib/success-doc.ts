@@ -145,6 +145,18 @@ export interface SuccessDoc {
   placeholderLines: number[];
 }
 
+/**
+ * The claim numbers a SUCCESS.md states, sorted and once each, in either
+ * layout `parseSuccessDoc` reads. A claim still carrying the template's
+ * placeholder states nothing. SC-2623's `serves:` check and the filing
+ * gate's `claimsIn` both read claims through this, so a consumer's file is
+ * read the way rungate's is (#2865).
+ */
+export function successClaimNumbers(text: string): number[] {
+  const stated = parseSuccessDoc(text).claims.filter(c => !unfilled(c.statement));
+  return [...new Set(stated.map(c => c.number))].sort((a, b) => a - b);
+}
+
 /** Read the structure out of a SUCCESS.md. Pure; takes the text. */
 export function parseSuccessDoc(text: string): SuccessDoc {
   const claims: SuccessClaim[] = [];

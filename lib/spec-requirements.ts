@@ -108,27 +108,6 @@ function servesField(content: string): string | null {
 }
 
 /**
- * SC-2623: the claim numbers SUCCESS.md states under "## Done, for the
- * harness" — `1. **…**` lines, up to the next `## ` heading. The consumer
- * section numbers its own list from 1 too, which is why the section bounds
- * the read.
- */
-export function successClaimNumbers(successMd: string): number[] {
-  const out: number[] = [];
-  let inSection = false;
-  for (const line of successMd.split("\n")) {
-    if (line.startsWith("## ")) {
-      inSection = /^## Done, for the harness\b/.test(line);
-      continue;
-    }
-    if (!inSection) continue;
-    const m = line.match(/^(\d+)\. \*\*/);
-    if (m) out.push(Number(m[1]));
-  }
-  return out;
-}
-
-/**
  * SC-2623: refusals for a `serves:` declaration that does not name a real
  * claim. A spec with no key is untouched. `claims` is `null` when SUCCESS.md
  * could not be read, and then every declaration is UNMEASURED rather than

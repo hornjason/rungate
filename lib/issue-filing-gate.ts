@@ -142,7 +142,7 @@ import {
   unreadableFiling,
 } from "./issue-create-override";
 import { headingFor, missingSections, requiredSections } from "./issue-shape";
-import { parseSuccessDoc, readSuccessDoc, UNREADABLE as SUCCESS_UNREADABLE, unfilled } from "./success-doc";
+import { readSuccessDoc, successClaimNumbers, UNREADABLE as SUCCESS_UNREADABLE } from "./success-doc";
 import { asIssueFiles, overlapNote } from "./issue-file-overlap";
 import { gitSource, plannedFiling, type PlanSource } from "./filing-plan";
 import { resolveShipPolicy, type ShipPolicy } from "./ship-mode";
@@ -324,9 +324,7 @@ function claimNumbers(claims: ClaimReading): number[] {
 export function claimsIn(text: string | null): ClaimReading {
   if (text === null) return { kind: "absent" };
   if (text === SUCCESS_UNREADABLE) return { kind: "unreadable" };
-  const numbers = [...new Set(parseSuccessDoc(text).claims.filter(c => !unfilled(c.statement)).map(c => c.number))].sort(
-    (a, b) => a - b,
-  );
+  const numbers = successClaimNumbers(text);
   return numbers.length === 0 ? { kind: "unwritten" } : { kind: "claims", numbers };
 }
 

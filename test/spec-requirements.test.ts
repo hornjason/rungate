@@ -24,9 +24,10 @@ import {
   requirementViolations,
   servesViolations,
   specIsReferenced,
-  successClaimNumbers,
   testableViolations,
 } from "../lib/spec-requirements";
+import { successClaimNumbers } from "../lib/success-doc";
+import { claimsIn } from "../lib/issue-filing-gate";
 import { collectSpecFiles } from "../lib/spec-files";
 import { parseCriteria, supersededStatement } from "../lib/spec-evidence";
 import { SERVES_FRONTMATTER_PLACEHOLDER, renderSpecTemplate } from "../lib/spec-template";
@@ -282,8 +283,14 @@ describe("SC-2623: a spec says which SUCCESS.md claim it serves", () => {
     "2. **Numbers describe the committed tree.**",
     "7. **The plan is on the tracker.**",
     "## Done, for a consumer",
-    "1. **Not a harness claim, and not counted.**",
+    "- A bullet is not a claim, and is not counted.",
   ].join("\n");
+
+  // #2865: the layout every consumer is seeded with. Claims 1 and 2 are
+  // filled, claim 3 is still the template's TODO, so it states nothing.
+  const TEMPLATE_MD = readFileSync(join(REPO, "templates", "SUCCESS-TEMPLATE.md"), "utf-8")
+    .replace("### Claim 1 — TODO", "### Claim 1 — Every gate can fail, and has been observed failing")
+    .replace("### Claim 2 — TODO", "### Claim 2 — A consumer's numbers describe its committed tree");
 
   function servesOf(frontmatterLine: string | null): string[] {
     const dir = specDir();
@@ -298,8 +305,28 @@ describe("SC-2623: a spec says which SUCCESS.md claim it serves", () => {
     }
   }
 
-  test("SC-2623: the claims are the numbered ones under 'Done, for the harness', and no others", () => {
+  test("SC-2623: the claims are the ones SUCCESS.md states, and no bullet or prose line", () => {
     expect(successClaimNumbers(CLAIMS_MD)).toEqual([1, 2, 7]);
+  });
+
+  test("SC-2623 (#2865): a consumer's template-layout SUCCESS.md states its filled claims, not none", () => {
+    expect(TEMPLATE_MD, "the template's claim headings moved; re-read this case").toContain("### Claim 3 — TODO");
+    expect(successClaimNumbers(TEMPLATE_MD)).toEqual([1, 2]);
+    // one reader: the filing gate states the same claims for the same file
+    expect(claimsIn(TEMPLATE_MD)).toEqual({ kind: "claims", numbers: [1, 2] });
+    expect(claimsIn(CLAIMS_MD)).toEqual({ kind: "claims", numbers: [1, 2, 7] });
+    const dir = specDir();
+    try {
+      const verdict = (serves: string) => {
+        writeSpec(dir, "S.md", `doc-type: spec\ngoverns: x\ntestable: true\nserves: ${serves}`, "- [ ] SC-9001: a thing");
+        return servesViolations([readSpecRequirements(dir, "S.md")], successClaimNumbers(TEMPLATE_MD));
+      };
+      expect(verdict("2")).toEqual([]);
+      expect(verdict("3"), "an unfilled claim was accepted").toHaveLength(1);
+      expect(verdict("9")).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("SC-2623: a declared claim that exists is clean, and an absent key is untouched", () => {
