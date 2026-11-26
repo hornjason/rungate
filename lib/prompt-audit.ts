@@ -210,10 +210,10 @@ export function lineOwners(file: string, text: string, presence: PresenceCheck, 
   if (file.startsWith(".claude/agents/")) {
     const name = file.slice(file.lastIndexOf("/") + 1);
     // Through the presence the audit reads with, so a template that cannot be
-    // read, or a directory at its name, is named on the UNMEASURED line, not
-    // taken for absent or for a template (#2876 review, #2878).
-    // Whether a template exists is a question, not a read, so a directory or
-    // FIFO at its name is no template and is not named (#2878 review round 1).
+    // read is named on the UNMEASURED line, not taken for absent (#2876
+    // review). Whether a template exists is a question, not a read, so a
+    // directory or FIFO at its name is no template and is not named (#2878
+    // review rounds 1 and 3).
     return onPresence(presence(join(packageRoot, "templates", "agent-briefs", name), "either"), {
       present: kind => (kind === "file" ? harnessExcept(BRIEF_CONSTRAINTS_SECTION) : all("consumer")),
       unread: () => all("consumer"),
