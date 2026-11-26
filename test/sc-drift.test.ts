@@ -416,6 +416,7 @@ const PATH_TOKEN_RULES: Array<{ token: string; reads: string[]; subject: Subject
   { token: "scripts/build", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "a path with a directory and no read extension is a file this reader does not read" },
   { token: "Node.js", reads: [], subject: "dropped", main: { reads: [], subject: "dropped" }, rule: "a bare name with a read extension is a root file, as #2884 read it: SUCCESS.md and Node.js look alike" },
   { token: "notes.yml", reads: [], subject: null, main: { reads: [], subject: null }, rule: "a bare name with any other extension is a word" },
+  { token: "lib/café.ts", reads: ["lib/café.ts"], subject: "lib/café.ts", main: { reads: ["lib/café.ts"], subject: "lib/café.ts" }, rule: "a file name in any script is read whole" },
 ];
 
 describe("#2897: one table of token rules, run through both readers", () => {

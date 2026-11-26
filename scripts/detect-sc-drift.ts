@@ -61,7 +61,8 @@ export type PathToken =
  *   not `lib/parser.ts`.
  */
 export function classifyPathToken(raw: string): PathToken {
-  for (const run of raw.matchAll(/[\w.@~/+-]+/g)) {
+  // Letters and digits in any script: a file name is not only ASCII.
+  for (const run of raw.matchAll(/[\p{L}\p{M}\p{N}_.@~/+-]+/gu)) {
     const token = pathRun(run[0].replace(/\.+$/, ""));
     if (token.kind !== "none") return token;
   }
