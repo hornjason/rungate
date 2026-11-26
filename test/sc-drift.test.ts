@@ -273,60 +273,74 @@ describe("#2287: the keywords are looked for in the file the contains clause nam
   });
 });
 
-describe("#2883: a path is read from its start, never from a segment nested inside another path", () => {
-  test("src/lib/x.ts is not read as lib/x.ts: present or missing, it reports no lib/ drift, and a missing lib/ path still does", () => {
+describe("#2883: a path is read whole, from its start, never from a segment nested inside it", () => {
+  /** A scratch project holding `src/lib/present.ts` and one spec with `criteria`, read by detectDrift. */
+  const driftOf = (criteria: string[]) => {
     const root = mkdtempSync(join(tmpdir(), "rungate-2883-"));
     try {
       mkdirSync(join(root, "specs"));
       mkdirSync(join(root, "src", "lib"), { recursive: true });
       writeFileSync(join(root, "src", "lib", "present.ts"), "export const present = 1;\n");
-      writeFileSync(
-        join(root, "specs", "nested.md"),
-        [
-          "---",
-          "doc-type: spec",
-          "---",
-          "",
-          "## Success Criteria",
-          "",
-          "- [ ] SC-9540: src/lib/present.ts exists",
-          "- [ ] SC-9541: src/lib/missing.ts exists",
-          "- [ ] SC-9542: lib/missing.ts exists",
-          "- [ ] SC-9543: node_modules/pkg/scripts/run.js exists",
-          "- [ ] SC-9544: the file `lib/also-missing.ts` exists",
-          "- [ ] SC-9545: ./lib/rooted-missing.ts exists",
-          "- [ ] SC-9546: /scripts/rooted-gone.ts exists",
-          "- [ ] SC-9547: ../lib/parent.ts exists",
-          "",
-        ].join("\n"),
-      );
+      writeFileSync(join(root, "specs", "nested.md"), ["---", "doc-type: spec", "---", "", "## Success Criteria", "", ...criteria, ""].join("\n"));
       const result = detectDrift(join(root, "specs"), root);
-      const drifted = (result.drifted.get("nested.md") ?? []).map(d => `${d.scId} ${d.path}`).sort();
-      // Top-level paths drift, root-relative ones as the same file (review round 1); nested and parent paths are not read.
-      expect(drifted).toEqual([
-        "SC-9542 lib/missing.ts",
-        "SC-9544 lib/also-missing.ts",
-        "SC-9545 lib/rooted-missing.ts",
-        "SC-9546 scripts/rooted-gone.ts",
-      ]);
+      return {
+        drifted: (result.drifted.get("nested.md") ?? []).map(d => `${d.scId} ${d.path}`).sort(),
+        stale: (result.stale.get("nested.md") ?? []).map(s => `${s.scId} ${s.path} ${s.keyword}`).sort(),
+      };
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  };
+
+  test("a nested path is checked as written: present passes, missing drifts under its own name, never as lib/missing.ts", () => {
+    const { drifted } = driftOf([
+      "- [ ] SC-9540: src/lib/present.ts exists",
+      "- [ ] SC-9541: src/lib/missing.ts exists",
+      "- [ ] SC-9542: lib/missing.ts exists",
+      "- [ ] SC-9543: node_modules/pkg/scripts/run.js exists",
+      "- [ ] SC-9544: the file `lib/also-missing.ts` exists",
+      "- [ ] SC-9545: ./lib/rooted-missing.ts exists",
+      "- [ ] SC-9546: /scripts/rooted-gone.ts exists",
+      "- [ ] SC-9547: @/lib/aliased.ts exists",
+      "- [ ] SC-9548: ~/lib/home.ts exists",
+    ]);
+    // Root-relative paths read as the same file (round 1). An alias or home
+    // prefix cannot be resolved here, so that path is not read (round 2).
+    expect(drifted).toEqual([
+      "SC-9541 src/lib/missing.ts",
+      "SC-9542 lib/missing.ts",
+      "SC-9543 node_modules/pkg/scripts/run.js",
+      "SC-9544 lib/also-missing.ts",
+      "SC-9545 lib/rooted-missing.ts",
+      "SC-9546 scripts/rooted-gone.ts",
+    ]);
   });
 
-  test("containsSubject reads no lib/x.ts out of src/lib/x.ts, and still reads a top-level lib/x.ts", () => {
-    expect(containsSubject("src/lib/x.ts contains [someKeyword]")).toBeNull();
-    expect(containsSubject("pkg-lib/x.ts contains [someKeyword]")).toBeNull();
+  test("a nested path's contains clause is checked in that file, so a missing keyword is stale there", () => {
+    const { drifted, stale } = driftOf([
+      "- [ ] SC-9549: src/lib/present.ts contains [present]",
+      "- [ ] SC-9550: src/lib/present.ts contains [absentWord]",
+    ]);
+    expect(drifted).toEqual([]);
+    expect(stale).toEqual(["SC-9550 src/lib/present.ts absentWord"]);
+  });
+
+  test("containsSubject names the whole path a clause sits on, quoted or not, and no alias path", () => {
+    expect(containsSubject("src/lib/x.ts contains [someKeyword]")).toBe("src/lib/x.ts");
     expect(containsSubject("lib/x.ts contains [someKeyword]")).toBe("lib/x.ts");
+    expect(containsSubject("`lib/x.ts` contains [someKeyword]")).toBe("lib/x.ts");
     expect(containsSubject("the reader in (lib/x.ts contains [someKeyword]")).toBe("lib/x.ts");
     expect(containsSubject("./lib/x.ts contains [someKeyword]")).toBe("lib/x.ts");
+    expect(containsSubject("pkg-lib/x.ts contains [someKeyword]")).toBeNull();
+    expect(containsSubject("@/lib/x.ts contains [someKeyword]")).toBeNull();
   });
 
-  test("a clause on a file this reader does not read lends its keywords to no other file (review round 1)", () => {
-    // Bound to null, the clause's keywords were required of every other path
-    // the criterion names: the #2287 class, re-entered through the fallback.
-    expect(keywordsFor("src/lib/x.ts contains [foo] and scripts/bar.ts contains [baz]", "scripts/bar.ts")).toEqual(["baz"]);
-    expect(keywordsFor("lib/a.ts exports the helper and src/lib/b.ts contains [fooHelper]", "lib/a.ts")).toEqual([]);
+  test("a clause lends its keywords to no other file: quoted, nested, or on a file this reader does not read", () => {
+    // Bound to "no file", a clause's keywords were required of every other
+    // path the criterion names: the #2287 class (rounds 1 and 2).
+    expect(keywordsFor("`lib/a.ts` contains [foo] and `lib/b.ts` contains [bar]", "lib/a.ts")).toEqual(["foo"]);
+    expect(keywordsFor("`src/lib/x.ts` contains [foo] and scripts/bar.ts contains [baz]", "scripts/bar.ts")).toEqual(["baz"]);
+    expect(keywordsFor("SUCCESS.md contains [foo] and lib/a.ts exists", "lib/a.ts")).toEqual([]);
     // CONTROL: a clause that names no file is still checked in every path, as before.
     expect(keywordsFor("lib/a.ts is wired so that it contains [wired]", "lib/a.ts")).toEqual(["wired"]);
   });
