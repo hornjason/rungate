@@ -159,7 +159,7 @@ export function preStampNote(file: string, text: string): string | null {
   if (!hasGeneratedName(file) || declaredSha(text) !== null) return null;
   return (
     `it has the name of a file rungate generates and no generated-sha stamp, so it may predate the stamp; ` +
-    `the scaffold keeps it as yours unless its body already matches what the generator writes now, which it adopts and stamps. ` +
+    `the scaffold decides on its next run whether to keep it as yours or adopt it. ` +
     `To take the generator's version, delete it and re-run \`${ACCEPT_GENERATED_RULE}\``
   );
 }

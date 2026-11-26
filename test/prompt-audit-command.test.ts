@@ -36,7 +36,7 @@ import {
 } from "../lib/prompt-audit";
 import { symptomKeys } from "../lib/finding-arbiter";
 import { SURFACE_LINTS, USER_SURFACE } from "../lib/surface-lint";
-import { ACCEPT_GENERATED_RULE, stampProvenance } from "../lib/rule-provenance";
+import { ACCEPT_GENERATED_RULE, acceptGeneratedAdvice, stampProvenance } from "../lib/rule-provenance";
 import { commitFixture, initFixtureRepo } from "./helpers/git-fixture";
 
 const ROOT = join(import.meta.dir, "..");
@@ -250,8 +250,20 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     expect(preStampNote(".claude/rules/our-own.md", "no stamp at all\n"), "a name the generator never writes").toBeNull();
     const stampedEdited = readFileSync(join(rendered, ".claude", "rules", "docs-routing.md"), "utf-8") + "\nan edit\n";
     expect(preStampNote(".claude/rules/docs-routing.md", stampedEdited), "an edited stamped file would lose the edit").toBeNull();
-    // Review of #2852: the scaffold adopts an unstamped file whose body is already its output, so the note says so.
-    expect(preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n")).toContain("unless its body already matches");
+    // Review of #2852: the scaffold may adopt or keep an unstamped file, so the note promises neither.
+    expect(preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n")).toContain("decides on its next run");
+    expect(preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n")).not.toContain("keeps it as yours.");
+    // Review of #2852: the scaffold's PRESERVED advice never tells a consumer to delete an edit without saying so.
+    expect(acceptGeneratedAdvice("no stamp at all\n")).toBe(`to accept it, delete the file and re-run \`${ACCEPT_GENERATED_RULE}\``);
+    expect(acceptGeneratedAdvice(null)).toContain("to accept it, delete the file");
+    expect(acceptGeneratedAdvice(stampedEdited)).toContain("discards the edit");
+    expect(acceptGeneratedAdvice(stampedEdited)).toContain("## Project-owned");
+    // Every PRESERVED line asks the helper: no scaffold file spells the advice itself.
+    for (const f of ["lib/scaffold/steps.ts", "lib/scaffold/write-steps.ts"]) {
+      const src = readFileSync(join(ROOT, f), "utf-8");
+      expect(src.includes("to accept it, delete the file"), `${f} spells the advice instead of calling acceptGeneratedAdvice`).toBe(false);
+      expect(src.includes("acceptGeneratedAdvice("), `${f} does not ask acceptGeneratedAdvice`).toBe(true);
+    }
   });
 
   // Review of #2852: a stamped rule the generator no longer writes is rewritten
@@ -296,10 +308,18 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
         timeout: 120_000,
         env: { ...process.env, GITHUB_TOKEN: "", GH_TOKEN: "", GITHUB_API_URL: "http://127.0.0.1:1" },
       });
+    // Review of #2852: a stamped rule edited by hand is preserved too, and its
+    // advice says the delete discards the edit rather than offering it plainly.
+    const edited = join(root, ".claude", "rules", "key-files.md");
+    writeFileSync(edited, readFileSync(edited, "utf-8") + "\nAn edit the project made.\n");
     const first = scaffold();
     expect(first.status, first.stderr).toBe(0);
     expect(first.stdout).toContain("PRESERVED: .claude/rules/docs-routing.md (hand-authored — no harness provenance marker)");
     expect(first.stdout).toContain(`re-run \`${ACCEPT_GENERATED_RULE}\``);
+    const editedLine = first.stdout.split("\n").find(l => l.trimStart().startsWith("PRESERVED: .claude/rules/key-files.md"));
+    expect(editedLine, first.stdout).toBeDefined();
+    expect(editedLine).toContain("discards the edit");
+    expect(editedLine).not.toContain("to accept it, delete the file");
     expect(readFileSync(rule, "utf-8"), "the scaffold rewrote a file it reported keeping").toBe(before);
 
     rmSync(rule);
