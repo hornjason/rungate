@@ -16,7 +16,7 @@
  */
 import { spawnSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { codeOf, probePath } from "./path-probe";
+import { codeOf, Presence } from "./path-probe";
 import { join } from "path";
 import { z } from "zod";
 import {
@@ -265,7 +265,7 @@ export class ConfigUnreadable extends Error {
 }
 
 /**
- * The working tree, read through {@link probePath} (#2875). `exists` is
+ * The working tree, read through {@link Presence.decide} (#2875, #2896). `exists` is
  * false only when nothing is at the name; something there that cannot be
  * followed or searched throws {@link ConfigUnreadable}. `read` opens only a
  * regular file, so a FIFO at a config file's name cannot hang the read, and a
@@ -276,17 +276,24 @@ function treeAccess(projectRoot: string): ConfigFileAccess {
   return {
     exists: rel => {
       const abs = join(projectRoot, rel);
-      const p = probePath(abs);
-      if (p.kind === "unreadable") throw new ConfigUnreadable(abs, p.code);
-      return p.kind !== "absent";
+      let why = "";
+      return Presence.decide(abs, "either", (_, w) => (why = w)).on({
+        present: () => true,
+        absent: () => false,
+        unread: () => {
+          throw new ConfigUnreadable(abs, why);
+        },
+      });
     },
     read: rel => {
       const abs = join(projectRoot, rel);
-      const p = probePath(abs);
-      if (p.kind !== "file") {
-        const code = p.kind === "unreadable" ? p.code : p.kind === "dir" ? "EISDIR" : p.kind === "absent" ? "ENOENT" : "not a regular file";
-        throw new ConfigUnreadable(abs, code);
-      }
+      // Absent with nothing named is nothing at the name; anything else the
+      // decider named (a directory, a FIFO, an unreadable path) says why.
+      let why = "ENOENT";
+      const refuse = () => {
+        throw new ConfigUnreadable(abs, why);
+      };
+      Presence.decide(abs, "file", (_, w) => (why = w)).on({ present: () => undefined, absent: refuse, unread: refuse });
       try {
         return readFileSync(abs, "utf-8");
       } catch (e) {

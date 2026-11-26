@@ -3,14 +3,15 @@
  *
  * Over #2876's local review and three review rounds, ten defects were each one
  * call site deciding for itself what "missing", "present" and "could not be
- * read" mean. The reader now has one decider (`decidePresence`, reached as a
- * surface's `presence`), and every caller takes its three answers through
- * `onPresence`. This table runs each kind of thing a path can be through
+ * read" mean. The reader now has one decider (`Presence.decide` in
+ * `lib/path-probe.ts`, reached as a surface's `presence`), and every caller
+ * takes its three answers through `on`, the only way to take them (#2896).
+ * This table runs each kind of thing a path can be through
  * each caller and pins the caller's outcome, so a caller that drifts from
  * the decider, or a decider that folds "unread" into "absent", turns its
  * cells red together.
  *
- * Breaking it: map `unreadable` to absent in `decidePresence` and every row's
+ * Breaking it: map `unreadable` to absent in `Presence.decide` and every row's
  * `dangling` and `underUnsearchable` cell changes (the battery in the PR).
  */
 import { afterAll, describe, expect, test } from "bun:test";
@@ -293,23 +294,23 @@ describe("#2878: presence is decided in one place in both files", () => {
     return out;
   };
 
-  /** An answer read by hand: `.is` compared with `==`, `===`, `!=` or `!==`, or switched on (review round 2). */
-  const HAND_READ = /\.is\s*[!=]==?|switch\s*\([^)]*\.is\s*\)/;
-
-  /** Every direct presence decision in `src`, by function: the one binding both cases below read. */
+  /**
+   * Every direct fs presence call in `src`, by function: the one binding both
+   * cases below read. The raw probe and a hand-read answer are not looked for
+   * here: `lib/path-probe.ts` does not export the one, and the compiler
+   * refuses the other (#2896, below).
+   */
   const refusals = (f: string, src: string): string[] => {
     const refused: string[] = [];
     for (const b of blocks(src)) {
       for (const call of ["statSync(", "lstatSync(", "existsSync("]) if (b.body.includes(call)) refused.push(`${f} ${b.name}: ${call}`);
-      if (b.name !== "decidePresence" && /\bprobePath\(/.test(b.body)) refused.push(`${f} ${b.name}: probePath(`);
-      if (b.name !== "onPresence" && HAND_READ.test(b.body)) refused.push(`${f} ${b.name}: reads .is by hand`);
     }
     return refused;
   };
 
-  test("no direct stat, lstat, existsSync, or probePath call outside decidePresence, and no hand-read of an answer", () => {
+  test("no direct stat, lstat or existsSync call: presence is asked of the reader", () => {
     const refused = files.flatMap(f => refusals(f, readFileSync(join(ROOT, f), "utf-8")));
-    expect(refused, "decide presence through the reader's presence and onPresence").toEqual([]);
+    expect(refused, "decide presence through the reader's presence, and take it with on()").toEqual([]);
   });
 
   test("every function that asks presence is a row in the table, or is named here as unlisted", () => {
@@ -328,21 +329,66 @@ describe("#2878: presence is decided in one place in both files", () => {
     expect([...LISTED].filter(n => !askers.includes(n)), "a listed caller no longer asks; drop it").toEqual([]);
   });
 
-  test("a planted direct call, or a hand-read answer, is refused by name", () => {
+  test("a planted direct call is refused by name", () => {
     for (const f of files) {
       const src = readFileSync(join(ROOT, f), "utf-8");
-      const planted = src +
-        "\nfunction plantedCheck(p: string) { return statSync(p).isFile() || probePath(p).kind === \"file\"; }\n" +
-        "function plantedRead(s: { presence: (a: string, e: string) => { is: string } }, p: string) { return s.presence(p, \"file\").is === \"present\"; }\n" +
-        "function plantedLoose(a: { is: string }) { return a.is == \"absent\"; }\n" +
-        "function plantedSwitch(a: { is: string }) { switch (a.is) { case \"unread\": return 1; default: return 0; } }\n";
-      expect(refusals(f, planted)).toEqual([
-        `${f} plantedCheck: statSync(`,
-        `${f} plantedCheck: probePath(`,
-        `${f} plantedRead: reads .is by hand`,
-        `${f} plantedLoose: reads .is by hand`,
-        `${f} plantedSwitch: reads .is by hand`,
-      ]);
+      const planted = src + "\nfunction plantedCheck(p: string) { return statSync(p).isFile(); }\n";
+      expect(refusals(f, planted)).toEqual([`${f} plantedCheck: statSync(`]);
     }
+  });
+});
+
+/**
+ * #2896: the answer is opaque, so the compiler refuses a hand-read. Rounds 2
+ * and 3 of #2887 each found a spelling the source-text check above missed
+ * (`==`, `switch (p.is)`, `const { is } = p`). Here every spelling is
+ * planted in one file and compiled; the control is the same file taking the
+ * answer through `on`, which must compile, so the refusals are the reads'
+ * and not the setup's.
+ */
+describe("#2896: Presence is opaque, so the compiler refuses every hand-read", () => {
+  const TSC = join(ROOT, "node_modules", ".bin", "tsc");
+  const FLAGS = ["--noEmit", "--strict", "--target", "esnext", "--module", "preserve", "--moduleResolution", "bundler", "--allowImportingTsExtensions", "--skipLibCheck", "--types", "bun"];
+  const header = `import { Presence } from ${JSON.stringify(join(ROOT, "lib", "path-probe.ts"))};\ndeclare const p: Presence;\n`;
+  const compile = (body: string) => {
+    const dir = mkdtempSync(join(scratch, "opaque-"));
+    const file = join(dir, "planted.ts");
+    writeFileSync(file, header + body);
+    const r = spawnSync(TSC, [...FLAGS, file], { cwd: ROOT, encoding: "utf-8" });
+    return { status: r.status, out: `${r.stdout}${r.stderr}` };
+  };
+  const PLANTED = [
+    ["compared", `export const a = p.is === "absent";`],
+    ["loosely compared", `export const b = p.is == "unread";`],
+    ["switched on", `export function c() { switch (p.is) { default: return 0; } }`],
+    ["destructured", `export const { is } = p;`],
+    ["indexed", `export const d = p["is"];`],
+    ["a branch left out", `export const e = p.on({ present: () => 1, absent: () => 2 });`],
+    ["built by hand", `export const f = new Presence({ is: "absent" });`],
+  ] as const;
+
+  test("the control, taking the answer through on(), compiles", () => {
+    const r = compile(`export const ok = p.on({ present: kind => kind, absent: () => "absent", unread: () => "unread" });\n`);
+    expect(r.out).toBe("");
+    expect(r.status).toBe(0);
+  }, 60_000);
+
+  test("each planted read is a compile error on its own line", () => {
+    const r = compile(PLANTED.map(([, line]) => line).join("\n") + "\n");
+    expect(r.status).not.toBe(0);
+    const erroredLines = new Set([...r.out.matchAll(/planted\.ts\((\d+),\d+\): error TS\d+/g)].map(m => Number(m[1])));
+    PLANTED.forEach(([what], i) => expect(erroredLines.has(i + 3), `${what} (line ${i + 3}) compiled:\n${r.out}`).toBe(true));
+  }, 60_000);
+
+  test("at runtime there is no answer to read either, and the raw probe is not exported", async () => {
+    const file = join(mkdtempSync(join(scratch, "opaque-run-")), "x");
+    writeFileSync(file, "x");
+    const { Presence } = await import("../lib/path-probe");
+    const p = Presence.decide(file, "file", () => {});
+    expect((p as unknown as Record<string, unknown>).is).toBeUndefined();
+    expect(Object.keys(p)).toEqual([]);
+    expect(JSON.stringify(p)).toBe("{}");
+    expect(p.on({ present: kind => kind, absent: () => "absent", unread: () => "unread" })).toBe("file");
+    expect(Object.keys(await import("../lib/path-probe"))).not.toContain("probePath");
   });
 });

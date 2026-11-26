@@ -903,7 +903,7 @@ describe("#2849: the project-side reader tells a missing file from one it cannot
     expect(unread(promptAudit(root))).toContain("CLAUDE.md (not a regular file)");
   });
 
-  test("lib/surface-lint.ts decides presence through probePath alone: no existsSync is left in it", () => {
+  test("lib/surface-lint.ts decides presence through Presence.decide alone: no existsSync is left in it", () => {
     expect(readFileSync(join(ROOT, "lib", "surface-lint.ts"), "utf-8")).not.toMatch(/\bexistsSync\b/);
   });
 });

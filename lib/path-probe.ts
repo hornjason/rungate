@@ -3,7 +3,8 @@
  * read (#2849, moved here by #2875).
  *
  * Its own module so the config loader can decide presence the way the
- * surface readers do: `lib/surface-lint.ts` imports the config loader, so the
+ * surface readers do, through {@link Presence.decide}, the only reader of the
+ * raw probe, which this module does not export (#2896): `lib/surface-lint.ts` imports the config loader, so the
  * loader could not import this from there without a cycle. One decider, read
  * by both, so a config that is there and cannot be read is never taken for
  * absent on one side while the other names it (#2875).
@@ -38,7 +39,7 @@ export type Probe = { kind: "dir" | "file" | "other" } | { kind: "absent" } | { 
  * `inRenderedTree` and `resolveTarget` decide presence here and nowhere
  * else, so neither side reads an unreadable path as a missing one.
  */
-export function probePath(abs: string): Probe {
+function probePath(abs: string): Probe {
   try {
     const st = statSync(abs);
     return { kind: st.isDirectory() ? "dir" : st.isFile() ? "file" : "other" };
@@ -82,3 +83,87 @@ function blockingAncestor(abs: string): string | null {
   }
   return null;
 }
+
+/**
+ * What a caller expects at a path (#2878). A reader that will read or walk
+ * what it finds asks `file` or `dir`, so something of the other kind there
+ * is named: it could not be read as expected. A caller that only asks whether
+ * something is there asks `either` and reads the present branch's kind, so
+ * nothing it merely finds is reported as unread (review round 1).
+ */
+export type Expect = "file" | "dir" | "either";
+
+/** What {@link Presence} holds and never hands out. */
+type Answer = { is: "present"; kind: "dir" | "file" | "other" } | { is: "absent" } | { is: "unread" };
+
+/**
+ * The one answer to "is it there?" (#2878), opaque (#2896):
+ *
+ * - **present**: something of the expected kind is there, and the branch is
+ *   given which kind, for a walk that recurses into a directory and reads a
+ *   file.
+ * - **absent**: nothing is at the name, or something of another kind is: a
+ *   regular file or FIFO where a directory is expected, a directory or FIFO
+ *   where a file is. The second is named, with why, and is still absent.
+ * - **unread**: something is there and cannot be followed or searched. It is
+ *   named with its code.
+ *
+ * The answer is a private field, so the only way to take it is
+ * {@link Presence.on}, which requires a branch for each. A caller cannot
+ * fold `unread` into `absent` by reading the answer by hand: there is no
+ * property to compare, switch on or destructure, and the compiler refuses
+ * every spelling of one. Rounds 2 and 3 of #2887 each found a spelling a
+ * source-text check had missed.
+ */
+export class Presence {
+  readonly #answer: Answer;
+
+  private constructor(answer: Answer) {
+    this.#answer = answer;
+  }
+
+  /**
+   * Presence at `abs`, naming through `note` what is unread or of another
+   * kind than `expect`. The only reader of the raw probe; a caller wraps it
+   * with its own `note`, so the naming cannot be left out (#2876 round 3).
+   */
+  static decide(abs: string, expect: Expect, note: (abs: string, why: string) => void): Presence {
+    const p = probePath(abs);
+    if (p.kind === "absent") return new Presence({ is: "absent" });
+    if (p.kind === "unreadable") {
+      note(abs, p.code);
+      return new Presence({ is: "unread" });
+    }
+    if (expect === "dir" && p.kind !== "dir") {
+      note(abs, NOT_A_DIRECTORY);
+      return new Presence({ is: "absent" });
+    }
+    if (expect === "file" && p.kind !== "file") {
+      note(abs, p.kind === "dir" ? "EISDIR" : NOT_A_REGULAR_FILE);
+      return new Presence({ is: "absent" });
+    }
+    return new Presence({ is: "present", kind: p.kind });
+  }
+
+  /** Take one of the three answers. Each branch is required. */
+  on<T>(branches: { present: (kind: "dir" | "file" | "other") => T; absent: () => T; unread: () => T }): T {
+    const a = this.#answer;
+    switch (a.is) {
+      case "present":
+        return branches.present(a.kind);
+      case "absent":
+        return branches.absent();
+      case "unread":
+        return branches.unread();
+    }
+  }
+}
+
+/**
+ * Why a directory entry that is a file or a FIFO is named (#2876 round 3).
+ * `stat` answered, so no errno applies; `ENOTDIR` read as a failed call.
+ */
+const NOT_A_DIRECTORY = "not a directory";
+
+/** Why a name expected to be a file is something else that is not a directory. */
+const NOT_A_REGULAR_FILE = "not a regular file";
