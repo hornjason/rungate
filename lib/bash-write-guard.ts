@@ -1029,8 +1029,11 @@ function pathWordsContaining(text: string, needle: string): string[] {
   // Searched in the text itself, without case. Indexing a lowercased copy
   // shifted every offset after a character whose lower case is longer —
   // `İ` becomes two code units — so the word lost its leading `/` and an
-  // absolute path read as relative (review of #2863, round 1).
-  const pin = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  // absolute path read as relative (review of #2863, round 1). `u` folds
+  // case the Unicode way, as `names`' `toLowerCase` does: without it the
+  // Kelvin sign in `.hooK.ts` is a protected name to `names` and no path
+  // word here, so the name is dropped (security review of the same push).
+  const pin = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
   let m: RegExpExecArray | null;
   while ((m = pin.exec(text)) !== null) {
     let s = m.index;
@@ -2440,7 +2443,7 @@ function writesNear(body: string, protectedName: string): boolean {
   let lastEnd = -1;
   const windowWrites = (): boolean =>
     pathStart >= 0 && WRITE_INTENT.test(body.slice(Math.max(0, pathStart - WINDOW), lastEnd + WINDOW));
-  for (const m of body.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'))) {
+  for (const m of body.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu'))) {
     const at = m.index ?? 0;
     for (; scanned < at; scanned++) if (PATH_STOPS.has(body[scanned])) lastStop = scanned;
     if (lastStop + 1 !== pathStart) {

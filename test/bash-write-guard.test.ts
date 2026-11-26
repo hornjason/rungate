@@ -3913,6 +3913,10 @@ describe("#2858: an interpreter body naming a protected artifact beside a write 
     ["a herestring", `python3 <<< "open('/home/u/.run-store/${STATE}','w')"`],
     ["a herestring that closes what it opened", `python3 <<< "f=open('/home/u/.rungate/run/${STATE}','w'); f.close()"`],
     ["a stdin body with a dotted capital I before the write", `python3 <<'PY'\nprint('\u0130')\nopen('/tmp/x/${SALT}','w').write('x')\nPY`],
+    // Security review of the round-1 push: the Kelvin sign folds to `k` for
+    // `names`, so the path search must fold it too or the name is dropped.
+    ["a hook name spelled with the Kelvin sign, -c", `python3 -c "open('/opt/bwprobe/X.hoo\u212A.ts','w')"`],
+    ["a hook name spelled with the Kelvin sign, stdin", `python3 <<'PY'\nopen('/opt/bwprobe/X.hoo\u212A.ts','w')\nPY`],
   ])("WITNESS: %s is refused", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
