@@ -24,9 +24,10 @@ import {
   requirementViolations,
   servesViolations,
   specIsReferenced,
-  successClaimNumbers,
   testableViolations,
 } from "../lib/spec-requirements";
+import { successClaimNumbers, successViolations } from "../lib/success-doc";
+import { claimsIn } from "../lib/issue-filing-gate";
 import { collectSpecFiles } from "../lib/spec-files";
 import { parseCriteria, supersededStatement } from "../lib/spec-evidence";
 import { SERVES_FRONTMATTER_PLACEHOLDER, renderSpecTemplate } from "../lib/spec-template";
@@ -282,8 +283,14 @@ describe("SC-2623: a spec says which SUCCESS.md claim it serves", () => {
     "2. **Numbers describe the committed tree.**",
     "7. **The plan is on the tracker.**",
     "## Done, for a consumer",
-    "1. **Not a harness claim, and not counted.**",
+    "- A bullet is not a claim, and is not counted.",
   ].join("\n");
+
+  // #2865: the layout every consumer is seeded with. Claims 1 and 2 are
+  // filled, claim 3 is still the template's TODO, so it states nothing.
+  const TEMPLATE_MD = readFileSync(join(REPO, "templates", "SUCCESS-TEMPLATE.md"), "utf-8")
+    .replace("### Claim 1 — TODO", "### Claim 1 — Every gate can fail, and has been observed failing")
+    .replace("### Claim 2 — TODO", "### Claim 2 — A consumer's numbers describe its committed tree");
 
   function servesOf(frontmatterLine: string | null): string[] {
     const dir = specDir();
@@ -298,8 +305,85 @@ describe("SC-2623: a spec says which SUCCESS.md claim it serves", () => {
     }
   }
 
-  test("SC-2623: the claims are the numbered ones under 'Done, for the harness', and no others", () => {
+  test("SC-2623: the claims are the ones SUCCESS.md states, and no bullet or prose line", () => {
     expect(successClaimNumbers(CLAIMS_MD)).toEqual([1, 2, 7]);
+  });
+
+  test("SC-2623 (#2865): a consumer's template-layout SUCCESS.md states its filled claims, not none", () => {
+    expect(TEMPLATE_MD, "the template's claim headings moved; re-read this case").toContain("### Claim 3 — TODO");
+    expect(successClaimNumbers(TEMPLATE_MD)).toEqual([1, 2]);
+    // one reader: the filing gate states the same claims for the same file
+    expect(claimsIn(TEMPLATE_MD)).toEqual({ kind: "claims", numbers: [1, 2] });
+    expect(claimsIn(CLAIMS_MD)).toEqual({ kind: "claims", numbers: [1, 2, 7] });
+    const dir = specDir();
+    try {
+      const verdict = (serves: string) => {
+        writeSpec(dir, "S.md", `doc-type: spec\ngoverns: x\ntestable: true\nserves: ${serves}`, "- [ ] SC-9001: a thing");
+        return servesViolations([readSpecRequirements(dir, "S.md")], successClaimNumbers(TEMPLATE_MD));
+      };
+      expect(verdict("2")).toEqual([]);
+      expect(verdict("3"), "an unfilled claim was accepted").toHaveLength(1);
+      expect(verdict("9")).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // #2868 review round 1: a numbered bold line is common markdown, so it is
+  // a claim only under a claims section; a `### Claim N` heading is a claim
+  // wherever it sits. Unscoped, a stray list revived an unfilled claim.
+  test("SC-2623 (#2868): a numbered bold line outside the claims section is not a claim", () => {
+    const stray = `${TEMPLATE_MD}\n## How we know\n\n3. **Run the suite before filing.**\n`;
+    expect(successClaimNumbers(stray)).toEqual([1, 2]);
+    const unfilledTemplate = readFileSync(join(REPO, "templates", "SUCCESS-TEMPLATE.md"), "utf-8");
+    const notClaims = `${unfilledTemplate}\n## What this is not\n\n1. **Not a feature list or a mission statement**\n`;
+    expect(successClaimNumbers(notClaims)).toEqual([]);
+    expect(claimsIn(notClaims)).toEqual({ kind: "unwritten" });
+    // a CRLF file keeps its section
+    expect(successClaimNumbers(CLAIMS_MD.replace(/\n/g, "\r\n"))).toEqual([1, 2, 7]);
+    // the same list under the template's claims heading is the claims
+    expect(successClaimNumbers("# S\n## The claims\n\n1. **Every gate can fail, observed failing.**\n")).toEqual([1]);
+    // round 4: a top-level heading after the claims ends them; the leading title does not
+    expect(successClaimNumbers("# S\n## The claims\n\n1. **Every gate can fail, observed failing.**\n\n# Appendix\n\n2. **Read the appendix before filing.**\n")).toEqual([1]);
+    expect(successClaimNumbers("# S\n\n1. **Every gate can fail, observed failing.**\n")).toEqual([1]);
+  });
+
+  test("SC-2623 (#2868): the refusals name no section, and no stated claims is not 'could not be read'", () => {
+    for (const line of ["serves: TODO", "serves: 9"]) {
+      for (const v of servesOf(line)) expect(v, line).not.toContain("Done, for the harness");
+    }
+    const reading = { spec: "S.md", criteria: 1, declaredNone: false, reason: null, serves: "2" };
+    const none = servesViolations([reading], []);
+    expect(none).toHaveLength(1);
+    expect(none[0]).toContain("states no claims yet");
+    expect(none[0]).not.toContain("could not be read");
+  });
+
+  // #2868 review round 2: the scope lives in the one parse, so the validator
+  // agrees with the gate, and a CRLF file reads like an LF one, both layouts
+  // and a spec's frontmatter alike.
+  test("SC-2623 (#2868): the validator, the gate and the serves check read one claim list, CRLF included", () => {
+    const background = "# S\n## Background\n\n1. **Users want the tool to be fast**\nCheck: the timing suite passes\n";
+    expect(claimsIn(background)).toEqual({ kind: "unwritten" });
+    expect(successViolations(background, null).violations.join("\n")).toContain("defines no claims");
+    expect(successClaimNumbers(TEMPLATE_MD.replace(/\n/g, "\r\n"))).toEqual([1, 2]);
+    const dir = specDir();
+    try {
+      writeFileSync(join(dir, "S.md"), "---\r\ndoc-type: spec\r\ngoverns: x\r\ntestable: true\r\nserves: 99\r\n---\r\n\r\n- [ ] SC-9001: a thing\r\n");
+      const v = servesViolations([readSpecRequirements(dir, "S.md")], [1, 2]);
+      expect(v, "a CRLF spec's serves: line went unread").toHaveLength(1);
+      expect(v[0]).toContain("claim 99");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // #2868 review round 3: an untitled `## ` heading is a heading, not "above
+  // every heading"; and the refusal says where a numbered claim must sit.
+  test("SC-2623 (#2868): a numbered line under an untitled heading is not a claim, and the refusal says where one goes", () => {
+    const untitled = "# S\n## \n\n1. **A falsifiable statement here**\nCheck: the suite fails\n";
+    expect(successClaimNumbers(untitled)).toEqual([]);
+    expect(successViolations(untitled, null).violations.join("\n")).toContain('under "## The claims"');
   });
 
   test("SC-2623: a declared claim that exists is clean, and an absent key is untouched", () => {

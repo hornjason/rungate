@@ -389,7 +389,9 @@ describe("SC-1709: both claim forms parse, and the real documents are the cases"
     const numberedDoc = FILLED
       .replace(
         "### Claim 1 — a spec with no testable criteria is rejected, not silently skipped",
-        "1. **a spec with no testable criteria is rejected, not silently skipped**",
+        // #2868: a numbered list is a claim only under a claims section, as
+        // in rungate's own SUCCESS.md; a `### Claim N` heading needs none.
+        "## The claims\n\n1. **a spec with no testable criteria is rejected, not silently skipped**",
       )
       .replace(/\*\*How it fails:\*\*/, "   Check:");
     const numbered = successViolations(numberedDoc, NO_RESIDUE_CHECK);

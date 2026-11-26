@@ -145,14 +145,34 @@ export interface SuccessDoc {
   placeholderLines: number[];
 }
 
+/**
+ * The claim numbers a SUCCESS.md states, sorted and once each, as
+ * `parseSuccessDoc` reads them. A claim whose statement `unfilled()` reads as
+ * unwritten states nothing. SC-2623's `serves:` check and the filing gate's
+ * `claimsIn` both read claims through this, and `successViolations` reads
+ * the same parse, so a consumer's file is read the way rungate's is (#2865).
+ */
+export function successClaimNumbers(text: string): number[] {
+  const stated = parseSuccessDoc(text).claims.filter(c => !unfilled(c.statement));
+  return [...new Set(stated.map(c => c.number))].sort((a, b) => a - b);
+}
+
+/**
+ * The sections a `N. **…**` claim may sit under. That form is ordinary
+ * markdown, so elsewhere it is a list, not a claim (#2868); a `### Claim N`
+ * heading is a claim wherever it sits. A list above any `## ` heading counts.
+ */
+const CLAIM_SECTIONS = /^(?:Done, for the harness|The claims)\b/;
+
 /** Read the structure out of a SUCCESS.md. Pure; takes the text. */
 export function parseSuccessDoc(text: string): SuccessDoc {
   const claims: SuccessClaim[] = [];
   const standingRows: number[] = [];
   const placeholderLines: number[] = [];
-  const lines = text.split("\n");
+  const lines = text.split(/\r?\n/); // a CRLF file reads as an LF one (#2868)
 
   let current: SuccessClaim | null = null;
+  let section: string | null = null; // null: no `## ` heading yet
   // A fence closes only on its own marker (#2130): a `~~~` line inside a
   // ``` block used to toggle the block shut.
   const { roles } = readFences(lines);
@@ -161,10 +181,17 @@ export function parseSuccessDoc(text: string): SuccessDoc {
     if (roles[i] === "fence") continue;
     if (line.includes(PLACEHOLDER_MARKER)) placeholderLines.push(i + 1);
     if (roles[i] === "code") continue;
+    const h2 = /^##(?!#)\s+(.*?)\s*$/.exec(line); // `\s*$` takes a CRLF's \r
+    if (h2) section = h2[1].trim();
+    // A top-level heading after a section has begun ends it too (#2868 round
+    // 4); the document's leading `# ` title opens none.
+    const h1 = /^#(?!#)\s+(.*?)\s*$/.exec(line);
+    if (h1 && section !== null) section = h1[1].trim();
 
     let heading: RegExpExecArray | null = null;
-    for (const form of CLAIM_FORMS) {
+    for (const [k, form] of CLAIM_FORMS.entries()) {
       heading = form.exec(line);
+      if (heading && k === 1 && section !== null && !CLAIM_SECTIONS.test(section)) heading = null;
       if (heading) break;
     }
     if (heading) {
@@ -319,7 +346,7 @@ export function successViolations(text: string | null, template: string | null):
     out.push(
       `SUCCESS.md defines no claims. The file's whole purpose is the falsifiable statements ` +
         `that mean the project works. Declare one as "### Claim N — ..." or as a numbered ` +
-        `"N. **...**" list item.`,
+        `"N. **...**" item under "## The claims".`,
     );
   }
 
