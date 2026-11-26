@@ -121,7 +121,9 @@ export function readRenderedSurface(root: string): RenderedSurface {
 
   const missing: string[] = [];
   if (config === "absent") missing.push(RENDERED_MARKERS[0]);
-  if (agentsMd === "absent") missing.push(RENDERED_MARKERS[1]);
+  // A file, or something there that could be one; a directory or FIFO at the
+  // name is not AGENTS.md (#2876 review).
+  if (agentsMd !== "file" && agentsMd !== "unreadable") missing.push(RENDERED_MARKERS[1]);
   if (!present.get(".claude/agents")) missing.push(RENDERED_MARKERS[2]);
   if (!present.get(".claude/rules")) missing.push(RENDERED_MARKERS[3]);
   if (missing.length > 0) throw new NotRenderedSurface(abs, missing);
@@ -368,7 +370,11 @@ function surfaceReader(nameOf: (abs: string) => string) {
     let met = 0;
     for (const name of names.sort((x, y) => x.localeCompare(y))) {
       if (skip(name)) continue;
-      if (capped) break;
+      if (capped) {
+        // The cap tripped below; what is left here is named, not dropped (#2876 review).
+        note(abs, "the rest was not walked: the entry cap was reached");
+        break;
+      }
       if (++entries > WALK_ENTRY_CAP) {
         capped = true;
         note(abs, `the walk stopped after ${WALK_ENTRY_CAP} entries`);

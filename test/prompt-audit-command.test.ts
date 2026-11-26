@@ -752,6 +752,23 @@ describe("#2849: the project-side reader tells a missing file from one it cannot
     expect(unread(audit)).toMatch(/templates\/agent-briefs\/marcus\.md \(EACCES\)/);
   });
 
+  test("#2876 review: a directory named AGENTS.md is not the AGENTS.md marker", () => {
+    const root = planted();
+    rmSync(join(root, "AGENTS.md"), { force: true });
+    mkdirSync(join(root, "AGENTS.md"));
+    expect(() => promptAudit(root)).toThrow(/not a rendered consumer[^\n]*AGENTS\.md/);
+  });
+
+  test("#2876 review: when the cap trips inside a linked directory, the rest of its parent is named, not dropped", () => {
+    const root = planted(["CLAUDE.md", PRESSURE]);
+    for (let i = 0; i <= 10; i++) mkdirSync(join(root, "vendor", `l${i}`), { recursive: true });
+    for (let i = 0; i < 10; i++) for (const n of ["a", "b", "c"]) symlinkSync(join("..", `l${i + 1}`), join(root, "vendor", `l${i}`, n));
+    writeFileSync(join(root, "vendor", "l10", "x.md"), "leaf\n");
+    // "a-fan" sorts before every generated rule, so the cap trips with rules left to read
+    symlinkSync(join("..", "..", "vendor", "l0"), join(root, ".claude", "rules", "a-fan"));
+    expect(unread(promptAudit(root))).toContain(".claude/rules (the rest was not walked: the entry cap was reached)");
+  }, 30_000);
+
   test("#2876 review: a project surface directory that is a regular file is named", () => {
     const root = planted();
     rmSync(join(root, ".claude", "commands"), { recursive: true, force: true });
