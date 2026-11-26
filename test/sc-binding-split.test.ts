@@ -546,7 +546,11 @@ const UNCLAIMED_RATCHET = 150;
 // artifact beside a write verb is refused wherever it points, a reading of the
 // write guard that no registered pattern expresses; the #2858 describe in
 // test/bash-write-guard.test.ts covers it (2026-11-26).
-const CLAIMED_UNBINDABLE = 215;
+// 216: SC-2812 (#2888) ticked by `sync-sc-status --only SC-2812` — the feature
+// manifest's schema and validator refuse a manifest naming a file, page or
+// route the tree does not hold, a reading of the validator that no registered
+// pattern expresses; test/feature-manifest.test.ts covers it (2026-11-26).
+const CLAIMED_UNBINDABLE = 216;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
