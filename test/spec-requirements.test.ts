@@ -375,6 +375,14 @@ describe("SC-2623: a spec says which SUCCESS.md claim it serves", () => {
     }
   });
 
+  // #2868 review round 3: an untitled `## ` heading is a heading, not "above
+  // every heading"; and the refusal says where a numbered claim must sit.
+  test("SC-2623 (#2868): a numbered line under an untitled heading is not a claim, and the refusal says where one goes", () => {
+    const untitled = "# S\n## \n\n1. **A falsifiable statement here**\nCheck: the suite fails\n";
+    expect(successClaimNumbers(untitled)).toEqual([]);
+    expect(successViolations(untitled, null).violations.join("\n")).toContain('under "## The claims"');
+  });
+
   test("SC-2623: a declared claim that exists is clean, and an absent key is untouched", () => {
     expect(servesOf("serves: 7")).toEqual([]);
     expect(servesOf("serves: 1, 7")).toEqual([]);

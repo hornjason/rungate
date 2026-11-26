@@ -172,7 +172,7 @@ export function parseSuccessDoc(text: string): SuccessDoc {
   const lines = text.split(/\r?\n/); // a CRLF file reads as an LF one (#2868)
 
   let current: SuccessClaim | null = null;
-  let section = "";
+  let section: string | null = null; // null: no `## ` heading yet
   // A fence closes only on its own marker (#2130): a `~~~` line inside a
   // ``` block used to toggle the block shut.
   const { roles } = readFences(lines);
@@ -187,7 +187,7 @@ export function parseSuccessDoc(text: string): SuccessDoc {
     let heading: RegExpExecArray | null = null;
     for (const [k, form] of CLAIM_FORMS.entries()) {
       heading = form.exec(line);
-      if (heading && k === 1 && section !== "" && !CLAIM_SECTIONS.test(section)) heading = null;
+      if (heading && k === 1 && section !== null && !CLAIM_SECTIONS.test(section)) heading = null;
       if (heading) break;
     }
     if (heading) {
@@ -342,7 +342,7 @@ export function successViolations(text: string | null, template: string | null):
     out.push(
       `SUCCESS.md defines no claims. The file's whole purpose is the falsifiable statements ` +
         `that mean the project works. Declare one as "### Claim N — ..." or as a numbered ` +
-        `"N. **...**" list item.`,
+        `"N. **...**" item under "## The claims".`,
     );
   }
 
