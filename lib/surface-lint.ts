@@ -17,7 +17,7 @@
  * (SC-2805) unchanged.
  */
 
-import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
+import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "path";
 
 import { resolveConfig } from "./config-loader";
@@ -42,6 +42,17 @@ export interface RenderedSurface {
   readonly root: string;
   /** Every surface file, by path relative to `root` with `/` separators, to its text. */
   readonly files: ReadonlyMap<string, string>;
+  /**
+   * Every path that is there and could not be read, each with the code that
+   * stopped it, e.g. `.claude/rules (EACCES)`. Named relative to `root`, or
+   * as the reader's surface names a path outside it. A lint's own reads land
+   * here too, so read it after the lints have run (#2849).
+   */
+  readonly unreadable: readonly string[];
+  /** {@link probePath}, recording any unreadable answer in `unreadable` under its name. */
+  readonly probe: (abs: string) => Probe;
+  /** The text at `abs` when it is a file that reads; otherwise `undefined`, with the reason in `unreadable` unless nothing is there. */
+  readonly readText: (abs: string) => string | undefined;
 }
 
 export interface SurfaceFinding {
@@ -72,43 +83,51 @@ export class NotRenderedSurface extends Error {
 }
 
 /**
- * Every `.md` file under `dir`, at any depth (review, PR #2632). Claude Code
- * discovers rules and commands in subdirectories, and the surface measurement
- * walks `.claude/rules` recursively, so a top-level listing skipped a nested
- * rule for every lint while the measurement counted it. Agents are walked
- * the same way, so no lint depends on which directory it is reading.
- */
-function mdIn(root: string, dir: string): string[] {
-  const at = join(root, dir);
-  if (!existsSync(at) || !statSync(at).isDirectory()) return [];
-  const out: string[] = [];
-  const walk = (abs: string, rel: string): void => {
-    for (const e of readdirSync(abs, { withFileTypes: true }).sort((x, y) => x.name.localeCompare(y.name))) {
-      if (e.isDirectory()) walk(join(abs, e.name), `${rel}/${e.name}`);
-      else if (e.isFile() && e.name.endsWith(".md")) out.push(`${rel}/${e.name}`);
-    }
-  };
-  walk(at, dir);
-  return out;
-}
-
-/**
  * The rendered surface under `root`, or a refusal naming what a rendered tree
  * would have and this one does not.
+ *
+ * Every path goes through {@link probePath} (#2849), as the user side has
+ * since #2844. A link is followed, so a rule linked in from elsewhere is
+ * linted under its own name. A path that is there and cannot be read is named
+ * in `unreadable` and the rest is still read. `AGENTS.md` and the two
+ * directory markers count as missing only when nothing that could be them is
+ * there: an unsearchable `.claude/rules`, or a rule in it that will not open,
+ * is unread, not a tree the scaffold never rendered, and so is an entry in it
+ * that cannot be followed, since it may be a linked directory of rules. A
+ * regular file at a directory's name, or a directory holding no `.md` and
+ * nothing unreadable, is still missing.
+ * Directories are walked at any depth (review, PR #2632), skipping what no
+ * session loads, as on the user side. The config marker is
+ * `resolveConfig`'s to decide (#2849 local review: #2875).
  */
 export function readRenderedSurface(root: string): RenderedSurface {
   const abs = resolve(root);
-  const missing: string[] = [];
-  if (resolveConfig(abs).status === "absent") missing.push(RENDERED_MARKERS[0]);
-  if (!existsSync(join(abs, "AGENTS.md"))) missing.push(RENDERED_MARKERS[1]);
-  if (mdIn(abs, ".claude/agents").length === 0) missing.push(RENDERED_MARKERS[2]);
-  if (mdIn(abs, ".claude/rules").length === 0) missing.push(RENDERED_MARKERS[3]);
-  if (missing.length > 0) throw new NotRenderedSurface(abs, missing);
+  const config = resolveConfig(abs).status;
+  const reader = surfaceReader(at => {
+    const rel = relative(abs, at);
+    return !rel.startsWith("..") && !isAbsolute(rel) ? rel.split(sep).join("/") : at;
+  });
+  const agentsMd = probePath(join(abs, "AGENTS.md")).kind;
+  for (const f of SURFACE_FILES) reader.read(join(abs, f));
+  // Per directory: whether a surface file is there, read or not.
+  const present = new Map<string, boolean>();
+  for (const d of SURFACE_DIRS) {
+    const at = join(abs, d);
+    const p = reader.probe(at);
+    present.set(d, p.kind === "unreadable" || (p.kind === "dir" && reader.walk(at, neverLoaded) > 0));
+    // There, and not a directory: named, and still no marker (#2876 review).
+    if (p.kind === "file" || p.kind === "other") reader.note(at, NOT_A_DIRECTORY);
+  }
 
-  const files = new Map<string, string>();
-  for (const f of SURFACE_FILES) if (existsSync(join(abs, f))) files.set(f, readFileSync(join(abs, f), "utf-8"));
-  for (const d of SURFACE_DIRS) for (const f of mdIn(abs, d)) files.set(f, readFileSync(join(abs, f), "utf-8"));
-  return { root: abs, files };
+  const missing: string[] = [];
+  if (config === "absent") missing.push(RENDERED_MARKERS[0]);
+  // A file, or something there that could be one; a directory or FIFO at the
+  // name is not AGENTS.md (#2876 review).
+  if (agentsMd !== "file" && agentsMd !== "unreadable") missing.push(RENDERED_MARKERS[1]);
+  if (!present.get(".claude/agents")) missing.push(RENDERED_MARKERS[2]);
+  if (!present.get(".claude/rules")) missing.push(RENDERED_MARKERS[3]);
+  if (missing.length > 0) throw new NotRenderedSurface(abs, missing);
+  return { root: abs, files: reader.files, unreadable: reader.unreadable, probe: reader.probe, readText: reader.readText };
 }
 
 // ── #2778: the user-level surface ─────────────────────────────────────────
@@ -143,13 +162,11 @@ export function userLoadsEverySession(file: string, text: string): boolean {
   });
 }
 
-/** The user-level surface as read: the files, every path that could not be read, and the one probe that decided both. */
-export interface UserSurface extends RenderedSurface {
-  /** Paths named from `~/.claude` (or `~/`), each with the code that stopped it, e.g. `skills/a (ELOOP)`. */
-  readonly unreadable: readonly string[];
-  /** {@link probePath}, recording any unreadable answer in `unreadable` under its name. */
-  readonly probe: (abs: string) => Probe;
-}
+/**
+ * The user-level surface as read. Its `unreadable` paths are named from
+ * `~/.claude` (or `~/`), e.g. `skills/a (ELOOP)`.
+ */
+export type UserSurface = RenderedSurface;
 
 /**
  * Directory entries no session loads: a linked checkout's `node_modules`,
@@ -184,11 +201,9 @@ export type Probe = { kind: "dir" | "file" | "other" } | { kind: "absent" } | { 
  * - **unreadable**: something is there and cannot be followed or read. A
  *   dangling or looping link, EACCES, or any other error.
  *
- * What does not use it yet: the project-side reader above. `mdIn`,
- * `readRenderedSurface`, `inRenderedTree` and `resolveTarget` decide
- * presence with `existsSync`, as they did before #2844, so on the project
- * side a dangling or unsearchable file still reads as missing. Routing them
- * through this function is one separate change (review round 9 of #2844).
+ * The project side reads through it too (#2849): `readRenderedSurface`,
+ * `inRenderedTree` and `resolveTarget` decide presence here and nowhere
+ * else, so neither side reads an unreadable path as a missing one.
  */
 export function probePath(abs: string): Probe {
   try {
@@ -250,14 +265,55 @@ function blockingAncestor(abs: string): string | null {
 export function readUserSurface(home: string): UserSurface {
   const homeAbs = resolve(home);
   const root = join(homeAbs, ".claude");
-  const files = new Map<string, string>();
-  const unreadable: string[] = [];
-  const nameOf = (abs: string): string => {
+  const reader = surfaceReader(abs => {
     const inRoot = relative(root, abs);
     if (!inRoot.startsWith("..") && !isAbsolute(inRoot)) return inRoot.split(sep).join("/");
     const inHome = relative(homeAbs, abs);
     return !inHome.startsWith("..") && !isAbsolute(inHome) ? `~/${inHome.split(sep).join("/")}` : abs;
-  };
+  });
+  for (const entry of USER_SURFACE) {
+    const at = join(root, entry.path);
+    // A file entry goes through `read`, which names a directory or a FIFO at
+    // its name; a directory entry that is something else is named too, as on
+    // the project side (#2876 review). Absent is silent on both.
+    if (entry.kind === "file") {
+      reader.read(at);
+      continue;
+    }
+    const p = reader.probe(at);
+    if (p.kind === "dir") reader.walk(at, neverLoaded);
+    else if (p.kind === "file" || p.kind === "other") reader.note(at, NOT_A_DIRECTORY);
+  }
+  return { root, files: reader.files, unreadable: reader.unreadable, probe: reader.probe, readText: reader.readText };
+}
+
+/**
+ * How many directory entries one reader visits before it stops walking (#2849
+ * security review). Following links lets a tree of links that each point at
+ * the next directory expand exponentially; the cycle guard stops only a link
+ * back to a directory the walk is inside. One machine's whole user surface was
+ * 928 `.md` files (round 1 of #2844), so this leaves room for any real
+ * surface. Past it the walk stops, and says so in `unreadable`.
+ */
+export const WALK_ENTRY_CAP = 20_000;
+
+/**
+ * Why a directory entry that is a file or a FIFO is named (#2876 round 3).
+ * `stat` answered, so no errno applies; `ENOTDIR` read as a failed call.
+ * Plain words, as `readText` says "not a regular file" of the reverse.
+ */
+const NOT_A_DIRECTORY = "not a directory";
+
+/**
+ * The one reader both surfaces are read through (#2849): every presence
+ * check is {@link probePath}, every unreadable path is named once by
+ * `nameOf`, and a read is attempted only on a file. The user side and the
+ * project side differ only in how a path is named and which directory
+ * entries a walk skips.
+ */
+function surfaceReader(nameOf: (abs: string) => string) {
+  const files = new Map<string, string>();
+  const unreadable: string[] = [];
   const note = (abs: string, why: string): void => {
     const entry = `${nameOf(abs)} (${why})`;
     if (!unreadable.includes(entry)) unreadable.push(entry);
@@ -275,38 +331,82 @@ export function readUserSurface(home: string): UserSurface {
       return undefined;
     }
   };
-  const read = (abs: string): void => {
-    const text = attempt(abs, () => readFileSync(abs, "utf-8"));
-    if (text !== undefined) files.set(nameOf(abs), text);
+  const readText = (abs: string): string | undefined => {
+    const p = probe(abs);
+    if (p.kind === "file") return attempt(abs, () => readFileSync(abs, "utf-8"));
+    if (p.kind === "dir") note(abs, "EISDIR");
+    else if (p.kind === "other") note(abs, "not a regular file");
+    return undefined;
   };
-  const walk = (abs: string, inside: ReadonlySet<string>): void => {
+  /** Read `abs` into `files` under its name; whether it was read. */
+  const read = (abs: string): boolean => {
+    const text = readText(abs);
+    if (text !== undefined) files.set(nameOf(abs), text);
+    return text !== undefined;
+  };
+  let entries = 0;
+  let capped = false;
+  /**
+   * Every `.md` under `abs`, at any depth, following links: Claude Code loads
+   * a linked skill or rule through its link, so two links to one directory
+   * are two entries, each read under its own name. Only a link back to a
+   * directory the walk is already inside is a cycle, named and not followed.
+   *
+   * Returns how many surface entries it met, read or not: each `.md` that is
+   * there, each directory it could not list, and each entry it could not
+   * follow at all, whatever its name, since that may be a linked directory of
+   * them (#2876 review). A regular file or FIFO with another name is neither.
+   */
+  const walk = (abs: string, skip: (name: string) => boolean, inside: ReadonlySet<string> = new Set()): number => {
+    // Past the cap a directory is named, not skipped, and counts as one that
+    // may hold surface files, so a later marker is not read as missing (#2876
+    // review).
+    if (capped) {
+      note(abs, "not walked: the entry cap was reached");
+      return 1;
+    }
     const real = attempt(abs, () => realpathSync(abs));
-    if (real === undefined) return;
-    if (inside.has(real)) return note(abs, "links back to a directory it is inside");
+    if (real === undefined) return 1;
+    if (inside.has(real)) {
+      note(abs, "links back to a directory it is inside");
+      return 0;
+    }
+    const names = attempt(abs, () => readdirSync(abs));
+    if (names === undefined) return 1;
     const here = new Set(inside).add(real);
-    for (const name of (attempt(abs, () => readdirSync(abs)) ?? []).sort((x, y) => x.localeCompare(y))) {
-      if (neverLoaded(name)) continue;
+    let met = 0;
+    for (const name of names.sort((x, y) => x.localeCompare(y))) {
+      if (skip(name)) continue;
+      if (capped) {
+        // The cap tripped below; what is left here is named, not dropped (#2876 review).
+        note(abs, "the rest was not walked: the entry cap was reached");
+        break;
+      }
+      if (++entries > WALK_ENTRY_CAP) {
+        capped = true;
+        note(abs, `the walk stopped after ${WALK_ENTRY_CAP} entries`);
+        return met + 1;
+      }
       const at = join(abs, name);
       const p = probe(at);
-      if (p.kind === "dir") walk(at, here);
-      else if (p.kind === "file" && name.endsWith(".md")) read(at);
+      if (p.kind === "dir") met += walk(at, skip, here);
+      else if (p.kind === "unreadable") met += 1;
+      else if (name.endsWith(".md") && p.kind !== "absent") {
+        read(at);
+        met += 1;
+      }
     }
+    return met;
   };
-  for (const entry of USER_SURFACE) {
-    const at = join(root, entry.path);
-    const p = probe(at);
-    if (entry.kind === "file" && p.kind === "file") read(at);
-    if (entry.kind === "dir" && p.kind === "dir") walk(at, new Set());
-  }
-  return { root, files, unreadable, probe };
+  return { files, unreadable, note, probe, readText, read, walk };
 }
 
-/** A surface file, or any file that exists inside the rendered root. */
+/** A surface file, or any path inside the rendered root that something is at, read or not. */
 function inRenderedTree(surface: RenderedSurface, file: string): boolean {
   if (surface.files.has(file)) return true;
   const at = resolve(surface.root, file);
   const rel = relative(surface.root, at);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel) && existsSync(at);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel) && probePath(at).kind !== "absent";
 }
 
 /**
@@ -318,8 +418,27 @@ function inRenderedTree(surface: RenderedSurface, file: string): boolean {
  * template, whatever its input was, and its finding is refused rather than
  * reported as if it described the consumer.
  */
-export function lintRenderedTree(root: string, lints: readonly SurfaceLint[]): NamedSurfaceFinding[] {
-  const surface = readRenderedSurface(root);
+export function lintRenderedTree(root: string | RenderedSurface, lints: readonly SurfaceLint[]): NamedSurfaceFinding[] {
+  // A surface already read is linted as is, so what its lints could not read
+  // lands in that surface's `unreadable` for its caller to report (#2849).
+  // Given only a path, nobody else holds that list, so an unread path is
+  // refused here rather than dropped: a clean result must mean read and clean.
+  const surface = typeof root === "string" ? readRenderedSurface(root) : root;
+  const findings = lintSurface(surface, lints);
+  if (typeof root === "string" && surface.unreadable.length > 0) throw new UnreadSurface(surface.root, surface.unreadable);
+  return findings;
+}
+
+/** Refused rather than reported clean: a rendered tree with paths the lints could not read (#2849). */
+export class UnreadSurface extends Error {
+  constructor(root: string, unreadable: readonly string[]) {
+    super(`UNMEASURED: ${unreadable.length} path(s) under ${root} could not be read, so a clean lint would claim what was not checked: ${unreadable.join(", ")}`);
+    this.name = "UnreadSurface";
+  }
+}
+
+/** Run `lints` over `surface`, refusing a finding that names a file outside it. */
+function lintSurface(surface: RenderedSurface, lints: readonly SurfaceLint[]): NamedSurfaceFinding[] {
   const out: NamedSurfaceFinding[] = [];
   for (const lint of lints) {
     for (const f of lint.check(surface)) {
@@ -401,19 +520,34 @@ export function readTargets(surface: RenderedSurface): ReadTarget[] {
   return out;
 }
 
-/** Where a target named in a rendered file resolves, or null when nowhere. */
-function resolveTarget(surface: RenderedSurface, target: string, packageRoot: string): string | null {
+/**
+ * Where a target named in a rendered file resolves: the path, `null` when
+ * nothing is there, or `"unread"` when something is there and could not be
+ * read (#2849). The surface's probe names that path, so it is never reported
+ * as missing.
+ */
+function resolveTarget(surface: RenderedSurface, target: string, packageRoot: string): string | null | "unread" {
   const local = resolve(surface.root, target);
-  if (existsSync(local)) return local;
+  // An unreadable local copy is named even when the package answers below: an
+  // agent in this tree opens the local one (#2876 review).
+  const here = surface.probe(local).kind;
+  if (here !== "absent" && here !== "unreadable") return local;
+  // A `node_modules/rungate/…` target the installed package answers is still
+  // checked there (#2849 local review).
   const pkg = target.match(/^node_modules\/rungate\/(.+)$/);
-  if (pkg && existsSync(join(packageRoot, pkg[1]))) return join(packageRoot, pkg[1]);
-  return null;
+  if (pkg !== null) {
+    const there = join(packageRoot, pkg[1]);
+    const kind = surface.probe(there).kind;
+    if (kind !== "absent" && kind !== "unreadable") return there;
+    if (kind === "unreadable") return "unread";
+  }
+  return here === "unreadable" ? "unread" : null;
 }
 
-/** Whether a markdown file holds a table its heading or header row calls `name`. */
-function hasTableNamed(path: string, name: string): boolean {
+/** Whether a markdown text holds a table its heading or header row calls `name`. */
+function hasTableNamed(text: string, name: string): boolean {
   const stem = name.toLowerCase().replace(/s$/, "");
-  const lines = readFileSync(path, "utf-8").split("\n");
+  const lines = text.split("\n");
   let heading = "";
   for (let i = 0; i < lines.length; i++) {
     const ln = lines[i];
@@ -440,9 +574,16 @@ export function danglingReadTargets(packageRoot: string = PACKAGE_ROOT): Surface
       const findings: SurfaceFinding[] = [];
       for (const t of readTargets(surface)) {
         const at = resolveTarget(surface, t.target, packageRoot);
+        if (at === "unread") continue;
         if (at === null) {
           findings.push({ file: t.file, message: `line ${t.line} tells the agent to read ${t.target}, which is not in the rendered tree` });
-        } else if (t.table !== null && !hasTableNamed(at, t.table)) {
+          continue;
+        }
+        if (t.table === null) continue;
+        // Only a file is read; a directory or a file that will not open is
+        // named in the surface's `unreadable`, not reported as tableless.
+        const text = surface.readText(at);
+        if (text !== undefined && !hasTableNamed(text, t.table)) {
           findings.push({ file: t.file, message: `line ${t.line} sends the agent to the ${t.table} table in ${t.target}, which has no table by that name` });
         }
       }

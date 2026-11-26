@@ -56,8 +56,8 @@
  * such finding is the user's, and only harness-owned findings become
  * upstream drafts, so none of them is ever drafted.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join, relative, sep } from "path";
+import { mkdirSync, readFileSync, writeFileSync } from "fs";
+import { dirname, join } from "path";
 
 import { BRIEF_CONSTRAINTS_SECTION, HARD_CONSTRAINTS_SECTION, readPreservedSection, type SectionSpec } from "./agents-md-sections";
 import { generateScopedRules } from "./generators/agents-md";
@@ -180,7 +180,7 @@ export function orphanNote(file: string, text: string): string | null {
  * The owner of every line of one rendered file, index 0 for line 1.
  * `packageRoot` is where the brief templates are read from.
  */
-export function lineOwners(file: string, text: string, packageRoot: string = PACKAGE_ROOT): Owner[] {
+export function lineOwners(file: string, text: string, packageRoot: string = PACKAGE_ROOT, probe: (abs: string) => Probe = probePath): Owner[] {
   const count = text.split("\n").length;
   const all = (o: Owner): Owner[] => new Array(count).fill(o);
   const harnessExcept = (spec: SectionSpec): Owner[] => {
@@ -209,7 +209,10 @@ export function lineOwners(file: string, text: string, packageRoot: string = PAC
   }
   if (file.startsWith(".claude/agents/")) {
     const name = file.slice(file.lastIndexOf("/") + 1);
-    return existsSync(join(packageRoot, "templates", "agent-briefs", name)) ? harnessExcept(BRIEF_CONSTRAINTS_SECTION) : all("consumer");
+    // Through the probe the audit reads with, so a template that cannot be
+    // read is named on the UNMEASURED line, not taken for absent (#2876 review).
+    const template = probe(join(packageRoot, "templates", "agent-briefs", name)).kind;
+    return template !== "absent" && template !== "unreadable" ? harnessExcept(BRIEF_CONSTRAINTS_SECTION) : all("consumer");
   }
   return all("consumer");
 }
@@ -302,25 +305,6 @@ const userPlaces = (root: string, home: string): PathPlaces => (file, token) => 
   if (rest !== null) return [join(home, rest)];
   return looksLikeRepoPath(token) ? [join(root, dirname(file), token), join(root, token)] : null;
 };
-
-/**
- * A probe over `root` that names each unreadable path in `unread`. The
- * project side's dangling-path lint reads paths with the same `probePath` as
- * the user side (review round 5 of #2844), so that lint never reports a file
- * in an unsearchable directory as missing. The project surface reader
- * (`readRenderedSurface` and `resolveTarget` in `lib/surface-lint.ts`) still
- * decides presence with `existsSync`; see `probePath`.
- */
-function recordingProbe(root: string, unread: string[]): (abs: string) => Probe {
-  return abs => {
-    const p = probePath(abs);
-    if (p.kind === "unreadable") {
-      const entry = `${relative(root, abs).split(sep).join("/")} (${p.code})`;
-      if (!unread.includes(entry)) unread.push(entry);
-    }
-    return p;
-  };
-}
 
 function danglingPathFindings(
   surface: RenderedSurface,
@@ -427,21 +411,19 @@ function userFindings(home: string): { root: string; files: number; findings: Au
 export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, opts: { home?: string } = {}): PromptAudit {
   const surface = readRenderedSurface(root);
   const owners = new Map<string, Owner[]>();
-  for (const [file, text] of surface.files) owners.set(file, lineOwners(file, text, packageRoot));
+  for (const [file, text] of surface.files) owners.set(file, lineOwners(file, text, packageRoot, surface.probe));
   const ownerAt = (file: string, line: number | null): Owner => {
     const own = owners.get(file);
     if (own === undefined) return "consumer";
     return line === null ? (own.includes("harness") ? "harness" : "consumer") : own[line - 1] ?? "consumer";
   };
-  const findings: AuditFinding[] = lintRenderedTree(root, SURFACE_LINTS).map(f => {
+  // The surface read once: every lint's unreadable path lands in its
+  // `unreadable`, which the project UNMEASURED line reads below (#2849).
+  const findings: AuditFinding[] = lintRenderedTree(surface, SURFACE_LINTS).map(f => {
     const line = lineOf(f.message);
     return { lint: f.lint, file: f.file, line, owner: ownerAt(f.file, line), message: f.message };
   });
-  const projectUnread: string[] = [];
-  findings.push(
-    ...pressureFindings(surface, owners),
-    ...danglingPathFindings(surface, owners, projectPlaces(surface.root), recordingProbe(surface.root, projectUnread)),
-  );
+  findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners, projectPlaces(surface.root), surface.probe));
   // #2835: a project-owned finding in a file the scaffold keeps only because
   // it predates the stamp says how to take the generator's version.
   for (const f of findings) {
@@ -449,7 +431,7 @@ export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, op
     const note = f.owner === "consumer" && text !== undefined ? (preStampNote(f.file, text) ?? orphanNote(f.file, text)) : null;
     if (note !== null) f.message = `${f.message} (${note})`;
   }
-  const projectLine = unreadLine("project", projectUnread, "");
+  const projectLine = unreadLine("project", surface.unreadable, "");
   const unmeasured = projectLine === null ? [] : [projectLine];
   if (opts.home === undefined) return { root: surface.root, lints: [...PROMPT_AUDIT_LINTS], findings, user: null, unmeasured: [...unmeasured, USER_SURFACE_UNREAD] };
   const user = userFindings(opts.home);
