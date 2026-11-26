@@ -195,6 +195,15 @@ export function lineOwners(file: string, text: string, packageRoot: string = PAC
     // text has moved away from, or a name the generator no longer writes is
     // the project's: `decideRuleWrite` preserves the first two, and no
     // scaffold step touches the third (review of #2852, `orphanNote`).
+    //
+    // What this cannot see (review round 2 of #2852): "the generator writes
+    // this name" is read over the whole generator. A project scaffolded with
+    // `--profile minimal` gets fewer rules, and some rules are written only
+    // when the tree has, say, specs/. The profile is a scaffold-time flag
+    // recorded nowhere (`parseProfile` in scripts/scaffold-project.ts), so no
+    // later reader can know which rules the project's next scaffold writes.
+    // Recording it, and asking `decideRuleWrite` over the project's own
+    // generated set, is a separate change.
     return stampCovers(text) !== null && hasGeneratedName(file) ? harnessExcept(PROJECT_OWNED_SECTION) : all("consumer");
   }
   if (file.startsWith(".claude/agents/")) {
