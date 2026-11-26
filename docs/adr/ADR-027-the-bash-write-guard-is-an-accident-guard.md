@@ -82,7 +82,7 @@ Once both rows ship, the guard catches accidents and says so. It refuses a shell
 
 ## Criteria
 
-Written in `specs/HOOK-ARCHITECTURE-SPEC.md` by `create-sc`, reserved in `specs/sc-reservations.json`. Quoted here once so the wording can be approved; the size limit is stated nowhere else in this record.
+Written in `specs/HOOK-ARCHITECTURE-SPEC.md` by `create-sc`. Their block in `specs/sc-reservations.json` was released when this ADR was accepted, because the written lines now hold both ids. Quoted here once so the wording could be approved; the size limit is stated nowhere else in this record.
 
 - SC-2810: lib/bash-write-guard.ts is between [100] and [2000] lines
 - SC-2811: An interpreter body that names a protected artifact beside a declared write verb is refused by the bash write guard whatever directory it names (behavioral)
