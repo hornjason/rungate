@@ -82,7 +82,7 @@
     },
     {
       "path": "specs/SCAFFOLD-DECOMPOSITION-SPEC.md",
-      "criteria": 80
+      "criteria": 87
     },
     {
       "path": "specs/SESSION-AUDIT-SPEC.md",

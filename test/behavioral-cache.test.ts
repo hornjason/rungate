@@ -240,7 +240,12 @@ describe("behavioral-cache: lookup table structure", () => {
     expect(total, "no behavioral SCs were found at all — the count is vacuous")
       .toBeGreaterThan(20);
     expect(untestable).toBeGreaterThanOrEqual(10);
-    expect(untestable).toBeLessThanOrEqual(20);
+    // 20 → 27 with ADR-028 (#2856): its seven criteria, SC-2812 to SC-2818,
+    // are behavioural feature criteria written by `create-sc --behavioral`.
+    // No eval criterion maps them; each is proved by a test of its own and
+    // ticked through the behavioural ratchet, as SC-2811 is. The band moves
+    // in the ADR Jason merges, so the move is his to see.
+    expect(untestable).toBeLessThanOrEqual(27);
   });
 });
 
