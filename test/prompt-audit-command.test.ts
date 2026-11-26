@@ -35,7 +35,7 @@ import {
   type PromptAudit,
 } from "../lib/prompt-audit";
 import { symptomKeys } from "../lib/finding-arbiter";
-import { SURFACE_LINTS, USER_SURFACE, UnreadSurface, WALK_ENTRY_CAP, lintRenderedTree, readRenderedSurface } from "../lib/surface-lint";
+import { SURFACE_LINTS, USER_SURFACE, UnreadSurface, WALK_ENTRY_CAP, lintRenderedTree, presenceRecorder, readRenderedSurface } from "../lib/surface-lint";
 import { ACCEPT_GENERATED_RULE, acceptGeneratedAdvice, generatedVersionSteps, stampProvenance } from "../lib/rule-provenance";
 import { commitFixture, initFixtureRepo } from "./helpers/git-fixture";
 
@@ -245,7 +245,7 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     }
     expect([...commands].sort()).toEqual(["board.md", "dry-run.md", "work-loop.md"]);
     // #2835: a generated name decides no owner; it only earns the note.
-    expect(lineOwners(".claude/rules/docs-routing.md", "no stamp at all\n").every(o => o === "consumer")).toBe(true);
+    expect(lineOwners(".claude/rules/docs-routing.md", "no stamp at all\n", presenceRecorder().presence).every(o => o === "consumer")).toBe(true);
     expect(preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n")).toContain(ACCEPT_GENERATED_RULE);
     expect(preStampNote(".claude/rules/our-own.md", "no stamp at all\n"), "a name the generator never writes").toBeNull();
     const stampedEdited = readFileSync(join(rendered, ".claude", "rules", "docs-routing.md"), "utf-8") + "\nan edit\n";
@@ -281,8 +281,8 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
   // never land. It is the project's to delete, and the finding says so.
   test("#2835: a stamped rule the generator no longer writes is the project's, and its findings say to delete it", () => {
     const stamped = readFileSync(join(rendered, ".claude", "rules", "docs-routing.md"), "utf-8");
-    expect(lineOwners(".claude/rules/docs-routing.md", stamped).some(o => o === "harness")).toBe(true);
-    expect(lineOwners(".claude/rules/old-rule.md", stamped).every(o => o === "consumer")).toBe(true);
+    expect(lineOwners(".claude/rules/docs-routing.md", stamped, presenceRecorder().presence).some(o => o === "harness")).toBe(true);
+    expect(lineOwners(".claude/rules/old-rule.md", stamped, presenceRecorder().presence).every(o => o === "consumer")).toBe(true);
     expect(orphanNote(".claude/rules/old-rule.md", stamped)).toContain("no longer generates");
     expect(orphanNote(".claude/rules/docs-routing.md", stamped)).toBeNull();
     expect(orphanNote(".claude/rules/our-own.md", "no stamp at all\n")).toBeNull();
@@ -339,7 +339,7 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     expect(after).toMatch(/^generated-sha:/m);
     expect(after).not.toContain("(3 files)");
     expect(promptAudit(root).findings.filter(f => f.file === ".claude/rules/docs-routing.md")).toEqual([]);
-    expect(lineOwners(".claude/rules/docs-routing.md", after).includes("harness")).toBe(true);
+    expect(lineOwners(".claude/rules/docs-routing.md", after, presenceRecorder().presence).includes("harness")).toBe(true);
   }, 300_000);
 
   test("rungate's findings become upstream drafts, the project's do not, and nothing is filed", () => {
