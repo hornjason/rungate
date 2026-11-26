@@ -729,7 +729,9 @@ describe("#1175 WITNESS: the same write is a fixture here and an artifact there"
 
   test("the literal /tmp spelling is scratch as well as the resolved one", () => {
     expect(decideBashWrite(`echo '{}' > ${FIX}/${STATE}`).blocked).toBe(false);
-    expect(decideBashWrite(`echo '{}' > /private${FIX}/${STATE}`).blocked).toBe(false);
+    // macOS also spells /tmp as /private/tmp. On Linux /private does not
+    // exist, and a missing directory is never exempt (#2859).
+    expect(decideBashWrite(`echo '{}' > /private${FIX}/${STATE}`).blocked).toBe(!existsSync("/private/tmp"));
   });
 });
 
