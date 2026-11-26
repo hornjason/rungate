@@ -249,21 +249,24 @@ describe("#713 BashWriteGuard: protects gate artifacts and hook files", () => {
     // fallback keyed on the protected names, and a module that allows while
     // its hook refuses would be invisible to `bash-write-guard.test.ts`.
     //
-    // #1367: the fixture makes its directory first. The exemption now holds
-    // only when every directory between the scratch root and the destination
-    // is real, and a write into one nobody made would fail anyway.
+    // #2859: the exemption holds only when every directory between the
+    // scratch root and the destination is real when the command is judged, so
+    // the fixture's directory exists first, made by a command of its own.
     //
     // #2858: the fixture is a shell write. An interpreter body has no scratch
     // exemption any more, so its spelling of the same write is refused here
     // as it is in the module.
-    expect(
-      runHook("BashWriteGuard.hook.ts", cmd(`mkdir -p /tmp/probe && echo x > /tmp/probe/.gate-salt`)).stdout.trim(),
-    ).toBe("");
-    const interp = runHook(
-      "BashWriteGuard.hook.ts",
-      cmd(`mkdir -p /tmp/probe && python3 -c "open('/tmp/probe/.gate-salt','w').write('x')"`),
-    );
-    expect(JSON.parse(interp.stdout).decision).toBe("block");
+    const probe = mkdtempSync("/tmp/probe-");
+    try {
+      expect(runHook("BashWriteGuard.hook.ts", cmd(`echo x > ${probe}/.gate-salt`)).stdout.trim()).toBe("");
+      const interp = runHook(
+        "BashWriteGuard.hook.ts",
+        cmd(`python3 -c "open('${probe}/.gate-salt','w').write('x')"`),
+      );
+      expect(JSON.parse(interp.stdout).decision).toBe("block");
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
   });
 
   test("#1120 NEG CTRL: the RECORDED false positive still passes", () => {

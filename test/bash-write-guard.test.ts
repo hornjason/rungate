@@ -20,7 +20,7 @@
  * a protected artifact. F5's shape alone occurs 1,390 times.
  */
 
-import { describe, test, expect } from "bun:test";
+import { afterAll, describe, test, expect } from "bun:test";
 import { spawnSync } from "child_process";
 import {
   existsSync,
@@ -87,6 +87,15 @@ function carryGuardImports(dir: string): void {
  * directories are REAL, so a fixture row makes the directory it writes into
  * rather than naming one that happens not to exist.
  */
+// #2859: a missing directory is never exempt, so a fixture row writes into a
+// directory that exists before the command is judged, as a real fixture's
+// does once it is made in a command of its own. `/tmp` spelled, like the
+// rows it replaces.
+const FIX = mkdtempSync("/tmp/bw-fix-");
+mkdirSync(join(FIX, "hooks"));
+mkdirSync(join(FIX, "cp.d"));
+afterAll(() => rmSync(FIX, { recursive: true, force: true }));
+
 function inScratch(fn: (root: string) => void): void {
   const root = mkdtempSync(join(tmpdir(), "bw-"));
   try {
@@ -719,8 +728,10 @@ describe("#1175 WITNESS: the same write is a fixture here and an artifact there"
   });
 
   test("the literal /tmp spelling is scratch as well as the resolved one", () => {
-    expect(decideBashWrite(`mkdir -p /tmp/p && echo '{}' > /tmp/p/${STATE}`).blocked).toBe(false);
-    expect(decideBashWrite(`mkdir -p /private/tmp/p && echo '{}' > /private/tmp/p/${STATE}`).blocked).toBe(false);
+    expect(decideBashWrite(`echo '{}' > ${FIX}/${STATE}`).blocked).toBe(false);
+    // macOS also spells /tmp as /private/tmp. On Linux /private does not
+    // exist, and a missing directory is never exempt (#2859).
+    expect(decideBashWrite(`echo '{}' > /private${FIX}/${STATE}`).blocked).toBe(!existsSync("/private/tmp"));
   });
 });
 
@@ -917,7 +928,7 @@ describe("#1175 review: the six spellings of an escape", () => {
   test("refusing `$` costs the fixtures nothing", () => {
     // The negative control for the widening: a plain fixture must still clear,
     // or the refusal above is just the guard turning itself off.
-    expect(decideBashWrite(`mkdir -p /tmp/p && echo x > /tmp/p/${STATE}`).blocked).toBe(false);
+    expect(decideBashWrite(`echo x > ${FIX}/${STATE}`).blocked).toBe(false);
   });
 });
 
@@ -953,13 +964,12 @@ describe("#1175 review: a link made by the same command voids the exemption", ()
     }
   });
 
-  test("CONTROL: mkdir -p is what makes a fixture's directory real (#1367)", () => {
-    // A directory cannot point out of its tree. If this went red the chain
-    // property would be refusing path creation in general, and every fixture
-    // would return to being refused.
-    expect(decideBashWrite(`mkdir -p /tmp/p && echo x > /tmp/p/${STATE}`).blocked).toBe(false);
-    expect(decideBashWrite(`mkdir -p /tmp/p && bun run learn.ts > /tmp/p/${STATE}`).blocked).toBe(false);
-    expect(decideBashWrite(`mkdir -p /tmp/p && echo kiln > /tmp/p/${STATE}`).blocked).toBe(false);
+  test("CONTROL: a write into a real scratch directory is a fixture (#2859)", () => {
+    // If this went red the link rule would be refusing every write, and every
+    // fixture would return to being refused.
+    expect(decideBashWrite(`echo x > ${FIX}/${STATE}`).blocked).toBe(false);
+    expect(decideBashWrite(`bun run learn.ts > ${FIX}/${STATE}`).blocked).toBe(false);
+    expect(decideBashWrite(`echo kiln > ${FIX}/${STATE}`).blocked).toBe(false);
   });
 });
 
@@ -988,11 +998,11 @@ describe("#1175 review: the hook arm keeps the exemption — REFUSED suggestion"
     expect(decideBashWrite(cmd).blocked).toBe(true);
   });
 
-  // #1367: each fixture makes its directory, as a real one must.
+  // #2859: each fixture writes into a directory that exists, as a real one does.
   const FIXTURES = [
-    `mkdir -p /tmp/cmp && cp -p /Users/x/hooks/Guard.hook.ts /tmp/cmp/old-guard.hook.ts`,
-    `mkdir -p /tmp/bwprobe/hooks && echo x > /tmp/bwprobe/hooks/X.hook.ts`,
-    `mkdir -p /tmp/bwprobe && chmod 777 /tmp/bwprobe/X.hook.ts`,
+    `cp -p /Users/x/hooks/Guard.hook.ts ${FIX}/old-guard.hook.ts`,
+    `echo x > ${FIX}/hooks/X.hook.ts`,
+    `chmod 777 ${FIX}/X.hook.ts`,
   ];
   test.each(FIXTURES)("a hook INSIDE one is the false positive #1175 removes: %s", cmd => {
     const d = decideBashWrite(cmd);
@@ -1152,10 +1162,10 @@ describe("#1175 review round 2: PROTECTED_HOOKS keeps the exemption, for a measu
    * These rows are the ones the restriction would change, and they are the
    * bug #1175 exists to fix.
    */
-  // #1367: each fixture makes its directory, as a real one must.
+  // #2859: each fixture writes into a directory that exists, as a real one does.
   const fixtures = [
-    `mkdir -p /tmp/cmp && cp -p /Users/x/hooks/Guard.hook.ts /tmp/cmp/old-guard.hook.ts`,
-    `mkdir -p /tmp/713-battery/pai-wrongfix && rm -f /tmp/713-battery/pai-wrongfix/X.hook.ts`,
+    `cp -p /Users/x/hooks/Guard.hook.ts ${FIX}/old-guard.hook.ts`,
+    `rm -f ${FIX}/hooks/X.hook.ts`,
     `cp /Users/jhorn/.pai/hooks/DocHygiene.hook.ts /tmp/DocHygiene.hook.ts.bak-299`,
   ];
   test.each(fixtures)("a hook in an unwired scratch tree is a fixture: %s", cmd => {
@@ -1264,9 +1274,9 @@ describe("#1175 review round 3: the verb is resolved, not pattern-matched", () =
     // If these go red the voiding has become a substring match and every
     // fixture whose path happens to contain `ln` is refused.
     for (const cmd of [
-      `mkdir -p /tmp/p && echo kiln > /tmp/p/${STATE}`,
-      `mkdir -p /tmp/p && bun run learn.ts > /tmp/p/${STATE}`,
-      `mkdir -p /tmp/p && echo x > /tmp/p/${STATE}`,
+      `echo kiln > ${FIX}/${STATE}`,
+      `bun run learn.ts > ${FIX}/${STATE}`,
+      `echo x > ${FIX}/${STATE}`,
     ]) {
       const d = decideBashWrite(cmd);
       expect(d.blocked, `refused: ${cmd} — ${d.reason}`).toBe(false);
@@ -1402,108 +1412,37 @@ describe("#1411 WITNESS: a link made by a verb that is not `ln`", () => {
    * row above and make the guard useless, so each refusal is paired with the
    * nearest spelling that must stay exempt.
    *
-   * #1367: each row makes its directory first, as a real fixture must, and
-   * the rows that used to build the directory with `cp -r src d` now copy
-   * INTO a made one — `cp -r` of a link planted earlier is #1425's escape,
-   * which the chain property refuses (see the #1367 WITNESS rows).
+   * #2859: each row writes into a directory that exists before the command
+   * is judged (`FIX`), as a real fixture does; a missing directory is never
+   * exempt. The rows copy INTO it, never build it with `cp -r src d`.
    */
   const stay: [string, string][] = [
-    ["a plain cp into scratch", `mkdir -p /tmp/fix && cp /tmp/a/${STATE} /tmp/fix/${STATE}`],
-    ["cp -r, the commonest fixture copy", `mkdir -p /tmp/fix && cp -r /tmp/a/${STATE} /tmp/fix/${STATE}`],
-    ["cp -L, which follows links instead of making them", `mkdir -p /tmp/fix && cp -L /tmp/a/${STATE} /tmp/fix/${STATE}`],
-    ["cp -p", `mkdir -p /tmp/fix && cp -p /tmp/a/${STATE} /tmp/fix/${STATE}`],
-    ["cp -a", `mkdir -p /tmp/fix && cp -a /tmp/a/${STATE} /tmp/fix/${STATE}`],
+    ["a plain cp into scratch", `cp /tmp/a/${STATE} ${FIX}/${STATE}`],
+    ["cp -r, the commonest fixture copy", `cp -r /tmp/a/${STATE} ${FIX}/${STATE}`],
+    ["cp -L, which follows links instead of making them", `cp -L /tmp/a/${STATE} ${FIX}/${STATE}`],
+    ["cp -p", `cp -p /tmp/a/${STATE} ${FIX}/${STATE}`],
+    ["cp -a", `cp -a /tmp/a/${STATE} ${FIX}/${STATE}`],
     // `-m755` attached: `writeTargets` reads a detached `-m 755` as a third
     // operand and the destination as a directory, which the chain property
     // then finds does not exist. A pre-existing misparse, not this change's.
-    ["install -m755, a flag with neither letter", `mkdir -p /tmp/fix && install -m755 /tmp/a/${STATE} /tmp/fix/${STATE}`],
-    ["mkdir -p, which cannot point out of its tree", `mkdir -p /tmp/fix && echo '{}' > /tmp/fix/${STATE}`],
-    ["a path that merely contains the letters", `mkdir -p /tmp/cp.d && echo '{}' > /tmp/cp.d/${STATE}`],
-    ["cp with a quoted FILENAME, not a flag", `mkdir -p /tmp/fix && cp 'a b.txt' /tmp/fix/${STATE}`],
-    ["cp '-L' quoted, which still creates no link", `mkdir -p /tmp/fix && cp '-L' /tmp/a/${STATE} /tmp/fix/${STATE}`],
-    ["cp '-r' quoted", `mkdir -p /tmp/fix && cp '-r' /tmp/a/${STATE} /tmp/fix/${STATE}`],
-    ["cp with a variable in the PATH rather than the flag", `mkdir -p /tmp/fix && cp -r "$SRC" /tmp/fix/${STATE}`],
-    ["cp -t/tmp/p, an attached argument and no link letter", `mkdir -p /tmp/fix && cp -t/tmp/p /tmp/a/${STATE} && echo '{}' > /tmp/fix/${STATE}`],
-    ["cp -S.bak, a suffix argument", `mkdir -p /tmp/fix && cp -S.bak /tmp/a/${STATE} /tmp/fix/${STATE}`],
-    ["cp --sparse=always, a long option that is not a link", `mkdir -p /tmp/fix && cp --sparse=always /tmp/a/${STATE} /tmp/fix/${STATE}`],
-    ["cp with a quoted filename containing a backslash", `mkdir -p /tmp/fix && cp 'a\\b.txt' /tmp/fix/${STATE}`],
-    ["cp with a backslash in the DESTINATION word", `mkdir -p /tmp/fix && cp /tmp/a/x /tmp/fix/a\\b-${STATE}`],
+    ["install -m755, a flag with neither letter", `install -m755 /tmp/a/${STATE} ${FIX}/${STATE}`],
+    ["a plain redirect into a real directory", `echo '{}' > ${FIX}/${STATE}`],
+    ["a path that merely contains the letters", `echo '{}' > ${FIX}/cp.d/${STATE}`],
+    ["cp with a quoted FILENAME, not a flag", `cp 'a b.txt' ${FIX}/${STATE}`],
+    ["cp '-L' quoted, which still creates no link", `cp '-L' /tmp/a/${STATE} ${FIX}/${STATE}`],
+    ["cp '-r' quoted", `cp '-r' /tmp/a/${STATE} ${FIX}/${STATE}`],
+    ["cp with a variable in the PATH rather than the flag", `cp -r "$SRC" ${FIX}/${STATE}`],
+    ["cp -t/tmp/p, an attached argument and no link letter", `cp -t/tmp/p /tmp/a/${STATE} && echo '{}' > ${FIX}/${STATE}`],
+    ["cp -S.bak, a suffix argument", `cp -S.bak /tmp/a/${STATE} ${FIX}/${STATE}`],
+    ["cp --sparse=always, a long option that is not a link", `cp --sparse=always /tmp/a/${STATE} ${FIX}/${STATE}`],
+    ["cp with a quoted filename containing a backslash", `cp 'a\\b.txt' ${FIX}/${STATE}`],
+    ["cp with a backslash in the DESTINATION word", `cp /tmp/a/x ${FIX}/a\\b-${STATE}`],
   ];
   test.each(stay)("CONTROL: %s stays exempt", (_l, cmd) => {
     const d = decideBashWrite(cmd);
     expect(d.blocked, `refused: ${cmd} — ${d.reason}`).toBe(false);
   });
 
-  /**
-   * MUTATION: the nested reading removed (#1367 rewrite).
-   *
-   * `nestedCommands` used to feed the verb list; it now feeds part 2 of the
-   * chain property — the words of text handed to another shell. The rows are
-   * the ones only it can see: an existing directory removed and re-linked
-   * inside a quoted body whose LAST word is not the path, so neither the
-   * whole quoted word nor any other reader names it. The controls are the
-   * same commands with the directory untouched, and must not move.
-   */
-  test("MUTATION: removing the nested reading moves exactly the nested re-link rows", async () => {
-    const src = readFileSync(join(import.meta.dir, "..", "lib", "bash-write-guard.ts"), "utf8");
-    const site = "function nestedCommands(view: string): string[] {";
-    expect(src.split(site).length - 1, "nestedCommands must have ONE site to mutate").toBe(1);
-
-    const dir = mkdtempSync(join(tmpdir(), "bw1429-"));
-    const base = mkdtempSync(join(tmpdir(), "bw1429-fx-"));
-    try {
-      carryGuardImports(dir);
-      writeFileSync(join(dir, "noNest.ts"), src.replace(site, `${site}\n  return [];`));
-      const mutant = (await import(`file://${join(dir, "noNest.ts")}`)) as {
-        decideBashWrite: (c: string) => { blocked: boolean };
-      };
-      mkdirSync(join(base, "real"));
-      const write = `echo '{}' > ${base}/real/${STATE}`;
-      const rows: [string, string, boolean][] = [
-        ["re-link inside eval", `eval 'rmdir ${base}/real; ln -s ${VICTIM} ${base}/real; true' && ${write}`, true],
-        ["re-link inside a substitution", `x="$(rmdir ${base}/real; ln -s ${VICTIM} ${base}/real; true)" && ${write}`, true],
-        ["CONTROL: eval that touches nothing", `eval 'echo hello; true' && ${write}`, false],
-        ["CONTROL: a substitution that touches nothing", `x="$(date; true)" && ${write}`, false],
-      ];
-      for (const [label, cmd, blocked] of rows) expect(decideBashWrite(cmd).blocked, label).toBe(blocked);
-      const moved = rows.filter(([, cmd]) => mutant.decideBashWrite(cmd).blocked !== decideBashWrite(cmd).blocked).map(([l]) => l);
-      expect(moved.sort()).toEqual(["re-link inside a substitution", "re-link inside eval"]);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-      rmSync(base, { recursive: true, force: true });
-    }
-  });
-
-  /**
-   * Why the `$(…)` reading is a walk and not a second regex, as a count.
-   *
-   * The flat `/\$\(([^()]*)\)/` cannot match a substitution containing
-   * parentheses, so on the two rows below it either matches the INNER
-   * substitution and leaves the outer body — the one carrying `cp -s` —
-   * unread, or matches nothing at all. The walk returns the outer body in
-   * both cases.
-   *
-   * This is the measurement behind "one reader, not a second spelling":
-   * the second spelling is not merely redundant, it is the weaker of the
-   * two, and the mutant above cannot show that because removing the whole
-   * nested reading moves these rows either way.
-   */
-  const flatVsWalk: [string, string | null][] = [
-    [`$(cp -s ${VICTIM} /tmp/esc)`, `cp -s ${VICTIM} /tmp/esc`],
-    [`$(cp -s $(echo ${VICTIM}) /tmp/esc)`, `echo ${VICTIM}`],
-    [`$( (cp -s ${VICTIM} /tmp/esc) )`, null],
-  ];
-  test.each(flatVsWalk)("the flat regex on %s yields %s, which is not the outer body", (cmd, flat) => {
-    // `.match` rather than `.exec`: #1096's spawn scan matches a bare
-    // `exec(` on any receiver, so a regex `.exec` reads as a child process
-    // and this file writes `process.env`. Same reading either way, and it
-    // keeps a non-spawn out of that census instead of exempting it.
-    const m = cmd.match(/\$\(([^()]*)\)/);
-    expect(m?.[1] ?? null).toBe(flat);
-    // And the command is refused — since #1367 by the chain property,
-    // because `/tmp/esc` is a directory nothing made.
-    expect(decideBashWrite(esc(cmd)).blocked).toBe(true);
-  });
 
   /**
    * The FOURTH transform, raised on the PR for the first three: ANSI-C
@@ -1557,9 +1496,9 @@ describe("#1411 WITNESS: a link made by a verb that is not `ln`", () => {
    * settled until the command runs.
    */
   const ansiCStay: [string, string, boolean][] = [
-    ["cp $'-L', which creates no link", `mkdir -p /tmp/fix && cp $'-L' /tmp/a/${STATE} /tmp/fix/${STATE}`, false],
-    ["cp $'-r'", `mkdir -p /tmp/fix && cp $'-r' /tmp/a/${STATE} /tmp/fix/${STATE}`, false],
-    ["ANSI-C in a PATH is now resolvable", `mkdir -p /tmp/fix && echo '{}' > /tmp/$'fix'/${STATE}`, false],
+    ["cp $'-L', which creates no link", `cp $'-L' /tmp/a/${STATE} ${FIX}/${STATE}`, false],
+    ["cp $'-r'", `cp $'-r' /tmp/a/${STATE} ${FIX}/${STATE}`, false],
+    ["ANSI-C in a PATH is now resolvable", `echo '{}' > /tmp/$'${FIX.slice(5)}'/${STATE}`, false],
     ["a VARIABLE in a path is still unprovable", `echo '{}' > /tmp/$FIX/${STATE}`, true],
     ["a SUBSTITUTION in a path is still unprovable", `echo '{}' > /tmp/$(id -un)/${STATE}`, true],
   ];
@@ -1654,100 +1593,7 @@ describe("#1411 WITNESS: a link made by a verb that is not `ln`", () => {
    * fixture, the link and the verdict for the literal name are all held
    * fixed, and only the spelling of the name varies.
    */
-  test("MUTATION: decoding octal as a code point reopens the symlink bypass", async () => {
-    const src = readFileSync(join(import.meta.dir, "..", "lib", "bash-write-guard.ts"), "utf8");
-    const site = "bytes.push(parseInt(oct, 8) & 0xff); // a BYTE";
-    expect(src.split(site).length - 1, "the octal decode must have ONE site to mutate").toBe(1);
 
-    const tmp = mkdtempSync(join(tmpdir(), "bwbyte-"));
-    const fixture = realpathSync(mkdtempSync(join(tmpdir(), "bw-byte-fx-")));
-    try {
-      carryGuardImports(tmp);
-      writeFileSync(
-        join(tmp, "asCodePoint.ts"),
-        src.replace(site, "pending += String.fromCharCode(parseInt(oct, 8) & 0xff);"),
-      );
-      const mutant = (await import(`file://${join(tmp, "asCodePoint.ts")}`)) as {
-        decideBashWrite: (c: string) => { blocked: boolean };
-      };
-
-      // #1367: a name that decodes to a directory nobody made is refused by
-      // part 1 whatever it decodes to, so the wrong decode is now watched
-      // reopening part 2 instead — a REAL directory removed and re-linked
-      // under a spelling only the decoder can read.
-      mkdirSync(join(fixture, "café"));
-      const cmd = (name: string) =>
-        `rmdir ${fixture}/${name} && ln -s /usr ${fixture}/${name} && echo '{}' > ${fixture}/café/${STATE}`;
-
-      // Held fixed: the literal name is refused by both.
-      expect(decideBashWrite(cmd("café")).blocked, "literal, real").toBe(true);
-      expect(mutant.decideBashWrite(cmd("café")).blocked, "literal, mutant").toBe(true);
-      // Varied: the octal spelling of that same name.
-      expect(decideBashWrite(cmd(String.raw`$'caf\303\251'`)).blocked, "octal, real").toBe(true);
-      expect(mutant.decideBashWrite(cmd(String.raw`$'caf\303\251'`)).blocked, "octal, mutant").toBe(false);
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
-      rmSync(fixture, { recursive: true, force: true });
-    }
-  });
-
-  /**
-   * MUTATION: the ANSI-C branch taken back out.
-   *
-   * The moved set is asserted with a DIRECTION per row rather than one
-   * blanket "everything moved was allowed", because this mutation moves
-   * rows both ways: the seven void rows become allowed, and `cp $'-L'`
-   * and the ANSI-C path become refused, since the `$` goes back into the
-   * token stream and the unprovable arm fires again. A blanket assertion
-   * would have had to be weakened to accommodate that, and a weakened
-   * assertion is how a mutation stops witnessing anything.
-   */
-  test("MUTATION: removing the ANSI-C branch moves one row one way and three the other", async () => {
-    const src = readFileSync(join(import.meta.dir, "..", "lib", "bash-write-guard.ts"), "utf8");
-    const site = `if (c === '$' && s[i + 1] === "'") {`;
-    expect(src.split(site).length - 1, "the ANSI-C branch must have ONE site to mutate").toBe(1);
-
-    const dir = mkdtempSync(join(tmpdir(), "bwansi-"));
-    try {
-      carryGuardImports(dir);
-      writeFileSync(join(dir, "noAnsiC.ts"), src.replace(site, "if (false) {"));
-      const mutant = (await import(`file://${join(dir, "noAnsiC.ts")}`)) as {
-        decideBashWrite: (c: string) => { blocked: boolean };
-      };
-
-      // #1367: the seven void rows no longer move — `/tmp/esc` is a directory
-      // nothing made, which part 1 refuses however the verb is spelled. The
-      // refusing direction is witnessed instead by a REAL directory re-linked
-      // under an ANSI-C spelling, which only the decoder can read.
-      const real = mkdtempSync(join(tmpdir(), "bwansi-fx-"));
-      mkdirSync(join(real, "real"));
-      const relinked = `rmdir ${real}/$'r\\x65al' && ln -s ${VICTIM} ${real}/$'r\\x65al' && echo '{}' > ${real}/real/${STATE}`;
-      const expected = new Map<string, boolean>([
-        // refused here, ALLOWED without the branch
-        ["a real directory re-linked under an ANSI-C spelling", false],
-        // controls that go the other way: allowed here, REFUSED without it,
-        // because the `$` returns to the token stream
-        ["cp $'-L', which creates no link", true],
-        ["cp $'-r'", true],
-        ["ANSI-C in a PATH is now resolvable", true],
-      ]);
-      const rows: [string, string][] = [
-        ...ansiC.map(([l, mk]) => [l, esc(mk)] as [string, string]),
-        ...ansiCStay.map(([l, c]) => [l, c] as [string, string]),
-        ["a real directory re-linked under an ANSI-C spelling", relinked],
-      ];
-      const moved = new Map<string, boolean>();
-      for (const [l, c] of rows) {
-        const m = mutant.decideBashWrite(c).blocked;
-        if (m !== decideBashWrite(c).blocked) moved.set(l, m);
-      }
-      expect([...moved.keys()].sort()).toEqual([...expected.keys()].sort());
-      for (const [l, dir_] of expected) expect(moved.get(l), l).toBe(dir_);
-      rmSync(real, { recursive: true, force: true });
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("#1175 review round 3: a glob in a DIRECTORY component", () => {
@@ -2464,8 +2310,8 @@ describe("#1240 WITNESS: a program handed to an interpreter on stdin", () => {
   });
 
   test("CONTROL: an interpreter heredoc writing a FIXTURE is still allowed", () => {
-    // #1367: the program makes its own directory, which its context reads.
-    const cmd = `bash <<'EOF'\nmkdir -p /tmp/bw1240\necho '{}' > /tmp/bw1240/${STATE}\nEOF`;
+    // #2859: the directory exists before the program runs.
+    const cmd = `bash <<'EOF'\necho '{}' > ${FIX}/${STATE}\nEOF`;
     expect(decideBashWrite(cmd).blocked).toBe(false);
   });
 
@@ -2974,7 +2820,7 @@ describe("#1239 BATTERY: an escaped quote must not swallow the redirect", () => 
     for (const cmd of [
       `grep -n "chmod" ${LIVE}/${STATE}`,
       `cat ${LIVE}/${STATE}`,
-      `mkdir -p /tmp/scratch && echo "x\\"" > /tmp/scratch/${STATE}`,
+      `echo "x\\"" > ${FIX}/${STATE}`,
       `git show HEAD:${STATE} | grep -nE "a\\"b"`,
       `jq . ${LIVE}/${STATE}`,
     ]) {
@@ -3070,13 +2916,13 @@ describe("#1277 CONTROL: a destination that is a shell word keeps the plain exem
   test("a mutating find keeps the plain exemption — its operands are shell words", () => {
     // `find` has no source literals, so a reader of them would refuse every
     // one. The target question is already asked of its operands directly.
-    expect(decideBashWrite(`mkdir -p /tmp/fix && find /tmp/fix -name '*.json' -exec rm /tmp/fix/${STATE} ;`).blocked).toBe(false);
+    expect(decideBashWrite(`find ${FIX} -name '*.json' -exec rm ${FIX}/${STATE} ;`).blocked).toBe(false);
     expect(decideBashWrite(`find /tmp/fix -name '*.json' -exec rm ${LIVE}/run/${STATE} ;`).blocked).toBe(true);
   });
 
   test("a shell -c body keeps the plain exemption — arm 3a re-enters it as shell", () => {
-    // #1367: the body makes its own directory, which the body's context reads.
-    expect(decideBashWrite(`bash -c 'mkdir -p /tmp/fix && echo x > /tmp/fix/${SALT}'`).blocked).toBe(false);
+    // #2859: the directory exists before the body runs.
+    expect(decideBashWrite(`bash -c 'echo x > ${FIX}/${SALT}'`).blocked).toBe(false);
     expect(decideBashWrite(`bash -c 'echo x > ${LIVE}/run/${SALT}'`).blocked).toBe(true);
   });
 });
@@ -3326,33 +3172,24 @@ describe("#1367 WITNESS: a link spelling the old list never named", () => {
 
 describe("#1367 CONTROL: a fixture whose directory is real stays exempt", () => {
   // The load-bearing half: a property that refused every fixture would pass
-  // every witness above. `d` never exists beforehand in these rows.
+  // every witness above. Since #2859 the directory is made before the
+  // command is judged, in a command of its own, as `d` and `d/e` are here.
   const rows: [string, (b: string) => string][] = [
-    ["mkdir -p d && cp x d", b => `mkdir -p ${b}/d && cp ${b}/src.json ${b}/d/${STATE}`],
-    ["mkdir -p d && cp x into d/", b => `mkdir -p ${b}/d && cp ${b}/x/${STATE} ${b}/d/`],
-    ["mkdir -p d && a redirect", b => `mkdir -p ${b}/d/e && echo '{}' > ${b}/d/e/${STATE}`],
-    ["mkdir without -p, one level", b => `mkdir ${b}/d && echo '{}' > ${b}/d/${STATE}`],
-    ["mkdir -p with the path in a variable", b => `D=${b}/d; mkdir -p $D/e && echo '{}' > ${b}/d/e/${STATE}`],
-    // #2858: a body's own write is never exempt, but the directory it makes
-    // still forgives a later shell write into it.
-    [
-      "mkdirSync inside a bun -e body, then a redirect",
-      b => `bun -e 'require("fs").mkdirSync("${b}/d/e", {recursive: true})' && echo '{}' > ${b}/d/e/${STATE}`,
-    ],
-    [
-      "os.makedirs inside a python -c body, then a redirect",
-      b => `python3 -I -c "import os; os.makedirs('${b}/d', exist_ok=True)" && echo '{}' > ${b}/d/${STATE}`,
-    ],
+    ["cp x d", b => `cp ${b}/src.json ${b}/d/${STATE}`],
+    ["cp x into d/", b => `cp ${b}/x/${STATE} ${b}/d/`],
+    ["a redirect two levels down", b => `echo '{}' > ${b}/d/e/${STATE}`],
+    ["a mkdir of a directory that already exists changes nothing", b => `mkdir -p ${b}/d && echo '{}' > ${b}/d/${STATE}`],
     ["a directory that already exists, no mkdir", b => `echo '{}' > ${b}/${STATE}`],
-    ["the write read back afterwards", b => `mkdir -p ${b}/d && echo '{}' > ${b}/d/${STATE} && cat ${b}/d/${STATE}`],
+    ["the write read back afterwards", b => `echo '{}' > ${b}/d/${STATE} && cat ${b}/d/${STATE}`],
     [
       "the directory handed to a later step",
-      b => `mkdir -p ${b}/d && echo '{}' > ${b}/d/${STATE} && TEST_WORK_DIR=${b}/d bun test x 2>&1 | tail -20`,
+      b => `echo '{}' > ${b}/d/${STATE} && TEST_WORK_DIR=${b}/d bun test x 2>&1 | tail -20`,
     ],
-    ["a hook copied into a fresh backup directory", b => `mkdir -p ${b}/bak && cp -p hooks/X.hook.ts ${b}/bak/`],
+    ["a hook copied into a backup directory", b => `cp -p hooks/X.hook.ts ${b}/d/`],
   ];
   test.each(rows)("%s", (_l, build) => {
     inScratch(base => {
+      mkdirSync(join(base, "d", "e"), { recursive: true });
       const cmd = build(base);
       const d = decideBashWrite(cmd);
       expect(d.blocked, `refused: ${cmd} — ${d.reason}`).toBe(false);
@@ -3361,13 +3198,15 @@ describe("#1367 CONTROL: a fixture whose directory is real stays exempt", () => 
 });
 
 describe("#1367 COST: refused, and the reason is the property", () => {
-  test("`recursive: false` makes only the last directory, so a missing parent is refused (review, #2282)", () => {
+  // #2859: a missing directory is never exempt, whoever makes it: a
+  // program, a variable, or a shell `mkdir` in the same command.
+  test("a directory a program makes, or one behind a variable, is refused (#2859)", () => {
     inScratch(base => {
-      const body = (flag: string) =>
-        `bun -e 'require("fs").mkdirSync("${base}/d/e", {recursive: ${flag}})' && echo '{}' > ${base}/d/e/${STATE}`;
-      expect(decideBashWrite(body("false")).blocked, body("false")).toBe(true);
-      // the same body with the value true still forgives every ancestor
-      expect(decideBashWrite(body("true")).blocked, body("true")).toBe(false);
+      for (const cmd of [
+        `bun -e 'require("fs").mkdirSync("${base}/d/e", {recursive: true})' && echo '{}' > ${base}/d/e/${STATE}`,
+        `python3 -I -c "import os; os.makedirs('${base}/d', exist_ok=True)" && echo '{}' > ${base}/d/${STATE}`,
+        `D=${base}/d; mkdir -p $D/e && echo '{}' > ${base}/d/e/${STATE}`,
+      ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
     });
   });
 
@@ -3377,13 +3216,13 @@ describe("#1367 COST: refused, and the reason is the property", () => {
     });
   });
 
-  test("resetting the directory in the same command is refused — the corpus's one live cost", () => {
-    // `rm -rf d && mkdir -p d && …` and `ln -s V d && mkdir -p d && …` are
-    // the same shape with a different verb. Nothing that does not read the
-    // verb can tell them apart, so the reset pays for the link.
+  // Refused for #2859's reason: `d` does not exist when the command is
+  // judged, whatever the `mkdir` after the reset makes. The `ln -s` spelling
+  // is refused because a command that links has no exemption.
+  test("resetting the directory in the same command is refused, and so is its linking spelling", () => {
     inScratch(base => {
-      const cmd = `rm -rf ${base}/d && mkdir -p ${base}/d && cat > ${base}/d/${STATE} <<'EOF'\n{}\nEOF`;
-      expect(decideBashWrite(cmd).blocked).toBe(true);
+      expect(decideBashWrite(`rm -rf ${base}/d && mkdir -p ${base}/d && cat > ${base}/d/${STATE} <<'EOF'\n{}\nEOF`).blocked).toBe(true);
+      expect(decideBashWrite(`ln -s /usr ${base}/d && mkdir -p ${base}/d && cat > ${base}/d/${STATE} <<'EOF'\n{}\nEOF`).blocked).toBe(true);
     });
   });
 });
@@ -3433,7 +3272,6 @@ describe("#1367 BYPASS 2: an existing directory removed and replaced in the same
   // the write runs.
   const rows: [string, (b: string) => string][] = [
     ["rmdir, then ln -s", b => `rmdir ${b}/real && ln -s ${VICTIM_1367} ${b}/real && echo '{}' > ${b}/real/${STATE}`],
-    ["rm -rf, then mv a planted link", b => `rm -rf ${b}/real && mv ${b}/planted ${b}/real && echo '{}' > ${b}/real/${STATE}`],
     ["rmdir and ln -s inside eval", b => `eval 'rmdir ${b}/real; ln -s ${VICTIM_1367} ${b}/real' && echo '{}' > ${b}/real/${STATE}`],
     [
       "rmdir and ln -s in a shell -c body",
@@ -3447,6 +3285,17 @@ describe("#1367 BYPASS 2: an existing directory removed and replaced in the same
       mkdirSync(join(base, "real"));
       const cmd = build(base);
       expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    });
+  });
+
+  // ADR-027 decision 4: a link made some other way is outside an accident
+  // guard. An `mv` of a link planted earlier, over a directory that is real
+  // when the decision is taken, is one, and #2859 concedes it.
+  test("CONCESSION: rm -rf, then mv a planted link, is allowed (#2859)", () => {
+    inScratch(base => {
+      mkdirSync(join(base, "real"));
+      const cmd = `rm -rf ${base}/real && mv ${base}/planted ${base}/real && echo '{}' > ${base}/real/${STATE}`;
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
     });
   });
 
@@ -3568,18 +3417,15 @@ describe("#1367: a program that calls a link function names every path (Jason, o
     });
   });
 
-  test("CONTROL: a link call that runs AFTER the write does not touch it", () => {
+  // #2859: the guard does not track which step runs when, so a link call
+  // anywhere in the command withdraws the exemption, after the write too.
+  test("a link call that runs AFTER the write still withdraws the exemption (#2859)", () => {
     inScratch(base => {
       mkdirSync(join(base, "real"));
       const cmd = `echo '{}' > ${base}/real/${STATE} && python3 -c "import os; os.symlink('/nonexistent-a', '/nonexistent-b')"`;
-      expect(decideBashWrite(cmd).blocked).toBe(false);
-    });
-  });
-
-  test("CONTROL: a body that only makes directories stays exempt", () => {
-    inScratch(base => {
-      const cmd = `node -e "require('fs').mkdirSync('${base}/made', { recursive: true })" && echo '{}' > ${base}/made/${STATE}`;
-      expect(decideBashWrite(cmd).blocked).toBe(false);
+      expect(decideBashWrite(cmd).blocked).toBe(true);
+      // the same write with no link call is a fixture
+      expect(decideBashWrite(`echo '{}' > ${base}/real/${STATE}`).blocked).toBe(false);
     });
   });
 
@@ -3640,9 +3486,14 @@ describe("#1367 BYPASS 5: a path spelled through the command's own HOME, a tilde
     });
   });
 
-  test("CONTROL: a plain assignment to a fresh name still lets mkdir -p $D forgive", () => {
+  // #2859: a missing directory is never exempt, so a `mkdir` forgives
+  // nothing, spelled out or behind a variable.
+  test("a mkdir, spelled out or behind a variable, does not make a missing directory exempt (#2859)", () => {
     inScratch(base => {
-      expect(decideBashWrite(`D1367=${base}/d; mkdir -p $D1367 && echo '{}' > ${base}/d/${STATE}`).blocked).toBe(false);
+      expect(decideBashWrite(`D1367=${base}/d; mkdir -p $D1367 && echo '{}' > ${base}/d/${STATE}`).blocked).toBe(true);
+      expect(decideBashWrite(`mkdir -p ${base}/d && echo '{}' > ${base}/d/${STATE}`).blocked).toBe(true);
+      mkdirSync(join(base, "d"));
+      expect(decideBashWrite(`echo '{}' > ${base}/d/${STATE}`).blocked).toBe(false);
     });
   });
 });
@@ -3862,8 +3713,8 @@ describe("#2858: an interpreter body naming a protected artifact beside a write 
 
   test("CONTROL: a shell write into a scratch tree keeps its exemption", () => {
     for (const cmd of [
-      `mkdir -p /tmp/rg2858 && echo '{}' > /tmp/rg2858/${STATE}`,
-      `mkdir -p /tmp/rg2858 && cp /tmp/rg2858/src /tmp/rg2858/${STATE}`,
+      `echo '{}' > ${FIX}/${STATE}`,
+      `cp ${FIX}/src ${FIX}/${STATE}`,
     ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
     // The same write into the live tree is refused, so the rows above are the
     // exemption working and not an arm that refuses nothing.
@@ -3879,7 +3730,7 @@ describe("#2858: an interpreter body naming a protected artifact beside a write 
       `mkdir -p /tmp/rg2858 && python3 -c "open('/tmp/rg2858/${STATE}','w')"`,
     ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
     // The shell write in the same wrapper keeps its exemption.
-    expect(decideBashWrite(`bash -c 'mkdir -p /tmp/rg2858 && echo x > /tmp/rg2858/${SALT}'`).blocked).toBe(false);
+    expect(decideBashWrite(`bash -c 'echo x > ${FIX}/${SALT}'`).blocked).toBe(false);
   });
 
   // The window opens at the path start, so the depth of the directory does
@@ -3988,5 +3839,229 @@ describe("#2705 / #2731 / #2772 WITNESS: the exemption's bypasses are refused on
   test.each(witnesses)("%s is refused", (_l, body) => {
     const cmd = `mkdir -p /tmp/rg2858 && python3 -I -c "${body}"`;
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+});
+
+/**
+ * #2859, ADR-027 decisions 1 and 4: the guard is an accident guard, cut to
+ * size, and a shell write's scratch exemption is decided by the target's
+ * real directory, not by tracking what earlier steps of the command mention.
+ */
+describe("#2859: an accident guard, sized and judged by the real directory", () => {
+  test("SC-2810: lib/bash-write-guard.ts is between 100 and 2000 lines", () => {
+    const lines = readFileSync(join(import.meta.dir, "..", "lib", "bash-write-guard.ts"), "utf8").split("\n").length;
+    expect(lines).toBeGreaterThanOrEqual(100);
+    expect(lines).toBeLessThanOrEqual(2000);
+  });
+
+  // ADR-027 decision 4's failure matrix, written before the cut.
+  test("a link at the leaf is refused, whatever it points at", () => {
+    inScratch(root => {
+      symlinkSync(join(root, "elsewhere.json"), join(root, STATE));
+      expect(decideBashWrite(`echo '{}' > ${root}/${STATE}`).blocked).toBe(true);
+    });
+  });
+
+  test("a dangling link at the leaf is refused", () => {
+    inScratch(root => {
+      symlinkSync(`${LIVE}/run/${STATE}`, join(root, STATE));
+      expect(existsSync(join(root, STATE))).toBe(false); // dangling: lstat sees it, stat does not
+      expect(decideBashWrite(`echo '{}' > ${root}/${STATE}`).blocked).toBe(true);
+    });
+  });
+
+  test("a hard link at the leaf is refused", () => {
+    inScratch(root => {
+      writeFileSync(join(root, "other.json"), "{}");
+      linkSync(join(root, "other.json"), join(root, STATE));
+      expect(decideBashWrite(`echo '{}' > ${root}/${STATE}`).blocked).toBe(true);
+    });
+  });
+
+  test("a directory made in the same command is refused: it has no real directory yet", () => {
+    inScratch(root => {
+      const made = decideBashWrite(`mkdir -p ${root}/new/d && echo '{}' > ${root}/new/d/${STATE}`);
+      expect(made.blocked).toBe(true);
+      // the refusal says how a fixture gets through
+      expect(made.reason).toContain("make its directory in a command of its own first");
+      expect(decideBashWrite(`echo '{}' > ${LIVE}/${STATE}`).reason).not.toContain("For a fixture");
+      expect(decideBashWrite(`mkdir ${root}/new && echo '{}' > ${root}/new/${STATE}`).blocked).toBe(true);
+      // made first, in a command of its own, it is a fixture
+      mkdirSync(join(root, "new", "d"), { recursive: true });
+      expect(decideBashWrite(`echo '{}' > ${root}/new/d/${STATE}`).blocked).toBe(false);
+    });
+  });
+
+  // Witnessed into a directory that EXISTS, so the missing-directory rule
+  // cannot hold these rows up for the wrong reason.
+  test("a command that makes a link anywhere has no exemption, nested bodies included", () => {
+    inScratch(root => {
+      mkdirSync(join(root, "real"));
+      expect(decideBashWrite(`echo '{}' > ${root}/real/${STATE}`).blocked).toBe(false);
+      // the link need not come first, or touch the directory by name
+      expect(decideBashWrite(`echo '{}' > ${root}/real/${STATE} && ln -s a b`).blocked).toBe(true);
+      // the local review of #2859: cp's link flag inside a shell body counts
+      for (const mk of [
+        `bash -c 'cp -sR ${LIVE}/run/. ${root}/real/'`,
+        `eval "cp -sR ${LIVE}/run/. ${root}/real/"`,
+        `echo $(cp -s ${LIVE}/run/x ${root}/real/)`,
+      ]) {
+        const cmd = `${mk} && echo '{}' > ${root}/real/${STATE}`;
+        expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+      }
+      // `-ln` is a flag of ls and grep, not a link
+      expect(decideBashWrite(`ls -ln ${root} && echo '{}' > ${root}/real/${STATE}`).blocked).toBe(false);
+    });
+  });
+
+  test("an existing directory that is a link is refused", () => {
+    inScratch(root => {
+      mkdirSync(join(root, "real"));
+      symlinkSync(join(root, "real"), join(root, "via"));
+      expect(decideBashWrite(`echo '{}' > ${root}/via/${STATE}`).blocked).toBe(true);
+      expect(decideBashWrite(`echo '{}' > ${root}/real/${STATE}`).blocked).toBe(false);
+    });
+  });
+
+  test("ln and cp's link flags are refused by name when an argument names a protected artifact, scratch or not", () => {
+    for (const cmd of [
+      `ln -s ${LIVE}/run/${STATE} ${FIX}/x.json`,
+      `ln ${FIX}/a ${FIX}/${STATE}`,
+      `cp -s ${LIVE}/run/${STATE} ${FIX}/x.json`,
+      `cp -l ${LIVE}/run/${STATE} ${FIX}/x.json`,
+      `cp --link ${FIX}/a ${FIX}/${STATE}`,
+      `cp --symbolic-link ${LIVE}/hooks/X.hook.ts ${FIX}/x.ts`,
+      // the local review of #2859: a quoted span inside the name is the same name
+      `ln -sf /tmp/evil.ts hooks/Foo.ho"ok".ts`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    // a plain copy between scratch paths is a fixture
+    expect(decideBashWrite(`cp ${FIX}/a ${FIX}/${STATE}`).blocked).toBe(false);
+    // the word `ln` as an argument makes no link: a read stays a read
+    expect(decideBashWrite(`grep -nw ln hooks/Foo.hook.ts`).blocked).toBe(false);
+  });
+
+  // The automated security review of the first #2859 commit and the local
+  // review of the third: each found a verb that lands a link where a `mkdir`
+  // had been trusted to make a directory. A missing directory is never
+  // exempt, so the whole class is refused, not each spelling.
+  test("a missing directory is refused, whatever makes it or lands there", () => {
+    inScratch(base => {
+      for (const cmd of [
+        `cp -a ${base}/planted ${base}/esc && echo '{}' > ${base}/esc/${STATE}`,
+        `mv ${base}/planted ${base}/esc && echo '{}' > ${base}/esc/${STATE}`,
+        `rsync -a ${base}/planted ${base}/esc && echo '{}' > ${base}/esc/${STATE}`,
+        `tar -xf ${base}.tar -C ${base} && echo '{}' > ${base}/esc/${STATE}`,
+        `python3 -c "import pathlib; pathlib.Path('${base}/esc').symlink_to('/usr')" && echo '{}' > ${base}/esc/${STATE}`,
+        `cp -a ${base}/planted ${base}/esc && mkdir -p ${base}/esc && echo '{}' > ${base}/esc/${STATE}`,
+        `mv ${base}/oldlink ${base}/esc && mkdir -p ${base}/esc/b && echo '{}' > ${base}/esc/b/${STATE}`,
+        `cd ${base} && mv oldlink esc && mkdir -p ${base}/esc && echo '{}' > ${base}/esc/${STATE}`,
+        `mv ${base}/oldlink /private${base}/esc && mkdir -p ${base}/esc && echo '{}' > ${base}/esc/${STATE}`,
+        `D=${base}/esc; mv ${base}/oldlink $D && mkdir -p ${base}/esc && echo '{}' > ${base}/esc/${STATE}`,
+        `tar -xf ${base}.tar -C ${base} && mkdir -p ${base}/esc && echo '{}' > ${base}/esc/${STATE}`,
+        `mkdir -p ${base}/esc && rmdir ${base}/esc && mv ${base}/oldlink ${base}/esc && echo '{}' > ${base}/esc/${STATE}`,
+      ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+      // a copy INTO a directory that exists is ordinary fixture work
+      mkdirSync(join(base, "d"));
+      expect(decideBashWrite(`cp ${base}/x/${STATE} ${base}/d/`).blocked).toBe(false);
+    });
+  });
+
+  // #2866 review round 1: a link verb in a subshell, a substitution, behind
+  // a wrapper that takes words, or behind `eval` is a link verb. Main refused
+  // all but `eval` by reading `ln` anywhere; this reads it where a command
+  // starts, so an argument `ln` stays a read.
+  test("a link verb wherever a command starts is refused by name, and an argument ln keeps a fixture exempt", () => {
+    for (const cmd of [
+      `(timeout 5 ln -s ${LIVE}/run/${STATE} ${FIX}/x)`,
+      `(nice ln -s ${LIVE}/run/${SALT} ${FIX}/x)`,
+      `echo $(ln -s ${LIVE}/run/${STATE} ${FIX}/x)`,
+      `echo \`ln -s ${LIVE}/run/${STATE} ${FIX}/x\``,
+      `eval "ln -s ${LIVE}/run/${STATE} ${FIX}/x"`,
+      `timeout -s KILL 30 ln -s ${LIVE}/run/${SALT} ${FIX}/x`,
+      `env A=1 ln -s ${LIVE}/run/${STATE} ${FIX}/x`,
+      `find . -exec ln -s ${LIVE}/run/${STATE} ${FIX}/x \;`,
+      `echo $(cp -s ${LIVE}/run/${STATE} ${FIX}/x)`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [
+      `grep -nw ln hooks/a.ts; echo '{}' > ${FIX}/${STATE}`,
+      `echo '{}' > ${FIX}/${SALT}; grep -nw ln hooks/Foo.hook.ts`,
+      `git log --oneline -3 && echo '{}' > ${FIX}/${STATE}`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  // #2866 review round 2: the command word looked through `sudo` and `env`
+  // but not `timeout` or `nice`, so a copy behind one wrote unread. Main
+  // allowed these too; the wrapper list is one line.
+  test("a write verb behind timeout, nice, stdbuf or caffeinate is the write verb", () => {
+    for (const cmd of [
+      `timeout 30 cp /tmp/fixture.json ${LIVE}/run/${STATE}`,
+      `nice cp /tmp/f ${LIVE}/run/${STATE}`,
+      `stdbuf -o0 mv /tmp/f ${LIVE}/run/${STATE}`,
+      `caffeinate -i cp /tmp/f ${LIVE}/run/${STATE}`,
+      `nice -n 10 chmod 777 ${LIVE}/hooks/X.hook.ts`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [`timeout 30 cp /tmp/a ${FIX}/${STATE}`, `timeout 30 grep -n x ${LIVE}/run/${STATE}`]) {
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+    }
+  });
+
+  // #2866 review round 3: a reserved word starts a command too. Main refused
+  // `do ln …` by reading `ln` anywhere, so missing it was this PR's
+  // regression; `then cp` was missed on main as well.
+  test("a link or copy after do, then, else or ! is read as the command", () => {
+    for (const cmd of [
+      `for f in a; do ln -s /tmp/scratch/a ${LIVE}/run/${STATE}; done`,
+      `for i in 1; do ln -s ${LIVE}/run/${STATE} ${FIX}/ws; done`,
+      `if [ -f a ]; then cp /tmp/x ${LIVE}/run/${STATE}; fi`,
+      `for f in x; do cp /tmp/a.json ${LIVE}/run/${STATE}; done`,
+      `if false; then :; else ln -s ${LIVE}/run/${SALT} ${FIX}/s; fi`,
+      `! ln -s ${LIVE}/run/${STATE} ${FIX}/x`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [
+      `if grep -q ln ${LIVE}/hooks/X.hook.ts; then echo y; fi`,
+      `for f in a; do cp /tmp/a ${FIX}/${STATE}; done`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  // #2866 review round 3: the walk read the lexically resolved path, so a
+  // link before a `..` was never looked at. A fixture never needs `..`.
+  test("a path with a .. component has no scratch exemption", () => {
+    inScratch(base => {
+      const away = mkdtempSync(join(tmpdir(), "bw-away-"));
+      try {
+        mkdirSync(join(away, "inner"));
+        symlinkSync(join(away, "inner"), join(base, "l"));
+        expect(decideBashWrite(`echo '{}' > ${base}/l/../${STATE}`).blocked).toBe(true);
+        expect(decideBashWrite(`echo '{}' > ${base}/${STATE}`).blocked).toBe(false);
+      } finally {
+        rmSync(away, { recursive: true, force: true });
+      }
+    });
+  });
+
+  test("cp's link flag is read as the shell hands it over, and ln behind a wrapper is ln", () => {
+    for (const cmd of [
+      `cp '-s' ${LIVE}/run/${STATE} ${FIX}/x.json`,
+      `cp "--symbolic-link" ${LIVE}/run/${STATE} ${FIX}/x.json`,
+      `cp --sym ${LIVE}/run/${STATE} ${FIX}/x.json`,
+      `cp -st ${FIX} ${LIVE}/run/${STATE}`,
+      `nice ln -s ${LIVE}/run/${STATE} ${FIX}/x.json`,
+      `nice -n 10 ln -s ${LIVE}/run/${STATE} ${FIX}/x.json`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    // a flag cp has that is not a link flag stays a copy
+    expect(decideBashWrite(`cp -p ${FIX}/a ${FIX}/${STATE}`).blocked).toBe(false);
+  });
+
+  test("the chain machinery is gone: no step-order or mention tracking decides the exemption", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "lib", "bash-write-guard.ts"), "utf8");
+    for (const name of ["chainHolds", "chainContext", "collectShell", "collectBody", "mentionNames", "stepOrder", "outerFor", "judgeFor"]) {
+      expect(src, name).not.toMatch(new RegExp(`function ${name}\\b`));
+    }
+  });
+
+  test("the hook says it is an accident guard and not a boundary", () => {
+    const hook = readFileSync(join(import.meta.dir, "..", "hooks", "BashWriteGuard.hook.ts"), "utf8");
+    expect(hook).toContain("accident guard");
+    expect(hook).toContain("not a boundary");
   });
 });

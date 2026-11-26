@@ -1,89 +1,29 @@
 /**
- * The decision behind `hooks/BashWriteGuard.hook.ts` (#473 on
- * `hornjason/pai-config`, tuned there in #474, reworked in #1120).
+ * The decision behind `hooks/BashWriteGuard.hook.ts`.
  *
- * Extracted from the hook so the population it refuses can be MEASURED
- * rather than argued about: 5,060 real commands from this machine's
- * transcripts were run through it, which is not something you can do with a
- * decision that only exists inside a subprocess. Same shape as
- * `lib/gate-result-protection.ts`, which #1137 extracted for the same reason.
+ * **An accident guard, not a boundary (ADR-027).** A reader of command text
+ * cannot stop an agent running as the files' owner: a program written to a
+ * file and then run, a name built from pieces, a quoted flag — each walks
+ * past it. What it does is stop the ordinary command that writes a gate
+ * artifact or a hook by mistake, and stay out of the way of the reads and
+ * fixture work around them. Merges are decided by CI (`ship.mode` direct).
  *
- * ## The thing this module exists to get right
+ * Every check is structural and per segment, because a substring test over a
+ * whole command line cannot tell CODE from DATA (#1120): it under-blocked
+ * `gh --version; echo x > .gate-salt` and over-blocked a `grep` for the word
+ * `chmod`. Each segment is asked what it WRITES (redirects, `tee`, `cp`/`mv`),
+ * what it MUTATES in place (`sed -i`, `rm`, …), whether it LINKS, whether it
+ * runs an interpreter body, and whether its command WORD is `chmod`.
  *
- * One mechanism was failing in BOTH directions at once.
+ * Quotes are read two ways on purpose: `stripQuoted` deletes quoted spans
+ * with their contents, to find a VERB (text in quotes is never the command
+ * the shell runs); `dequote` keeps the contents, to find a TARGET
+ * (`chmod 777 "x.hook.ts"` really names a hook).
  *
- * It UNDER-blocked, because a read-only prefix allowlist was consulted before
- * anything looked at what the command wrote, so `gh --version; echo x >
- * .gate-salt` exited clean. A prefix says nothing about what follows a `;`.
- *
- * It OVER-blocked, because the remaining checks matched protected names
- * anywhere in the command STRING, so a read-only `git show … | grep -nE
- * "chmod|chflags"` was refused for quoting the words it was searching for.
- * That happened four times in real work — twice to the session coordinating
- * this fix, twice to a peer staging a comparison copy — and a guard that
- * makes reading its own source awkward is a guard people route around.
- *
- * Both directions are the same root cause: a substring test over a whole
- * command line cannot tell CODE from DATA. So nothing here tests the whole
- * string. The command is split into segments at top-level separators, and
- * each check asks a structural question of a segment:
- *
- *   - what does this segment WRITE?          → redirects, tee, cp/mv
- *   - what does this segment MUTATE in place? → sed -i, dd of=, rm, …
- *   - is this segment OPAQUE?                 → an interpreter body, find -exec
- *   - is this segment's COMMAND WORD chmod?   → not "does it contain chmod"
- *
- * Quotes are handled two different ways on purpose, and the distinction is
- * the whole fix:
- *
- *   `stripQuoted`  deletes quoted spans INCLUDING their contents. Used to
- *                  find a VERB, because text inside quotes is an argument,
- *                  never the command the shell runs. This is what stops a
- *                  grep PATTERN from reading as a chmod invocation.
- *   `dequote`      removes quote characters and KEEPS the contents. Used to
- *                  find a TARGET, because `chmod 777 "x.hook.ts"` really does
- *                  name a hook file.
- *
- * Using `stripQuoted` for both would let an attacker quote the path; using
- * `dequote` for both reinstates all four false positives. Each test below
- * names which one it uses and why.
- *
- * ## The names are global; the artifacts are not (#1175)
- *
- * `PROTECTED_FILES` is a list of NAMES, and until #1175 a name matched in any
- * tree. A fixture at `/tmp/rg-abc/workflow-state.json` was refused as readily
- * as a live run's state, which is a true positive against the rule and a false
- * positive against intent — agents on this repo build such fixtures
- * constantly, including fixtures for this module.
- *
- * The scoping is by SCRATCH TREE rather than by project root, and that is a
- * measurement and not a preference. #1175's acceptance asked for "the path
- * relative to the project root". Swept over 5,531 real commands, the gate
- * artifacts named in them resolve like this:
- *
- *     2,620  under the run store (`$RUNGATE_WORK_DIR`, i.e. `~/.rungate`)
- *       521  under a former run store (`~/.pai-work`) or `~/.claude`
- *     1,724  no resolvable path at all — a bare basename, or built by `join`
- *        83  under an OS temp root
- *        65  relative
- *        16  under a repository tree
- *
- * A live `workflow-state.json` is almost never inside the project root: it is
- * in the run store, one level up and sideways. "Protect what is under the
- * root" would therefore have stopped protecting 3,141 of 3,240 absolute
- * references — reopening `pai-config#473` C1, the forge-a-gate-result attack
- * this guard was built for. The root-relative reading is recorded here as
- * MEASURED WRONG rather than merely not chosen.
- *
- * So the question asked is the fail-closed one: can this path be shown to be
- * in a scratch tree? Only then is it a fixture. Every other answer —
- * elsewhere, relative, or not a path at all — keeps the old refusal. An
- * allowlist is normally the wrong shape here and `pai-config#474`'s
- * read-only-prefix list is why: a PREFIX says nothing about what a command
- * writes. A scratch root says something about the DESTINATION, is consulted
- * only after the destination has been extracted, and is not a judgement call
- * — each entry is a value `mktemp -d` returns on a supported platform.
- * Narrowing it over-blocks; it cannot open a hole.
+ * A protected NAME is a protected ARTIFACT only outside a fixed scratch root
+ * (#1175), judged by the real directory a shell write lands in
+ * (`scratchExempt`). Scoping by project root was measured wrong: a live
+ * `workflow-state.json` is in the run store, not the repository.
  */
 
 import { lstatSync, realpathSync, statSync, type Stats } from 'fs';
@@ -105,120 +45,26 @@ export interface BashWriteDecision {
 const ALLOW: BashWriteDecision = { blocked: false };
 
 /**
- * The trees an OS temporary directory can be in.
+ * The trees an OS temporary directory can be in, each also in its realpath
+ * form (`/tmp` is `/private/tmp`, and `tmpdir()` hands back `/var/…` while a
+ * resolution hands back `/private/var/…`). Read at call time.
  *
- * `/tmp` and `/private/tmp` are both listed because on macOS they are the
- * same directory under two names and a command may spell either; `resolve()`
- * normalises `..` but does not follow links, and the link cannot be followed
- * here because the path being judged usually does not exist yet — it is about
- * to be created. `/var/folders` is where macOS puts a per-user `$TMPDIR`, and
- * `tmpdir()` covers whatever the platform or the environment says, which is
- * what `mkdtemp`, `mkstemp` and `mktemp -d` all build on.
- *
- * Each root is also recorded in its REALPATH form. On macOS `/var` is a
- * symlink to `/private/var`, so `tmpdir()` hands back `/var/folders/…/T`
- * while the resolution below hands back `/private/var/folders/…/T`, and a
- * list holding only the first form answers `false` for every path spelled
- * the way `mkdtemp` hands it to a program.
- *
- * The corpus does NOT show this, and saying so is the point: real commands
- * spell `/tmp` literally, so all 37 fixture commands clear either way. It
- * was found by `isScratchPath, asserted directly` calling `tmpdir()`, which
- * is what a program does and what a person does not. A sweep over what
- * people typed cannot see a defect in what their programs compute.
- *
- * Read at call time rather than frozen at import, because `TMPDIR` is what a
- * test harness moves when it wants its own scratch space, and a guard that
- * cached the old value would refuse the new one.
- *
- * ## `TMPDIR` is the writer's variable, so it is not trusted
- *
- * The first version of this took `process.env.TMPDIR` as given. Measured:
- *
- *     TMPDIR unset                  isScratchPath(…/.rungate/x/…) = false
- *     TMPDIR=$HOME/.rungate                                       = true
- *
- * The agent whose write is being judged sets the variable that decides
- * whether the write is exempt, and pointing it at the run store switches the
- * guard off for the one directory it exists to protect. `tmpdir()` is the
- * same hole wearing a function call — on POSIX it READS `TMPDIR`.
- *
- * So `FIXED` is the whole of the trust, and the environment can only ever
- * SELECT within it: a `TMPDIR` that does not already resolve inside a fixed
- * root is dropped. A platform whose temp directory is somewhere else
- * over-blocks, which is the direction this module is allowed to be wrong in.
+ * `TMPDIR` is the writer's variable, so it is not trusted: pointing it at the
+ * run store would exempt the one directory this guard exists for. The fixed
+ * list is the whole of the trust, and the environment may only SELECT a root
+ * that already resolves inside it.
  */
 const FIXED_SCRATCH_ROOTS = ['/tmp', '/private/tmp', '/var/folders'];
 
 /**
- * Trees that hold LIVE artifacts, wherever on the disk they are.
- *
- * This is SUBTRACTED from the exemption in `isScratchPath`, not merely used
- * to vet the root list. The difference matters: vetting roots is a proxy for
- * the property, and it only holds for roots somebody thought of. Subtracting
- * the trees themselves IS the property — "a live artifact is never exempt" —
- * and it keeps holding when a root is added later by someone who has not
- * read this comment.
- *
- * The two mechanisms are also not interchangeable, and conflating them was
- * measured. Dropping a ROOT because it contains a protected tree removes
- * `/tmp` wholesale the moment `RUNGATE_WORK_DIR` points inside it — which a
- * real corpus command does — and refuses every fixture on the machine.
- * Subtracting the TREE removes only that subtree and leaves the rest of
- * `/tmp` exempt. So the root list is vetted only against trees that are not
- * themselves scratch, and the subtraction below applies unconditionally.
- *
- * ## The hook directories are here because a checkout CAN be the live hook
- *
- * A review argued that `PROTECTED_HOOKS` should lose the scratch exemption
- * entirely, on the grounds that a `.hook.ts` under `/tmp` is as likely to be
- * a real checkout as a fixture — worktrees under `/tmp` are routine here.
- * The counter-argument offered was that a hook source in a checkout is not
- * the live hook, so compromising one does nothing until it is deployed.
- *
- * That counter-argument is FALSE on this machine, and `lib/hook-target-tree.ts`
- * is where it was measured: every registration in `~/.claude/settings.json`
- * is spelled `${PAI_HOOKS_DIR}/…` or `${RUNGATE_HOOKS_DIR}/…`, and
- * `RUNGATE_HOOKS_DIR` resolved to *a checkout that is not this one*, with
- * fourteen hooks executing from it. #999's shell-injection fix never reached
- * the bytes that run. A checkout is the live hook exactly when a variable
- * says it is.
- *
- * So the answer is neither "refuse the exemption for hooks" nor "trust the
- * checkout": resolve where the registrations actually point and subtract
- * THAT, wherever it is — including when it is under `/tmp`. A hook in a
- * worktree nothing registers stays a fixture, which is the case #1175 exists
- * for; a hook in the tree that is actually wired stays protected, which is
- * the case the review was worried about.
- *
- * `process.cwd()` is deliberately NOT here, and the reason is measured. A
- * checkout under `/tmp` is ordinary on this machine — the worktree this was
- * written in is `/private/tmp/rg-1175-wt` — so treating the working
- * directory as protected drops `/private/tmp` from the roots, and because
- * `/tmp` realpaths to it the walk then refuses every `/tmp` path as well.
- * 12 of 145 tests red, measured.
- *
- * ## BOTH spellings, which #1175 got wrong
- *
- * `resolve()` normalises `.` and `..`; it does not follow a symlink. So a
- * tree named `/tmp/e2e` stayed in this list as `/tmp/e2e` while a path
- * through the same inode reads `/private/tmp/e2e/…`, and `inAnyTree`
- * matches neither spelling against the other. Executed against the module
- * as merged, with `RUNGATE_WORK_DIR=/tmp/e2e`:
- *
- *     /tmp/e2e/s/workflow-state.json           blocked
- *     /private/tmp/e2e/s/workflow-state.json   ALLOWED   ← the run store
- *
- * The same for `RUNGATE_HOOKS_DIR`, and `/tmp` is a symlink to
- * `/private/tmp` on every macOS install, so the second spelling is not
- * exotic — it is what `realpath` prints.
- *
- * `scratchRoots()` below already recorded both spellings for the fixed
- * roots, so the asymmetry was inside one file: the roots a write may land
- * in were realpathed and the trees it may not were not. A `catch` here
- * means the tree is not on disk, which is ordinary for a variable pointing
- * at a directory the command is about to create, and the resolved spelling
- * stands on its own.
+ * Trees that hold LIVE artifacts, wherever they are on disk: the run store,
+ * `~/.claude`, and the trees hook registrations resolve to (`PAI_HOOKS_DIR`,
+ * `RUNGATE_HOOKS_DIR`). They are SUBTRACTED from the exemption, even under
+ * `/tmp` — a checkout is the live hook exactly when a variable says it is
+ * (`lib/hook-target-tree.ts` measured one). Both spellings of each tree are
+ * kept, because `resolve()` does not follow `/tmp` → `/private/tmp`.
+ * `process.cwd()` is not here: a worktree under `/tmp` is ordinary, and
+ * protecting it refused every fixture.
  */
 function protectedTrees(): string[] {
   const home = process.env.HOME || '';
@@ -302,69 +148,24 @@ function scratchRoots(): string[] {
 }
 
 /**
- * Is this path demonstrably inside a scratch tree?
- *
- * Only an ABSOLUTE path can be placed in a tree, so everything else — a bare
- * basename, a relative path, a `join(dir, "workflow-state.json")` whose `dir`
- * lives in a variable — answers `false` and stays refused. That is the whole
- * fail-closed property: this function's job is to say YES, and silence means
- * the old behaviour.
- *
- * `resolve()` first, per #1129: a destination spelled `/tmp/../Users/me/
- * .rungate/x/workflow-state.json` is not in `/tmp`, and comparing the
- * unnormalised string would say it is.
- *
- * The deepest EXISTING ancestor is then realpath'd, which is the half
- * `resolve()` cannot do. Without it, `ln -s ~/.rungate/slug /tmp/esc` followed
- * by a write to `/tmp/esc/workflow-state.json` is a two-command bypass of the
- * thing this guard protects. The stat happens only after a protected NAME has
- * already matched, so the common command pays nothing for it.
- *
- * It does NOT close the case where the link is made by the SAME command —
- * see `chainHolds` (#1367), which is where that is handled, because the answer
- * is a property of the command and not of the path.
- *
- * An UNEXPANDED expansion is refused. `/tmp/$X/workflow-state.json` is not a
- * path, it is a path the shell will build, and `$X` may be `../../Users/me/
- * .rungate/slug`. Five of the six spellings a review raised were already
- * refused by `resolve()` and the `startsWith('/')` precondition — `${X}`, the
- * backtick form, `/tmp/../…`, `$HOME/…` and `~/…` — and this is the sixth.
- * Measured cost of refusing it: 0 of the 37 commands this branch clears, with
- * 209 corpus-wide carrying a `$` in an artifact path, none of them in the
- * population at stake.
- *
- * Both exits below return `false`. They are all but unreachable — the
- * deepest artifact path in the corpus is 6 components against a cap of 64,
- * and the walk only runs out of parents if `realpathSync('/')` throws — but
- * an unreachable fail-OPEN in a fail-closed module is a line that reads as
- * permission, and the next person to make the walk reachable inherits it.
- */
-
-/**
- * Glob and brace metacharacters, tested against the DIRECTORY part only.
- *
- * `echo '{}' > /tmp/sym*​/workflow-state.json`, with `/tmp/syma` a symlink
- * into the run store: `/tmp/sym*` does not exist, the walk climbs past it to
- * `/tmp`, and the path is exempted — then the shell expands the glob and the
- * write goes through the link. Same escape as the symlink case with no `ln`
- * in the command for a reader of the command to see.
- *
- * Only the directory part is tested, and that is measured rather than
- * cautious. A glob in the BASENAME is already safe, because the directory
- * above it is the thing `resolveThroughLinks` resolves — built and executed:
- * with `SRC/syma` linked out of scratch, `SRC/syma/*.json` answers false and
- * `SRC/sym*​/x` answered true. So the basename case needs no refusal, and
- * refusing it anyway costs a real command: `rm -f /tmp/713-battery/
- * pai-wrongfix/*.hook.ts` is 1 of the 37 this branch clears, and a blanket
- * metacharacter class takes it back. Restricting the test to the directory
- * part closes the escape at a measured cost of 0.
- *
- * The exact class a review proposed, `[$`*?[]{}~]` tested against the whole
- * path, was swept over the same 5,573-command corpus: it takes back 1 of the
- * 37, that `rm -f`. It does not ship on caution either way — it ships on the
- * reading, and the reading is 1 against 0.
+ * Glob and brace metacharacters, tested against the DIRECTORY part only: a
+ * glob there names no directory the walk can resolve, so it could expand into
+ * a link. A glob in the basename is safe, because the directory above it is
+ * what gets resolved, and refusing it cost a real fixture cleanup.
  */
 const UNRESOLVED_DIR = /[*?[\]{}]/;
+
+/**
+ * Is this path demonstrably inside a scratch tree? Only an ABSOLUTE path can
+ * be placed, so anything else answers `false` and stays refused. The path is
+ * `resolve()`d (`/tmp/../` is not in `/tmp`), its deepest existing ancestor
+ * realpath'd, and both spellings must sit in a scratch root and in no
+ * protected tree. An unexpanded `$` or backtick is refused: it is a path the
+ * shell has yet to build.
+ *
+ * A link the SAME command makes is not visible here; `scratchExempt`'s
+ * caller withdraws the exemption from any command that makes a link.
+ */
 export function isScratchPath(path: string): boolean {
   if (!path || !path.startsWith('/')) return false;
   if (/[$`]/.test(path)) return false;
@@ -408,604 +209,106 @@ function resolveThroughLinks(normalised: string): string | null {
 }
 
 /**
- * Can this destination be shown to be what it looks like when the write
- * RUNS, and not only when the decision is taken? (#1367)
+ * A shell write's scratch exemption (ADR-027 decision 4). A write naming a
+ * protected artifact is exempt only when it lands under a fixed scratch root,
+ * judged by the real directory it writes into:
  *
- * `isScratchPath` resolves the destination's existing ancestors at DECISION
- * time. A command that plants a link before it writes invalidates that
- * resolution between the decision and the execution, and the whole thing
- * fits in one command:
+ * - `isScratchPath`: the deepest existing ancestor, resolved through links,
+ *   is in a scratch root and in no protected tree;
+ * - no existing component between the scratch root and the target is a link;
+ * - the target, if it exists, is not a link (a dangling one included) and has
+ *   one name.
  *
- *     ln -s ~/.rungate/victim /tmp/esc && echo '{}' > /tmp/esc/workflow-state.json
- *
- * At decision time `/tmp/esc` does not exist, the walk reaches `/tmp`, and
- * the write is exempted. Then the shell creates the link and the write lands
- * in the run store. Both halves were executed in the #1175 review: no second
- * actor is required.
- *
- * ## The verb list this replaces, and why it was deleted
- *
- * Until #1367 the answer was a list of ways to make a link: a raw-text regex
- * (`ln`, `symlinkSync`, `os.symlink`, `symlink(`), an `ln` command-word test,
- * and a `cp`/`install` flag reader (#1411). A list of ways to make a link is
- * wrong the moment somebody uses one that is not on it, and seven were not:
- * `pathlib`'s `symlink_to`, `ruby`'s `File.symlink` without parentheses, and
- * `cp -a`, `cp -r`, `mv`, `rsync -a` or `tar -x` carrying a link planted by
- * an earlier command (#1425). All seven are witness rows in the tests.
- *
- * ## The property: the chain is REAL
- *
- * Every directory between the scratch root and the destination must exist
- * NOW, or be made by a `mkdir` in this same command. A directory that exists
- * cannot become a link without being removed first, and a directory `mkdir`
- * makes is a directory — so a link the command makes cannot be in the chain,
- * whatever verb makes it.
- *
- * A directory that neither exists nor is made is refused. The write into it
- * would fail unless something in the command makes it, and the things that
- * make it without `mkdir` are the ones this exists to catch.
- *
- * ## Why that alone was not enough to delete the list
- *
- * Built and run with only the paragraph above, three bypasses the list
- * caught were re-opened — each with the plain `ln -s` or `cp -l` the list
- * names. Every one is a test row that was red under that paragraph alone:
- *
- *   1. `ln -s V d && mkdir -p d && echo > d/…` — `mkdir -p` succeeds silently
- *      on a link to a directory, so the forgiveness clause forgave the link.
- *   2. `rmdir d && ln -s V d && echo > d/…` with `d` real — the chain is real
- *      when the decision is taken and is not when the write runs.
- *   3. `cp -l V/f d/f && echo > d/f` — a link at the destination FILE, which
- *      a property about directories says nothing about.
- *
- * So the property has three parts, and none of them reads a verb:
- *
- *   PART 1  every directory of the chain is real now, or `mkdir` makes it;
- *   PART 2  nothing that runs before the write, or alongside it, NAMES a
- *           directory of the chain or the destination itself — a `mkdir`'s
- *           own arguments excepted. Removing a directory, re-linking it, or
- *           planting a link where `mkdir -p` will accept it all need the
- *           path spelled, and this asks whether it was — not by what;
- *   PART 3  an existing destination has one name and is not a link, and no
- *           existing directory of the chain is a symbolic link, so a link
- *           planted by an EARLIER command cannot be re-aimed unseen.
- *
- * ## What "names" means, and the direction it errs in
- *
- * A word names a path when, after quotes, ANSI-C, `~`, `$HOME` and the
- * command's own earlier assignments are applied, it resolves to that path
- * under either spelling and either case; when it is relative and its last
- * component is the path's basename (`cd /tmp && ln -s V esc` spells only
- * `esc`); or when an expansion or glob it still carries could produce that
- * basename under that prefix. Interpreter bodies contribute their string
- * literals; text handed to another shell — quoted words, `$( )`, backticks,
- * `bash -c` bodies, heredoc programs — contributes its words. A body this
- * module cannot read names everything. Each approximation errs toward
- * NAMING, which costs an exemption and never opens one.
- *
- * "Before" is by position when the steps are sequential. A background `&`,
- * a `coproc`, a subshell, a brace group or a substitution hides the order,
- * and then every other step counts. A word naming the scratch ROOT counts as
- * naming the chain, because a link put INTO the root takes its source's
- * basename. `~` and `$HOME` read the command's own `HOME` first; any other
- * tilde form could be anything.
- *
- * A plain `D=/tmp/x` sets a shell variable and touches nothing: its uses are
- * substituted and read where they occur, which is what lets `mkdir -p $D`
- * forgive. An EXPORTED value — `export D=…`, a `D=… cmd` prefix, `set -a`,
- * or a name the environment already exports — reaches a process's
- * environment, where a link can be made from it with the path never spelled
- * again, so it names the path where it is set.
- *
- * ## A program that computes the path: `BODY_LINK_CALL`
- *
- * A program that computes a directory's name at run time — decoded,
- * assembled, read from a file — and re-links a directory that ALREADY
- * exists names nothing a reader of the command can see. With the list gone
- * that was a regression for the list's own spellings, so an interpreter body
- * that calls a link function names everything (Jason's option (b), PR #2282).
- * A body that only makes directories — the `mkdirSync` fixtures #1175 exists
- * to allow — calls none and is unaffected. Outside interpreter bodies the
- * shell's own words are read, and an expansion already names what it could
- * produce.
+ * A directory that does not exist yet is not exempt, even when a `mkdir` in
+ * the same command makes it: there is no real directory to judge, and
+ * `mkdir -p` succeeds silently on a link a `cp -a`, `mv` or `tar` puts in
+ * its place. Three review rounds each found a new spelling of that, so the
+ * rule is the whole class: make the directory in a command of its own first.
+ * The corpus sweep counted one real command it costs. And a command that
+ * makes a link anywhere (`makesLink`) has no exemption at all, applied by
+ * the caller: an accident guard does not track which step made what. This
+ * replaces #1367's step-order and mention tracking. A link made some other
+ * way, such as a program written to a file and then run, is outside an
+ * accident guard.
  */
-
-/** Decides, for one destination path, whether the scratch exemption holds. */
 type Exemption = (path: string) => boolean;
 const NO_EXEMPTION: Exemption = () => false;
 
-/** A word that may name a path, and where in the command it sits. */
-interface Mention {
-  /** The word, with the command's earlier assignments substituted. */
-  text: string;
-  /** Its top-level step; -1 when its position is unknown. */
-  at: number;
-  /** `seg:i`, `sub:i` (handed to another shell), `body:i`, `prog:k`, `outer`. */
-  src: string;
-}
-
-/** Which top-level steps run before, or alongside, which. */
-interface StepOrder {
-  /** False when a background `&`, a `coproc`, or a bracket hides the order. */
-  ordered: boolean;
-  /** Pipeline membership per step: equal numbers run concurrently. */
-  group: number[];
-}
-
-/** What the whole command does that the chain question depends on. */
-interface ChainContext {
-  /** Directories some `mkdir` in the command makes, by `chainKey`. */
-  made: Set<string>;
-  mentions: Mention[];
-  order: StepOrder;
-}
-
-/** What an enclosing command hands down to a body it runs. */
-interface Outer {
-  made: Set<string>;
-  mentions: Mention[];
-}
-
-/**
- * One spelling per directory, so `/tmp/x`, `/private/tmp/x` and `/TMP/X`
- * compare equal: resolved through the links that exist, then folded the way
- * `names()` folds, because the default macOS volume makes them one inode.
- * On a case-sensitive volume the fold over-matches, which only ever refuses.
- */
-function chainKey(p: string): string {
-  const normalised = resolve(p);
-  return (resolveThroughLinks(normalised) ?? normalised).normalize('NFC').toLowerCase();
-}
-
-/** A token's bare name: `/bin/mkdir` and `\mkdir` are both `mkdir`. */
-function verbName(token: string): string {
-  const bare = token.replace(/^[\\(]+/, '');
-  return bare.slice(bare.lastIndexOf('/') + 1);
-}
-
-/**
- * `$NAME`, `${NAME}` and a leading `~`, from what the command assigned
- * EARLIER — its own `HOME` before the environment's, for `~` as well as
- * `$HOME` (#1367 review). Anything else is left as written, so it stays
- * unresolved and forgives nothing.
- *
- * A tilde other than `~` or `~/…` — `~+`, `~-`, `~user` — expands to a
- * directory this module cannot see, so it becomes `$?`, which reads as
- * "could be anything" everywhere downstream and cannot be assigned to.
- */
-const ANYTHING = '$?';
-
-function substitute(word: string, vars: Map<string, string | null>): string {
-  const home = vars.has('HOME') ? vars.get('HOME') : process.env.HOME || null;
-  let w = word;
-  const tilde = /^~([^/]*)/.exec(w);
-  if (tilde) w = (tilde[1] === '' && typeof home === 'string' && home ? home : ANYTHING) + w.slice(tilde[0].length);
-  return w.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (m, a, b) => {
-    const name = a ?? b;
-    const v = vars.has(name) ? vars.get(name) : name === 'HOME' ? home : undefined;
-    return typeof v === 'string' && v ? v : m;
-  });
-}
-
-/** Record `NAME=value`; an unresolvable value is recorded as unresolvable. */
-function assign(word: string, vars: Map<string, string | null>): void {
-  const eq = word.indexOf('=');
-  const value = substitute(word.slice(eq + 1), vars);
-  vars.set(word.slice(0, eq), /[$`]/.test(value) ? null : value);
-}
-
-/** Text a resolved path cannot contain: an expansion, a glob, a brace. */
-const UNRESOLVED = /[$`*?[\]{}]/;
-
-/** Add `path`, and with `parents` every ancestor of it, to `made`. */
-function addMade(path: string, parents: boolean, made: Set<string>): void {
-  if (!path.startsWith('/') || UNRESOLVED.test(path)) return; // unplaceable: forgives nothing
-  let d = resolve(path);
-  made.add(chainKey(d));
-  if (!parents) return;
-  for (let up = dirname(d); up !== d; d = up, up = dirname(up)) made.add(chainKey(up));
-}
-
-/**
- * The directories a shell `mkdir` segment makes. `-p` makes the ancestors
- * too; without it a missing parent fails the `mkdir`, so only the argument
- * itself is made. `-m` takes a value, which is not a directory.
- */
-function mkdirMakes(words: string[], vars: Map<string, string | null>, made: Set<string>): void {
-  const at = words.findIndex(w => verbName(w) === 'mkdir');
-  if (at === -1) return;
-  let parents = false;
-  let value = false;
-  let options = true;
-  const paths: string[] = [];
-  for (const w of words.slice(at + 1)) {
-    if (value) {
-      value = false;
-      continue;
-    }
-    if (options && w === '--') {
-      options = false;
-      continue;
-    }
-    if (options && w.startsWith('--')) {
-      if (w === '--parents') parents = true;
-      if (w === '--mode') value = true;
-      continue;
-    }
-    if (options && /^-[A-Za-z]/.test(w)) {
-      const letters = /^-([A-Za-z]*)/.exec(w)?.[1] ?? '';
-      if (letters.includes('p')) parents = true;
-      // `-m 755` and `-pm 755` take the NEXT word; `-m755` carries it.
-      if (letters.endsWith('m') && letters.length === w.length - 1) value = true;
-      continue;
-    }
-    paths.push(w);
-  }
-  for (const p of paths) addMade(substitute(p, vars), parents, made);
-}
-
-/**
- * The directories an interpreter body makes with a `mkdir` call whose first
- * argument is a literal: `mkdirSync`, `fs.promises.mkdir`, `os.mkdir`,
- * `os.makedirs`, and `Path("…").mkdir(…)`. `recursive` / `parents=True` /
- * `makedirs` make the ancestors too. A call whose path is computed forgives
- * nothing — the fail-closed direction.
- */
-const BODY_MKDIR = new Set(['mkdirSync', 'mkdir', 'makedirs']);
-const PATH_CTORS = new Set(['Path', 'PurePath', 'PosixPath']);
-
-function bodyMakes(body: string, lits: Array<{ value: string; start: number; end: number }>, made: Set<string>): Set<number> {
-  const consumed = new Set<number>();
-  for (const { value, start, end } of lits) {
-    const open = previousNonSpace(body, start - 1);
-    if (body[open] !== '(') continue;
-    const callee = calleeBefore(body, open);
-    const last = callee.slice(callee.lastIndexOf('.') + 1);
-    const rest = body.slice(end + 1);
-    if (BODY_MKDIR.has(last)) {
-      const args = rest.split(')')[0];
-      addMade(value, last === 'makedirs' || /\brecursive\s*:\s*true\b|\bparents\s*=\s*True\b/.test(args), made);
-      consumed.add(start);
-      continue;
-    }
-    const chained = /^\s*\)\s*\.mkdir\s*\(([^)]*)\)/.exec(rest);
-    if (PATH_CTORS.has(last) && chained) {
-      addMade(value, /\bparents\s*=\s*True\b/.test(chained[1]), made);
-      consumed.add(start);
-    }
-  }
-  return consumed;
-}
-
-/** The index of the last non-whitespace character at or before `i`. */
-function previousNonSpace(text: string, i: number): number {
-  while (i >= 0 && WHITESPACE.has(text[i])) i--;
-  return i;
-}
-
-/** A body this module cannot read names every path (see `mentionNames`). */
-const NAMES_EVERYTHING = '$UNREADABLE';
-
-interface Sink {
-  made: Set<string>;
-  mentions: Mention[];
-  /** Plain assignments, whose values count only if the name is exported. */
-  plain: Array<{ name: string; mention: Mention }>;
-  allexport: boolean;
-}
-
-const subSrc = (src: string): string => (src.startsWith('seg:') ? `sub:${src.slice(4)}` : src);
-const bodySrc = (src: string): string => (src.startsWith('seg:') ? `body:${src.slice(4)}` : src);
-
-/**
- * Read `text` as shell: what its `mkdir`s make (when `makes`), and every
- * word that may name a path. `tag` places each of its segments in the
- * top-level command. Text handed to another shell is read with `makes`
- * off — a quoted string that LOOKS like a `mkdir` makes nothing.
- */
-function collectShell(text: string, depth: number, tag: (i: number) => { at: number; src: string }, sink: Sink, makes: boolean): void {
-  if (depth > 3) {
-    sink.mentions.push({ text: NAMES_EVERYTHING, at: -1, src: 'deep' });
-    return;
-  }
-  const vars = new Map<string, string | null>();
-  segments(text).forEach((seg, i) => {
-    const { at, src } = tag(i);
-    const { words, targets } = scanSegment(seg);
-    const word = commandWord(seg);
-    const add = (w: string) => sink.mentions.push({ text: substitute(w, vars), at, src });
-    const nested = () => {
-      for (const n of nestedCommands(seg)) collectShell(n, depth + 1, () => ({ at, src: subSrc(src) }), sink, false);
-    };
-    if (!word && words.length > 0 && words.every(w => ASSIGNMENT.test(w))) {
-      for (const w of words) {
-        const value = substitute(w.slice(w.indexOf('=') + 1), vars);
-        sink.plain.push({ name: w.slice(0, w.indexOf('=')), mention: { text: value, at, src } });
-        assign(w, vars);
-      }
-      nested(); // `x="$(…)"` runs the substitution, whatever it assigns
-      return;
-    }
-    if (word === 'set' && words.some(w => /^-[A-Za-z]*a/.test(w) || w === 'allexport')) sink.allexport = true;
-    if (word === 'mkdir') {
-      if (makes) mkdirMakes(words, vars, sink.made);
-      nested(); // a `mkdir`'s own arguments are not mentions; a substitution in one is
-      return;
-    }
-    if (isInterpreterWord(word) && /\s-[A-Za-z]*[ce]\b/.test(stripQuoted(seg))) {
-      const shell = isShellWord(word);
-      const body = shell ? shellBody(seg) : programBody(seg);
-      for (const w of words) if (w !== body && dequote(w) !== body) add(w);
-      if (shell) collectShell(body, depth + 1, () => ({ at, src }), sink, makes);
-      else collectBody(body, at, bodySrc(src), sink, makes);
-      return;
-    }
-    for (const w of [...words, ...targets]) add(w);
-    nested();
-  });
-}
-
-/**
- * A call that makes a link, in any interpreter body: `symlink` in every
- * spelling (`os.symlink`, `fs.symlinkSync`, `fs.promises.symlink(`,
- * `symlink_to`, ruby's `File.symlink a, b`, perl's `symlink $a, $b`), the
- * hard-link calls (`os.link`, `linkSync`, `hardlink_to`, `link(`), and `ln`
- * handed to a subprocess.
- *
- * Jason's option (b) on PR #2282, 2026-11-16. A program can compute a path at
- * run time — decoded, assembled, read from a file — and link it, and then no
- * word in the command spells the path. A body that calls one of these
- * therefore NAMES EVERYTHING, like a body this module cannot read. That is
- * the one place a verb list survives #1367: it closes the regression the
- * deleted list's own spellings would otherwise have, and only ever refuses.
- * A body that only makes directories calls none of these.
- */
-export const BODY_LINK_CALL = /\bsymlink(?:Sync|_to|at)?\b|\bhardlink_to\b|\blink(?:Sync|at)?\s*\(|\bos\.link\b|\bFile\.link\b|\bln\b/;
-
-/** An interpreter body: its `mkdir` calls make, its other literals are mentions. */
-function collectBody(body: string, at: number, src: string, sink: Sink, makes: boolean): void {
-  const lits = readLiterals(body);
-  if (!lits || BODY_LINK_CALL.test(body)) sink.mentions.push({ text: NAMES_EVERYTHING, at, src });
-  if (!lits) return;
-  const consumed = bodyMakes(body, lits, makes ? sink.made : new Set());
-  for (const l of lits) if (!consumed.has(l.start)) sink.mentions.push({ text: l.value, at, src });
-}
-
-/** Read everything in `cmd` the chain question depends on, once. */
-function chainContext(cmd: string, outer?: Outer): ChainContext {
-  const sink: Sink = { made: new Set(outer?.made ?? []), mentions: [...(outer?.mentions ?? [])], plain: [], allexport: false };
-  collectShell(cmd, 0, i => ({ at: i, src: `seg:${i}` }), sink, true);
-  interpreterPrograms(cmd).forEach(({ shell, program }, k) => {
-    if (shell) collectShell(program, 1, () => ({ at: -1, src: `prog:${k}` }), sink, true);
-    else collectBody(program, -1, `prog:${k}`, sink, true);
-  });
-  // An exported value reaches a process's environment, so it names the path
-  // where it is set. `export D` and `D=… cmd` both spell the name as a word.
-  // A name the environment ALREADY exports stays exported when the command
-  // reassigns it (#1367 review): `HOME=…` reaches every child process.
-  const exported = (name: string): boolean =>
-    sink.allexport ||
-    process.env[name] !== undefined ||
-    sink.mentions.some(m => m.text === name || m.text.startsWith(`${name}=`));
-  for (const { name, mention } of sink.plain) if (exported(name)) sink.mentions.push(mention);
-  return { made: sink.made, mentions: sink.mentions, order: stepOrder(cmd) };
-}
-
-/**
- * Which steps of `cmd` run before, or alongside, which — read off its
- * separators. Position is order only for plain sequential steps: a
- * background `&`, a `coproc`, a subshell, a brace group, a command or
- * process substitution can each run a step out of its written place, so any
- * of them makes every other step count (#1367 review).
- */
-function stepOrder(cmd: string): StepOrder {
-  const parts = splitSegments(cmd);
-  const background = parts.some(p => p.sep === '&' || commandWord(p.text) === 'coproc');
-  const bracketed = /[()]|(?:^|[\s;&|])\{(?=\s|$)/m.test(stripQuoted(cmd));
-  const group: number[] = [];
-  let g = 0;
-  parts.forEach((p, i) => {
-    group[i] = g;
-    if (p.sep !== '|' && p.sep !== 'redir') g++;
-  });
-  return { ordered: !background && !bracketed, group };
-}
-
-/** Can the step at `from` run before, or alongside, the write at `at`? */
-function runsBefore(from: number, at: number, order: StepOrder): boolean {
-  if (from < 0 || at < 0 || !order.ordered) return true;
-  return from < at || order.group[from] === order.group[at];
-}
-
-/** The directories strictly between `root` and the destination. */
-function chainBelow(root: string, normalised: string): string[] {
-  const out: string[] = [];
-  for (let d = dirname(normalised); d.startsWith(root + '/'); d = dirname(d)) out.push(d);
-  return out;
-}
-
-/** The deepest scratch root this (normalised) path is inside. */
-function scratchRootOf(normalised: string): string | null {
-  const roots = scratchRoots().filter(r => inAnyTree(normalised, [r]));
-  return roots.sort((a, b) => b.length - a.length)[0] ?? null;
-}
-
-const fold = (s: string): string => s.normalize('NFC').toLowerCase();
-
-/** `lstat`, or `null` when nothing is there. */
-function lstatOrNull(p: string): Stats | null {
-  try {
-    return lstatSync(p);
-  } catch {
-    return null; // not there now — part 1 decides whether that is allowed
-  }
-}
-
-/** Mentions that come from the write's OWN step and do not count against it. */
-interface Own {
-  src: string;
-}
-
-/**
- * The three parts, for one destination. See the docblock above `Exemption`.
- */
-function chainHolds(path: string, ctx: ChainContext, own: Own, at: number): boolean {
-  const normalised = resolve(path);
-  const root = scratchRootOf(normalised);
+export function scratchExempt(path: string): boolean {
+  // The walk reads the resolved path, so a link before a `..` would go unseen (#2866).
+  if (!isScratchPath(path) || path.split('/').includes('..')) return false;
+  const target = resolve(path);
+  const root = scratchRoots().find(r => target === r || target.startsWith(r + '/'));
   if (!root) return false;
-  const dirs = chainBelow(root, normalised);
-  // PART 1, with part 3's directory half: real now and not a link, or made.
-  for (const dir of dirs) {
-    const st = lstatOrNull(dir);
-    if (st === null) {
-      if (!ctx.made.has(chainKey(dir))) return false;
-      continue;
+  let at = root;
+  for (const part of target.slice(root.length).split('/').filter(Boolean)) {
+    at = join(at, part);
+    let st: Stats;
+    try {
+      st = lstatSync(at);
+    } catch {
+      // Not there yet, so nothing below it is either. A new file in a real
+      // directory is fine; a missing directory has no real directory to judge.
+      return at === target;
     }
-    if (!st.isDirectory()) return false; // a symbolic link, or a file
-  }
-  // PART 3: an existing destination has one name and is not a link.
-  const dest = lstatOrNull(normalised);
-  if (dest && (dest.isSymbolicLink() || (!dest.isDirectory() && dest.nlink > 1))) return false;
-  // PART 2: nothing before the write names the chain or the destination.
-  // The ROOT is named too (#1367 review): `ln -s V /tmp/` and `ln -s V -t
-  // /tmp` call the link after V's basename, so a step that puts anything
-  // INTO the root plants a name only its source spells. A chain directory's
-  // other parents are chain directories, and are already named.
-  const named = [root, ...dirs, normalised].map(p => ({ key: chainKey(p), base: fold(basename(p)) }));
-  for (const m of ctx.mentions) {
-    // The word being judged is never a mention of itself — a copy's SOURCE
-    // literal is judged too, by every path word that carries the name.
-    if (m.src === own.src) continue;
-    if (!runsBefore(m.at, at, ctx.order)) continue;
-    if (mentionNames(m.text, named)) return false;
+    if (st.isSymbolicLink()) return false;
+    if (at !== target && !st.isDirectory()) return false;
+    if (at === target && !st.isDirectory() && st.nlink > 1) return false;
   }
   return true;
 }
 
-/** A word as a path, and — for `--opt=value` or `NAME=value` — its value. */
-function mentionCandidates(text: string): string[] {
-  const w = text.replace(/^[(!{]+/, '').replace(/[);,]+$/, '');
-  if (!w) return [];
-  const eq = w.indexOf('=');
-  return eq > 0 && eq < w.length - 1 ? [w, w.slice(eq + 1)] : [w];
-}
+/**
+ * `ln`, `link`, or `cp` with a link flag where a command STARTS: the text's
+ * start, after an operator, `(`, `$(`, `{`, a backtick, a quote, a list
+ * bracket, `find -exec` or `do`/`then`, and behind a wrapper with the words it takes
+ * (`timeout -s KILL 30 ln`, `eval ln`). An argument is not one: `grep -nw ln`
+ * is a read. A wrapped command that only mentions it (`nice grep ln`)
+ * over-reads, the direction this module may be wrong in (#2866).
+ */
+const LINK_AT_COMMAND = new RegExp(
+  String.raw`(?:^|[;&|({\x60'"[,]|\$\(|\s-(?:exec|ok)(?:dir)?\s)\s*(?:(?:do|then|else|elif|if|while|until|!)\s+)*` +
+    String.raw`(?:(?:sudo|env|nohup|time|command|exec|xargs|nice|timeout|stdbuf|doas|caffeinate|eval)\s+(?:\S+\s+)*?)?` +
+    String.raw`(?:['"]?(?:\S*\/)?(?:ln|link)['"]?(?=[\s,'"\]]|$)|cp\s(?:[^|;&\n)]*\s)?['"]?-(?:[A-Za-z]*[ls]|-sy|-l))`,
+);
 
-/** Text not settled until the command runs: an expansion, a substitution, a glob, a brace. */
-const OPEN_TEXT = /[$`*?[{]/;
-const OPEN_PIECE = /(\$\{[^}]*\}?|\$[A-Za-z_0-9?#@*!$-]*|\*|\?|\[[^\]]*\]|\{[^}]*\})/;
+/**
+ * A link call in a program or a nested shell body: `symlink` in every
+ * spelling, the hard-link calls, and `LINK_AT_COMMAND`, so `bash -c 'cp -sR
+ * …'` counts as well as a top-level `cp -s`. Read over the whole command,
+ * quotes included, by `makesLink`; it over-reads a quoted "ln -s", which
+ * costs a fixture its exemption, the direction this module may be wrong in.
+ */
+export const BODY_LINK_CALL = new RegExp(
+  String.raw`\bsymlink(?:Sync|_to|at)?\b|\bhardlink_to\b|\blink(?:Sync|at)?\s*\(|\bos\.link\b|\bFile\.link\b|` + LINK_AT_COMMAND.source,
+);
 
-/** A component carrying open text, as the set of names it could produce. */
-function openPattern(component: string): RegExp {
-  const src = component
-    .split(OPEN_PIECE)
-    .map((p, i) => (i % 2 === 1 ? (p === '?' ? '.' : '.*') : p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
-    .join('');
-  return new RegExp(`^${src}$`, 'i');
-}
-
-/** Does this word name any of these paths? See "What names means" above. */
-function mentionNames(text: string, named: Array<{ key: string; base: string }>): boolean {
-  for (const w of mentionCandidates(text)) {
-    const trimmed = w.replace(/\/+$/, '') || w;
-    const last = trimmed.slice(trimmed.lastIndexOf('/') + 1);
-    const open = w.search(OPEN_TEXT);
-    if (open === -1) {
-      if (w.startsWith('/')) {
-        const key = chainKey(w);
-        if (named.some(n => n.key === key)) return true;
-        continue;
-      }
-      if (last === '.' || last === '..') return true; // relative to a directory nobody can see
-      if (named.some(n => n.base === fold(last))) return true;
-      continue;
-    }
-    // A substitution can produce anything, slashes included; a variable or
-    // glob produces one component's worth, so the last one is matched.
-    const prefix = w.slice(0, open);
-    const prefixKey = prefix.startsWith('/') ? chainKey(prefix) : null;
-    const pattern = /\$\(|`/.test(w) ? null : openPattern(last);
-    for (const n of named) {
-      if (prefixKey !== null && n.key !== prefixKey && !n.key.startsWith(prefixKey)) continue;
-      if (pattern && !pattern.test(n.base)) continue;
-      return true;
-    }
-  }
-  return false;
-}
-
-/** The exemption for writes judged at step `at`, excluding the write's own words. */
-function judgeFor(getCtx: () => ChainContext, own: Own, at: number): Exemption {
-  return path => isScratchPath(path) && chainHolds(path, getCtx(), own, at);
+/**
+ * One of `cp`'s link flags as the shell hands it over (a dequoted word):
+ * `-s` or `-l` in a cluster, or any prefix GNU accepts of `--link` or
+ * `--symbolic-link`.
+ */
+function isCpLinkFlag(w: string): boolean {
+  if (!w.startsWith('--')) return /^-[A-Za-z]*[ls]/.test(w);
+  return w.length > 2 && ('--link'.startsWith(w) || (w.length >= 4 && '--symbolic-link'.startsWith(w)));
 }
 
 /**
- * What a body run by step `at` inherits: every `mkdir`, and every mention
- * from a step that runs before or alongside it, placed BEFORE everything
- * inside — except the body's own words, which it reads with positions.
+ * A segment that makes a link: `LINK_AT_COMMAND` read with quoted spans gone
+ * (a commit message saying "; ln" is not a command), a quoted `"ln"` as the
+ * command word, or `cp` with a link flag as the shell hands it over.
  */
-function outerFor(ctx: ChainContext, src: string, at: number): Outer {
-  return {
-    made: ctx.made,
-    mentions: ctx.mentions
-      .filter(m => m.src !== src && runsBefore(m.at, at, ctx.order))
-      .map(m => ({ ...m, at: -1, src: 'outer' })),
-  };
+function segmentLinks(seg: string): boolean {
+  const word = commandWord(seg);
+  const view = word === 'eval' ? dequote(seg) : stripQuoted(seg); // `eval` runs its quoted text
+  if (word === 'ln' || word === 'link' || LINK_AT_COMMAND.test(view)) return true;
+  return word === 'cp' && scanSegment(seg).words.some(isCpLinkFlag);
 }
 
-/**
- * Text a segment will hand to ANOTHER shell: the contents of its quoted
- * words and of its command substitutions (#1429).
- *
- * #1429 built this for the verb list #1367 deleted; it now feeds part 2 of
- * the chain property, which needs the words of `eval '…'`, `$( … )` and
- * backticks for the same reason the list needed their verbs — a reading built
- * on segments does not see inside them. Every quoted span is read, data or
- * not, which over-collects: that is the direction part 2 is allowed to err.
- *
- * `interpreterPrograms` was the obvious place and is the wrong one: it
- * reaches a heredoc body and returns NOTHING for `sh -c "…"`, `$( … )` or
- * `eval '…'` — measured, all four empty, against a heredoc control that
- * returns the body. Widening it would change what every other arm reads.
- */
-function nestedCommands(view: string): string[] {
-  const out: string[] = [];
-  // A substitution inside a quoted span is read by the walk below. Left in
-  // the span, `segments` cuts it at its own `;` and the fragment `$(date`
-  // reads as a word that could be anything (#1367), so it is blanked here.
-  for (const m of view.matchAll(/'([^']*)'|"([^"]*)"/g)) out.push(blankSubstitutions(m[1] ?? m[2] ?? ''));
-  // Backticks are the OTHER substitution syntax and were missing entirely
-  // from #1429's first reading. They do not nest in bash, so a flat match is
-  // the whole grammar here.
-  for (const m of view.matchAll(/`([^`]*)`/g)) out.push(m[1]);
-  // `$(…)` DOES nest, so it gets the module's one substitution walk rather
-  // than a second spelling of it. Every `$(` position is examined — the
-  // index is not advanced past a substitution that was just read — so an
-  // inner body is collected as well as the outer one it sits in.
-  for (let i = 0; i < view.length; i++) {
-    if (view[i] !== '$' || view[i + 1] !== '(') continue;
-    const end = endOfSubstitution(view, i);
-    const body = view.slice(i + 2, end);
-    out.push(body.endsWith(')') ? body.slice(0, -1) : body); // unterminated keeps all of it
-  }
-  return out.filter(s => /\s/.test(s));
+/** Does the command make a link anywhere: a shell verb, `cp`'s flag, or a program's call? */
+function makesLink(cmd: string): boolean {
+  return BODY_LINK_CALL.test(cmd) || segments(cmd).some(segmentLinks);
 }
-
-/** `text` with every `$( … )` and backtick span replaced by `$?` (#1367). */
-function blankSubstitutions(text: string): string {
-  let out = '';
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === '$' && text[i + 1] === '(') {
-      out += ANYTHING;
-      i = endOfSubstitution(text, i) - 1;
-    } else if (text[i] === '`') {
-      out += ANYTHING;
-      const close = text.indexOf('`', i + 1);
-      i = close === -1 ? text.length : close;
-    } else out += text[i];
-  }
-  return out;
-}
-
 
 /**
  * Path-like words in `text` that contain `needle`.
@@ -1182,43 +485,13 @@ export function stripQuoted(s: string): string {
 }
 
 /**
- * Delete heredoc bodies only, keeping ordinary quoting intact. Separate from
- * `stripQuoted` because a quoted PATH is a real argument while a heredoc
- * body never is — it is the document being written, not a word of the
- * command writing it.
+ * Delete heredoc bodies only, keeping ordinary quoting intact: a heredoc body
+ * is the document being written, never a word of the command writing it.
  *
- * ## `blankComments`, and the three review rounds behind it (#1741)
- *
- * This function has two readers with OPPOSITE needs, and for a while it
- * tried to serve both with one output.
- *
- * The write guard needs `#`-leading lines blanked. #1176: `# First, check if
- * there's a test workflow-state.json` opened a quote that stayed open across
- * the newline and swallowed the redirect on a later line, so a real write to
- * a protected file read as quoted text. Two commands in a 5,513-command
- * corpus did exactly that, both genuine writes.
- *
- * The filing parser needs them KEPT. `lib/issue-create-override.ts` builds
- * its view from here, so a multi-line `gh issue create --body "…"` arrived
- * with every `##` markdown heading deleted — the dedupe and the symptom scan
- * were reading bodies with holes and nothing reported the loss.
- *
- * **The first three attempts all tried to make ONE output correct for both,
- * by deciding per line whether the `#` was inside a quote. Each was a
- * hand-rolled shell-comment predicate and each had a narrower view than the
- * shell:** a `#` line inside a quote could open a heredoc and delete the
- * lines after it; an inline comment's apostrophe set a carried state that
- * suppressed the next line's blanking; and `echo hi;#…` was a comment the
- * predicate did not recognise. Three rounds, three edges, same shape — so
- * the fourth change is not a fourth predicate. `AGENTS.md` rule 5.
- *
- * **The parameter is the method change.** Blanking is a WRITE-GUARD safety
- * measure; it was never something the filing parser wanted, and no quote
- * tracking is needed to tell the two apart because the CALLER already knows
- * which one it is. #1176 is untouched — the default is the old behaviour and
- * every write-guard path takes it. `heredocView` passes `false` and lets
- * `tokenize`, which implements the shell's comment rule for its own
- * purposes, decide what a comment is on the side of the fence that cares.
+ * `blankComments` is for the write guard (#1176): a `#` line's apostrophe
+ * opened a quote that swallowed a later redirect. The filing parser
+ * (`lib/issue-create-override.ts`) passes `false`, because it needs a body's
+ * `##` headings kept; the caller knows which reader it is (#1741).
  */
 
 export function stripHeredocs(s: string, blankComments = true): string {
@@ -1763,8 +1036,8 @@ export function dequote(s: string): string {
   return s.replace(/['"]/g, '');
 }
 
-/** Wrappers that delegate to the real command word rather than being one. */
-const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs)$/;
+/** Wrappers and reserved words that come before the real command word (#2866: `timeout`, `do`, `then`). */
+const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs|nice|timeout|stdbuf|doas|caffeinate|exec|do|then|else|elif|if|while|until|!)$/;
 
 /**
  * A variable assignment prefix, by the POSIX shape: an identifier, an
@@ -1826,7 +1099,7 @@ export function commandWord(segment: string): string {
       .replace(/^[({\\]+/, '') // `(cmd …`, `{ cmd …`, `\cmd` — alias bypass
       .replace(/^.*\//, ''); // `/usr/bin/python3` -> `python3`
     if (!tok || tok.includes('=') || tok.startsWith('-')) continue;
-    if (WRAPPERS.test(tok)) continue;
+    if (WRAPPERS.test(tok) || /^\d+(?:\.\d+)?[smhd]?$/.test(tok)) continue; // `timeout 30 cp`
     return tok;
   }
   return '';
@@ -1842,61 +1115,14 @@ export function commandWord(segment: string): string {
  */
 
 /**
- * The index just past a quoted span whose OPENING quote is at `i`.
+ * The index just past a quoted span whose OPENING quote is at `i`. A single
+ * quote takes no escapes; inside double quotes `\` escapes the next
+ * character, so `\"` does not close the span (#1239). An unterminated span
+ * runs to the end, which bash refuses to run anyway.
  *
- * #1239: both scanners below used to find the partner with `indexOf`, and
- * `indexOf` cannot tell `"` from `\"`. Inside a double-quoted span the
- * escaped quote was read as the closing one, every subsequent quote was
- * paired off by one, and the scanner ran off the end of the line — taking
- * the `>` operator with it. No operator, no target, ALLOW. Seven spellings
- * that bash runs and that overwrite the file reached a real write that way,
- * across both call sites; `test/bash-write-guard.test.ts` holds the table.
- *
- * The asymmetry is bash's and is the whole of the fix: a single-quoted span
- * takes NO escapes, so `'a\'` is a complete span whose contents are `a\`,
- * while in a double-quoted span `\` escapes whatever follows it.
- *
- * Unterminated spans run to `s.length` — the pre-existing, fail-closed
- * direction. Those spellings are syntax errors that bash refuses to run, so
- * nothing executable depends on the choice.
- *
- * ## #1471: `end` alone could not say which of those two happened
- *
- * This used to return a bare number, and for a span that closes at the very
- * LAST character of the string that number is `s.length` — the same value
- * an unterminated span returns. The one caller that strips the quotes
- * resolved the ambiguity with `end === s.length ? s.length : end - 1`, which
- * cannot be right: it takes the unterminated branch for a correctly closed
- * final word and keeps the closing quote inside the word.
- *
- * Measured on `5d0bf00e` before this fix, and **one trailing space is the
- * entire difference** — `segments()` trims it, so the spaced form is simply
- * the same command without a final-word quote:
- *
- *     cp /tmp/evil.hook.ts /repo/hooks/     → targets 2, BLOCKED
- *     cp /tmp/evil.hook.ts "/repo/hooks/"   → targets 1, ALLOWED
- *
- * The consequence is sharper than a cosmetic trailing quote. `/repo/hooks/"`
- * does not end with `/`, so `isDirDestination` reads a DIRECTORY as a plain
- * file, the `dest/basename(src)` expansion never happens, and the target
- * that would have named `.hook.ts` is never produced. That is #1184's H4
- * arriving through a new door.
- *
- * It is #1239's defect one level down: there, `indexOf` could not tell `"`
- * from `\"`; here, `s.length` could not tell *closed at the end* from
- * *never closed*. One value carrying two meanings — and
- * `.claude/rules/checks-must-be-able-to-fail.md` names the shape: *a status
- * code is almost never specific to one mechanism*.
- *
- * So the span reports BOTH boundaries and no caller recomputes either.
- * `contentEnd` is where the span's contents stop; `end` is where the next
- * word starts. For a terminated span they differ by the closing quote, and
- * for an unterminated one they are equal. The three callers read the field
- * they need and none of them owns a ternary — which is the point, because
- * a `terminated` flag computed at each call site would be three deciders
- * over one question, and that is how this family keeps coming back.
- *
- * One function, three callers, so a mutation of it moves all of them.
+ * Both boundaries are reported (#1471): `contentEnd` is where the contents
+ * stop and `end` where the next word starts. One value for both could not
+ * tell a span closed at the last character from one never closed.
  */
 interface QuotedSpan {
   /** The index just past the closing quote, or `s.length` if there is none. */
@@ -1927,43 +1153,10 @@ function endOfQuoted(s: string, i: number): QuotedSpan {
  * either side of a span that was deleted.
  */
 /**
- * The index just past the `)` that closes the `$(` at `i`, or the end of
- * the string if it never closes.
- *
- * A parenthesis inside a STRING LITERAL is data, not grammar. Counting it
- * dropped the depth to zero early, ended the word in the middle of the
- * substitution, and left a `"` whose partner had already been consumed — so
- * `readWord`'s quote branch then took `close === -1` and swallowed the rest
- * of the line INCLUDING the `>` operator. No operator, no target, allow:
- *
- *     echo $(echo "x)") > <protected>     ran, and wrote
- *
- * That is #1205's own sentence a second time — the bug is what the scanner
- * cannot see, not the substitution — so it was fixed the same way rather
- * than by special-casing the literal that exposed it.
- *
- * Extracted from `readWord` so `nestedCommands` can reuse the walk. The
- * alternative was a second flat `/\$\(([^()]*)\)/`, which is two deciders
- * answering one question about substitution structure — the fourth shape in
- * `.claude/rules/checks-must-be-able-to-fail.md` — and the flat one is the
- * weaker: it cannot match a substitution containing parentheses at all, so
- * `$(cp -s $(echo V) /tmp/esc)` matched only the INNER one and the outer
- * body was never read. One reader.
- *
- * ## The escape handling is #1239's and it is load-bearing here (#1361)
- *
- * This function was extracted on `main` from a copy of the walk that
- * predated #1239, so it opened spans on `\"` and found their ends with
- * `indexOf`. Merging the two branches by taking the extraction unchanged
- * would have reinstated the bypass it had already fixed on the other side:
- * `echo \" > <protected>` opens a span that never closes, the scanner
- * swallows the `>`, no operator means no target, and the write is allowed.
- * One reader is still right — the reader just has to be the fixed one.
- *
- * So: a backslash OUTSIDE a span escapes the next character, and the end of
- * a span is `endOfQuoted`, which honours `\"` inside double quotes and
- * correctly does not inside single ones, because bash processes no escapes
- * there.
+ * The index just past the `)` that closes the `$(` at `i`, or the end of the
+ * string. A parenthesis inside a string literal is data, not grammar
+ * (`echo $(echo "x)") > …` hid its redirect), and quoted spans end where
+ * `endOfQuoted` says, escapes included (#1205, #1361).
  */
 function endOfSubstitution(s: string, i: number): number {
   let depth = 0;
@@ -1992,47 +1185,12 @@ function endOfSubstitution(s: string, i: number): number {
 }
 
 /**
- * ANSI-C quoting: the value of a `$'…'` word.
- *
- * Unlike `$(…)` and `` `…` ``, this is settled at parse time — no command
- * runs and nothing is looked up — so decoding it makes a word MORE readable
- * rather than guessing at one. `$'-\163'` is the string `-s` on every run.
- *
- * An escape this does not recognise keeps its backslash, which is what bash
- * does with one.
- *
- * ## Octal and `\x` are BYTES, so the decode assembles bytes
- *
- * Measured: `printf '%s' $'\303\251' | od -An -tx1` gives `c3 a9`, and so
- * do `$'\xc3\xa9'` and a literal `é` — all three are the UTF-8 encoding of
- * one character. A per-escape `String.fromCharCode` gives U+00C3 followed
- * by U+00A9, a different string of four bytes, so above 0x7F that spelling
- * hands the module a token the shell never produced. Same defect as the
- * transforms this function exists to close, pointing the other way.
- *
- * It is a live one, not a cosmetic differential. With a symlink named
- * `café` under a scratch root pointing into the run store, the write
- * through it is REFUSED when spelled literally and when spelled
- * `$'café'`, and was ALLOWED when spelled `$'caf\303\251'` or
- * `$'caf\xc3\xa9'` — the module looked for a directory nobody had made,
- * found nothing to resolve, and exempted it as ordinary scratch. That is
- * #1175's escape with a name the decoder disagreed about.
- *
- * So escapes are decoded into BYTES and the byte string is decoded as
- * UTF-8 once, at the end. Refusing to decode above 0x80 was the first
- * repair and it does NOT close this: an undecoded `caf\303\251` is just
- * another directory that does not exist, which is exempt. The conservative
- * answer and the wrong answer are the same answer here.
- *
- * `\u` and `\U` stay code points, because that is what bash defines them
- * as — it emits their UTF-8 encoding, which is what they mean once the
- * command text has itself been decoded from UTF-8.
- *
- * What remains: a byte sequence that is not valid UTF-8, such as a lone
- * `$'\303'`, becomes U+FFFD here and names a file this module cannot
- * spell. Closing that needs byte-level paths throughout, which is a
- * different change; the residue is one unmatched character in a position
- * that is then unprovable rather than wrongly exempt.
+ * ANSI-C quoting: the value of a `$'…'` word, settled at parse time, so
+ * decoding it makes a word more readable rather than guessing at one. An
+ * unknown escape keeps its backslash, as bash does. Octal and `\x` escapes
+ * are BYTES, decoded as UTF-8 once at the end: per-escape code points gave
+ * `$'caf\303\251'` a spelling the shell never produces, and a directory
+ * the module could not find was exempted. `\u`/`\U` stay code points.
  */
 const ANSI_C_SHORT: Record<string, string> = {
   a: '\x07',
@@ -2318,7 +1476,8 @@ export function writeTargets(segment: string, whole: string = segment): string[]
   // destination as `src` and never examined the real one.
   const word = commandWord(segment);
   if (word === 'cp' || word === 'mv' || word === 'install' || word === 'rsync') {
-    const args = words.slice(1).filter(a => !a.startsWith('-'));
+    // after the verb, not after a wrapper (`timeout 30 cp a b`, #2866)
+    const args = words.slice(words.findIndex(w => w.replace(/^.*\//, '') === word) + 1).filter(a => !a.startsWith('-'));
     if (args.length >= 2) {
       const dest = args[args.length - 1];
       targets.push(dest);
@@ -2406,49 +1565,21 @@ export function argumentsOf(segment: string): string[] {
 
 /**
  * Does a protected name sit NEAR a declared write verb in an interpreter
- * body? Proximity, not parsing — the arm needs to tell
- * `open('…/.gate-salt','w')` from a program that writes a `.md` and happens
- * to mention a hook in its data. Associating a call with its argument
- * properly means parsing the language, which this module will not do.
+ * body? Proximity, not parsing (ADR-027 decision 3).
  *
- * #2858 (the criterion says refused "whatever directory it names"): the window opens
- * at the start of the path the name ends, not at the name. Opened at the
- * name, a deep enough directory pushed the verb out of reach — a realpath'd
- * macOS `$TMPDIR` is long enough — so how far a body's write was refused
- * depended on where it pointed. What stays outside the window is a verb
- * separated from the path by other text: a long SOURCE before the
- * destination, or a call nested deeper than `WRITE_INTENT` reads. ADR-027
- * decision 3 concedes those. The name is matched without case, as `names`
- * matches it (#1184).
+ * The window opens 80 characters before the start of the path the name ends
+ * and closes 80 after the path's end, so a long directory or a long tail
+ * does not move the verb out of reach (#2858; `$TMPDIR` alone is long
+ * enough). Path starts come from one forward pass and every match in one
+ * path is one window, so the cost is linear. The name is matched without
+ * case, the Unicode way, as `names` matches it (#1184).
  *
- * The window closes at the end of the path, too, not at the name: a long
- * tail after `/witnesses/` moved the mode out of reach the same way a long
- * directory did (review of #2863, round 3).
- *
- * **Conceded:** a separator inside the directory — a `(` or a `,` more
- * than 80 characters after the verb — still ends the guessed path start
- * early, and the verb is out of reach. Round 3 closed it by spanning the
- * whole string literal instead, and the corpus sweep then newly refused 3
- * real commands, all editing a spec or a plan that names a hook file. An
- * accident guard that refuses that work is the worse trade, so the window
- * stays where round 2 put it and a CONCESSION row pins the spelling. A space
- * in a long file name after the protected name is the same class: the tail
- * ends at whitespace, so a mode more than 80 characters past it is out of
- * reach (the security review of round 3; same trade, same answer).
- *
- * The path starts are found in one forward pass, and every match in the
- * same path is tested as ONE window, from 80 before the path to 80 after
- * its end. A walk back from each match made a body of one name
- * repeated with no separator quadratic — a 40 KB heredoc took 4.6 s against
- * 0.05 s on main — and capping the walk instead put a long enough directory
- * outside the window again (review of #2863, round 1). Paths do not
- * overlap, so the windows together read each character a bounded number of
- * times.
- *
- * Opening at the path start also means a write verb within the window
- * before a long path that is only READ now refuses, as it always did before
- * a short one: `open('/tmp/o.md','w'); json.load(open('/x/workflow-state.json'))`
- * is refused on main. The depth of the directory no longer decides which.
+ * **Conceded** (review of #2863, round 3): a separator inside the directory
+ * — a `(`, `,` or `=` more than 80 characters after the verb — ends the
+ * guessed path start early, and a space in a long file name ends the tail.
+ * Spanning the whole string literal closed both and newly refused 3 real
+ * spec and plan edits, so CONCESSION rows pin the spellings instead. So
+ * does a verb separated from the path by other text (a long source).
  */
 function writesNear(body: string, protectedName: string): boolean {
   const WINDOW = 80;
@@ -2497,7 +1628,6 @@ const IN_PLACE = [
   /\bdd\b[^\n]*\bof=/,
   /\btruncate\b/,
   /\brm\b/,
-  /\bln\b/,
   /\bgit\s+(?:checkout|restore)\b/,
   // #1146: extended attributes are file metadata, and `com.apple.provenance`
   // is what was blocking writes to the hooks on this machine — so removing it
@@ -2564,93 +1694,25 @@ const WRITE_MODE_SOURCE = `(?:'${MODE_BODY}'|"${MODE_BODY}")`;
 /**
  * Declared write intent inside an interpreter body.
  *
- * The honest version of this arm would refuse any interpreter naming a
- * protected artifact, since a program is opaque. That was implemented and
- * MEASURED: it newly refused 1,760 of 5,060 real commands — 35% — and
- * triage found them to be reads. `bun -e '…readFileSync(…workflow-state
- * .json…)…'` and `python3 -I -c 'json.load(open(…))'` are how every agent
- * on this machine inspects gate state, and a guard that refuses the normal
- * way of looking at a thing is a guard that gets switched off.
+ * Refusing every interpreter that names a protected artifact was measured
+ * (1,760 of 5,060 real commands newly refused, all reads), so the arm fires
+ * on a declared write VERB instead. An interpreter can always evade it — build
+ * the name, call through a variable, put the program in a file. It raises
+ * the cost of an accidental write and of the obvious deliberate one.
  *
- * So the arm fires on a declared write VERB instead. The limit that buys is
- * real and is stated rather than hidden: an interpreter can always evade
- * this — build the name from pieces, `eval` it, call through a variable, or
- * put the program in a file instead of `-c`. This arm raises the cost of an
- * accidental write and of the obvious deliberate one. It is not a boundary,
- * and `.claude/rules/checks-must-be-able-to-fail.md` would call it a
- * detector narrower than what it detects. It is the widest setting the
- * measured false-positive rate allows.
+ * A program that writes through an imported project function is outside
+ * what a command-line guard can decide (#1214): the harness's own GOAL step
+ * and the repair it prints (`writeWorkflowState` via `bun -e`) are that same
+ * call on that same path, and `test/bash-write-guard.test.ts` pins them
+ * allowed. Telling them apart is a question of provenance, not text.
  *
- * ## #1214: an imported project function is outside what this arm can decide
- *
- * The concession above says an interpreter can evade this arm by calling
- * through a variable or putting the program in a file. #1214 filed a case
- * needing neither — a plain call to a project function the enumeration has
- * never heard of:
- *
- *     bun -e "
- *     import {initWorkflow, writeACs} from '<harness>/gates/orchestrator.ts';
- *     const sf = '<run store>/workflow-state.json';
- *     initWorkflow(sf, {…});
- *     writeACs(sf, JSON.parse(process.argv[1]));"
- *
- * `initWorkflow` and `writeACs` both write `sf`, `sf` is a live run-store
- * artifact, and nothing in the list above matches. ALLOW.
- *
- * The issue's framing 1 — derive the suspicious-call set from the body's OWN
- * `import` statement, so the module enumerates nothing and stays
- * project-agnostic — was implemented and swept over 130,247 real commands
- * from this machine's 31,793 transcripts:
- *
- *     newly BLOCKED  616          newly ALLOWED  0
- *       600  call a writing orchestrator symbol  (writeWorkflowState 301,
- *            initWorkflow+writeACs 285, the rest in ones and twos)
- *        10  call a reading one (readWorkflow, loadWorkflow, …)
- *         6  probe this module or take a hook census
- *     0 of the 616 are scratch fixtures; every one names the live run store.
- *
- * 97% precision by that reading, and it is still **not shippable** — for a
- * reason no count could show. The 600 are not evasions. They are this
- * harness's own prescribed mechanism:
- *
- *   - `workflows/ship.js` EMITS the filed command, at the GOAL phase, under
- *     an instruction reading "Run this EXACTLY as written". The payload
- *     spelling `JSON.parse(process.argv[1])` is generated by
- *     `acPayloadReadExpression()` in `lib/evidence-command-transport.ts`, so
- *     the fingerprint belongs to the harness and to nothing else.
- *   - `gates/SCHEMA-GUIDE.md` prescribes `writeWorkflowState` via `bun -e`
- *     in place of the Write tool or `cat >`.
- *   - `lib/gate-result-protection.ts` and `lib/gate-enforcement.ts` PRINT
- *     that command to the agent as the sanctioned repair.
- *
- * So the predicate would refuse the GOAL phase of every run, and the guard
- * would be refusing the exact command its sibling modules hand out as the
- * remedy. The filed case and the sanctioned repair are the same operation,
- * differing only in which orchestrator symbol is called — and separating
- * them means enumerating one consumer's API, which is what #1214 forbids and
- * is wrong in every other tree besides.
- *
- * **The result is therefore framing 2, and it belongs here rather than in an
- * open issue: a program that imports project code is outside what a
- * command-line guard can decide.** Nothing read off the command line
- * distinguishes a sanctioned write from an unsanctioned one when both are
- * the same call to the same function on the same path. That is a question
- * about the command's PROVENANCE, not its text, so closing it needs the
- * harness to mark the commands it issued — a different mechanism from
- * parsing, and not one this module can reach.
- *
- * `test/bash-write-guard.test.ts` pins the conclusion rather than leaving it
- * as prose: the sanctioned commands must stay ALLOWED, so the next person to
- * reach for the obvious fix gets a red suite naming what it costs.
+ * Shell idioms (`>`, `tee`, `rm`) are not in the list (#1176): inside a body
+ * that is not shell they match the host language (`x=>x.id` read as `>`).
  */
 const WRITE_INTENT = new RegExp(
-  // #2701: the callback forms beside the `Sync` ones (`writeFile`, `appendFile`,
-  // `copyFile`, which also covers `fs.promises.*`), `cpSync` and any `.cp(`,
-  // `write_bytes` beside `write_text`, `shutil`'s other copies (`copy\b`
-  // cannot reach `copy2`: a digit is a word character), any `.rename(`,
-  // `.unlink(`, `.rm(` or `.truncate(` (`fs.unlink`, `Path.unlink`), `os.open`
-  // with a write flag (read through two levels of nested calls in the path,
-  // as the open pattern below is), and `openSync` beside `open`.
+  // #2701: the callback forms beside the `Sync` ones, `shutil`'s other
+  // copies, any `.rename(`/`.unlink(`/`.rm(`/`.truncate(`, and `os.open`
+  // with a write flag.
   String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|writeFile|appendFile|copyFile|cpSync|write_text|write_bytes|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy2?|copyfile|copytree|move|rmtree))\b|\.(?:rename|unlink|rm|truncate|cp)\s*\(|\bos\.open\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\bO_(?:WRONLY|RDWR|CREAT|TRUNC|APPEND)\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen(?:Sync)?\s*\([^)]*` +
     WRITE_MODE_SOURCE +
     // #2699 review: the mode after nested calls in the path, two levels deep.
@@ -2660,23 +1722,7 @@ const WRITE_INTENT = new RegExp(
     WRITE_MODE_SOURCE,
 );
 
-/**
- * #1176 measured the suggested widening of WRITE_INTENT to shell idioms —
- * `>`, `>>`, `tee`, `rm`, `mv`, `cp`, `dd of=`, `truncate` — so that a
- * NON-shell interpreter shelling out would also fire. It is not implemented.
- *
- * Measured: 100 newly blocked against 4 without it, on 5,513 real commands.
- * Sampling the extra 96 found them to be reads, and the mechanism is
- * specific: `>{1,2}\s*\S` matches `=>`, so every arrow function in a
- * `bun -e` body became a declared write. `x=>x.id==="AC-4"` is not a write.
- *
- * The same lesson as the interpreter widening this module already records:
- * matching SHELL idioms inside a body that is not shell matches the host
- * language instead. A shell body is handled properly by recursion (see
- * SHELLS); a Python or Node body that shells out would need its
- * `os.system`/`subprocess`/`execSync` argument extracted and recursed, which
- * is a real fix and a different issue from this one.
- */
+
 
 /** `find` actions that run or delete rather than print. */
 const FIND_MUTATING = /\s-(?:delete|exec|execdir|ok|okdir)\b/;
@@ -2724,13 +1770,8 @@ function namesOutsideScratch(text: string, list: string[], exempt: Exemption): s
  * `shellBody` next door `dequote`s, which is right for a shell body about to
  * be re-parsed as shell and wrong for every other language: it deletes the
  * only thing that marks where one string literal ends and the next
- * expression begins. The chain reader (`collectBody`) reads a body's literals
- * for what it makes and mentions, and it cannot do that on a view with no
- * quotes in it.
- *
- * An unmatched outer quote leaves the text as it stands. `readLiterals` then
- * returns `null` and the body names every path rather than guessing, which
- * is the fail-closed direction.
+ * expression begins, and the write-intent window reads an `open(…, 'w')`
+ * mode by its quotes. An unmatched outer quote leaves the text as it stands.
  */
 export function programBody(segment: string): string {
   // `\s*`, not `\s+`: `python3 -c'open(…)'` hands python the body with no
@@ -2747,60 +1788,6 @@ export function programBody(segment: string): string {
   return raw;
 }
 
-/**
- * The string literals of an interpreter body, with the index of each opening
- * and closing quote — or `null` when one is never closed. #1367 split it out
- * of the body-target reader #2858 deleted; the chain reader is its caller.
- */
-function readLiterals(body: string): Array<{ value: string; start: number; end: number }> | null {
-  const out: Array<{ value: string; start: number; end: number }> = [];
-  let i = 0;
-  while (i < body.length) {
-    const q = body[i];
-    if (q !== "'" && q !== '"') {
-      i++;
-      continue;
-    }
-    let j = i + 1;
-    let value = '';
-    let closed = false;
-    while (j < body.length) {
-      const c = body[j];
-      // Only a DOUBLE-quoted literal escapes. Inside single quotes a
-      // backslash is literal in both shell and Python, and treating it as an
-      // escape keeps the span open past its real end — #1203's defect, one
-      // layer down.
-      if (q === '"' && c === '\\' && j + 1 < body.length) {
-        value += body[j + 1];
-        j += 2;
-        continue;
-      }
-      if (c === q) {
-        closed = true;
-        break;
-      }
-      value += c;
-      j++;
-    }
-    if (!closed) return null;
-    out.push({ value, start: i, end: j });
-    i = j + 1;
-  }
-  return out;
-}
-
-/** Whitespace, including a newline. */
-const WHITESPACE = new Set([' ', '\t', '\n', '\r']);
-
-/** The dotted name immediately in front of an opening parenthesis. */
-function calleeBefore(body: string, openIndex: number): string {
-  let i = openIndex - 1;
-  while (i >= 0 && WHITESPACE.has(body[i])) i--;
-  let end = i + 1;
-  while (i >= 0 && /[A-Za-z0-9_$.]/.test(body[i])) i--;
-  return body.slice(i + 1, end);
-}
-
 const ALL_PROTECTED = [...PROTECTED_FILES, ...PROTECTED_HOOKS];
 
 /**
@@ -2812,52 +1799,31 @@ const ALL_PROTECTED = [...PROTECTED_FILES, ...PROTECTED_HOOKS];
  * work around it protects nothing, and four real refusals of read-only work
  * is already a pattern.
  *
- * The scratch exemption is decided per DESTINATION against the WHOLE command
- * (#1367): the chain context is read once, lazily — most commands name no
- * protected artifact and never ask — and each step gets a judge that knows
- * its position and which words are its own. A shell body this command runs
- * is decided as a command of its own, inheriting what the enclosing command
- * made and named before it (`outer`). An interpreter body that is not shell
- * gets no exemption at all (#2858).
+ * A shell write's scratch exemption is `scratchExempt`, the target's real
+ * directory, and a command that makes a link anywhere has none (ADR-027
+ * decision 4). A shell body this command runs is decided as a command of its
+ * own and inherits that (`linkInCommand`). An interpreter body that is not
+ * shell gets no exemption at all (#2858).
  */
-export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): BashWriteDecision {
+export function decideBashWrite(cmd: string, depth = 0, linkInCommand = false): BashWriteDecision {
   if (!cmd) return ALLOW;
   // A shell body can contain a shell body. Bounded so a crafted nest costs a
   // fixed amount of work rather than the session.
   if (depth > 3) return ALLOW;
-  let ctx: ChainContext | null = null;
-  const getCtx = (): ChainContext => (ctx ??= chainContext(cmd, outer?.()));
+  const links = linkInCommand || makesLink(cmd);
+  const exempt: Exemption = links ? NO_EXEMPTION : scratchExempt;
 
-  // #1240: a program handed to an interpreter on stdin. `stripHeredocs`
-  // deletes the body before every arm below, and arm 3a only reads a body
-  // back when the segment also carries `-c`/`-e` — which `bash <<'EOF'` does
-  // not. The result was that the guard decided on the single word `bash`
-  // while the program underneath wrote whatever it liked. Each program is
-  // re-entered as a command in its own right, and recomputes its own
-  // exemption: an `ln` in the body is the body's business.
-  // A SHELL body is read as shell; anything else gets the treatment arm 3
-  // gives a `-c` body it cannot parse — a declared write verb near the name
-  // of a protected artifact. Reading a Python body as shell finds nothing,
-  // which is how `python3 <<'PY'` stayed allowed after the shell spellings
-  // were closed.
-  for (const [k, { shell, program, quoted }] of interpreterPrograms(cmd).entries()) {
+  // #1240: a program handed to an interpreter on stdin, which every arm
+  // below would otherwise see as one word (`bash`). A shell program is
+  // decided as a command of its own; any other gets arm 3's question.
+  for (const { shell, program, quoted } of interpreterPrograms(cmd)) {
     if (shell) {
-      const inner = decideBashWrite(program, depth + 1, () => outerFor(getCtx(), `prog:${k}`, -1));
+      const inner = decideBashWrite(program, depth + 1, links);
       if (inner.blocked) return inner;
       continue;
     }
-    // #2858 (ADR-027): arm 3's write-verb question, and no scratch
-    // exemption in front of it. A stdin program is the arm 3 body reached by
-    // another route; a declared write verb near a protected name refuses it
-    // whatever directory the name sits in, and however it is spelled.
-    //
-    // #1240 counted only absolute spellings here, because a relative
-    // fragment could not be shown to be scratch and refusing it refused 23
-    // fixture builds the exemption existed for. With the exemption gone a
-    // relative spelling is the same write, and the absolute-only reading
-    // allowed `open('workflow-state.json','w')` from the run store, and any
-    // absolute path with a space in it, which the word split cut in two
-    // (review of #2863, round 2).
+    // #2858 (ADR-027): a declared write verb near a protected name refuses
+    // it, wherever the name points and however it is spelled, relative too.
     const pf = ALL_PROTECTED.find(
       p => names(program, [p]) !== null && (writesNear(program, p) || (quoted !== undefined && writesNear(quoted, p))),
     );
@@ -2874,30 +1840,43 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
   const segs = segments(cmd);
   for (let i = 0; i < segs.length; i++) {
     const seg = segs[i];
-    // The write's own words are the step's shell words: they are what the
-    // writing verb is handed, not something that runs before it.
-    const exempt = judgeFor(getCtx, { src: `seg:${i}` }, i);
     const bare = dequote(seg); // TARGET view: contents kept
     const code = stripQuoted(seg); // VERB view: quoted spans gone
     const word = commandWord(seg);
 
+    // 0. A link is refused by name when any argument names a protected
+    //    artifact, wherever it points, dangling and hard links included
+    //    (ADR-027 decision 4). No exemption: a link is how a scratch name
+    //    reaches a live file.
+    if (segmentLinks(seg)) {
+      const pf = names(scanSegment(seg).words.join(' '), ALL_PROTECTED);
+      if (pf) {
+        return { blocked: true, reason: `Bash command makes a link naming "${pf}". A link to or from a protected artifact is refused.` };
+      }
+    }
+
     // 1. Shell redirection and copying verbs. Never exempted by anything:
     //    this is the arm the old allowlist sat above, which is #1120.
-    // The whole command is passed so the directory test can see a `mkdir`
-    // in an EARLIER segment (#1196 R2). Everything else is per-segment.
+    // The whole command is passed so `cp x d` can read `d` as a directory
+    // an EARLIER `mkdir` made (#1196 R2). Everything else is per-segment.
     for (const target of writeTargets(seg, cmd)) {
       // #1175: the target IS a path, so the tree question is asked directly
       // here rather than through `namesOutsideScratch`.
       if (exempt(target)) continue;
+      // A scratch target that is not exempt is a fixture with a missing
+      // directory, a link on its path, or a link made in the command (#2859).
+      const hint = isScratchPath(target)
+        ? ' For a fixture: make its directory in a command of its own first, and make no link in the same command.'
+        : '';
       const pf = names(target, PROTECTED_FILES);
       if (pf) {
         return {
           blocked: true,
-          reason: `Bash write to protected file "${pf}" blocked. Use gate-runner.ts for gate results.`,
+          reason: `Bash write to protected file "${pf}" blocked. Use gate-runner.ts for gate results.${hint}`,
         };
       }
       if (names(target, PROTECTED_HOOKS)) {
-        return { blocked: true, reason: 'Bash write to hook file blocked. Hook integrity is protected.' };
+        return { blocked: true, reason: `Bash write to hook file blocked. Hook integrity is protected.${hint}` };
       }
     }
 
@@ -2934,7 +1913,7 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
     if (isInterpreter && isShellWord(word)) {
       const body = shellBody(seg);
       if (body) {
-        const inner = decideBashWrite(body, depth + 1, () => outerFor(getCtx(), `seg:${i}`, i));
+        const inner = decideBashWrite(body, depth + 1, links);
         if (inner.blocked) return inner;
       }
     }
@@ -2981,27 +1960,9 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
     }
 
     // 4. Permission changes on a protected artifact. The COMMAND WORD must be
-    //    the verb — not merely a `chmod` somewhere in the string, which is
-    //    what refused four read-only commands. The target is read off `bare`,
-    //    so quoting the path does not hide it.
-    //
-    //    #1146: the TARGET list widened from PROTECTED_HOOKS to every
-    //    protected artifact; the VERB test is untouched, and that asymmetry is
-    //    the point. There was no reason for a `chmod` on `.gate-salt` to be
-    //    allowed while a `chmod` on a `.hook.ts` was refused — mode bits are
-    //    how a file stops being writable, so a permission change on the gate
-    //    salt is a step toward writing it. Measured on the 5,059 allowed
-    //    commands naming a protected artifact, the widening newly blocks
-    //    exactly one, and that one is real:
-    //      `chmod 600 …/worktrees/agent-abbce…/hooks/lib/.gate-salt`
-    //
-    //    #1175 composes with that widening rather than replacing it: the
-    //    target list stays `ALL_PROTECTED` and the lookup moves to
-    //    `namesOutsideScratch`, so a `chmod` on a FIXTURE in a scratch tree
-    //    is not a permission change on a protected artifact. The widened
-    //    list and the tree scoping are independent and both are kept — a
-    //    textual merge that took either side alone would have silently
-    //    dropped one of them.
+    //    the verb, not a `chmod` somewhere in the string, and the target is
+    //    read off `bare`, so quoting it does not hide it. Every protected
+    //    artifact counts (#1146): mode bits are how a file stops being writable.
     const permTarget =
       word === 'chmod' || word === 'chflags'
         ? (namesOutsideScratch(bare, ALL_PROTECTED, exempt)[0] ?? null)
@@ -3013,29 +1974,9 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
       };
     }
 
-    // 5. The gate salt in the Keychain. Exempted by nothing — unlike `chmod`,
-    //    which turns up innocently in docs and greps, `security` INVOKED on
-    //    the gate-salt entry has no benign form. It has a benign MENTION
-    //    though, and two real commands hit it: issue comments quoting the
-    //    very command they proposed to guard.
-    //
-    //    #1176: this used to read `stripQuoted(cmd)` over the whole command,
-    //    which deleted the quoted key name outright — so the real invocation,
-    //    `security find-generic-password -s 'pai-gate-salt'`, could not fire
-    //    it. The prose case is now separated by POSITION instead: the command
-    //    word must BE `security`, which an issue comment's `gh` never is.
-    //    #1184: the key is matched across the WHOLE command, not just this
-    //    segment, so `KEY=pai-gate-salt; security … -s "$KEY"` cannot hide it
-    //    behind a variable. Measured cost: 0 commands in an unfiltered corpus
-    //    of 125,644. The command word must still BE `security`, which is what
-    //    keeps the `gh issue comment` prose case allowed.
-    //
-    //    The other half of that suggestion — firing on any keychain
-    //    SUBCOMMAND whether or not the key is named — is refused. In the same
-    //    corpus only TWO commands have `security` as their command word, and
-    //    widening to subcommands newly blocks exactly one: `security
-    //    find-generic-password -h`, a help invocation. One false positive,
-    //    zero true positives, no evidence of the risk it was meant to cover.
+    // 5. The gate salt in the Keychain. The command word must BE `security`
+    //    (an issue comment quoting the command is not an invocation), and the
+    //    key is matched across the whole command, so a variable cannot hide it.
     if (word === 'security' && dequote(cmd).toLowerCase().includes('pai-gate-salt')) {
       return { blocked: true, reason: 'Access to gate salt Keychain entry blocked.' };
     }
