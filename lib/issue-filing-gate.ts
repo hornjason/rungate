@@ -112,7 +112,7 @@ import {
   type OpenIssue,
   type OpenIssuePage,
 } from "./github";
-import { closedIssueCounts, PLANNED_ISSUE_FOOTER } from "./issue-decomposition";
+import { closedIssueCounts, isPlannedIssueBody, PLANNED_ISSUE_FOOTER, plannedRowText } from "./issue-decomposition";
 import { branchOf, toplevel } from "./launch-base";
 import { readWorktreeRemote, repoSlug, type RemoteReading } from "./worktree-repo";
 import {
@@ -3177,7 +3177,7 @@ export function describeDrops(dropped: readonly CorpusDrop[]): string {
  */
 export function trustedAuthor(issue: Pick<OpenIssue, "authorAssociation" | "authorLogin" | "authorType" | "body">): boolean {
   if (TRUSTED_ASSOCIATIONS.has(issue.authorAssociation)) return true;
-  return workflowBotAuthored(issue) && issue.body.split("\n").some(line => line.startsWith(PLANNED_ISSUE_FOOTER));
+  return workflowBotAuthored(issue) && isPlannedIssueBody(issue.body);
 }
 
 /**
@@ -3228,7 +3228,11 @@ export function trustedCorpus(page: OpenIssuePage): CorpusReading {
       });
       continue;
     }
-    const finding: Finding = { id, title: issue.title, body: issue.body };
+    // A planned issue is compared on what its row supplied, not on the
+    // template every row of every plan shares (#2906 review): otherwise two
+    // sibling rows that share one file read as duplicates.
+    const body = isPlannedIssueBody(issue.body) ? plannedRowText(issue.body) : issue.body;
+    const finding: Finding = { id, title: issue.title, body };
     if (!withinKeyCap(finding)) {
       dropped.push({
         id,

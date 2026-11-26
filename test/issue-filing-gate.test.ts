@@ -120,7 +120,7 @@ import {
 } from "../lib/issue-shape";
 import { loadRungateConfig, readCommittedConfig } from "../lib/config-loader";
 import { DROPPED_CATEGORIES } from "../lib/finding-jury";
-import type { ArbiterRefusal } from "../lib/finding-arbiter";
+import { duplicateCollisions, type ArbiterRefusal } from "../lib/finding-arbiter";
 import type { FilingAdjudication } from "../lib/issue-filing-gate";
 import { toplevel } from "../lib/launch-base";
 import { readWorktreeRemote, type RemoteReading } from "../lib/worktree-repo";
@@ -1152,6 +1152,20 @@ describe("#1261 the four suppression classes", () => {
       expect(kept(r), body).toEqual([]);
       expect(r.dropped.map(d => d.reason)).toEqual(["untrusted-author"]);
     }
+  });
+
+  // #2906 review round 2: every planned body shares the template's three
+  // file keys, so a sibling row sharing one file read as a duplicate.
+  test("FG-294: a sibling row of one plan is not its duplicate, and a restated row still is", () => {
+    const row = (criterion: string, outcome: string, files: string[]) => ({ criterion, outcome, files, milestone: null, blockedBy: [], line: 3 });
+    const planned = (r: ReturnType<typeof row>) => decomposedBody(r, "## Criteria this serves", "docs/adr/ADR-9-plan.md");
+    const filedA = trusted({ number: 41, title: "Gate reads plan rows", ...bot, body: planned(row("CRC-B5", "the gate reads plan rows", ["lib/issue-filing-gate.ts"])) });
+    const siblingB = { id: "new", title: "Gate and client agree on authors", body: planned(row("CRC-B6", "the client and gate agree", ["lib/issue-filing-gate.ts", "lib/github.ts"])) };
+    expect(duplicateCollisions(siblingB, kept(trustedCorpus(page([filedA]))))).toEqual([]);
+    // CONTROL: a hand filing restating a planned row's own keys is still caught.
+    const filedC = trusted({ number: 42, title: "Retry ceiling", ...bot, body: planned(row("CRC-B7", "`retryBudget` and `backoffCeiling` disagree", ["lib/command-retry.ts", "lib/retry-config.ts"])) });
+    const restated = { id: "new", title: "Retry ceiling again", body: "`retryBudget` and `backoffCeiling` in lib/command-retry.ts and lib/retry-config.ts disagree." };
+    expect(duplicateCollisions(restated, kept(trustedCorpus(page([filedC])))).map(c => c.id)).toEqual(["42"]);
   });
 
   test("FG-35: one issue cannot name enough to match everything", () => {
