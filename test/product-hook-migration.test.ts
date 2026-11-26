@@ -252,12 +252,18 @@ describe("#713 BashWriteGuard: protects gate artifacts and hook files", () => {
     // #1367: the fixture makes its directory first. The exemption now holds
     // only when every directory between the scratch root and the destination
     // is real, and a write into one nobody made would fail anyway.
+    //
+    // #2858: the fixture is a shell write. An interpreter body has no scratch
+    // exemption any more, so its spelling of the same write is refused here
+    // as it is in the module.
     expect(
-      runHook(
-        "BashWriteGuard.hook.ts",
-        cmd(`mkdir -p /tmp/probe && python3 -c "open('/tmp/probe/.gate-salt','w').write('x')"`),
-      ).stdout.trim(),
+      runHook("BashWriteGuard.hook.ts", cmd(`mkdir -p /tmp/probe && echo x > /tmp/probe/.gate-salt`)).stdout.trim(),
     ).toBe("");
+    const interp = runHook(
+      "BashWriteGuard.hook.ts",
+      cmd(`mkdir -p /tmp/probe && python3 -c "open('/tmp/probe/.gate-salt','w').write('x')"`),
+    );
+    expect(JSON.parse(interp.stdout).decision).toBe("block");
   });
 
   test("#1120 NEG CTRL: the RECORDED false positive still passes", () => {
