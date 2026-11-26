@@ -572,6 +572,31 @@ describe("#1173: CI produces the durations these readings need", () => {
       );
     });
 
+    // #2903: a runner's network drop while uploading timing data failed the
+    // required test job after the suite had passed. The upload may fail; it
+    // must not fail the job, and it must not fail silently. Every other upload
+    // keeps failing the job: the shard marker is the aggregate's evidence.
+    test("#2903: a failed durations upload does not fail the job, and a warning says so", () => {
+      for (const ci of [{}, { shards: 4 }]) {
+        const at = JSON.stringify(ci);
+        const doc = Bun.YAML.parse(emit(ci)) as { jobs: Record<string, { steps?: Array<Record<string, unknown>> }> };
+        const steps = Object.values(doc.jobs).flatMap(j => j.steps ?? []);
+        const keep = steps.find(st => st.name === "Keep this run's per-case durations");
+        expect(keep, `no durations step at ${at}`).toBeDefined();
+        expect(keep!["continue-on-error"], `a failed upload fails the job at ${at}`).toBe(true);
+        expect(typeof keep!.id, `the durations step has no id to read its outcome by at ${at}`).toBe("string");
+        const warn = steps.find(st => typeof st.if === "string" && st.if.includes(`steps.${keep!.id}.outcome == 'failure'`));
+        expect(warn, `a lost upload is silent at ${at}`).toBeDefined();
+        expect(String(warn!.run)).toContain("::warning");
+        const softUploads = steps.filter(
+          st => String(st.uses ?? "").includes("upload-artifact") && st["continue-on-error"] === true,
+        );
+        expect(softUploads.map(st => st.name), `another upload stopped failing the job at ${at}`).toEqual([
+          "Keep this run's per-case durations",
+        ]);
+      }
+    });
+
     test("#1173: a consumer who already configured a reporter gets no second one", () => {
       // Round 3. The upload step must go too, not just the flags: a step
       // uploading `${{ runner.temp }}/rungate-junit.xml` for a run writing
