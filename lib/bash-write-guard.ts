@@ -1037,7 +1037,7 @@ export function dequote(s: string): string {
 }
 
 /** Wrappers and reserved words that come before the real command word (#2866: `timeout`, `do`, `then`). */
-const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs|nice|timeout|stdbuf|doas|caffeinate|exec|ionice|setsid|busybox|builtin|eval|do|then|else|elif|if|while|until|!)$/;
+const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs|nice|timeout|stdbuf|doas|caffeinate|exec|ionice|setsid|busybox|builtin|do|then|else|elif|if|while|until|!)$/;
 
 /**
  * A variable assignment prefix, by the POSIX shape: an identifier, an
@@ -1058,7 +1058,7 @@ function verbAt(words: string[], verb: RegExp): number {
     const w = words[i].replace(/^[({\\]+/, '').replace(/^.*\//, '');
     if (!w || ASSIGNMENT.test(words[i]) || /^\d+(?:\.\d+)?[smhd]?$/.test(w)) continue;
     if (verb.test(w)) return i;
-    if (WRAPPERS.test(w)) wrapped = true;
+    if (WRAPPERS.test(w) || w === 'eval') wrapped = true; // `eval cp`; commandWord keeps `eval` for interpreterPrograms
     else if (!wrapped || !(w.startsWith('-') || words[i - 1].startsWith('-'))) return -1;
   }
   return -1;
