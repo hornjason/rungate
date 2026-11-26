@@ -1,15 +1,15 @@
 ---
 doc-type: adr
-status: proposed
+status: accepted
 created: 2026-11-25
-updated: 2026-11-25
+updated: 2026-11-26
 ---
 
 # ADR-028 — Every consumer gets a feature map, and a card for each feature, generated from what the project declares
 
 ## Status
 
-**Proposed, 2026-11-25.** Jason chose the shape after reviewing a mock-up built from DailyBriefDashboard's real data ("worth it: draft the rungate ADR"). The DDB consumer session drafted it, and the rungate session numbered it, wrote its criteria with `create-sc`, and fixed the file paths. Jason decides decisions 1 and 4, and the wording of SC-2812 to SC-2818. The DA recommends the rest. Still open: everything under "Not decided here".
+**Accepted, 2026-11-26.** Jason merged it in #2857. Jason chose the shape after reviewing a mock-up built from DailyBriefDashboard's real data ("worth it: draft the rungate ADR"). The DDB consumer session drafted it, and the rungate session numbered it, wrote its criteria with `create-sc`, and fixed the file paths. Decisions 1 and 4, and the wording of SC-2812 to SC-2818 below, are as merged. Still open: everything under "Not decided here".
 
 ## Context
 
@@ -71,7 +71,7 @@ Nothing changes when this ADR merges. Once every row below ships:
 
 ## Criteria
 
-Written in `specs/SCAFFOLD-DECOMPOSITION-SPEC.md` by `create-sc`, which governs the code map today, and reserved in `specs/sc-reservations.json`. Quoted here once so the wording can be approved:
+Written in `specs/SCAFFOLD-DECOMPOSITION-SPEC.md` by `create-sc`, which governs the code map today. Their block in `specs/sc-reservations.json` was released when this ADR was accepted, because the written lines now hold all seven ids. Quoted here once so the wording could be approved:
 
 - SC-2812: Rungate publishes a feature-manifest schema, and its validator refuses a manifest that names a file, page or route the tree does not hold (behavioral)
 - SC-2813: The code map lists every route registered on any router a file creates, and every page in the router, and says how many routes it could not attribute to a router (behavioral)
