@@ -1026,16 +1026,19 @@ function blankSubstitutions(text: string): string {
  */
 function pathWordsContaining(text: string, needle: string): string[] {
   const out: string[] = [];
-  const hay = text.toLowerCase();
-  const pin = needle.toLowerCase();
-  let i = 0;
-  while ((i = hay.indexOf(pin, i)) !== -1) {
-    let s = i;
-    while (s > 0 && !/[\s'"`,;(){}[\]]/.test(hay[s - 1])) s--;
-    let e = i + pin.length;
-    while (e < hay.length && !/[\s'"`,;(){}[\]]/.test(hay[e])) e++;
+  // Searched in the text itself, without case. Indexing a lowercased copy
+  // shifted every offset after a character whose lower case is longer —
+  // `İ` becomes two code units — so the word lost its leading `/` and an
+  // absolute path read as relative (review of #2863, round 1).
+  const pin = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+  let m: RegExpExecArray | null;
+  while ((m = pin.exec(text)) !== null) {
+    let s = m.index;
+    while (s > 0 && !/[\s'"`,;(){}[\]]/.test(text[s - 1])) s--;
+    let e = m.index + m[0].length;
+    while (e < text.length && !/[\s'"`,;(){}[\]]/.test(text[e])) e++;
     out.push(text.slice(s, e)); // the ORIGINAL case: this is a path to resolve
-    i = e;
+    pin.lastIndex = e;
   }
   return out;
 }
@@ -1688,9 +1691,9 @@ function heredocInterpreter(line: string): string | null {
  * its body ends. `skeleton` is the command as the shell parses it around the
  * bodies; `heredocReach` reads it.
  */
-export function interpreterPrograms(cmd: string): Array<{ shell: boolean; program: string }> {
+export function interpreterPrograms(cmd: string): Array<{ shell: boolean; program: string; quoted?: string }> {
   type Pending = { opener: string; at: number; body: string };
-  const found: Array<{ shell: boolean; program: string } | Pending> = [];
+  const found: Array<{ shell: boolean; program: string; quoted?: string } | Pending> = [];
   const lines = cmd.split('\n');
   const skeleton: string[] = [];
   let offset = 0; // where the next skeleton line starts in `skeleton.join('\n')`
@@ -1716,7 +1719,9 @@ export function interpreterPrograms(cmd: string): Array<{ shell: boolean; progra
       const owner = segments(line).find(s => /(?<!<)<<<(?!<)/.test(s));
       const word = owner ? commandWord(owner) : '';
       if (isInterpreterWord(word)) {
-        found.push({ shell: isShellWord(word), program: dequote(hs[1]).trim() });
+        // `quoted` keeps the word as written: `dequote` strips every quote,
+        // and with them the `'w'` an `open` mode is read by (review of #2863).
+        found.push({ shell: isShellWord(word), program: dequote(hs[1]).trim(), quoted: hs[1].trim() });
       }
     }
 
@@ -2413,11 +2418,14 @@ export function argumentsOf(segment: string): string[] {
  * decision 3 concedes those. The name is matched without case, as `names`
  * matches it (#1184).
  *
- * The walk back stops after `PATH_REACH` characters. Unbounded, a body of
- * one name repeated with no separator walked the whole run before every
- * match, and the time grew with the square of the body: a 40 KB heredoc
- * took 4.6 s, against 0.05 s on main and 0.1 s bounded. A path longer than
- * `PATH_REACH` puts its verb outside the window, as a long source does.
+ * The path starts are found in one forward pass, and every match in the
+ * same path is tested as ONE window, from 80 before the path to 80 after
+ * its last match. A walk back from each match made a body of one name
+ * repeated with no separator quadratic — a 40 KB heredoc took 4.6 s against
+ * 0.05 s on main — and capping the walk instead put a long enough directory
+ * outside the window again (review of #2863, round 1). Paths do not
+ * overlap, so the windows together read each character a bounded number of
+ * times.
  *
  * Opening at the path start also means a write verb within the window
  * before a long path that is only READ now refuses, as it always did before
@@ -2426,21 +2434,25 @@ export function argumentsOf(segment: string): string[] {
  */
 function writesNear(body: string, protectedName: string): boolean {
   const WINDOW = 80;
+  let scanned = 0;
+  let lastStop = -1;
+  let pathStart = -1;
+  let lastEnd = -1;
+  const windowWrites = (): boolean =>
+    pathStart >= 0 && WRITE_INTENT.test(body.slice(Math.max(0, pathStart - WINDOW), lastEnd + WINDOW));
   for (const m of body.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'))) {
     const at = m.index ?? 0;
-    let start = at;
-    while (start > 0 && at - start < PATH_REACH && !PATH_STOPS.has(body[start - 1])) start--;
-    const from = Math.max(0, start - WINDOW);
-    const slice = body.slice(from, at + protectedName.length + WINDOW);
-    if (WRITE_INTENT.test(slice)) return true;
+    for (; scanned < at; scanned++) if (PATH_STOPS.has(body[scanned])) lastStop = scanned;
+    if (lastStop + 1 !== pathStart) {
+      if (windowWrites()) return true;
+      pathStart = lastStop + 1;
+    }
+    lastEnd = at + m[0].length;
   }
-  return false;
+  return windowWrites();
 }
 
-/** How far back from a name `writesNear` looks for the start of its path. */
-const PATH_REACH = 256;
-
-/** What ends a path word in an interpreter body, read backwards from a name. */
+/** What ends a path word in an interpreter body. */
 const PATH_STOPS = new Set([' ', '\t', '\n', '\r', "'", '"', '`', '(', ',', '=', '[', '{', ';', '+']);
 
 /**
@@ -2816,7 +2828,7 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
   // of a protected artifact. Reading a Python body as shell finds nothing,
   // which is how `python3 <<'PY'` stayed allowed after the shell spellings
   // were closed.
-  for (const [k, { shell, program }] of interpreterPrograms(cmd).entries()) {
+  for (const [k, { shell, program, quoted }] of interpreterPrograms(cmd).entries()) {
     if (shell) {
       const inner = decideBashWrite(program, depth + 1, () => outerFor(getCtx(), `prog:${k}`, -1));
       if (inner.blocked) return inner;
@@ -2827,7 +2839,7 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
     // another route; a declared write verb near a protected name refuses it
     // whatever directory the name sits in. Unlike arm 3, it counts only a
     // name spelled as an absolute path — see `absoluteProtectedNames`.
-    const pf = absoluteProtectedNames(program).find(p => writesNear(program, p));
+    const pf = absoluteProtectedNames(program).find(p => writesNear(program, p) || (quoted !== undefined && writesNear(quoted, p)));
     if (pf) {
       return {
         blocked: true,

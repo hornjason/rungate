@@ -3903,6 +3903,20 @@ describe("#2858: an interpreter body naming a protected artifact beside a write 
     expect(performance.now() - t).toBeLessThan(2000);
   });
 
+  // Review of #2863, round 1: three spellings the window missed. A directory
+  // longer than the first version's walk cap; a herestring, whose program was
+  // read only with its quotes stripped; and a character whose lower case is
+  // longer than itself, which shifted the path word off its leading slash.
+  test.each([
+    ["a 330-character directory, -c", `python3 -c "open('/tmp/${"a".repeat(329)}/${STATE}','w')"`],
+    ["a 330-character directory, a copy", `python3 -c "import shutil; shutil.copyfile('/tmp/s', '/home/u/${"a".repeat(330)}/${SALT}')"`],
+    ["a herestring", `python3 <<< "open('/home/u/.run-store/${STATE}','w')"`],
+    ["a herestring that closes what it opened", `python3 <<< "f=open('/home/u/.rungate/run/${STATE}','w'); f.close()"`],
+    ["a stdin body with a dotted capital I before the write", `python3 <<'PY'\nprint('\u0130')\nopen('/tmp/x/${SALT}','w').write('x')\nPY`],
+  ])("WITNESS: %s is refused", (_l, cmd) => {
+    expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+  });
+
   // ADR-027 decision 3: a body that hides its write verb from the window is
   // allowed. Pinned so the trade is visible; if one turns red, something
   // started reading program bodies again — read the ADR first.
