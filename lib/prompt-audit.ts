@@ -71,8 +71,8 @@ import {
   SURFACE_LINTS,
   USER_SURFACE,
   userLoadsEverySession,
-  probePath,
-  type Probe,
+  onPresence,
+  type PresenceCheck,
   lintRenderedTree,
   readRenderedSurface,
   readUserSurface,
@@ -180,7 +180,7 @@ export function orphanNote(file: string, text: string): string | null {
  * The owner of every line of one rendered file, index 0 for line 1.
  * `packageRoot` is where the brief templates are read from.
  */
-export function lineOwners(file: string, text: string, packageRoot: string = PACKAGE_ROOT, probe: (abs: string) => Probe = probePath): Owner[] {
+export function lineOwners(file: string, text: string, presence: PresenceCheck, packageRoot: string = PACKAGE_ROOT): Owner[] {
   const count = text.split("\n").length;
   const all = (o: Owner): Owner[] => new Array(count).fill(o);
   const harnessExcept = (spec: SectionSpec): Owner[] => {
@@ -209,10 +209,16 @@ export function lineOwners(file: string, text: string, packageRoot: string = PAC
   }
   if (file.startsWith(".claude/agents/")) {
     const name = file.slice(file.lastIndexOf("/") + 1);
-    // Through the probe the audit reads with, so a template that cannot be
-    // read is named on the UNMEASURED line, not taken for absent (#2876 review).
-    const template = probe(join(packageRoot, "templates", "agent-briefs", name)).kind;
-    return template !== "absent" && template !== "unreadable" ? harnessExcept(BRIEF_CONSTRAINTS_SECTION) : all("consumer");
+    // Through the presence the audit reads with, so a template that cannot be
+    // read is named on the UNMEASURED line, not taken for absent (#2876
+    // review). Whether a template exists is a question, not a read, so a
+    // directory or FIFO at its name is no template and is not named (#2878
+    // review rounds 1 and 3).
+    return onPresence(presence(join(packageRoot, "templates", "agent-briefs", name), "either"), {
+      present: kind => (kind === "file" ? harnessExcept(BRIEF_CONSTRAINTS_SECTION) : all("consumer")),
+      unread: () => all("consumer"),
+      absent: () => all("consumer"),
+    });
   }
   return all("consumer");
 }
@@ -310,7 +316,7 @@ function danglingPathFindings(
   surface: RenderedSurface,
   owners: Map<string, Owner[]>,
   places: PathPlaces = projectPlaces(surface.root),
-  probe: (abs: string) => Probe = probePath,
+  presence: PresenceCheck,
 ): AuditFinding[] {
   const out: AuditFinding[] = [];
   for (const [file, text] of surface.files) {
@@ -323,10 +329,15 @@ function danglingPathFindings(
         if (at === null) continue;
         // A finding needs one place whose directory is there, and every place
         // without the file. A place that could not be read is neither: the
-        // user probe names it as unread, so it is never reported as missing
+        // surface's presence names it as unread, so it is never reported as missing
         // (review round 4 of #2844).
-        if (!at.map(p => probe(dirname(p))).some(k => k.kind === "dir")) continue;
-        if (at.map(p => probe(p)).some(k => k.kind !== "absent")) continue;
+        // Every place is asked, so each one that could not be read is named.
+        // Whether a directory is there is a question, not a read: a regular
+        // file at that name is no directory, and is not named (#2878 review round 1).
+        const dirThere = at.map(p => onPresence(presence(dirname(p), "either"), { present: kind => kind === "dir", unread: () => false, absent: () => false }));
+        if (!dirThere.some(Boolean)) continue;
+        const fileThere = at.map(p => onPresence(presence(p, "either"), { present: () => true, unread: () => true, absent: () => false }));
+        if (fileThere.some(Boolean)) continue;
         out.push({
           lint: "dangling-path", file, line: i + 1, owner: owners.get(file)![i],
           message: `line ${i + 1} names \`${token}\`; its directory exists and the file does not`,
@@ -396,7 +407,7 @@ function userFindings(home: string): { root: string; files: number; findings: Au
   const findings: AuditFinding[] = USER_SURFACE_LINTS.flatMap(lint =>
     lint.check(surface).map(f => ({ lint: lint.name, file: f.file, line: lineOf(f.message), owner: "user" as const, message: f.message })),
   );
-  findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners, userPlaces(surface.root, home), surface.probe));
+  findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners, userPlaces(surface.root, home), surface.presence));
   return { root: surface.root, files: surface.files.size, findings: findings.map(f => ({ ...f, file: USER_PREFIX + f.file })), unreadable: surface.unreadable };
 }
 
@@ -411,7 +422,7 @@ function userFindings(home: string): { root: string; files: number; findings: Au
 export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, opts: { home?: string } = {}): PromptAudit {
   const surface = readRenderedSurface(root);
   const owners = new Map<string, Owner[]>();
-  for (const [file, text] of surface.files) owners.set(file, lineOwners(file, text, packageRoot, surface.probe));
+  for (const [file, text] of surface.files) owners.set(file, lineOwners(file, text, surface.presence, packageRoot));
   const ownerAt = (file: string, line: number | null): Owner => {
     const own = owners.get(file);
     if (own === undefined) return "consumer";
@@ -423,7 +434,7 @@ export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, op
     const line = lineOf(f.message);
     return { lint: f.lint, file: f.file, line, owner: ownerAt(f.file, line), message: f.message };
   });
-  findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners, projectPlaces(surface.root), surface.probe));
+  findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners, projectPlaces(surface.root), surface.presence));
   // #2835: a project-owned finding in a file the scaffold keeps only because
   // it predates the stamp says how to take the generator's version.
   for (const f of findings) {

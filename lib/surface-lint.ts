@@ -17,15 +17,61 @@
  * (SC-2805) unchanged.
  */
 
-import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
+import { readdirSync, readFileSync, realpathSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "path";
 
 import { ConfigUnreadable, resolveConfig } from "./config-loader";
-import { codeOf, probePath, type Probe } from "./path-probe";
+import { codeOf, probePath } from "./path-probe";
 import { readFences } from "./markdown-fence";
 import { isPathScoped } from "../scripts/check-instruction-surface";
 
-export { probePath, type Probe };
+/**
+ * What a caller expects at a path (#2878). `file` and `dir` are for a caller
+ * that will read or walk what it finds, so something of the other kind there
+ * is named: it could not be read as expected. A caller that only asks whether
+ * something is there asks `either` and reads `kind`, so nothing it merely
+ * finds is reported as unread (review round 1).
+ */
+export type Expect = "file" | "dir" | "either";
+
+/**
+ * The one answer to "is it there?" on either surface (#2878). Every presence
+ * check in this file and in `lib/prompt-audit.ts` asks it, and takes all
+ * three answers through {@link onPresence}, so no caller can read "could not
+ * be read" as "missing" or skip naming it:
+ *
+ * - **present**: something of the expected kind is there. `kind` says which,
+ *   for a walk that recurses into a directory and reads a file.
+ * - **absent**: nothing is at the name, or something of another kind is: a
+ *   regular file or FIFO where a directory is expected, a directory or FIFO
+ *   where a file is. The second is named, with why, and is still absent.
+ * - **unread**: something is there and cannot be followed or searched. It is
+ *   named with its code.
+ *
+ * The naming is part of the answer: whoever asks records it (#2876 round 3).
+ */
+export type Presence = { is: "present"; kind: "dir" | "file" | "other" } | { is: "absent" } | { is: "unread" };
+
+/** A presence check that names what it could not read, as a surface's reader does. */
+export type PresenceCheck = (abs: string, expect: Expect) => Presence;
+
+/**
+ * Take one of the three answers. The type requires a branch for each, so a
+ * caller cannot fold `unread` into `absent` by omission (#2878).
+ */
+export function onPresence<T>(
+  p: Presence,
+  on: { present: (kind: "dir" | "file" | "other") => T; absent: () => T; unread: () => T },
+): T {
+  switch (p.is) {
+    case "present":
+      return on.present(p.kind);
+    case "absent":
+      return on.absent();
+    case "unread":
+      return on.unread();
+  }
+}
 
 /** The files a consumer's agents load or are pointed at, read whole, when the scaffold rendered them. */
 export const SURFACE_FILES = ["CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md"] as const;
@@ -52,8 +98,8 @@ export interface RenderedSurface {
    * here too, so read it after the lints have run (#2849).
    */
   readonly unreadable: readonly string[];
-  /** {@link probePath}, recording any unreadable answer in `unreadable` under its name. */
-  readonly probe: (abs: string) => Probe;
+  /** {@link Presence} at a path, naming in `unreadable` what is unread or of another kind. */
+  readonly presence: PresenceCheck;
   /** The text at `abs` when it is a file that reads; otherwise `undefined`, with the reason in `unreadable` unless nothing is there. */
   readonly readText: (abs: string) => string | undefined;
 }
@@ -89,8 +135,8 @@ export class NotRenderedSurface extends Error {
  * The rendered surface under `root`, or a refusal naming what a rendered tree
  * would have and this one does not.
  *
- * Every path goes through {@link probePath} (#2849), as the user side has
- * since #2844. A link is followed, so a rule linked in from elsewhere is
+ * Every path goes through the reader's {@link Presence} (#2849, #2878), as
+ * the user side has since #2844. A link is followed, so a rule linked in from elsewhere is
  * linted under its own name. A path that is there and cannot be read is named
  * in `unreadable` and the rest is still read. `AGENTS.md` and the two
  * directory markers count as missing only when nothing that could be them is
@@ -119,27 +165,33 @@ export function readRenderedSurface(root: string): RenderedSurface {
     reader.note(e.path, e.code);
     config = "unread";
   }
-  const agentsMd = probePath(join(abs, "AGENTS.md")).kind;
   for (const f of SURFACE_FILES) reader.read(join(abs, f));
-  // Per directory: whether a surface file is there, read or not.
+  // A file, or something there that could be one; a directory or FIFO at the
+  // name is not AGENTS.md, and is named (#2876 review).
+  const agentsMdMissing = onPresence(reader.presence(join(abs, "AGENTS.md"), "file"), {
+    present: () => false,
+    unread: () => false,
+    absent: () => true,
+  });
+  // Per directory: whether a surface file is there, read or not. A file or
+  // FIFO at the name is named, and is still no marker (#2876 review).
   const present = new Map<string, boolean>();
   for (const d of SURFACE_DIRS) {
     const at = join(abs, d);
-    const p = reader.probe(at);
-    present.set(d, p.kind === "unreadable" || (p.kind === "dir" && reader.walk(at, neverLoaded) > 0));
-    // There, and not a directory: named, and still no marker (#2876 review).
-    if (p.kind === "file" || p.kind === "other") reader.note(at, NOT_A_DIRECTORY);
+    present.set(d, onPresence(reader.presence(at, "dir"), {
+      present: () => reader.walk(at, neverLoaded) > 0,
+      unread: () => true,
+      absent: () => false,
+    }));
   }
 
   const missing: string[] = [];
   if (config === "absent") missing.push(RENDERED_MARKERS[0]);
-  // A file, or something there that could be one; a directory or FIFO at the
-  // name is not AGENTS.md (#2876 review).
-  if (agentsMd !== "file" && agentsMd !== "unreadable") missing.push(RENDERED_MARKERS[1]);
+  if (agentsMdMissing) missing.push(RENDERED_MARKERS[1]);
   if (!present.get(".claude/agents")) missing.push(RENDERED_MARKERS[2]);
   if (!present.get(".claude/rules")) missing.push(RENDERED_MARKERS[3]);
   if (missing.length > 0) throw new NotRenderedSurface(abs, missing);
-  return { root: abs, files: reader.files, unreadable: reader.unreadable, probe: reader.probe, readText: reader.readText };
+  return { root: abs, files: reader.files, unreadable: reader.unreadable, presence: reader.presence, readText: reader.readText };
 }
 
 // ── #2778: the user-level surface ─────────────────────────────────────────
@@ -221,11 +273,13 @@ export function readUserSurface(home: string): UserSurface {
       reader.read(at);
       continue;
     }
-    const p = reader.probe(at);
-    if (p.kind === "dir") reader.walk(at, neverLoaded);
-    else if (p.kind === "file" || p.kind === "other") reader.note(at, NOT_A_DIRECTORY);
+    onPresence(reader.presence(at, "dir"), {
+      present: () => void reader.walk(at, neverLoaded),
+      unread: () => undefined,
+      absent: () => undefined,
+    });
   }
-  return { root, files: reader.files, unreadable: reader.unreadable, probe: reader.probe, readText: reader.readText };
+  return { root, files: reader.files, unreadable: reader.unreadable, presence: reader.presence, readText: reader.readText };
 }
 
 /**
@@ -246,8 +300,42 @@ export const WALK_ENTRY_CAP = 20_000;
 const NOT_A_DIRECTORY = "not a directory";
 
 /**
+ * {@link Presence} at `abs`, naming through `note` what is unread or of
+ * another kind than `expect`. The only caller of {@link probePath} in this
+ * file and in `lib/prompt-audit.ts` (#2878); a reader wraps it with its own
+ * `note`, so the naming cannot be left out.
+ */
+function decidePresence(abs: string, expect: Expect, note: (abs: string, why: string) => void): Presence {
+  const p = probePath(abs);
+  if (p.kind === "absent") return { is: "absent" };
+  if (p.kind === "unreadable") {
+    note(abs, p.code);
+    return { is: "unread" };
+  }
+  if (expect === "dir" && p.kind !== "dir") {
+    note(abs, NOT_A_DIRECTORY);
+    return { is: "absent" };
+  }
+  if (expect === "file" && p.kind !== "file") {
+    note(abs, p.kind === "dir" ? "EISDIR" : "not a regular file");
+    return { is: "absent" };
+  }
+  return { is: "present", kind: p.kind };
+}
+
+/**
+ * A presence check for a caller with no surface, and the paths it named
+ * (#2878). A caller that asks must be able to say what it could not read, so
+ * there is no check that names nothing.
+ */
+export function presenceRecorder(): { presence: PresenceCheck; unreadable: readonly string[] } {
+  const reader = surfaceReader(abs => abs);
+  return { presence: reader.presence, unreadable: reader.unreadable };
+}
+
+/**
  * The one reader both surfaces are read through (#2849): every presence
- * check is {@link probePath}, every unreadable path is named once by
+ * check is {@link decidePresence} (#2878), every unreadable path is named once by
  * `nameOf`, and a read is attempted only on a file. The user side and the
  * project side differ only in how a path is named and which directory
  * entries a walk skips.
@@ -259,11 +347,7 @@ function surfaceReader(nameOf: (abs: string) => string) {
     const entry = `${nameOf(abs)} (${why})`;
     if (!unreadable.includes(entry)) unreadable.push(entry);
   };
-  const probe = (abs: string): Probe => {
-    const p = probePath(abs);
-    if (p.kind === "unreadable") note(abs, p.code);
-    return p;
-  };
+  const presence: PresenceCheck = (abs, expect) => decidePresence(abs, expect, note);
   const attempt = <T>(abs: string, run: () => T): T | undefined => {
     try {
       return run();
@@ -272,13 +356,12 @@ function surfaceReader(nameOf: (abs: string) => string) {
       return undefined;
     }
   };
-  const readText = (abs: string): string | undefined => {
-    const p = probe(abs);
-    if (p.kind === "file") return attempt(abs, () => readFileSync(abs, "utf-8"));
-    if (p.kind === "dir") note(abs, "EISDIR");
-    else if (p.kind === "other") note(abs, "not a regular file");
-    return undefined;
-  };
+  const readText = (abs: string): string | undefined =>
+    onPresence(presence(abs, "file"), {
+      present: () => attempt(abs, () => readFileSync(abs, "utf-8")),
+      unread: () => undefined,
+      absent: () => undefined,
+    });
   /** Read `abs` into `files` under its name; whether it was read. */
   const read = (abs: string): boolean => {
     const text = readText(abs);
@@ -329,17 +412,20 @@ function surfaceReader(nameOf: (abs: string) => string) {
         return met + 1;
       }
       const at = join(abs, name);
-      const p = probe(at);
-      if (p.kind === "dir") met += walk(at, skip, here);
-      else if (p.kind === "unreadable") met += 1;
-      else if (name.endsWith(".md") && p.kind !== "absent") {
-        read(at);
-        met += 1;
-      }
+      met += onPresence(presence(at, "either"), {
+        present: kind => {
+          if (kind === "dir") return walk(at, skip, here);
+          if (!name.endsWith(".md")) return 0;
+          read(at);
+          return 1;
+        },
+        unread: () => 1,
+        absent: () => 0,
+      });
     }
     return met;
   };
-  return { files, unreadable, note, probe, readText, read, walk };
+  return { files, unreadable, note, presence, readText, read, walk };
 }
 
 /** A surface file, or any path inside the rendered root that something is at, read or not. */
@@ -347,7 +433,9 @@ function inRenderedTree(surface: RenderedSurface, file: string): boolean {
   if (surface.files.has(file)) return true;
   const at = resolve(surface.root, file);
   const rel = relative(surface.root, at);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel) && probePath(at).kind !== "absent";
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return false;
+  // Read or not, and named when unread (#2876 round 5).
+  return onPresence(surface.presence(at, "either"), { present: () => true, unread: () => true, absent: () => false });
 }
 
 /**
@@ -464,25 +552,32 @@ export function readTargets(surface: RenderedSurface): ReadTarget[] {
 /**
  * Where a target named in a rendered file resolves: the path, `null` when
  * nothing is there, or `"unread"` when something is there and could not be
- * read (#2849). The surface's probe names that path, so it is never reported
+ * read (#2849). The surface's presence names that path, so it is never reported
  * as missing.
  */
 function resolveTarget(surface: RenderedSurface, target: string, packageRoot: string): string | null | "unread" {
   const local = resolve(surface.root, target);
   // An unreadable local copy is named even when the package answers below: an
   // agent in this tree opens the local one (#2876 review).
-  const here = surface.probe(local).kind;
-  if (here !== "absent" && here !== "unreadable") return local;
+  const here = onPresence(surface.presence(local, "either"), {
+    present: () => local,
+    unread: () => "unread" as const,
+    absent: () => null,
+  });
+  if (here === local) return local;
   // A `node_modules/rungate/…` target the installed package answers is still
   // checked there (#2849 local review).
   const pkg = target.match(/^node_modules\/rungate\/(.+)$/);
   if (pkg !== null) {
     const there = join(packageRoot, pkg[1]);
-    const kind = surface.probe(there).kind;
-    if (kind !== "absent" && kind !== "unreadable") return there;
-    if (kind === "unreadable") return "unread";
+    const answer = onPresence(surface.presence(there, "either"), {
+      present: () => there,
+      unread: () => "unread" as const,
+      absent: () => undefined,
+    });
+    if (answer !== undefined) return answer;
   }
-  return here === "unreadable" ? "unread" : null;
+  return here;
 }
 
 /** Whether a markdown text holds a table its heading or header row calls `name`. */
