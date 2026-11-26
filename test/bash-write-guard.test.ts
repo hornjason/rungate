@@ -3901,15 +3901,10 @@ describe("#2858: an interpreter body naming a protected artifact beside a write 
     expect(performance.now() - t).toBeLessThan(2000);
   });
 
-  // Review of #2863, round 3: the window spans the literal the name sits in,
-  // so neither a separator inside the directory nor a long tail after the
-  // name moves the verb out of reach; and a grouped flag with a capital is
-  // still `-c`.
+  // Review of #2863, round 3: the window closes at the end of the path, not
+  // the name; and a grouped flag with a capital is still `-c`.
   test.each([
     ["a witness with a 200-character tail after the name", `python3 -c "open('/home/u/witnesses/${"a".repeat(200)}.json','w').write('{}')"`],
-    ["a ( in a long directory", `python3 -c "open('/Users/alice/Library/Application Support/Claude Desktop Extension Manager Storage Folder/Dev (Beta)/run-store/${STATE}','w')"`],
-    ["a ( in a long directory, f=open then close", `python3 -c "f=open('/Users/dev/Library/Application Support/Acme Workspace Synchronisation Service Folder Archive/Nested Projects Folder (Beta)/${STATE}','w'); f.close()"`],
-    ["an apostrophe in a double-quoted long directory", `python3 -c 'open("/Users/o'"'"'brien/${"b".repeat(100)}/${STATE}","w")'`],
     ["a grouped -Ic flag", `python3 -Ic "open('/repo/${STATE}','w').write('{}')"`],
   ])("WITNESS: %s is refused", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
@@ -3954,6 +3949,10 @@ describe("#2858: an interpreter body naming a protected artifact beside a write 
       `python3 -c "import shutil; shutil.copy('${longSource}', '${LIVE}/${STATE}')"`,
       // an open-for-write nested three calls deep
       `python3 -c "import os; open(os.path.join(os.path.dirname(os.path.abspath(f)), '${STATE}'), 'w').close()"`,
+      // a separator inside a long directory, more than the window after the
+      // verb (review of #2863, round 3: spanning the whole literal closed it
+      // and newly refused 3 real commands editing specs and plans)
+      `python3 -c "open('/Users/alice/Library/Application Support/Claude Desktop Extension Manager Storage Folder/Dev (Beta)/run-store/${STATE}','w')"`,
       // a path bound to a name, written through it more than the window later
       // (the assignment readers that followed it were deleted with the rest)
       `python3 -c "p = '${LIVE}/${STATE}'${"\nx = 1".repeat(20)}\nopen(p, 'w').write('{}')"`,
