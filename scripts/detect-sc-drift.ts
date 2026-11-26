@@ -35,38 +35,73 @@ export interface StaleDetail {
   keyword: string;  // The keyword that's missing
 }
 
-/** The extensions a file path in a criterion ends in. */
-const FILE_EXT_SOURCE = String.raw`\.(?:ts|js|md|json)`;
+/** The directories a criterion's file path must pass through to be read: the one list (#2897). */
+const LISTED_DIRS: ReadonlySet<string> = new Set(["lib", "scripts", "test", "gates", "workflows", "hooks"]);
+
+/** The extensions a read path ends in, with nothing after them: `lib/parser.tsx` is not `lib/parser.ts` (#2897). */
+const READ_EXTENSIONS = /\.(?:ts|js|md|json)$/;
+
+/** What one token of criterion prose is, read as a path (#2897). */
+export type PathToken =
+  | { kind: "listed"; path: string }
+  | { kind: "unread-file" | "alias" | "absolute" | "pattern" | "url" | "none" };
 
 /**
- * A file path in a criterion, read whole and from its start (#2883). The
- * path must pass through a listed directory, and it is read from the start
- * of its token: a consumer's `src/lib/x.ts` is checked as `src/lib/x.ts`,
- * never as `lib/x.ts`, which is not there (review round 2: reading nothing
- * let a missing nested file pass). A root-relative `./lib/x.ts` or
- * `/lib/x.ts` is the same file as `lib/x.ts` and is read as it (round 1).
- * A token opening with `@` or `~` is an alias or home path this reader
- * cannot resolve, so it is not read (round 2). Both readers below build on
- * this one source, so they cannot disagree about where a path starts.
+ * One token of criterion prose, read as a path, by the rules tabled in
+ * `test/sc-drift.test.ts` (#2897). Both readers below call it, so they cannot
+ * disagree about what a path is. `bound` is false when a separator, a
+ * sentence end or a closing bracket follows the path: such a token ends a
+ * naming, so it cannot be the subject of the clause after it.
+ *
+ * - Quotes and backticks around a token are not part of it, nor is an opening
+ *   parenthesis or bracket. A possessive (`lib/x.ts's code`) names the file,
+ *   and what follows belongs to it, so it does not bind.
+ * - A line reference (`lib/x.ts:42`) names the file.
+ * - A URL, a glob, an alias (`@/`, `~/`) and an absolute path outside the
+ *   project are not paths in this tree. A root-relative `/lib/x.ts` is
+ *   `lib/x.ts`, because its first segment is a listed directory.
+ * - A path is read whole, from its start, when a directory before its file is
+ *   on the list and it ends in a read extension. A scoped segment inside it
+ *   (`node_modules/@scope/…`) is part of it.
+ * - Anything else with a file extension is a file this reader does not read.
  */
-const PATH_SOURCE = String.raw`(?<![\w./@~-])(?:\.?\/)?((?:[\w.-]+\/)*(?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]\`'"]+${FILE_EXT_SOURCE})`;
-
-/** What may close a quoted path before the clause it names: `\`lib/x.ts\` contains [...]` (round 2). */
-const CLOSE_QUOTE_SOURCE = String.raw`[\`'"]?`;
-
-/** A file named directly before a clause, quoted or not, whether or not {@link PATH_SOURCE} reads it. */
-const NAMED_FILE_BEFORE = new RegExp(String.raw`\S+${FILE_EXT_SOURCE}${CLOSE_QUOTE_SOURCE}\s+$`);
+export function classifyPathToken(raw: string): { token: PathToken; bound: boolean } {
+  let core = raw.replace(/^[`'"([]+/, "");
+  let bound = true;
+  for (let prev = ""; prev !== core; ) {
+    prev = core;
+    const separated = core.replace(/[,.;:)\]]+$/, "").replace(/['’]s$/, "");
+    if (separated !== core) bound = false;
+    core = separated.replace(/[`'"]+$/, "");
+  }
+  core = core.replace(/:\d+(?::\d+)?$/, "");
+  const of = (token: PathToken) => ({ token, bound });
+  if (core === "") return of({ kind: "none" });
+  if (core.includes("://")) return of({ kind: "url" });
+  if (/[*?{}<>|]/.test(core)) return of({ kind: "pattern" });
+  if (/^[@~]/.test(core)) return of({ kind: "alias" });
+  core = core.replace(/^\.\//, "");
+  if (core.startsWith("/")) {
+    const rest = core.slice(1);
+    if (!LISTED_DIRS.has(rest.split("/")[0])) return of({ kind: "absolute" });
+    core = rest;
+  }
+  if (!/\.[A-Za-z][A-Za-z0-9]*$/.test(core)) return of({ kind: "none" });
+  const dirs = core.split("/").slice(0, -1);
+  if (!READ_EXTENSIONS.test(core) || !dirs.some(d => LISTED_DIRS.has(d))) return of({ kind: "unread-file" });
+  return of({ kind: "listed", path: core });
+}
 
 /**
- * Extract file paths from SC statement text.
- * Matches patterns like: lib/foo.ts, scripts/bar.ts, test/baz.test.ts, etc.
+ * The file paths a criterion names, for existence checking: every token the
+ * classifier reads as a listed path. Tokens split on whitespace and on the
+ * punctuation that can sit between two paths (#2897).
  */
-function extractFilePaths(statement: string): string[] {
+export function extractFilePaths(statement: string): string[] {
   const paths: string[] = [];
-  const pathPattern = new RegExp(PATH_SOURCE, "g");
-  let match;
-  while ((match = pathPattern.exec(statement)) !== null) {
-    paths.push(match[1]);
+  for (const raw of statement.split(/[\s,;()[\]=]+/)) {
+    const { token } = classifyPathToken(raw);
+    if (token.kind === "listed") paths.push(token.path);
   }
   return paths;
 }
@@ -125,15 +160,15 @@ export function containsClauses(statement: string): Array<{ path: string | null;
   const out: Array<{ path: string | null; keywords: string[] }> = [];
   for (const m of statement.matchAll(/(?<!not )contains \[([^\]]+)\]/g)) {
     const head = statement.slice(0, m.index);
-    const before = head.match(new RegExp(String.raw`${PATH_SOURCE}${CLOSE_QUOTE_SOURCE}\s+$`));
-    // A clause on a file this reader does not read is that file's, not every
-    // path's. `SUCCESS.md` and `config/x.json` sit in no listed directory,
-    // so PATH_SOURCE never reads them. Binding the clause to null would check
-    // its keywords in each other file the criterion names, the #2287 class
-    // (review round 1). Its keywords are checked nowhere, as its existence is
-    // not.
-    if (!before && NAMED_FILE_BEFORE.test(head)) continue;
-    out.push({ path: before ? before[1] : null, keywords: m[1].split(",").map(k => k.trim()).filter(Boolean) });
+    // The token directly before the clause names its file (#2897's table).
+    // A listed path binds it; a word names no file, so the keywords apply to
+    // every path, as before; any other file is this reader's to skip, and its
+    // keywords are checked nowhere rather than lent to other files (#2287).
+    const last = /\S+$/.exec(head.trimEnd())?.[0] ?? "";
+    const { token, bound } = classifyPathToken(last);
+    const keywords = m[1].split(",").map(k => k.trim()).filter(Boolean);
+    if (!bound || token.kind === "none") out.push({ path: null, keywords });
+    else if (token.kind === "listed") out.push({ path: token.path, keywords });
   }
   return out;
 }

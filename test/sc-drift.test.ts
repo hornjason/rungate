@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { containsSubject, detectDrift, extractKeywords, keywordsFor } from "../scripts/detect-sc-drift";
+import { containsClauses, containsSubject, detectDrift, extractFilePaths, extractKeywords, keywordsFor } from "../scripts/detect-sc-drift";
 
 const ROOT = join(import.meta.dir, "..");
 /** Created in `beforeAll`, not at module scope — see #437. */
@@ -345,8 +345,68 @@ describe("#2883: a path is read whole, from its start, never from a segment nest
     expect(keywordsFor("lib/a.ts is wired so that it contains [wired]", "lib/a.ts")).toEqual(["wired"]);
   });
 
-  test("both readers share one path pattern, so they cannot disagree about where a path starts", () => {
+  test("both readers share one token classifier and one directory list, so they cannot disagree about what a path is (#2897)", () => {
     const source = readFileSync(join(ROOT, "scripts", "detect-sc-drift.ts"), "utf-8");
-    expect(source.split("(?:lib|scripts|test|gates|workflows|hooks)").length - 1).toBe(1);
+    expect(source.split(`"workflows"`).length - 1).toBe(1);
+    // The definition and one call from each reader.
+    expect(source.split("classifyPathToken(").length - 1).toBe(3);
+  });
+});
+
+/**
+ * #2897: the token rules, written once as a table and run through both
+ * readers. Each row is a token as it appears in a criterion; `reads` is what
+ * existence checking reads from it, and `subject` is what a `contains [...]`
+ * clause directly after it binds to: a path, `null` (no file named, so the
+ * keywords apply to every path), or `"dropped"` (a file this reader does not
+ * read, so the clause is checked nowhere). `main` is what main read for the
+ * same token, measured on 2d7ac192f, so a reader can see which rows changed.
+ */
+type Subject = string | null | "dropped";
+const PATH_TOKEN_RULES: Array<{ token: string; reads: string[]; subject: Subject; main: { reads: string[]; subject: Subject }; rule: string }> = [
+  { token: "lib/x.ts", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: "lib/x.ts" }, rule: "a path through a listed directory" },
+  { token: "src/lib/x.ts", reads: ["src/lib/x.ts"], subject: "src/lib/x.ts", main: { reads: ["src/lib/x.ts"], subject: "src/lib/x.ts" }, rule: "read whole, from the token's start" },
+  { token: "a/lib/b/c.md", reads: ["a/lib/b/c.md"], subject: "a/lib/b/c.md", main: { reads: ["a/lib/b/c.md"], subject: "a/lib/b/c.md" }, rule: "a listed directory anywhere before the file" },
+  { token: "lib/x.test.ts", reads: ["lib/x.test.ts"], subject: "lib/x.test.ts", main: { reads: ["lib/x.test.ts"], subject: "lib/x.test.ts" }, rule: "dots inside the file name" },
+  { token: "./lib/x.ts", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: "lib/x.ts" }, rule: "prefix ./ is the same file" },
+  { token: "/lib/x.ts", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: "lib/x.ts" }, rule: "a root-relative path whose first segment is listed" },
+  { token: "/scripts/rooted-gone.ts", reads: ["scripts/rooted-gone.ts"], subject: "scripts/rooted-gone.ts", main: { reads: ["scripts/rooted-gone.ts"], subject: "scripts/rooted-gone.ts" }, rule: "root-relative, second listed directory" },
+  { token: "/home/u/proj/lib/y.ts", reads: [], subject: "dropped", main: { reads: ["home/u/proj/lib/y.ts"], subject: "home/u/proj/lib/y.ts" }, rule: "an absolute path outside the project is not read under it" },
+  { token: "@/lib/x.ts", reads: [], subject: "dropped", main: { reads: [], subject: "dropped" }, rule: "an alias this reader cannot resolve" },
+  { token: "~/lib/x.ts", reads: [], subject: "dropped", main: { reads: [], subject: "dropped" }, rule: "a home path this reader cannot resolve" },
+  { token: "node_modules/@scope/pkg/scripts/run.js", reads: ["node_modules/@scope/pkg/scripts/run.js"], subject: "node_modules/@scope/pkg/scripts/run.js", main: { reads: [], subject: "dropped" }, rule: "a scoped segment inside a path is part of it" },
+  { token: "`lib/a.ts`", reads: ["lib/a.ts"], subject: "lib/a.ts", main: { reads: ["lib/a.ts"], subject: "lib/a.ts" }, rule: "backticks around the path" },
+  { token: "\"lib/q.ts\"", reads: ["lib/q.ts"], subject: "lib/q.ts", main: { reads: ["lib/q.ts"], subject: "lib/q.ts" }, rule: "double quotes around the path" },
+  { token: "(lib/x.ts", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: "lib/x.ts" }, rule: "an opening parenthesis" },
+  { token: "lib/x.ts:42", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "a line reference names the file" },
+  { token: "lib/x.ts,", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a separator after the path ends the naming" },
+  { token: "lib/x.ts.", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a sentence end after the path ends the naming" },
+  { token: "lib/x.ts's", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a possessive names the file, and what follows belongs to it (SC-1487's prose)" },
+  { token: ".github/workflows/release.yml", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "a workflow file is not read, so its clause is checked nowhere rather than everywhere (SC-831's shape)" },
+  { token: "lib/x.ts)", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a closing parenthesis ends a parenthetical, not a subject" },
+  { token: "[lib/x.ts]", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a closing bracket, likewise" },
+  { token: "lib/parser.tsx", reads: [], subject: "dropped", main: { reads: ["lib/parser.ts"], subject: null }, rule: "the extension ends at the token's end" },
+  { token: "hooks/pre-commit.sh", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "an extension this reader does not read" },
+  { token: "SUCCESS.md", reads: [], subject: "dropped", main: { reads: [], subject: "dropped" }, rule: "a file in no listed directory" },
+  { token: "config/x.json", reads: [], subject: "dropped", main: { reads: [], subject: "dropped" }, rule: "a directory not on the list" },
+  { token: "pkg-lib/x.ts", reads: [], subject: "dropped", main: { reads: [], subject: "dropped" }, rule: "a directory whose name only ends in a listed one" },
+  { token: "lib/*.ts", reads: [], subject: "dropped", main: { reads: ["lib/*.ts"], subject: "lib/*.ts" }, rule: "a glob is a pattern, not a file" },
+  { token: "https://example.com/lib/x.ts", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "a URL is not a path in this tree" },
+  { token: "wired", reads: [], subject: null, main: { reads: [], subject: null }, rule: "a plain word names no file" },
+];
+
+describe("#2897: one table of token rules, run through both readers", () => {
+  for (const row of PATH_TOKEN_RULES) {
+    test(`${row.token} — ${row.rule}`, () => {
+      expect(extractFilePaths(`see ${row.token} here`), "what existence checking reads").toEqual(row.reads);
+      const clauses = containsClauses(`${row.token} contains [kw]`);
+      const subject: Subject = clauses.length === 0 ? "dropped" : clauses[0].path;
+      expect(subject, "what a contains clause after it binds to").toBe(row.subject);
+    });
+  }
+
+  test("the table names main's reading for every row, and says which rows changed", () => {
+    const changed = PATH_TOKEN_RULES.filter(r => JSON.stringify(r.main) !== JSON.stringify({ reads: r.reads, subject: r.subject })).map(r => r.token);
+    expect(changed).toEqual(["/home/u/proj/lib/y.ts", "node_modules/@scope/pkg/scripts/run.js", "lib/x.ts:42", ".github/workflows/release.yml", "lib/parser.tsx", "hooks/pre-commit.sh", "lib/*.ts", "https://example.com/lib/x.ts"]);
   });
 });
