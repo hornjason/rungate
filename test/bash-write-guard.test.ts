@@ -4005,6 +4005,40 @@ describe("#2859: an accident guard, sized and judged by the real directory", () 
     }
   });
 
+  // #2866 review round 3: a reserved word starts a command too. Main refused
+  // `do ln …` by reading `ln` anywhere, so missing it was this PR's
+  // regression; `then cp` was missed on main as well.
+  test("a link or copy after do, then, else or ! is read as the command", () => {
+    for (const cmd of [
+      `for f in a; do ln -s /tmp/scratch/a ${LIVE}/run/${STATE}; done`,
+      `for i in 1; do ln -s ${LIVE}/run/${STATE} ${FIX}/ws; done`,
+      `if [ -f a ]; then cp /tmp/x ${LIVE}/run/${STATE}; fi`,
+      `for f in x; do cp /tmp/a.json ${LIVE}/run/${STATE}; done`,
+      `if false; then :; else ln -s ${LIVE}/run/${SALT} ${FIX}/s; fi`,
+      `! ln -s ${LIVE}/run/${STATE} ${FIX}/x`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [
+      `if grep -q ln ${LIVE}/hooks/X.hook.ts; then echo y; fi`,
+      `for f in a; do cp /tmp/a ${FIX}/${STATE}; done`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  // #2866 review round 3: the walk read the lexically resolved path, so a
+  // link before a `..` was never looked at. A fixture never needs `..`.
+  test("a path with a .. component has no scratch exemption", () => {
+    inScratch(base => {
+      const away = mkdtempSync(join(tmpdir(), "bw-away-"));
+      try {
+        mkdirSync(join(away, "inner"));
+        symlinkSync(join(away, "inner"), join(base, "l"));
+        expect(decideBashWrite(`echo '{}' > ${base}/l/../${STATE}`).blocked).toBe(true);
+        expect(decideBashWrite(`echo '{}' > ${base}/${STATE}`).blocked).toBe(false);
+      } finally {
+        rmSync(away, { recursive: true, force: true });
+      }
+    });
+  });
+
   test("cp's link flag is read as the shell hands it over, and ln behind a wrapper is ln", () => {
     for (const cmd of [
       `cp '-s' ${LIVE}/run/${STATE} ${FIX}/x.json`,

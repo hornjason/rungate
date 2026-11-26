@@ -235,7 +235,8 @@ type Exemption = (path: string) => boolean;
 const NO_EXEMPTION: Exemption = () => false;
 
 export function scratchExempt(path: string): boolean {
-  if (!isScratchPath(path)) return false;
+  // The walk reads the resolved path, so a link before a `..` would go unseen (#2866).
+  if (!isScratchPath(path) || path.split('/').includes('..')) return false;
   const target = resolve(path);
   const root = scratchRoots().find(r => target === r || target.startsWith(r + '/'));
   if (!root) return false;
@@ -260,13 +261,13 @@ export function scratchExempt(path: string): boolean {
 /**
  * `ln`, `link`, or `cp` with a link flag where a command STARTS: the text's
  * start, after an operator, `(`, `$(`, `{`, a backtick, a quote, a list
- * bracket or `find -exec`, and behind a wrapper with whatever words it takes
+ * bracket, `find -exec` or `do`/`then`, and behind a wrapper with the words it takes
  * (`timeout -s KILL 30 ln`, `eval ln`). An argument is not one: `grep -nw ln`
  * is a read. A wrapped command that only mentions it (`nice grep ln`)
  * over-reads, the direction this module may be wrong in (#2866).
  */
 const LINK_AT_COMMAND = new RegExp(
-  String.raw`(?:^|[;&|({\x60'"[,]|\$\(|\s-(?:exec|ok)(?:dir)?\s)\s*` +
+  String.raw`(?:^|[;&|({\x60'"[,]|\$\(|\s-(?:exec|ok)(?:dir)?\s)\s*(?:(?:do|then|else|elif|if|while|until|!)\s+)*` +
     String.raw`(?:(?:sudo|env|nohup|time|command|exec|xargs|nice|timeout|stdbuf|doas|caffeinate|eval)\s+(?:\S+\s+)*?)?` +
     String.raw`(?:['"]?(?:\S*\/)?(?:ln|link)['"]?(?=[\s,'"\]]|$)|cp\s(?:[^|;&\n)]*\s)?['"]?-(?:[A-Za-z]*[ls]|-sy|-l))`,
 );
@@ -1035,8 +1036,8 @@ export function dequote(s: string): string {
   return s.replace(/['"]/g, '');
 }
 
-/** Wrappers that delegate to the real command word rather than being one (#2866: `timeout`, `nice` too). */
-const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs|nice|timeout|stdbuf|doas|caffeinate|exec)$/;
+/** Wrappers and reserved words that come before the real command word (#2866: `timeout`, `do`, `then`). */
+const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs|nice|timeout|stdbuf|doas|caffeinate|exec|do|then|else|elif|if|while|until|!)$/;
 
 /**
  * A variable assignment prefix, by the POSIX shape: an identifier, an
