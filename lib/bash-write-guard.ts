@@ -2456,7 +2456,10 @@ function writesNear(body: string, protectedName: string): boolean {
   const windowWrites = (): boolean => {
     if (pathStart < 0) return false;
     let pathEnd = lastEnd;
-    while (pathEnd < body.length && !PATH_STOPS.has(body[pathEnd])) pathEnd++;
+    // Whitespace ends the tail, though not the start: a tail is a file name,
+    // and without it the "path" ran on through prose to the next quote
+    // (2 real commands editing a spec newly refused, measured).
+    while (pathEnd < body.length && !PATH_STOPS.has(body[pathEnd]) && !/\s/.test(body[pathEnd])) pathEnd++;
     return WRITE_INTENT.test(body.slice(Math.max(0, pathStart - WINDOW), pathEnd + WINDOW));
   };
   for (const m of body.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu'))) {
@@ -2536,7 +2539,10 @@ const IN_PLACE = [
 
 /** The `-c` body of a shell invocation, dequoted. */
 function shellBody(segment: string): string {
-  const m = /\s-[a-z]*c\s+([\s\S]+)$/.exec(segment);
+  // The same flag grammar as `programBody`: a grouped capital (`bash -Ec`)
+  // and a body attached to its flag (`bash -c'…'`) are both a `-c` body
+  // (security review of #2863's round 3).
+  const m = /\s-[A-Za-z]*c\s*([\s\S]+)$/.exec(segment);
   return m ? dequote(m[1]).trim() : '';
 }
 

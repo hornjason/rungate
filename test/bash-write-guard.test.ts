@@ -3906,6 +3906,8 @@ describe("#2858: an interpreter body naming a protected artifact beside a write 
   test.each([
     ["a witness with a 200-character tail after the name", `python3 -c "open('/home/u/witnesses/${"a".repeat(200)}.json','w').write('{}')"`],
     ["a grouped -Ic flag", `python3 -Ic "open('/repo/${STATE}','w').write('{}')"`],
+    ["a shell body behind a grouped -Ec flag", `bash -Ec 'echo x > /opt/bwprobe/${STATE}'`],
+    ["a shell body attached to its -c flag", `bash -c'echo x > /opt/bwprobe/${STATE}'`],
   ])("WITNESS: %s is refused", (_l, cmd) => {
     expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
   });
