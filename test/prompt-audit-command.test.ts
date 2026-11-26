@@ -35,7 +35,7 @@ import {
   type PromptAudit,
 } from "../lib/prompt-audit";
 import { symptomKeys } from "../lib/finding-arbiter";
-import { SURFACE_LINTS, USER_SURFACE, UnreadSurface, WALK_ENTRY_CAP, lintRenderedTree } from "../lib/surface-lint";
+import { SURFACE_LINTS, USER_SURFACE, UnreadSurface, WALK_ENTRY_CAP, lintRenderedTree, readRenderedSurface } from "../lib/surface-lint";
 import { ACCEPT_GENERATED_RULE, acceptGeneratedAdvice, generatedVersionSteps, stampProvenance } from "../lib/rule-provenance";
 import { commitFixture, initFixtureRepo } from "./helpers/git-fixture";
 
@@ -862,6 +862,37 @@ describe("#2849: the project-side reader tells a missing file from one it cannot
   test("CONTROL: a table named in a real file that lacks it is still a finding", () => {
     const root = planted(["CLAUDE.md", "Find the spec in the Specs table in docs/x.md."], ["docs/x.md", "# Notes\n\nno table here"]);
     expect(of(promptAudit(root), "dangling-read-target")).toEqual(["consumer CLAUDE.md"]);
+  });
+
+  test.skipIf(asRoot)("#2875: a rungate config.json at mode 000 is named as unread, never a missing marker, and the run reports", () => {
+    const root = planted(["CLAUDE.md", PRESSURE]);
+    const config = join(root, ".claude", "rungate", "config.json");
+    const audit = withMode(config, 0o000, () => promptAudit(root));
+    expect(unread(audit)).toContain(".claude/rungate/config.json (EACCES)");
+    // The rendered-surface reader names it itself, not some later probe of a path a rule mentions.
+    expect(withMode(config, 0o000, () => readRenderedSurface(root).unreadable)).toContain(".claude/rungate/config.json (EACCES)");
+    expect(of(audit, "pressure-density")).toContain("consumer CLAUDE.md");
+  });
+
+  test("#2875: a rungate config.json that is a dangling link is named as unread, never a missing marker", () => {
+    const root = planted(["CLAUDE.md", PRESSURE]);
+    const config = join(root, ".claude", "rungate", "config.json");
+    rmSync(config);
+    symlinkSync("nowhere.json", config);
+    const audit = promptAudit(root);
+    expect(unread(audit)).toContain(".claude/rungate/config.json (ENOENT)");
+    // The rendered-surface reader names it itself: a rule mentioning the path is probed too, and names it the same way.
+    expect(readRenderedSurface(root).unreadable).toContain(".claude/rungate/config.json (ENOENT)");
+    expect(of(audit, "pressure-density")).toContain("consumer CLAUDE.md");
+  });
+
+  test("#2875 CONTROL: a tree with no rungate config is still not a rendered consumer, and a malformed one still throws", () => {
+    const root = planted();
+    rmSync(join(root, ".claude", "rungate"), { recursive: true, force: true });
+    expect(() => promptAudit(root)).toThrow(/not a rendered consumer/);
+    const bad = planted(["CLAUDE.md", PRESSURE]);
+    writeFileSync(join(bad, ".claude", "rungate", "config.json"), "{ not json");
+    expect(() => promptAudit(bad)).toThrow(SyntaxError);
   });
 
   test("readRenderedSurface: a CLAUDE.md that is a FIFO is named and never opened, so the run cannot hang on it", () => {

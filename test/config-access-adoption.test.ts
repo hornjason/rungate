@@ -34,11 +34,13 @@
  */
 
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "fs";
+import { spawnSync } from "child_process";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
 import { enginePrefixReading, loadRoleConfig, readBoardConfig, readBoardInputs, readProjectSlug, readRemoteHosts } from "../lib/config-readers";
+import { ConfigUnreadable, configLocation, resolveConfig, tryLoadRungateConfig } from "../lib/config-loader";
 import { loadRegistry } from "../lib/create-sc";
 import { loadValidRoles, loadRoleBriefPaths } from "../scripts/grade-deterministic";
 import { getProjectSlug } from "../scripts/parallel-ship";
@@ -345,6 +347,136 @@ describe("SC-1450: absent is empty, malformed throws - the distinction ADR-001 D
       expect(() => loadRoleConfig(bad)).toThrow();
       expect(() => readProjectSlug(bad)).toThrow();
       expect(() => readRemoteHosts(bad)).toThrow();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ── #2875 ───────────────────────────────────────────────────────────────────
+
+describe("#2875: a config that is there and cannot be read is never read as absent", () => {
+  const asRoot = process.getuid?.() === 0; // root reads and searches mode-000 paths anyway
+  /** Run `fn` with `path` at `mode`, restoring it after, so cleanup can remove it. */
+  const withMode = <T>(path: string, mode: number, fn: () => T): T => {
+    chmodSync(path, mode);
+    try {
+      return fn();
+    } finally {
+      chmodSync(path, 0o755);
+    }
+  };
+  /** What resolveConfig did: its status, or the unreadable path and code it threw. */
+  const reading = (root: string): string => {
+    try {
+      return resolveConfig(root).status;
+    } catch (e) {
+      if (e instanceof ConfigUnreadable) return `unreadable ${e.path.slice(root.length + 1)} (${e.code})`;
+      throw e;
+    }
+  };
+  const CONFIG = ".claude/rungate/config.json";
+
+  test.skipIf(asRoot)("a config.json at mode 000 is unreadable, naming the path and EACCES", () => {
+    const root = makeRoot("directory");
+    try {
+      expect(withMode(join(root, CONFIG), 0o000, () => reading(root))).toBe(`unreadable ${CONFIG} (EACCES)`);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test.skipIf(asRoot)("a .claude/rungate that cannot be searched is unreadable, not absent", () => {
+    const root = makeRoot("directory");
+    try {
+      expect(withMode(join(root, ".claude", "rungate"), 0o000, () => reading(root))).toBe(`unreadable ${CONFIG} (EACCES)`);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("a config.json that is a dangling link is unreadable, not absent", () => {
+    const root = makeRoot("neither");
+    try {
+      mkdirSync(join(root, ".claude", "rungate"));
+      symlinkSync("nowhere.json", join(root, CONFIG));
+      expect(reading(root)).toBe(`unreadable ${CONFIG} (ENOENT)`);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("a directory at config.json's name is unreadable, never opened as a file", () => {
+    const root = makeRoot("neither");
+    try {
+      mkdirSync(join(root, CONFIG), { recursive: true });
+      expect(reading(root)).toBe(`unreadable ${CONFIG} (EISDIR)`);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("a FIFO at config.json's name is unreadable and never opened, so the read cannot hang", () => {
+    const root = makeRoot("neither");
+    const child = mkdtempSync(join(tmpdir(), "rungate-2875-child-"));
+    scratch.push(child);
+    try {
+      mkdirSync(join(root, ".claude", "rungate"));
+      const made = spawnSync("mkfifo", [join(root, CONFIG)]);
+      expect(made.status, String(made.stderr)).toBe(0);
+      // In a child with a deadline: opening a FIFO with no writer blocks the
+      // whole process, so an in-process read that hung would hang the suite.
+      const script = join(child, "read-config.ts");
+      writeFileSync(
+        script,
+        `import { resolveConfig } from ${JSON.stringify(join(import.meta.dir, "..", "lib", "config-loader.ts"))};\n` +
+          `try { resolveConfig(${JSON.stringify(root)}); console.log("no throw"); } catch (e) { console.log((e as Error).name, (e as { code?: string }).code); }\n`,
+      );
+      const r = spawnSync("bun", [script], { encoding: "utf-8", timeout: 20_000 });
+      expect(r.signal, "the read hung on the FIFO").toBeNull();
+      expect(r.stdout.trim()).toBe("ConfigUnreadable not a regular file");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test.skipIf(asRoot)("tryLoadRungateConfig throws for an unreadable config, where it returns null for an absent one", () => {
+    const root = makeRoot("directory");
+    try {
+      expect(() => withMode(join(root, CONFIG), 0o000, () => tryLoadRungateConfig(root))).toThrow(ConfigUnreadable);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test.skipIf(asRoot)("configLocation names an unreadable config rather than throwing, so an error can cite it", () => {
+    const root = makeRoot("directory");
+    try {
+      expect(withMode(join(root, ".claude", "rungate"), 0o000, () => configLocation(root))).toBe(join(root, CONFIG));
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("CONTROL: no config is absent, a regular file at .claude is absent, and malformed JSON still throws its own error", () => {
+    const none = makeRoot("neither");
+    const fileAtClaude = mkdtempSync(join(tmpdir(), "rungate-2875-"));
+    scratch.push(fileAtClaude);
+    writeFileSync(join(fileAtClaude, ".claude"), "not a directory");
+    const bad = makeRoot("malformed");
+    try {
+      expect(reading(none)).toBe("absent");
+      expect(tryLoadRungateConfig(none)).toBeNull();
+      expect(reading(fileAtClaude)).toBe("absent");
+      expect(reading(makeRoot("directory"))).toBe("resolved");
+      let thrown: unknown;
+      try {
+        resolveConfig(bad);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(SyntaxError);
+      expect(thrown).not.toBeInstanceOf(ConfigUnreadable);
     } finally {
       cleanup();
     }
