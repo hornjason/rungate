@@ -293,13 +293,16 @@ describe("#2878: presence is decided in one place in both files", () => {
     return out;
   };
 
+  /** An answer read by hand: `.is` compared with `==`, `===`, `!=` or `!==`, or switched on (review round 2). */
+  const HAND_READ = /\.is\s*[!=]==?|switch\s*\([^)]*\.is\s*\)/;
+
   /** Every direct presence decision in `src`, by function: the one binding both cases below read. */
   const refusals = (f: string, src: string): string[] => {
     const refused: string[] = [];
     for (const b of blocks(src)) {
       for (const call of ["statSync(", "lstatSync(", "existsSync("]) if (b.body.includes(call)) refused.push(`${f} ${b.name}: ${call}`);
       if (b.name !== "decidePresence" && /\bprobePath\(/.test(b.body)) refused.push(`${f} ${b.name}: probePath(`);
-      if (b.name !== "onPresence" && /\.is\s*[!=]==/.test(b.body)) refused.push(`${f} ${b.name}: reads .is by hand`);
+      if (b.name !== "onPresence" && HAND_READ.test(b.body)) refused.push(`${f} ${b.name}: reads .is by hand`);
     }
     return refused;
   };
@@ -330,11 +333,15 @@ describe("#2878: presence is decided in one place in both files", () => {
       const src = readFileSync(join(ROOT, f), "utf-8");
       const planted = src +
         "\nfunction plantedCheck(p: string) { return statSync(p).isFile() || probePath(p).kind === \"file\"; }\n" +
-        "function plantedRead(s: { presence: (a: string, e: string) => { is: string } }, p: string) { return s.presence(p, \"file\").is === \"present\"; }\n";
+        "function plantedRead(s: { presence: (a: string, e: string) => { is: string } }, p: string) { return s.presence(p, \"file\").is === \"present\"; }\n" +
+        "function plantedLoose(a: { is: string }) { return a.is == \"absent\"; }\n" +
+        "function plantedSwitch(a: { is: string }) { switch (a.is) { case \"unread\": return 1; default: return 0; } }\n";
       expect(refusals(f, planted)).toEqual([
         `${f} plantedCheck: statSync(`,
         `${f} plantedCheck: probePath(`,
         `${f} plantedRead: reads .is by hand`,
+        `${f} plantedLoose: reads .is by hand`,
+        `${f} plantedSwitch: reads .is by hand`,
       ]);
     }
   });
