@@ -1669,6 +1669,9 @@ const IN_PLACE = [
  */
 
 /** The `-c` body of a shell invocation, dequoted. */
+/** What `eval` runs: the words after it, joined as the shell joins them before re-reading. */
+const evalBody = (seg: string) => { const w = scanSegment(seg).words; return w.slice(w.findIndex(x => commandWord(x) === 'eval') + 1).join(' '); };
+
 function shellBody(segment: string): string {
   // The same flag grammar as `programBody`: a grouped capital (`bash -Ec`)
   // and a body attached to its flag (`bash -c'…'`) are both a `-c` body
@@ -1917,15 +1920,12 @@ export function decideBashWrite(cmd: string, depth = 0, linkInCommand = false): 
     const isInterpreter = isInterpreterWord(word) && /\s-[A-Za-z]*[ce]\b/.test(code);
     const isMutatingFind = word === 'find' && FIND_MUTATING.test(code);
 
-    // 3a. A shell `-c` body is shell. Read it as shell rather than scanning
-    //     it for Node and Python idioms it will never contain (#1176).
-    if (isInterpreter && isShellWord(word)) {
-      const body = shellBody(seg);
-      if (body) {
-        const inner = decideBashWrite(body, depth + 1, links);
-        if (inner.blocked) return inner;
-      }
-    }
+    // 3a. A shell `-c` body is shell, so it is read as shell, not scanned for
+    //     Node and Python idioms (#1176). So is what `eval` runs: its words,
+    //     quoted or not, joined into one command line (#2870 round 5).
+    const sh = isInterpreter && isShellWord(word) ? shellBody(seg) : word === 'eval' ? evalBody(seg) : '';
+    const inner = sh ? decideBashWrite(sh, depth + 1, links) : ALLOW;
+    if (inner.blocked) return inner;
 
     if (isInterpreter || isMutatingFind) {
       // #1214 asked for a third reading here — an imported project symbol

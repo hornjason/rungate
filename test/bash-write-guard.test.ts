@@ -4128,6 +4128,27 @@ describe("#2859: an accident guard, sized and judged by the real directory", () 
     expect(decideBashWrite(`echo '$(cp /tmp/x ${LIVE}/run/${SALT})'`).blocked).toBe(false);
   });
 
+  // #2870 review round 5: `eval` joins its words and runs them as a command
+  // line, so a quoted body is the same command as the unquoted one. Before,
+  // the quoted body was one word and no verb, and the copy was allowed.
+  test("a copy or redirect in a quoted eval body is read as the command it runs (#2870)", () => {
+    for (const cmd of [
+      `eval 'cp -p src ${LIVE}/run/${STATE}'`,
+      `eval 'cp /tmp/forged.json ${LIVE}/run/${STATE}'`,
+      `eval "cp /tmp/forged.json ${LIVE}/run/${STATE}"`,
+      `eval 'cp /tmp/forged.json' "${LIVE}/run/${STATE}"`,
+      `command eval 'mv /tmp/a ${LIVE}/run/${SALT}'`,
+      `eval 'echo x > ${LIVE}/run/${STATE}'`,
+      `true && eval 'cp /tmp/a ${LIVE}/witnesses/x'`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [
+      `eval 'echo cp /tmp/a ${LIVE}/run/${STATE}'`,
+      `echo eval 'cp /tmp/a ${LIVE}/run/${STATE}'`,
+      `eval "$(ssh-agent -s)"`,
+      `eval 'cat ${LIVE}/run/${STATE}'`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
   test("cp's link flag is read as the shell hands it over, and ln behind a wrapper is ln", () => {
     for (const cmd of [
       `cp '-s' ${LIVE}/run/${STATE} ${FIX}/x.json`,
