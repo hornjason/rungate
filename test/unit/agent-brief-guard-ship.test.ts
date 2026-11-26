@@ -341,6 +341,31 @@ describe('AgentBriefGuard — ship-active enforcement', () => {
       expect(r.signalEvents.some(e => e.advisory_reason === 'no_ship_session')).toBe(false);
     });
 
+    // #2899 review round 1: a marker whose date cannot be read is no evidence
+    // of a session, at either reader; and a stale marker must not hide a live
+    // ship run's workflow-state.json.
+    it('a marker with an unreadable date is no session: the advisory is printed', () => {
+      createShipMarker('65-bad-date', 65, 'not-a-date');
+      const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+      expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(true);
+    });
+
+    it('an unreadable date beside a fresh marker does not hide the fresh one', () => {
+      createShipMarker('65-bad-date', 65, 'yesterday');
+      createShipMarker('66-fresh', 66, new Date().toISOString());
+      const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+      expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(false);
+    });
+
+    it('a stale marker does not hide a live ship run in workflow-state.json', () => {
+      createShipMarker('60-old', 60, new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString());
+      mkdirSync(join(workDir, '66-live'), { recursive: true });
+      writeFileSync(join(workDir, '66-live', 'workflow-state.json'), JSON.stringify({ issue: 66, phase: 'BUILD' }));
+      const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+      expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(false);
+      expect(r.signalEvents.some(e => e.advisory_reason === 'no_ship_session')).toBe(false);
+    });
+
     it('the permission-mode refusal is unchanged with no ship session', () => {
       const r = validateAgentBrief(brief(undefined) as never, workDir, tempDir);
       expect(r.action).toBe('block');

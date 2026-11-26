@@ -117,6 +117,11 @@ function detectAgentDef(input: BriefValidationInput): AgentDef | null {
   return null;
 }
 
+/** A marker names an issue and a time that parses; one whose time cannot be read is no evidence of a session (#2899 review). */
+function usableMarker(m: ShipMarker): boolean {
+  return Boolean(m.issue && m.ts) && Number.isFinite(new Date(m.ts).getTime());
+}
+
 function checkShipActive(workDir: string): ShipMarker | null {
   if (!existsSync(workDir)) return null;
   const markers: ShipMarker[] = [];
@@ -131,7 +136,7 @@ function checkShipActive(workDir: string): ShipMarker | null {
           const raw = readFileSync(markerPath, 'utf-8').trim();
           if (!raw.startsWith('{')) continue;
           const parsed = JSON.parse(raw) as ShipMarker;
-          if (parsed.issue && parsed.ts) markers.push(parsed);
+          if (usableMarker(parsed)) markers.push(parsed);
         } catch {}
       }
       // Nested scan for 2-level slugs
@@ -145,7 +150,7 @@ function checkShipActive(workDir: string): ShipMarker | null {
             const raw = readFileSync(nested, 'utf-8').trim();
             if (!raw.startsWith('{')) continue;
             const parsed = JSON.parse(raw) as ShipMarker;
-            if (parsed.issue && parsed.ts) markers.push(parsed);
+            if (usableMarker(parsed)) markers.push(parsed);
           } catch {}
         }
       } catch {}
@@ -310,9 +315,11 @@ export function validateAgentBrief(
   // only a user can start a ship run, so a block stopped every agent working
   // an issue outside one, and a project in direct-ship mode never starts one.
   if (isEngineer) {
-    const shipMarker = checkShipActive(workDir) || checkWorkflowState(workDir);
-    const isStale = shipMarker ? (Date.now() - new Date(shipMarker.ts).getTime()) > SHIP_MARKER_TTL_MS : true;
-    if (!shipMarker || isStale) {
+    // Either source is enough: a stale marker must not hide a live ship run
+    // in workflow-state.json (#2899 review), which carries no age of its own.
+    const marker = checkShipActive(workDir);
+    const markerFresh = marker !== null && Date.now() - new Date(marker.ts).getTime() <= SHIP_MARKER_TTL_MS;
+    if (!markerFresh && checkWorkflowState(workDir) === null) {
       outputs.push(
         `ADVISORY: no ship session — no fresh .ship-active marker in ~/.rungate/. This Engineer spawn runs without what a ship run's SCOPE adds: the issue's scope, its acceptance criteria, DISCOVERY, and sizing. Put them in the brief yourself, or start a ship run if this work needs its gates.`
       );
