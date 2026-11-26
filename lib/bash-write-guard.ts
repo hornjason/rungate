@@ -268,7 +268,7 @@ export function scratchExempt(path: string): boolean {
  */
 const LINK_AT_COMMAND = new RegExp(
   String.raw`(?:^|[;&|({\x60'"[,]|\$\(|\s-(?:exec|ok)(?:dir)?\s)\s*(?:(?:do|then|else|elif|if|while|until|!)\s+)*` +
-    String.raw`(?:(?:sudo|env|nohup|time|command|exec|xargs|nice|timeout|stdbuf|doas|caffeinate|eval)\s+(?:\S+\s+)*?)?` +
+    String.raw`(?:(?:sudo|env|nohup|time|command|exec|xargs|nice|timeout|stdbuf|doas|caffeinate|ionice|setsid|busybox|builtin|eval)\s+(?:\S+\s+)*?)?` +
     String.raw`(?:['"]?(?:\S*\/)?(?:ln|link)['"]?(?=[\s,'"\]]|$)|cp\s(?:[^|;&\n)]*\s)?['"]?-(?:[A-Za-z]*[ls]|-sy|-l))`,
 );
 
@@ -1037,7 +1037,7 @@ export function dequote(s: string): string {
 }
 
 /** Wrappers and reserved words that come before the real command word (#2866: `timeout`, `do`, `then`). */
-const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs|nice|timeout|stdbuf|doas|caffeinate|exec|do|then|else|elif|if|while|until|!)$/;
+const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs|nice|timeout|stdbuf|doas|caffeinate|exec|ionice|setsid|busybox|builtin|do|then|else|elif|if|while|until|!)$/;
 
 /**
  * A variable assignment prefix, by the POSIX shape: an identifier, an
@@ -1047,53 +1047,36 @@ const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs|nice|timeout|stdbuf|doas
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]*\])?=/;
 
 /**
+ * Where a verb in `verb` stands among a segment's words (#2867): the command
+ * word, or behind wrappers, past their flags and the word a flag takes
+ * (`timeout -s KILL 30 cp`, `sudo -u x cp`). -1 when the command is anything
+ * else, so `grep -c cp a b` is a read. `\cp` and `(cp` are `cp`.
+ */
+function verbAt(words: string[], verb: RegExp): number {
+  let wrapped = false;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i].replace(/^[({\\]+/, '').replace(/^.*\//, '');
+    if (!w || ASSIGNMENT.test(words[i]) || /^\d+(?:\.\d+)?[smhd]?$/.test(w)) continue;
+    if (verb.test(w)) return i;
+    if (WRAPPERS.test(w)) wrapped = true;
+    else if (!wrapped || !(w.startsWith('-') || words[i - 1].startsWith('-'))) return -1;
+  }
+  return -1;
+}
+
+/**
  * The command word of a segment — the first token that is not a wrapper, an
  * assignment or an option. Read off `stripQuoted`, because a quoted token is
  * an argument.
  */
 export function commandWord(segment: string): string {
-  // #1184: read the DEQUOTED token stream, not the quote-stripped one. This
-  // is the mirror of #1176's F2 — there the TARGET was read off a view the
-  // writer controls, here the VERB was: `stripQuoted` deleted `"chmod"`
-  // outright, so `"chmod" 777 x.hook.ts` resolved its command word to `777`
-  // and the shell ran chmod anyway. Quoting a verb changes nothing about
-  // what executes, so it must change nothing about what the guard reads.
-  //
-  // The grep-PATTERN false positive this function was protecting against is
-  // unaffected: `grep -nE "chmod" f` still resolves to `grep`, because the
-  // real verb comes FIRST and a pattern is never in first position.
-  //
-  // #1196: the TOKENS come from `scanSegment`, the same quote-aware pass the
-  // redirect scan uses. The #1184 spelling was `dequote(...).split(/\s+/)`,
-  // which removes the quote characters and THEN splits on whitespace — so a
-  // quoted value's internal spaces become token boundaries. `A="1 grep" cp
-  // <protected> /tmp/x` split to `A=1`, `grep`, `cp`, …: the `=` skip
-  // consumed only `A=1` and the verb resolved to `grep`, which is on the
-  // read-only side, so the `cp` was allowed. A quoted span must stay inside
-  // its word; `readWord` already does that, and now there is one tokeniser
-  // rather than two spellings of the idea.
+  // #1184/#1196: the DEQUOTED tokens of `scanSegment`, so `"chmod" 777 x` is
+  // chmod and `A="1 grep" cp …` is cp; a pattern is never in first position.
   for (const raw of scanSegment(segment).words) {
-    // A token carrying WHITESPACE is not a verb. It is what the quote-aware
-    // tokeniser above is for — `A="1 grep"` is one word — and the same
-    // property makes `--body "## Goal … chflags uchg …"` one word too. The
-    // first spelling of this fix returned that whole document as the command
-    // word, and `decideBashWrite` tests `IN_PLACE` against `${word} ${code}`:
-    // a `gh issue create` whose body described chflags on a hook was refused,
-    // which is the recorded `pai-config#474` family. The shell cannot run a
-    // verb named `chmod 777` either, so nothing executable is lost.
+    // A token with whitespace is a quoted argument (`--body "… chflags …"`),
+    // not a verb (pai-config#474). An assignment is read on the RAW token,
+    // before the path strip takes its `=` (`FOO=/x/grep chmod …`, #1196).
     if (/\s/.test(raw)) continue;
-    // An assignment prefix is recognised on the RAW token, before the path
-    // strip. #1196: the strip runs `^.*\/` and takes the `=` away with the
-    // directory part, so `FOO=/x/grep` arrived at the `includes('=')` test
-    // spelled `grep` and was returned as the command word — a fake verb in
-    // front of the real one. `FOO=/x/grep chmod 777 <hook>` was ALLOW on
-    // main and ALLOW behind the first #1196 fix; `chmod 777 <hook>` BLOCKs.
-    // Four arms were reachable this way. Same defect this issue names, a
-    // different assignment shape: the prefix hides the verb either way.
-    //
-    // Matched by the POSIX shape rather than by `includes('=')` so a real
-    // path is not mistaken for one — `/opt/a=b/bin/tool` does not start
-    // with an identifier, and the test below still catches the rest.
     if (ASSIGNMENT.test(raw)) continue;
     const tok = raw
       .replace(/^[({\\]+/, '') // `(cmd …`, `{ cmd …`, `\cmd` — alias bypass
@@ -1473,12 +1456,21 @@ export function writeTargets(segment: string, whole: string = segment): string[]
   // `cp`/`mv` take the LAST non-option argument as the destination. Reading
   // the second token instead — which this did until #1120 — mis-parses every
   // invocation carrying a flag: `cp -p src /x/workflow-state.json` read the
-  // destination as `src` and never examined the real one.
-  const word = commandWord(segment);
-  if (word === 'cp' || word === 'mv' || word === 'install' || word === 'rsync') {
-    // after the verb, not after a wrapper (`timeout 30 cp a b`, #2866)
-    const args = words.slice(words.findIndex(w => w.replace(/^.*\//, '') === word) + 1).filter(a => !a.startsWith('-'));
-    if (args.length >= 2) {
+  // destination as `src` and never examined the real one. `verbAt` finds the
+  // verb behind any wrapper and its flags (#2867).
+  const at = verbAt(words, /^(?:cp|mv|install|rsync)$/);
+  if (at !== -1) {
+    const args: string[] = [];
+    let dir: string | null = null; // `-t DIR`, `-tDIR`, `--target=DIR` (any prefix); rsync's `-t` is times
+    for (let i = at + 1; i < words.length; i++) {
+      const [name, ...value] = words[i].split('=');
+      const long = name.length >= 3 && '--target-directory'.startsWith(name);
+      const short = name.startsWith('--') ? null : /^-[A-Za-z]*?t(.*)$/.exec(words[i]);
+      if (!words[at].endsWith('rsync') && (long || short)) dir = (long ? value.join('=') : short![1]) || words[++i] || null;
+      else if (!words[i].startsWith('-')) args.push(words[i]);
+    }
+    if (dir !== null) for (const src of args) targets.push(`${dir.replace(/\/+$/, '')}/${src.replace(/^.*\//, '')}`);
+    else if (args.length >= 2) {
       const dest = args[args.length - 1];
       targets.push(dest);
       // When the destination is a DIRECTORY the real sink is
