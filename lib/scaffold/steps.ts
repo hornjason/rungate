@@ -3614,14 +3614,21 @@ export function buildJunitArtifactStep(indent: string, testCommand: string, leg:
   const lines = [
     `# #1173. The per-case durations, kept so they can accumulate across`,
     `# runs — one run cannot say whether a case has regressed.`,
+    `# #2903: timing data, so a failed upload must not fail a required job`,
+    `# whose suite passed; the next step says it was lost instead.`,
     `- name: Keep this run's per-case durations`,
+    `  id: keep-durations`,
     `  if: always()`,
+    `  continue-on-error: true`,
     `  uses: ${actionRef("actions/upload-artifact")}`,
     `  with:`,
     `    name: rungate-junit-\${{ github.run_attempt }}${leg}`,
     `    path: ${ciJunitOutfile(leg)}`,
     `    if-no-files-found: warn`,
     `    retention-days: 14`,
+    `- name: Say that this run's per-case durations were not kept`,
+    `  if: always() && steps.keep-durations.outcome == 'failure'`,
+    `  run: echo "::warning title=Per-case durations not kept::The upload of rungate-junit-\${{ github.run_attempt }}${leg} failed, so this run's per-case durations are lost. The suite's own result is unaffected."`,
   ];
   return `${lines.map(line => `${indent}${line}`).join("\n")}\n`;
 }

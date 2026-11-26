@@ -1,4 +1,4 @@
-# generated-sha: 1d42b5928b10a749
+# generated-sha: ff9582394b866762
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 name: CI
 
@@ -179,14 +179,21 @@ jobs:
           key: rungate-persist-${{ hashFiles('.rungate/reporails-cache.json') }}
       # #1173. The per-case durations, kept so they can accumulate across
       # runs — one run cannot say whether a case has regressed.
+      # #2903: timing data, so a failed upload must not fail a required job
+      # whose suite passed; the next step says it was lost instead.
       - name: Keep this run's per-case durations
+        id: keep-durations
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: rungate-junit-${{ github.run_attempt }}-${{ matrix.shard }}
           path: ${{ runner.temp }}/rungate-junit-${{ matrix.shard }}.xml
           if-no-files-found: warn
           retention-days: 14
+      - name: Say that this run's per-case durations were not kept
+        if: always() && steps.keep-durations.outcome == 'failure'
+        run: echo "::warning title=Per-case durations not kept::The upload of rungate-junit-${{ github.run_attempt }}-${{ matrix.shard }} failed, so this run's per-case durations are lost. The suite's own result is unaffected."
       # #1190. The aggregate below counts these instead of asking the Actions
       # API: `gh` is a GitHub-hosted-image fact rather than a runner fact, and
       # `actions: read` is a scope a consumer's token has to be granted. A
