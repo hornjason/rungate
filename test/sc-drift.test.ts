@@ -343,6 +343,9 @@ describe("#2883: a path is read whole, from its start, never from a segment nest
     expect(keywordsFor("SUCCESS.md contains [foo] and lib/a.ts exists", "lib/a.ts")).toEqual([]);
     // Punctuated, the unread file still keeps its clause to itself (#2907 review).
     expect(keywordsFor("hooks/pre-commit.sh, contains [set -e] and lib/a.ts contains [foo]", "lib/a.ts")).toEqual(["foo"]);
+    // A punctuated listed path keeps its clause too, and so does a path with no read extension (round 2).
+    expect(keywordsFor("lib/a.ts, contains [foo] and lib/b.ts exists", "lib/b.ts")).toEqual([]);
+    expect(keywordsFor("scripts/build contains [x] and lib/a.ts contains [y]", "lib/a.ts")).toEqual(["y"]);
     // CONTROL: a clause that names no file is still checked in every path, as before.
     expect(keywordsFor("lib/a.ts is wired so that it contains [wired]", "lib/a.ts")).toEqual(["wired"]);
   });
@@ -381,12 +384,12 @@ const PATH_TOKEN_RULES: Array<{ token: string; reads: string[]; subject: Subject
   { token: "\"lib/q.ts\"", reads: ["lib/q.ts"], subject: "lib/q.ts", main: { reads: ["lib/q.ts"], subject: "lib/q.ts" }, rule: "double quotes around the path" },
   { token: "(lib/x.ts", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: "lib/x.ts" }, rule: "an opening parenthesis" },
   { token: "lib/x.ts:42", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "a line reference names the file" },
-  { token: "lib/x.ts,", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a separator after the path ends the naming" },
-  { token: "lib/x.ts.", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a sentence end after the path ends the naming" },
-  { token: "lib/x.ts's", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a possessive names the file, and what follows belongs to it (SC-1487's prose)" },
+  { token: "lib/x.ts,", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "a separator after the path still names it, so its clause is lent to no other file (#2907 review)" },
+  { token: "lib/x.ts.", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "a sentence end after the path, likewise" },
+  { token: "lib/x.ts's", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "a possessive names the file (SC-1487's prose)" },
   { token: ".github/workflows/release.yml", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "a workflow file is not read, so its clause is checked nowhere rather than everywhere (SC-831's shape)" },
-  { token: "lib/x.ts)", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a closing parenthesis ends a parenthetical, not a subject" },
-  { token: "[lib/x.ts]", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a closing bracket, likewise" },
+  { token: "lib/x.ts)", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "a closing parenthesis, likewise" },
+  { token: "[lib/x.ts]", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "brackets, likewise" },
   { token: "lib/parser.tsx", reads: [], subject: "dropped", main: { reads: ["lib/parser.ts"], subject: null }, rule: "the extension ends at the token's end" },
   { token: "hooks/pre-commit.sh", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "an extension this reader does not read" },
   { token: "SUCCESS.md", reads: [], subject: "dropped", main: { reads: [], subject: "dropped" }, rule: "a file in no listed directory" },
@@ -400,14 +403,19 @@ const PATH_TOKEN_RULES: Array<{ token: string; reads: string[]; subject: Subject
   { token: "lib/x.ts:L42", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "an L-prefixed line names the file" },
   { token: "lib/x.ts#L42", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "a line anchor names the file" },
   { token: "lib/a.md#some-heading", reads: ["lib/a.md"], subject: "lib/a.md", main: { reads: ["lib/a.md"], subject: null }, rule: "a heading anchor names the file" },
-  { token: "lib/x.ts?", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "a question mark ends the naming" },
-  { token: "lib/x.ts—the", reads: ["lib/x.ts"], subject: null, main: { reads: ["lib/x.ts"], subject: null }, rule: "text joined by a dash ends the naming" },
+  { token: "lib/x.ts?", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "a question mark, likewise" },
+  { token: "lib/x.ts—the", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "text joined by a dash does not stop the path naming its file" },
   { token: "<lib/x.ts>", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "angle brackets are not part of the path" },
   { token: "**lib/x.ts**", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: null }, rule: "emphasis is not part of the path" },
   { token: "key:lib/x.ts", reads: ["lib/x.ts"], subject: "lib/x.ts", main: { reads: ["lib/x.ts"], subject: "lib/x.ts" }, rule: "a prefix before the path is not part of it" },
   { token: "hooks/pre-commit.sh,", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "an unread file is skipped, punctuated or not" },
   { token: "SUCCESS.md's", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "an unread file is skipped, possessive or not" },
   { token: "src/*/lib/x.ts", reads: [], subject: "dropped", main: { reads: ["lib/x.ts"], subject: "lib/x.ts" }, rule: "a glob anywhere in the token is a pattern" },
+  // #2907 review round 2.
+  { token: "../lib/x.ts", reads: [], subject: "dropped", main: { reads: ["../lib/x.ts"], subject: "../lib/x.ts" }, rule: "a path through .. leaves the tree, so it is not read under it" },
+  { token: "scripts/build", reads: [], subject: "dropped", main: { reads: [], subject: null }, rule: "a path with a directory and no read extension is a file this reader does not read" },
+  { token: "Node.js", reads: [], subject: "dropped", main: { reads: [], subject: "dropped" }, rule: "a bare name with a read extension is a root file, as #2884 read it: SUCCESS.md and Node.js look alike" },
+  { token: "notes.yml", reads: [], subject: null, main: { reads: [], subject: null }, rule: "a bare name with any other extension is a word" },
 ];
 
 describe("#2897: one table of token rules, run through both readers", () => {
@@ -422,6 +430,6 @@ describe("#2897: one table of token rules, run through both readers", () => {
 
   test("the table names main's reading for every row, and says which rows changed", () => {
     const changed = PATH_TOKEN_RULES.filter(r => JSON.stringify(r.main) !== JSON.stringify({ reads: r.reads, subject: r.subject })).map(r => r.token);
-    expect(changed).toEqual(["/home/u/proj/lib/y.ts", "node_modules/@scope/pkg/scripts/run.js", "lib/x.ts:42", ".github/workflows/release.yml", "lib/parser.tsx", "hooks/pre-commit.sh", "lib/*.ts", "https://example.com/lib/x.ts", "lib/x.ts:10-20", "lib/x.ts:L42", "lib/x.ts#L42", "lib/a.md#some-heading", "<lib/x.ts>", "**lib/x.ts**", "hooks/pre-commit.sh,", "SUCCESS.md's", "src/*/lib/x.ts"]);
+    expect(changed).toEqual(["/home/u/proj/lib/y.ts", "node_modules/@scope/pkg/scripts/run.js", "lib/x.ts:42", "lib/x.ts,", "lib/x.ts.", "lib/x.ts's", ".github/workflows/release.yml", "lib/x.ts)", "[lib/x.ts]", "lib/parser.tsx", "hooks/pre-commit.sh", "lib/*.ts", "https://example.com/lib/x.ts", "lib/x.ts:10-20", "lib/x.ts:L42", "lib/x.ts#L42", "lib/a.md#some-heading", "lib/x.ts?", "lib/x.ts—the", "<lib/x.ts>", "**lib/x.ts**", "hooks/pre-commit.sh,", "SUCCESS.md's", "src/*/lib/x.ts", "../lib/x.ts", "scripts/build"]);
   });
 });
