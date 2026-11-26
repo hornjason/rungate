@@ -732,6 +732,26 @@ describe("#2849: the project-side reader tells a missing file from one it cannot
     expect(of(audit, "pressure-density")).toContain("consumer CLAUDE.md");
   });
 
+  test("#2876 review: once the cap stops a walk, a later surface directory is named as not walked, not read as missing", () => {
+    // the fan-out from the cap row, under .claude/rules, which is walked first
+    const root = planted();
+    for (let i = 0; i <= 10; i++) mkdirSync(join(root, "vendor", `l${i}`), { recursive: true });
+    for (let i = 0; i < 10; i++) for (const n of ["a", "b", "c"]) symlinkSync(join("..", `l${i + 1}`), join(root, "vendor", `l${i}`, n));
+    writeFileSync(join(root, "vendor", "l10", "x.md"), "leaf\n");
+    symlinkSync(join("..", "..", "vendor", "l0"), join(root, ".claude", "rules", "fan"));
+    const audit = promptAudit(root);
+    expect(unread(audit)).toContain(`the walk stopped after ${WALK_ENTRY_CAP} entries`);
+    expect(unread(audit)).toContain(".claude/agents (not walked: the entry cap was reached)");
+  }, 30_000);
+
+  test.skipIf(asRoot)("#2876 review: an agent-brief template the owner reading cannot open is named, not taken for absent", () => {
+    const pkg = mkdtempSync(join(scratch, "pkg-2876-"));
+    mkdirSync(join(pkg, "templates", "agent-briefs"), { recursive: true });
+    writeFileSync(join(pkg, "templates", "agent-briefs", "marcus.md"), "brief\n");
+    const audit = withMode(join(pkg, "templates", "agent-briefs"), 0o000, () => promptAudit(rendered, pkg));
+    expect(unread(audit)).toMatch(/templates\/agent-briefs\/marcus\.md \(EACCES\)/);
+  });
+
   test("#2876 review: a project surface directory that is a regular file is named", () => {
     const root = planted();
     rmSync(join(root, ".claude", "commands"), { recursive: true, force: true });

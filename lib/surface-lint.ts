@@ -349,7 +349,13 @@ function surfaceReader(nameOf: (abs: string) => string) {
    * them (#2876 review). A regular file or FIFO with another name is neither.
    */
   const walk = (abs: string, skip: (name: string) => boolean, inside: ReadonlySet<string> = new Set()): number => {
-    if (capped) return 0;
+    // Past the cap a directory is named, not skipped, and counts as one that
+    // may hold surface files, so a later marker is not read as missing (#2876
+    // review).
+    if (capped) {
+      note(abs, "not walked: the entry cap was reached");
+      return 1;
+    }
     const real = attempt(abs, () => realpathSync(abs));
     if (real === undefined) return 1;
     if (inside.has(real)) {

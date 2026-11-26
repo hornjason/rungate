@@ -56,7 +56,7 @@
  * such finding is the user's, and only harness-owned findings become
  * upstream drafts, so none of them is ever drafted.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 
 import { BRIEF_CONSTRAINTS_SECTION, HARD_CONSTRAINTS_SECTION, readPreservedSection, type SectionSpec } from "./agents-md-sections";
@@ -180,7 +180,7 @@ export function orphanNote(file: string, text: string): string | null {
  * The owner of every line of one rendered file, index 0 for line 1.
  * `packageRoot` is where the brief templates are read from.
  */
-export function lineOwners(file: string, text: string, packageRoot: string = PACKAGE_ROOT): Owner[] {
+export function lineOwners(file: string, text: string, packageRoot: string = PACKAGE_ROOT, probe: (abs: string) => Probe = probePath): Owner[] {
   const count = text.split("\n").length;
   const all = (o: Owner): Owner[] => new Array(count).fill(o);
   const harnessExcept = (spec: SectionSpec): Owner[] => {
@@ -209,7 +209,10 @@ export function lineOwners(file: string, text: string, packageRoot: string = PAC
   }
   if (file.startsWith(".claude/agents/")) {
     const name = file.slice(file.lastIndexOf("/") + 1);
-    return existsSync(join(packageRoot, "templates", "agent-briefs", name)) ? harnessExcept(BRIEF_CONSTRAINTS_SECTION) : all("consumer");
+    // Through the probe the audit reads with, so a template that cannot be
+    // read is named on the UNMEASURED line, not taken for absent (#2876 review).
+    const template = probe(join(packageRoot, "templates", "agent-briefs", name)).kind;
+    return template !== "absent" && template !== "unreadable" ? harnessExcept(BRIEF_CONSTRAINTS_SECTION) : all("consumer");
   }
   return all("consumer");
 }
@@ -408,7 +411,7 @@ function userFindings(home: string): { root: string; files: number; findings: Au
 export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, opts: { home?: string } = {}): PromptAudit {
   const surface = readRenderedSurface(root);
   const owners = new Map<string, Owner[]>();
-  for (const [file, text] of surface.files) owners.set(file, lineOwners(file, text, packageRoot));
+  for (const [file, text] of surface.files) owners.set(file, lineOwners(file, text, packageRoot, surface.probe));
   const ownerAt = (file: string, line: number | null): Owner => {
     const own = owners.get(file);
     if (own === undefined) return "consumer";
