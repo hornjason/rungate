@@ -275,6 +275,16 @@ export function readUserSurface(home: string): UserSurface {
 }
 
 /**
+ * How many directory entries one reader visits before it stops walking (#2849
+ * security review). Following links lets a tree of links that each point at
+ * the next directory expand exponentially; the cycle guard stops only a link
+ * back to a directory the walk is inside. One machine's whole user surface was
+ * 928 `.md` files (round 1 of #2844), so this leaves room for any real
+ * surface. Past it the walk stops, and says so in `unreadable`.
+ */
+export const WALK_ENTRY_CAP = 20_000;
+
+/**
  * The one reader both surfaces are read through (#2849): every presence
  * check is {@link probePath}, every unreadable path is named once by
  * `nameOf`, and a read is attempted only on a file. The user side and the
@@ -314,6 +324,8 @@ function surfaceReader(nameOf: (abs: string) => string) {
     if (text !== undefined) files.set(nameOf(abs), text);
     return text !== undefined;
   };
+  let entries = 0;
+  let capped = false;
   /**
    * Every `.md` under `abs`, at any depth, following links: Claude Code loads
    * a linked skill or rule through its link, so two links to one directory
@@ -326,6 +338,7 @@ function surfaceReader(nameOf: (abs: string) => string) {
    * linked directory) and not counted.
    */
   const walk = (abs: string, skip: (name: string) => boolean, inside: ReadonlySet<string> = new Set()): number => {
+    if (capped) return 0;
     const real = attempt(abs, () => realpathSync(abs));
     if (real === undefined) return 1;
     if (inside.has(real)) {
@@ -338,6 +351,12 @@ function surfaceReader(nameOf: (abs: string) => string) {
     let met = 0;
     for (const name of names.sort((x, y) => x.localeCompare(y))) {
       if (skip(name)) continue;
+      if (capped) break;
+      if (++entries > WALK_ENTRY_CAP) {
+        capped = true;
+        note(abs, `the walk stopped after ${WALK_ENTRY_CAP} entries`);
+        return met + 1;
+      }
       const at = join(abs, name);
       const p = probe(at);
       if (p.kind === "dir") met += walk(at, skip, here);

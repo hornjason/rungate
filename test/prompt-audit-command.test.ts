@@ -35,7 +35,7 @@ import {
   type PromptAudit,
 } from "../lib/prompt-audit";
 import { symptomKeys } from "../lib/finding-arbiter";
-import { SURFACE_LINTS, USER_SURFACE, UnreadSurface, lintRenderedTree } from "../lib/surface-lint";
+import { SURFACE_LINTS, USER_SURFACE, UnreadSurface, WALK_ENTRY_CAP, lintRenderedTree } from "../lib/surface-lint";
 import { ACCEPT_GENERATED_RULE, acceptGeneratedAdvice, generatedVersionSteps, stampProvenance } from "../lib/rule-provenance";
 import { commitFixture, initFixtureRepo } from "./helpers/git-fixture";
 
@@ -729,6 +729,19 @@ describe("#2849: the project-side reader tells a missing file from one it cannot
     expect(pressure).toContain("consumer .claude/commands/shared/x.md");
     expect(pressure.filter(f => f.includes("node_modules") || f.includes(".hidden"))).toEqual([]);
   });
+
+  test("walk: links that fan out stop at the entry cap, and the stop is named, so the audit cannot be made to run forever", () => {
+    // ten levels, each holding three links to the next: 3^10 paths, and no cycle
+    const root = planted();
+    for (let i = 0; i <= 10; i++) mkdirSync(join(root, "vendor", `l${i}`), { recursive: true });
+    for (let i = 0; i < 10; i++) for (const n of ["a", "b", "c"]) symlinkSync(join("..", `l${i + 1}`), join(root, "vendor", `l${i}`, n));
+    writeFileSync(join(root, "vendor", "l10", "x.md"), "leaf\n");
+    symlinkSync(join("..", "..", "vendor", "l0"), join(root, ".claude", "commands", "fan"));
+    const started = Date.now();
+    const audit = promptAudit(root);
+    expect(unread(audit)).toContain(`the walk stopped after ${WALK_ENTRY_CAP} entries`);
+    expect(Date.now() - started).toBeLessThan(20_000);
+  }, 30_000);
 
   test("resolveTarget: a node_modules/rungate target the installed package answers is checked there, even when the local copy is a dangling link", () => {
     const root = planted(["CLAUDE.md", "Find it in the Zebra table in node_modules/rungate/README.md."]);
