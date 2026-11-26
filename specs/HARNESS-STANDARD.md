@@ -12770,3 +12770,4 @@ named the harness skill `ship-issue` on 2026-11-26.
 `docs/adr/ADR-029-rename-the-ship-skill.md` orders the change.
 
 - [ ] SC-2819: No file rungate generates for a consumer, and no live source, spec or test of rungate's own, tells an agent to call `Skill("ship")`; they name `Skill("ship-issue")`, and only dated records under `docs/adr/`, `docs/research/` and `reference/` keep the old name
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
