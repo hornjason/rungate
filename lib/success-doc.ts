@@ -135,9 +135,6 @@ export interface SuccessClaim {
   statement: string;
   /** The text after `**How it fails:**`, or null when the line is absent. */
   howItFails: string | null;
-  /** The `## ` section it sits under, and whether it took the `N. **…**` form (#2868). */
-  section: string;
-  numbered: boolean;
 }
 
 export interface SuccessDoc {
@@ -149,28 +146,30 @@ export interface SuccessDoc {
 }
 
 /**
- * The claim numbers a SUCCESS.md states, sorted and once each, in either
- * layout `parseSuccessDoc` reads. A `### Claim N` heading is a claim wherever
- * it sits; a `N. **…**` line, which is ordinary markdown, only under a claims
- * section (#2868). A claim whose statement `unfilled()` reads as unwritten
- * states nothing. SC-2623's `serves:` check and the filing gate's `claimsIn`
- * both read claims through this, so a consumer's file is read the way
- * rungate's is (#2865).
+ * The claim numbers a SUCCESS.md states, sorted and once each, as
+ * `parseSuccessDoc` reads them. A claim whose statement `unfilled()` reads as
+ * unwritten states nothing. SC-2623's `serves:` check and the filing gate's
+ * `claimsIn` both read claims through this, and `successViolations` reads
+ * the same parse, so a consumer's file is read the way rungate's is (#2865).
  */
-const CLAIM_SECTIONS = /^(?:Done, for the harness|The claims)\b/;
 export function successClaimNumbers(text: string): number[] {
-  const stated = parseSuccessDoc(text).claims.filter(
-    c => (!c.numbered || CLAIM_SECTIONS.test(c.section)) && !unfilled(c.statement),
-  );
+  const stated = parseSuccessDoc(text).claims.filter(c => !unfilled(c.statement));
   return [...new Set(stated.map(c => c.number))].sort((a, b) => a - b);
 }
+
+/**
+ * The sections a `N. **…**` claim may sit under. That form is ordinary
+ * markdown, so elsewhere it is a list, not a claim (#2868); a `### Claim N`
+ * heading is a claim wherever it sits. A list above any `## ` heading counts.
+ */
+const CLAIM_SECTIONS = /^(?:Done, for the harness|The claims)\b/;
 
 /** Read the structure out of a SUCCESS.md. Pure; takes the text. */
 export function parseSuccessDoc(text: string): SuccessDoc {
   const claims: SuccessClaim[] = [];
   const standingRows: number[] = [];
   const placeholderLines: number[] = [];
-  const lines = text.split("\n");
+  const lines = text.split(/\r?\n/); // a CRLF file reads as an LF one (#2868)
 
   let current: SuccessClaim | null = null;
   let section = "";
@@ -186,14 +185,13 @@ export function parseSuccessDoc(text: string): SuccessDoc {
     if (h2) section = h2[1].trim();
 
     let heading: RegExpExecArray | null = null;
-    let numbered = false;
     for (const [k, form] of CLAIM_FORMS.entries()) {
       heading = form.exec(line);
-      numbered = k === 1;
+      if (heading && k === 1 && section !== "" && !CLAIM_SECTIONS.test(section)) heading = null;
       if (heading) break;
     }
     if (heading) {
-      current = { number: Number(heading[1]), statement: heading[2].trim(), howItFails: null, section, numbered };
+      current = { number: Number(heading[1]), statement: heading[2].trim(), howItFails: null };
       claims.push(current);
       continue;
     }

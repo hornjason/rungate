@@ -76,7 +76,7 @@ export interface SpecRequirementReading {
 }
 
 function frontmatterField(content: string, key: string): string | null {
-  const fm = content.match(/^---\n([\s\S]*?)\n---/);
+  const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!fm) return null;
   const m = fm[1].match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
   return m ? m[1].trim() : null;
@@ -101,7 +101,7 @@ export function readSpecRequirements(specsDir: string, rel: string): SpecRequire
  * would otherwise read as no key at all — an opt-in that silently opts out.
  */
 function servesField(content: string): string | null {
-  const fm = content.match(/^---\n([\s\S]*?)\n---/);
+  const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!fm) return null;
   const m = fm[1].match(/^serves:[ \t]*(.*)$/m);
   return m ? m[1].trim() : null;

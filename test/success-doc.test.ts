@@ -389,7 +389,9 @@ describe("SC-1709: both claim forms parse, and the real documents are the cases"
     const numberedDoc = FILLED
       .replace(
         "### Claim 1 — a spec with no testable criteria is rejected, not silently skipped",
-        "1. **a spec with no testable criteria is rejected, not silently skipped**",
+        // #2868: a numbered list is a claim only under a claims section, as
+        // in rungate's own SUCCESS.md; a `### Claim N` heading needs none.
+        "## The claims\n\n1. **a spec with no testable criteria is rejected, not silently skipped**",
       )
       .replace(/\*\*How it fails:\*\*/, "   Check:");
     const numbered = successViolations(numberedDoc, NO_RESIDUE_CHECK);
@@ -402,11 +404,7 @@ describe("SC-1709: both claim forms parse, and the real documents are the cases"
     // left it green.
     const h = parseSuccessDoc(FILLED).claims;
     const n = parseSuccessDoc(numberedDoc).claims;
-    // #2868: the parse records which form each claim took, so compare
-    // everything else, and the form marker on its own.
-    const strip = (cs: typeof h) => cs.map(({ numbered: _form, ...rest }) => rest);
-    expect(strip(n), "the two claim forms do not parse to the same structure").toEqual(strip(h));
-    expect([n[0]?.numbered, h[0]?.numbered]).toEqual([true, false]);
+    expect(n, "the two claim forms do not parse to the same structure").toEqual(h);
     expect(h.length, "the comparison above is over an empty list").toBeGreaterThan(0);
     expect(numbered.violations).toEqual(heading.violations);
   });

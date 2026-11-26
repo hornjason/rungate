@@ -26,7 +26,7 @@ import {
   specIsReferenced,
   testableViolations,
 } from "../lib/spec-requirements";
-import { successClaimNumbers } from "../lib/success-doc";
+import { successClaimNumbers, successViolations } from "../lib/success-doc";
 import { claimsIn } from "../lib/issue-filing-gate";
 import { collectSpecFiles } from "../lib/spec-files";
 import { parseCriteria, supersededStatement } from "../lib/spec-evidence";
@@ -354,6 +354,25 @@ describe("SC-2623: a spec says which SUCCESS.md claim it serves", () => {
     expect(none).toHaveLength(1);
     expect(none[0]).toContain("states no claims yet");
     expect(none[0]).not.toContain("could not be read");
+  });
+
+  // #2868 review round 2: the scope lives in the one parse, so the validator
+  // agrees with the gate, and a CRLF file reads like an LF one, both layouts
+  // and a spec's frontmatter alike.
+  test("SC-2623 (#2868): the validator, the gate and the serves check read one claim list, CRLF included", () => {
+    const background = "# S\n## Background\n\n1. **Users want the tool to be fast**\nCheck: the timing suite passes\n";
+    expect(claimsIn(background)).toEqual({ kind: "unwritten" });
+    expect(successViolations(background, null).violations.join("\n")).toContain("defines no claims");
+    expect(successClaimNumbers(TEMPLATE_MD.replace(/\n/g, "\r\n"))).toEqual([1, 2]);
+    const dir = specDir();
+    try {
+      writeFileSync(join(dir, "S.md"), "---\r\ndoc-type: spec\r\ngoverns: x\r\ntestable: true\r\nserves: 99\r\n---\r\n\r\n- [ ] SC-9001: a thing\r\n");
+      const v = servesViolations([readSpecRequirements(dir, "S.md")], [1, 2]);
+      expect(v, "a CRLF spec's serves: line went unread").toHaveLength(1);
+      expect(v[0]).toContain("claim 99");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("SC-2623: a declared claim that exists is clean, and an absent key is untouched", () => {
