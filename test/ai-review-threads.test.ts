@@ -20,7 +20,9 @@ import {
   aiReviewThreadsExitCode,
   postReviewThreads,
   refusalFrom,
+  THREAD_BODY_BUDGET,
   prIsForkReading,
+  threadReading,
   threadsDetailLines,
   threadsLandedPhrase,
   type AiReviewThreadPoster,
@@ -28,8 +30,9 @@ import {
   unreasonedReport,
   unreasonedResolutions,
 } from "../lib/ai-review-threads";
-import type { AiReviewFindingsReading } from "../lib/scaffold/ai-review-findings";
-import { threadBody } from "../lib/scaffold/ai-review-findings";
+import type { AiReviewFindingsReading, AiReviewThreadRequest } from "../lib/scaffold/ai-review-findings";
+import { readAiReviewFindings, threadBody } from "../lib/scaffold/ai-review-findings";
+import { mergeDrafts } from "../lib/ai-review-drafts";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -196,7 +199,9 @@ describe("postReviewThreads", () => {
     const { post } = recorder(refused);
     const { comment } = pullCommenter();
     const keyFor = () => "src/a.ts\u0000n:12\u0000off-by-one";
-    const r = await postReviewThreads(reading([finding, { ...finding }]), post, keyFor, undefined, comment);
+    // Two lines, one key: at one line the two would share a thread (#2838)
+    // and never reach the conversation twice.
+    const r = await postReviewThreads(reading([finding, { ...finding, line: 13 }]), post, keyFor, undefined, comment);
     const text = r.detail.join("\n");
     expect(text).toContain("earlier in this round");
     expect(text).not.toContain("from an earlier round");
@@ -631,7 +636,7 @@ describe("#1992: no detail line reaches the workflow-command channel unescaped",
 
   test("threadsDetailLines escapes CR, LF and %", () => {
     const lines = threadsDetailLines(
-      { outcome: "FAILED", attempted: 1, posted: 0, demoted: 0, pullComments: 0, detail: [hostile] },
+      { outcome: "FAILED", attempted: 1, posted: 0, demoted: 0, pullComments: 0, together: 0, detail: [hostile] },
       "ai-review-threads",
     );
     expect(lines).toHaveLength(1);
@@ -989,5 +994,174 @@ describe("CRC-C3: a review thread resolved with no stated reason is reported on 
     expect(again!).toContain(`<!-- ${UNREASONED_MARKER} T3 -->`);
     expect(again!).not.toContain(`<!-- ${UNREASONED_MARKER} T1 -->`);
     expect(unreasonedReport(list, [body!]), "the same threads were reported twice").toBeNull();
+  });
+});
+
+/**
+ * #2838: one round put one defect on a consumer's pull request as three
+ * threads at `board-flow.yml:75`, because three runs worded it three ways and
+ * `findingIdentity` keeps paraphrases apart — on purpose, since two real
+ * defects can share a line and a finding one run raised is never voted away
+ * (CRC-B11). The union stays as it is. What changes is the posting: findings
+ * that share a file and line go up as ONE thread carrying each of them.
+ */
+describe("#2838: findings that share a file and line post as one thread", () => {
+  const FILE = ".github/workflows/board-flow.yml";
+  const at = (file: string, line: number, summary: string) => ({
+    severity: "high",
+    file,
+    line,
+    summary,
+    failure_scenario: `given ${summary.toLowerCase()}, the job fails`,
+  });
+  /** The consumer's round: one defect, three runs, three wordings. */
+  const reworded = [
+    at(FILE, 75, "The gate names the wrong secret"),
+    at(FILE, 75, "This step reads a secret the gate never sets"),
+    at(FILE, 75, "Wrong secret name: the token read here is not the one configured"),
+  ];
+  const keyOf = (f: Record<string, unknown>) => `${f.file}\u0000${f.line}\u0000${f.summary}`;
+
+  /** The round end to end: one draft per run, merged, adjudicated, posted. */
+  async function round(findings: Record<string, unknown>[]) {
+    const merged = mergeDrafts(
+      findings.map((f, i) => ({
+        path: `draft-${i}.json`,
+        text: JSON.stringify({ verdict: "BLOCK", findings: [f], review_summary: "1 finding(s)" }),
+      })),
+    );
+    const reading = readAiReviewFindings(JSON.stringify(merged.payload));
+    const sent: AiReviewThreadRequest[] = [];
+    const result = await postReviewThreads(reading, async req => (sent.push(req), { ok: true }), keyOf);
+    return { merged, reading, sent, result };
+  }
+
+  /** What posting must not move: the union, its count, and the blocking outcome. */
+  function expectUnion(r: Awaited<ReturnType<typeof round>>, findings: Record<string, unknown>[]) {
+    expect(r.merged.kept).toBe(findings.length);
+    expect(r.merged.duplicates).toBe(0);
+    expect(r.merged.payload!.findings).toEqual(findings);
+    expect(r.reading.outcome).toBe("BLOCKED");
+    expect(r.reading.reported).toHaveLength(findings.length);
+  }
+
+  test("three runs wording one defect at one line three ways post one thread holding all three", async () => {
+    const r = await round(reworded);
+    expectUnion(r, reworded);
+    expect(r.sent.map(s => [s.path, s.line])).toEqual([[FILE, 75]]);
+    for (const f of reworded) {
+      expect(r.sent[0]!.body).toContain(f.summary);
+      expect(r.sent[0]!.body).toContain(f.failure_scenario);
+    }
+    // the person resolving it is told that one resolution answers all three (#2874 review)
+    expect(r.sent[0]!.body.endsWith(
+      "_The findings above share this line. Resolving the thread answers all of them, so reply to each, or leave it open until each is fixed or answered._",
+    )).toBe(true);
+    expect(r.sent[0]!.body.split("\n")[0]).toBe(`**high** — ${reworded[0]!.summary}`);
+    expect(r.result).toMatchObject({ outcome: "POSTED", attempted: 1, posted: 1, together: 3 });
+    expect(r.result.detail).toContain(`${FILE}:75: 3 findings share this file and line, so they are posted as one thread`);
+    expect(r.result.detail.at(-1)).toBe("posted 1 review comment, 3 findings posted together as 1 thread because they share a file and line");
+  });
+
+  test("CONTROL: the same three wordings on three different lines post three threads", async () => {
+    const spread = reworded.map((f, i) => ({ ...f, line: 75 + i }));
+    const r = await round(spread);
+    expectUnion(r, spread);
+    expect(r.sent.map(s => s.line)).toEqual([75, 76, 77]);
+    expect(r.result).toMatchObject({ outcome: "POSTED", attempted: 3, posted: 3, together: 0 });
+    expect(r.result.detail.at(-1)).toBe("posted 3 review comments");
+  });
+
+  test("CONTROL: two files at the same line number post two threads", async () => {
+    const two = [reworded[0]!, { ...reworded[1]!, file: ".github/workflows/board-ready.yml" }];
+    const r = await round(two);
+    expectUnion(r, two);
+    expect(r.sent.map(s => s.path)).toEqual([FILE, ".github/workflows/board-ready.yml"]);
+    expect(r.result).toMatchObject({ outcome: "POSTED", attempted: 2, posted: 2, together: 0 });
+  });
+
+  test("every finding's key rides on the one thread, so resolving it answers all three", async () => {
+    const r = await round(reworded);
+    expect(threadReading([{ isResolved: true, body: r.sent[0]!.body }], "unread")).toEqual({
+      status: "MEASURED",
+      threads: reworded.map(f => ({ key: keyOf(f), isResolved: true })),
+    });
+  });
+
+  test("CONTROL: a thread holding one finding still reads as its one key", async () => {
+    const r = await round([reworded[0]!]);
+    expect(threadReading([{ isResolved: false, body: r.sent[0]!.body }], "unread")).toEqual({
+      status: "MEASURED",
+      threads: [{ key: keyOf(reworded[0]!), isResolved: false }],
+    });
+  });
+
+  test("two copies of one finding at one line post one thread that says it once", async () => {
+    const sent: AiReviewThreadRequest[] = [];
+    const r = await postReviewThreads(reading([finding, { ...finding }]), async req => (sent.push(req), { ok: true }));
+    expect(sent.map(s => s.body)).toEqual([threadBody(finding)]);
+    expect(r.together).toBe(2);
+  });
+
+  test("two findings in one file with no line stay two threads: a file is not a line", async () => {
+    const { sent, post } = recorder(() => ({ ok: true }));
+    const r = await postReviewThreads(reading([{ file: FILE, summary: "One" }, { file: FILE, summary: "Two" }]), post);
+    expect(sent).toEqual([
+      { path: FILE, line: null },
+      { path: FILE, line: null },
+    ]);
+    expect(r.together).toBe(0);
+  });
+
+  test("off the diff, the shared thread goes on the conversation once, and is not posted again next round", async () => {
+    const offDiff = async () => ({ ok: false, status: 422, message: "Validation Failed: pull_request_review_thread.path" }) as const;
+    const bodies: string[] = [];
+    const comment = {
+      existing: [] as string[],
+      post: async (body: string) => {
+        bodies.push(body);
+        return { ok: true as const };
+      },
+    };
+    const r = await postReviewThreads(reading(reworded), offDiff, keyOf, undefined, comment);
+    expect(r).toMatchObject({ outcome: "POSTED", pullComments: 1 });
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toContain("so these 3 findings could not go on it");
+    for (const f of reworded) expect(bodies[0]).toContain(f.summary);
+    const later: string[] = [];
+    const again = await postReviewThreads(reading(reworded), offDiff, keyOf, undefined, {
+      existing: bodies,
+      post: async body => (later.push(body), { ok: true }),
+    });
+    expect(later).toEqual([]);
+    expect(again.detail.join("\n")).toContain("already on its conversation from an earlier round");
+    // CONTROL: a fourth finding joining that line is new, so the thread goes up again
+    const fourth = at(FILE, 75, "The secret is misnamed");
+    const joined: string[] = [];
+    await postReviewThreads(reading([...reworded, fourth]), offDiff, keyOf, undefined, {
+      existing: bodies,
+      post: async body => (joined.push(body), { ok: true }),
+    });
+    expect(joined).toHaveLength(1);
+    expect(joined[0]).toContain("so this finding could not go on it");
+    expect(joined[0]).toContain(fourth.summary);
+    // only the new one: the three already there are not posted twice
+    for (const f of reworded) expect(joined[0]).not.toContain(f.summary);
+  });
+
+  test("a shared thread that would pass GitHub's comment size limit is split at the same line, never cut", async () => {
+    const long = reworded.map(f => ({ ...f, failure_scenario: `${f.failure_scenario} ${"x".repeat(25_000)}` }));
+    const sent: AiReviewThreadRequest[] = [];
+    const r = await postReviewThreads(reading(long), async req => (sent.push(req), { ok: true }));
+    expect(sent.map(s => [s.path, s.line])).toEqual([
+      [FILE, 75],
+      [FILE, 75],
+    ]);
+    for (const s of sent) expect(s.body.length).toBeLessThanOrEqual(THREAD_BODY_BUDGET);
+    for (const f of long) expect(sent.filter(s => s.body.includes(f.failure_scenario))).toHaveLength(1);
+    expect(r).toMatchObject({ outcome: "POSTED", attempted: 2, posted: 2, together: 3 });
+    expect(r.detail).toContain(
+      `${FILE}:75: 3 findings share this file and line, so they are posted as 2 threads, each under GitHub's comment size limit`,
+    );
   });
 });
