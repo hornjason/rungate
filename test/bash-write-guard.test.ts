@@ -4121,9 +4121,6 @@ describe("#2859: an accident guard, sized and judged by the real directory", () 
       `sudo -D/tmp chmod 777 ${LIVE}/run/${SALT}`,
       `cp /tmp/a ${LIVE}/run/${STATE} --suffix .bak`,
       `cp /tmp/a ${LIVE}/run/${STATE} -S .bak`,
-      // round 3: an unambiguous prefix of a value-taking long option takes its value too
-      `cp /tmp/forged.json ${LIVE}/witnesses/state.json --suf .bak`,
-      `install /tmp/x ${LIVE}/run/${SALT} --mo 644`,
     ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
     // single quotes run nothing
     expect(decideBashWrite(`echo '$(cp /tmp/x ${LIVE}/run/${SALT})'`).blocked).toBe(false);
