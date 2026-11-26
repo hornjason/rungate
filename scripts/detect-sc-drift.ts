@@ -44,7 +44,7 @@ const READ_EXTENSIONS = /\.(?:ts|js|md|json)$/;
 /** What one token of criterion prose is, read as a path (#2897). */
 export type PathToken =
   | { kind: "listed"; path: string }
-  | { kind: "unread-file" | "alias" | "absolute" | "pattern" | "none" };
+  | { kind: "unread-file" | "alias" | "absolute" | "none" };
 
 /**
  * One token of criterion prose, read as a path, by the rules tabled in
@@ -52,8 +52,9 @@ export type PathToken =
  * disagree about what a path is.
  *
  * - Quotes, backticks, emphasis, angle brackets and trailing punctuation
- *   around a token are not part of it. A glob character left inside it makes
- *   the token a pattern, not a path.
+ *   around a token are not part of it. A glob is no file: the run before its
+ *   first wildcard (`lib/` in `lib/*.ts`) is a path this reader does not
+ *   read.
  * - The path is the token's first run of path characters that reads as one,
  *   so a prefix (`key:lib/x.ts`) is not part of it, and what follows the run
  *   (`lib/x.ts:10-20`, `lib/x.ts#L42`, `lib/x.ts's`) does not stop it naming
@@ -62,7 +63,6 @@ export type PathToken =
  */
 export function classifyPathToken(raw: string): PathToken {
   const core = raw.replace(/^[`'"([<*]+/, "").replace(/[`'">*,.;:?!)\]—–]+$/, "");
-  if (/[*?{}<>|]/.test(core)) return { kind: "pattern" };
   for (const run of core.matchAll(/[\w.@~/+-]+/g)) {
     const token = pathRun(run[0].replace(/\.+$/, ""));
     if (token.kind !== "none") return token;
