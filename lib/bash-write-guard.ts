@@ -1669,8 +1669,8 @@ const IN_PLACE = [
  */
 
 /** The `-c` body of a shell invocation, dequoted. */
-/** What `eval` runs: the words after it, joined as the shell joins them before re-reading. */
-const evalBody = (seg: string) => { const w = scanSegment(seg).words; return w.slice(w.findIndex(x => commandWord(x) === 'eval') + 1).join(' '); };
+/** What `eval` runs: the words after it, past one `--` (bash) or `-` (zsh), joined as the shell joins them. */
+const evalBody = (seg: string) => { const w = scanSegment(seg).words; const at = w.findIndex(x => commandWord(x) === 'eval') + 1; return w.slice(/^--?$/.test(w[at] ?? '') ? at + 1 : at).join(' '); };
 
 function shellBody(segment: string): string {
   // The same flag grammar as `programBody`: a grouped capital (`bash -Ec`)

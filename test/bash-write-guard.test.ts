@@ -4140,12 +4140,17 @@ describe("#2859: an accident guard, sized and judged by the real directory", () 
       `command eval 'mv /tmp/a ${LIVE}/run/${SALT}'`,
       `eval 'echo x > ${LIVE}/run/${STATE}'`,
       `true && eval 'cp /tmp/a ${LIVE}/witnesses/x'`,
+      // one leading `--` ends eval's options in bash, and `-` does in zsh
+      `eval -- 'cp /tmp/a ${LIVE}/run/${STATE}'`,
+      `command eval -- 'mv /tmp/a ${LIVE}/run/${SALT}'`,
+      `eval - 'cp /tmp/a ${LIVE}/run/${STATE}'`,
     ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
     for (const cmd of [
       `eval 'echo cp /tmp/a ${LIVE}/run/${STATE}'`,
       `echo eval 'cp /tmp/a ${LIVE}/run/${STATE}'`,
       `eval "$(ssh-agent -s)"`,
       `eval 'cat ${LIVE}/run/${STATE}'`,
+      `eval -- 'echo cp /tmp/a ${LIVE}/run/${STATE}'`,
     ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
