@@ -71,7 +71,6 @@ import {
   SURFACE_LINTS,
   USER_SURFACE,
   userLoadsEverySession,
-  onPresence,
   type PresenceCheck,
   lintRenderedTree,
   readRenderedSurface,
@@ -214,7 +213,7 @@ export function lineOwners(file: string, text: string, presence: PresenceCheck, 
     // review). Whether a template exists is a question, not a read, so a
     // directory or FIFO at its name is no template and is not named (#2878
     // review rounds 1 and 3).
-    return onPresence(presence(join(packageRoot, "templates", "agent-briefs", name), "either"), {
+    return presence(join(packageRoot, "templates", "agent-briefs", name), "either").on({
       present: kind => (kind === "file" ? harnessExcept(BRIEF_CONSTRAINTS_SECTION) : all("consumer")),
       unread: () => all("consumer"),
       absent: () => all("consumer"),
@@ -334,9 +333,9 @@ function danglingPathFindings(
         // Every place is asked, so each one that could not be read is named.
         // Whether a directory is there is a question, not a read: a regular
         // file at that name is no directory, and is not named (#2878 review round 1).
-        const dirThere = at.map(p => onPresence(presence(dirname(p), "either"), { present: kind => kind === "dir", unread: () => false, absent: () => false }));
+        const dirThere = at.map(p => presence(dirname(p), "either").on({ present: kind => kind === "dir", unread: () => false, absent: () => false }));
         if (!dirThere.some(Boolean)) continue;
-        const fileThere = at.map(p => onPresence(presence(p, "either"), { present: () => true, unread: () => true, absent: () => false }));
+        const fileThere = at.map(p => presence(p, "either").on({ present: () => true, unread: () => true, absent: () => false }));
         if (fileThere.some(Boolean)) continue;
         out.push({
           lint: "dangling-path", file, line: i + 1, owner: owners.get(file)![i],
