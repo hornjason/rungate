@@ -90,7 +90,6 @@ import { lstatSync, realpathSync, statSync, type Stats } from 'fs';
 import { tmpdir } from 'os';
 import { basename, dirname, join, resolve } from 'path';
 import { isInterpreterWord, isShellWord } from './interpreters';
-import { PATH_BUILDERS, readJsCalls } from './interpreter-calls';
 
 /** Gate artifacts. A write to any of these must come from the gate runner. */
 export const PROTECTED_FILES = ['workflow-state.json', '.gate-salt', '/witnesses/'];
@@ -733,7 +732,7 @@ function collectShell(text: string, depth: number, tag: (i: number) => { at: num
       nested(); // a `mkdir`'s own arguments are not mentions; a substitution in one is
       return;
     }
-    if (isInterpreterWord(word) && /\s-[a-z]*[ce]\b/.test(stripQuoted(seg))) {
+    if (isInterpreterWord(word) && /\s-[A-Za-z]*[ce]\b/.test(stripQuoted(seg))) {
       const shell = isShellWord(word);
       const body = shell ? shellBody(seg) : programBody(seg);
       for (const w of words) if (w !== body && dequote(w) !== body) add(w);
@@ -845,8 +844,6 @@ function lstatOrNull(p: string): Stats | null {
 /** Mentions that come from the write's OWN step and do not count against it. */
 interface Own {
   src: string;
-  /** When set, only these texts from `src` are the write's own; the rest count. */
-  only?: Set<string>;
 }
 
 /**
@@ -878,7 +875,7 @@ function chainHolds(path: string, ctx: ChainContext, own: Own, at: number): bool
   for (const m of ctx.mentions) {
     // The word being judged is never a mention of itself — a copy's SOURCE
     // literal is judged too, by every path word that carries the name.
-    if (m.src === own.src && (!own.only || own.only.has(m.text) || m.text === path)) continue;
+    if (m.src === own.src) continue;
     if (!runsBefore(m.at, at, ctx.order)) continue;
     if (mentionNames(m.text, named)) return false;
   }
@@ -1029,16 +1026,22 @@ function blankSubstitutions(text: string): string {
  */
 function pathWordsContaining(text: string, needle: string): string[] {
   const out: string[] = [];
-  const hay = text.toLowerCase();
-  const pin = needle.toLowerCase();
-  let i = 0;
-  while ((i = hay.indexOf(pin, i)) !== -1) {
-    let s = i;
-    while (s > 0 && !/[\s'"`,;(){}[\]]/.test(hay[s - 1])) s--;
-    let e = i + pin.length;
-    while (e < hay.length && !/[\s'"`,;(){}[\]]/.test(hay[e])) e++;
+  // Searched in the text itself, without case. Indexing a lowercased copy
+  // shifted every offset after a character whose lower case is longer —
+  // `İ` becomes two code units — so the word lost its leading `/` and an
+  // absolute path read as relative (review of #2863, round 1). `u` folds
+  // case the Unicode way, as `names`' `toLowerCase` does: without it the
+  // Kelvin sign in `.hooK.ts` is a protected name to `names` and no path
+  // word here, so the name is dropped (security review of the same push).
+  const pin = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu');
+  let m: RegExpExecArray | null;
+  while ((m = pin.exec(text)) !== null) {
+    let s = m.index;
+    while (s > 0 && !/[\s'"`,;(){}[\]]/.test(text[s - 1])) s--;
+    let e = m.index + m[0].length;
+    while (e < text.length && !/[\s'"`,;(){}[\]]/.test(text[e])) e++;
     out.push(text.slice(s, e)); // the ORIGINAL case: this is a path to resolve
-    i = e;
+    pin.lastIndex = e;
   }
   return out;
 }
@@ -1691,9 +1694,9 @@ function heredocInterpreter(line: string): string | null {
  * its body ends. `skeleton` is the command as the shell parses it around the
  * bodies; `heredocReach` reads it.
  */
-export function interpreterPrograms(cmd: string): Array<{ shell: boolean; program: string }> {
+export function interpreterPrograms(cmd: string): Array<{ shell: boolean; program: string; quoted?: string }> {
   type Pending = { opener: string; at: number; body: string };
-  const found: Array<{ shell: boolean; program: string } | Pending> = [];
+  const found: Array<{ shell: boolean; program: string; quoted?: string } | Pending> = [];
   const lines = cmd.split('\n');
   const skeleton: string[] = [];
   let offset = 0; // where the next skeleton line starts in `skeleton.join('\n')`
@@ -1719,7 +1722,9 @@ export function interpreterPrograms(cmd: string): Array<{ shell: boolean; progra
       const owner = segments(line).find(s => /(?<!<)<<<(?!<)/.test(s));
       const word = owner ? commandWord(owner) : '';
       if (isInterpreterWord(word)) {
-        found.push({ shell: isShellWord(word), program: dequote(hs[1]).trim() });
+        // `quoted` keeps the word as written: `dequote` strips every quote,
+        // and with them the `'w'` an `open` mode is read by (review of #2863).
+        found.push({ shell: isShellWord(word), program: dequote(hs[1]).trim(), quoted: hs[1].trim() });
       }
     }
 
@@ -2405,613 +2410,81 @@ export function argumentsOf(segment: string): string[] {
  * `open('…/.gate-salt','w')` from a program that writes a `.md` and happens
  * to mention a hook in its data. Associating a call with its argument
  * properly means parsing the language, which this module will not do.
+ *
+ * #2858 (the criterion says refused "whatever directory it names"): the window opens
+ * at the start of the path the name ends, not at the name. Opened at the
+ * name, a deep enough directory pushed the verb out of reach — a realpath'd
+ * macOS `$TMPDIR` is long enough — so how far a body's write was refused
+ * depended on where it pointed. What stays outside the window is a verb
+ * separated from the path by other text: a long SOURCE before the
+ * destination, or a call nested deeper than `WRITE_INTENT` reads. ADR-027
+ * decision 3 concedes those. The name is matched without case, as `names`
+ * matches it (#1184).
+ *
+ * The window closes at the end of the path, too, not at the name: a long
+ * tail after `/witnesses/` moved the mode out of reach the same way a long
+ * directory did (review of #2863, round 3).
+ *
+ * **Conceded:** a separator inside the directory — a `(` or a `,` more
+ * than 80 characters after the verb — still ends the guessed path start
+ * early, and the verb is out of reach. Round 3 closed it by spanning the
+ * whole string literal instead, and the corpus sweep then newly refused 3
+ * real commands, all editing a spec or a plan that names a hook file. An
+ * accident guard that refuses that work is the worse trade, so the window
+ * stays where round 2 put it and a CONCESSION row pins the spelling. A space
+ * in a long file name after the protected name is the same class: the tail
+ * ends at whitespace, so a mode more than 80 characters past it is out of
+ * reach (the security review of round 3; same trade, same answer).
+ *
+ * The path starts are found in one forward pass, and every match in the
+ * same path is tested as ONE window, from 80 before the path to 80 after
+ * its end. A walk back from each match made a body of one name
+ * repeated with no separator quadratic — a 40 KB heredoc took 4.6 s against
+ * 0.05 s on main — and capping the walk instead put a long enough directory
+ * outside the window again (review of #2863, round 1). Paths do not
+ * overlap, so the windows together read each character a bounded number of
+ * times.
+ *
+ * Opening at the path start also means a write verb within the window
+ * before a long path that is only READ now refuses, as it always did before
+ * a short one: `open('/tmp/o.md','w'); json.load(open('/x/workflow-state.json'))`
+ * is refused on main. The depth of the directory no longer decides which.
  */
 function writesNear(body: string, protectedName: string): boolean {
   const WINDOW = 80;
-  for (const m of body.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))) {
+  let scanned = 0;
+  let lastStop = -1;
+  let pathStart = -1;
+  let lastEnd = -1;
+  const windowWrites = (): boolean => {
+    if (pathStart < 0) return false;
+    let pathEnd = lastEnd;
+    // Whitespace ends the tail, though not the start: a tail is a file name,
+    // and without it the "path" ran on through prose to the next quote
+    // (2 real commands editing a spec newly refused, measured).
+    while (pathEnd < body.length && !PATH_STOPS.has(body[pathEnd]) && !/\s/.test(body[pathEnd])) pathEnd++;
+    return WRITE_INTENT.test(body.slice(Math.max(0, pathStart - WINDOW), pathEnd + WINDOW));
+  };
+  for (const m of body.matchAll(new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu'))) {
     const at = m.index ?? 0;
-    const from = Math.max(0, at - WINDOW);
-    const slice = body.slice(from, at + protectedName.length + WINDOW);
-    if (WRITE_INTENT.test(slice)) return true;
-  }
-  return false;
-}
-
-/**
- * Whether a call's text is `open(…)` with a write mode among its arguments
- * (#2699 review). A regular expression counts nested calls only to a fixed
- * depth, and `open(os.path.join(os.path.dirname(os.path.abspath(f)), n), 'w')`
- * is three deep, so the argument list is read here with brackets and quotes
- * tracked, at any depth; the mode is a whole argument, positional or `mode=`.
- */
-function opensForWrite(call: string): boolean {
-  const head = /^(?:[A-Za-z_$][\w$]*\s*\.\s*)*open(?:Sync)?\s*\(/.exec(call);
-  if (!head) return false;
-  return READINGS.some(reading => {
-    const { mask } = codeMask(call, reading);
-    const args: string[] = [];
-    let depth = 0;
-    let from = head[0].length;
-    for (let i = from; i < call.length; i++) {
-      if (mask[i] !== 0) continue;
-      const ch = call[i];
-      if (ch === '(' || ch === '[' || ch === '{') depth++;
-      else if (ch === ')' || ch === ']' || ch === '}') {
-        if (depth-- > 0) continue;
-        args.push(call.slice(from, i));
-        break;
-      } else if (ch === ',' && depth === 0) {
-        args.push(call.slice(from, i));
-        from = i + 1;
-      }
+    for (; scanned < at; scanned++) if (PATH_STOPS.has(body[scanned])) lastStop = scanned;
+    if (lastStop + 1 !== pathStart) {
+      if (windowWrites()) return true;
+      pathStart = lastStop + 1;
     }
-    // Searched, not matched whole: `'w' if new else 'r'` and `u'w'` are write
-    // modes too. Any argument, the first included: `Path(p).open('w')` takes
-    // its mode first, and `WRITE_INTENT`'s open pattern, which reads the same
-    // call, has always counted a mode-like literal anywhere in it.
-    return args.some(arg => WRITE_MODE.test(arg));
-  });
-}
-
-/** A call that writes: by `WRITE_INTENT`, or an `open` with a write mode at any depth. */
-function callIsWrite(call: string): boolean {
-  return WRITE_INTENT.test(call) || opensForWrite(call);
+    lastEnd = at + m[0].length;
+  }
+  return windowWrites();
 }
 
 /**
- * Whether any call holding `protectedName` as an argument, at any depth, is
- * a write (#1407). `writesNear`'s window misses a verb separated from the
- * name by a long argument: in `shutil.copy(SRC, DST)` the verb comes before
- * SRC, so a SRC longer than the window put DST's name out of its reach, and a
- * copy onto the artifact spelled in full was allowed; a realpath'd macOS
- * $TMPDIR is long enough. A name that is no call's argument (text in a string
- * assigned to a variable, a docblock being edited) is left to the window.
- *
- * `program` must be the program text with its quotes: the reading masks
- * strings and comments, and `dequote`'s view, which strips every quote,
- * would read a `#` inside a string as a comment.
+ * What ends a path word in an interpreter body. Not a space or a tab: a path
+ * can hold one (`Application Support`), and a stop inside it opened the
+ * window past the verb (review of #2863, round 2). Every argument separator
+ * that is not whitespace still stops it, so the window opens no earlier than
+ * the literal or the call the path sits in.
  */
-function callWrites(program: string, protectedName: string): boolean {
-  const pattern = new RegExp(protectedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
-  // #2702: a body that parses as JavaScript is also read by the parser, which
-  // reads comments, regex literals and template literals as the language
-  // does. Four reviews of #2699 each found a JavaScript form the mask below
-  // misread, and a misread switched that reading off for the body. The parser
-  // ADDS a reading; it never replaces the mask's. Parsing is not knowing the
-  // language: Python's `d: str = '…'` parses as a JavaScript label and an
-  // assignment to `str`, so a parser-only reading binds the wrong name and
-  // allows a copy onto `d` that the mask refuses (#2702 security review).
-  const js = readJsCalls(program);
-  if (js !== null) {
-    for (const m of program.matchAll(pattern)) {
-      const at = m.index ?? 0;
-      if (js.enclosingCalls(at).some(callIsWrite)) return true;
-      const bound = js.boundIdentifier(at, at + protectedName.length);
-      if (bound !== null && js.references(bound).some(u => js.enclosingCalls(u).some(callIsWrite))) return true;
-    }
-  }
-  return READINGS.some(reading => {
-    const view = codeMask(program, reading);
-    for (const m of program.matchAll(pattern)) {
-      const at = m.index ?? 0;
-      if (enclosingCalls(program, at, view).some(callIsWrite)) return true;
-      // #2699 review: `dst = '<…>/workflow-state.json'` and then
-      // `shutil.copy(src, dst)` lines later. One level of binding is followed:
-      // the identifier the name's literal is assigned to counts as the name
-      // wherever a write call takes it. Deeper data flow is the evasion
-      // `WRITE_INTENT`'s docblock concedes.
-      for (const bound of boundIdentifiers(program, at, protectedName, view)) {
-        // `\b…\b` around the escaped name: `self.p` is not `self.path`.
-        for (const use of program.matchAll(new RegExp(`\\b${bound.replace(/\./g, '\\.')}\\b`, 'g'))) {
-          const u = use.index ?? 0;
-          if (u === at) continue;
-          if (enclosingCalls(program, u, view).some(callIsWrite)) return true;
-        }
-      }
-    }
-    return false;
-  });
-}
-
-/**
- * Per offset, how many `(` and `[` are open before it, read over code only.
- * `{` and `}` are not counted: at the top level they end a statement, as `;`
- * does (#2720).
- */
-const BRACKET_DEPTHS = new WeakMap<CodeView, Int32Array>();
-function bracketDepths(program: string, view: CodeView): Int32Array {
-  const cached = BRACKET_DEPTHS.get(view);
-  if (cached !== undefined) return cached;
-  const depths = new Int32Array(program.length + 1);
-  let depth = 0;
-  for (let i = 0; i < program.length; i++) {
-    depths[i] = depth;
-    if (view.mask[i] !== 0) continue;
-    const ch = program[i];
-    if (ch === '(' || ch === '[') depth++;
-    else if ((ch === ')' || ch === ']') && depth > 0) depth--;
-  }
-  depths[program.length] = depth;
-  BRACKET_DEPTHS.set(view, depths);
-  return depths;
-}
-
-/**
- * The calls a path flows through when the mask reads a body (#2720): the
- * parser's path builders, and Python's (`os.path.normpath`, `Path(…)`,
- * `str(…)`, …). Any other call reads or transforms its argument, so
- * `d = json.load(open('…'))` holds the file's contents, not its path.
- */
-const MASK_PATH_BUILDERS: ReadonlySet<string> = new Set([
-  ...PATH_BUILDERS,
-  'normpath', 'abspath', 'realpath', 'expanduser', 'expandvars', 'joinpath', 'fspath',
-  'relpath', 'normcase', 'commonpath', 'commonprefix', 'fsencode', 'fsdecode',
-  'Path', 'PurePath', 'PosixPath', 'PurePosixPath', 'WindowsPath', 'PureWindowsPath', 'str', 'bytes',
-  // Node's, beside the parser's `join`, `resolve` and `normalize` (#2721 review).
-  'relative', 'toNamespacedPath', 'String',
-]);
-
-/**
- * Keywords before `(` or `[` whose expression's value is the bracket's own,
- * or holds its items: `x or ['…']`, `[] if ok else ('…')`, `await ('…')`, and
- * a comprehension's iterable, `[p for p in ['…']]`. After any other word the
- * bracket is a call or a subscript. Every other keyword makes a different
- * value (`not`, `typeof`) or starts a statement that assigns nothing
- * (`return`, `match`, `case`), and many are names in the other language or as
- * Python's soft keywords: `d = match['…']` is a subscript (#2721 review).
- * `in` is reserved in both languages, so it names nothing.
- */
-const VALUE_KEYWORDS = new Set(['and', 'or', 'else', 'await', 'in']);
-
-/**
- * Whether the value inside the bracket opened at `open` is part of the value
- * outside it: a grouping `(…)`, a list display `[…]`, or a path-building
- * call's arguments. A subscript (`cfg['…']`) and any other call do not hand
- * the literal on.
- */
-function carriesOut(program: string, view: CodeView, open: number): boolean {
-  let k = open - 1;
-  while (k >= 0 && (program[k] === ' ' || program[k] === '\t')) k--;
-  const prev = k >= 0 ? program[k] : '';
-  const quoted = k >= 0 && view.mask[k] === 1;
-  if (program[open] === '[') {
-    if (quoted || prev === ')' || prev === ']') return false;
-    if (!/[\w$]/.test(prev)) return true;
-    // After a word: a subscript (`cfg[…]`), unless the word is a keyword
-    // that hands the value on (`x or […]`, `[] if ok else […]`, #2721 review).
-    let w = k;
-    while (w > 0 && /[\w$]/.test(program[w - 1])) w--;
-    return VALUE_KEYWORDS.has(program.slice(w, k + 1));
-  }
-  if (quoted || prev === ')' || prev === ']') return false;
-  if (!/[\w$]/.test(prev)) return true;
-  let s = k;
-  while (s > 0 && /[\w$.]/.test(program[s - 1])) s--;
-  const callee = program.slice(s, k + 1);
-  if (!callee.includes('.') && VALUE_KEYWORDS.has(callee)) return true;
-  return MASK_PATH_BUILDERS.has(callee.split('.').pop() ?? '');
-}
-
-/**
- * Whether the newline at `j` is escaped, by a backslash before it or before a
- * CR before it: Python reads backslash-CRLF as a continuation too (#2721
- * review).
- */
-function continuedAt(program: string, j: number): boolean {
-  return program[j - 1] === '\\' || (program[j - 1] === '\r' && program[j - 2] === '\\');
-}
-
-/** Python's block keywords, which a `:` can follow without being an annotation. */
-const BLOCK_KEYWORDS = new Set(['else', 'try', 'finally', 'except', 'do']);
-
-/**
- * The name an assignment operator starting at `op` assigns (#2721 review).
- * The target is read at the operator's own bracket level, back to the start of
- * the statement, of the parameter (after `(` or `,`), or to an earlier `=` in
- * a chain. A `:` there makes `name: T` an annotation of any shape (`T[…]`,
- * `A | B`), and the name is the one before that `:`; a `:` after something
- * other than the statement's first word is a compound statement's (`if ok:
- * d = …`), and one after a block keyword (`else: d = …`) is too, and the
- * target is then the word before the operator. The name may be an attribute
- * path (`self.p`), and must start its statement or follow `(`, `,` or `{`.
- */
-function targetBefore(program: string, op: number, view: CodeView, depths: Int32Array): string | null {
-  const level = depths[op];
-  let colon = -1;
-  for (let j = op - 1; j >= 0; j--) {
-    if (view.mask[j] !== 0 || depths[j] > level) continue;
-    if (depths[j] < level) break; // the bracket this target sits in: `def f(`
-    const ch = program[j];
-    if (ch === ';' || ch === '{' || ch === '}' || ch === ',' || ch === '=' || (ch === '\n' && !continuedAt(program, j))) break;
-    if (ch === ':') {
-      colon = j;
-      break;
-    }
-  }
-  const wordBefore = (end: number): [string, number] => {
-    let e = end;
-    // Spaces, and a continuation between the target and the operator.
-    while (e > 0 && (/\s/.test(program[e - 1]) || (program[e - 1] === '\\' && /[\r\n]/.test(program[e] ?? '')))) e--;
-    let st = e;
-    while (st > 0 && /[\w.]/.test(program[st - 1])) st--;
-    return [program.slice(st, e), st];
-  };
-  let [name, nameAt] = wordBefore(op);
-  if (colon >= 0) {
-    const [annotated, at] = wordBefore(colon);
-    const lineStart = Math.max(program.lastIndexOf('\n', at - 1), program.lastIndexOf(';', at - 1)) + 1;
-    const before = program.slice(lineStart, at);
-    // A statement starts the line, follows `;` (lineStart), or follows a
-    // compound statement's colon (`if ok: d: str = …`, #2721 review).
-    const opensStatement = before.trim() === '' || /[(,:]\s*$/.test(before);
-    if (annotated !== '' && opensStatement && !BLOCK_KEYWORDS.has(annotated)) {
-      name = annotated;
-      nameAt = at;
-    }
-  }
-  if (!/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(name)) return null;
-  return nameAt === 0 || /[\s;(,{]/.test(program[nameAt - 1]) ? name : null;
-}
-
-/**
- * Python's and JavaScript's augmented assignment operators, longest first so
- * `>>>=` is not read as `>=` (#2721 review: `??=`, `||=`, `&&=` bound
- * nothing).
- */
-const AUGMENTED_OPERATORS = [
-  '>>>=', '**=', '//=', '>>=', '<<=', '&&=', '||=', '??=',
-  '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '@=', ':=',
-];
-
-/**
- * Every name of a tuple or list target before the top-level plain `=` at `op`
- * (`d, e = …`, `(d, e) = …`, `[d, *rest] = …`), or null when the target is
- * not one. All of them, not the one at the literal's position: in JavaScript
- * `d, e = '…', 1` is the comma operator and assigns the literal to `e`, and
- * the mask does not know the language (#2721 review). An element that is not
- * a name (`1` in `let a = 1, d = …`, a subscript) binds nothing.
- */
-function tupleTargets(program: string, op: number, view: CodeView, depths: Int32Array): string[] | null {
-  let start = op;
-  let comma = false;
-  for (let j = op - 1; j >= 0; j--) {
-    if (view.mask[j] === 0 && depths[j] === 0) {
-      const ch = program[j];
-      if (ch === ';' || ch === '{' || ch === '}' || ch === '=' || ch === ':' || (ch === '\n' && !continuedAt(program, j))) break;
-      if (ch === ',') comma = true;
-    }
-    start = j;
-  }
-  const region = program.slice(start, op).replace(/\\\r?\n/g, ' ').trim().replace(/^(?:const|let|var)\s+/, '');
-  if (!comma && !/^[([][\s\S]*[)\]]$/.test(region)) return null;
-  const names: string[] = [];
-  const collect = (from: number, to: number): void => {
-    let depth = 0;
-    let s = from;
-    for (let i = from; i <= to; i++) {
-      if (i < to && view.mask[i] !== 0) continue;
-      const c = i < to ? program[i] : ',';
-      if (c === '(' || c === '[') depth++;
-      else if (c === ')' || c === ']') depth--;
-      else if (c === ',' && depth === 0) {
-        const text = program.slice(s, i).replace(/\\\r?\n/g, ' ').trim().replace(/^(?:const|let|var)\s+/, '').replace(/^\*\s*/, '');
-        if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(text)) names.push(text);
-        else if (/^\([\s\S]*\)$|^\[[\s\S]*\]$/.test(text)) {
-          const first = s + program.slice(s, i).search(/[([]/);
-          const last = s + Math.max(program.slice(s, i).lastIndexOf(')'), program.slice(s, i).lastIndexOf(']'));
-          collect(first + 1, last);
-        }
-        s = i + 1;
-      }
-    }
-  };
-  collect(start, op);
-  return names;
-}
-
-/** The names a top-level plain `=` at `op` assigns: a tuple's every name, or the one target. */
-function targetsAt(program: string, op: number, view: CodeView, depths: Int32Array): string[] {
-  const tuple = tupleTargets(program, op, view, depths);
-  if (tuple !== null) return tuple;
-  const one = targetBefore(program, op, view, depths);
-  return one === null ? [] : [one];
-}
-
-/**
- * The names the literal starting at `start` is assigned to (#2720): the
- * target of the assignment whose right-hand side holds it (every name of a
- * tuple target), and every earlier target of a chain, through any operator,
- * grouping parentheses, list displays and path-building calls
- * (`carriesOut`). One rule rather than one link per form, which is what four
- * review rounds of #2718 asked for. It is read backward from the literal at
- * the literal's own nesting level, which only falls as each enclosing bracket
- * is left behind:
- *
- * - at the top level, the nearest `=`, `name: T =` or augmented `+=`, `-=`,
- *   …, before the statement ends at `;`, `{`, `}` or a newline that is not
- *   continued;
- * - inside brackets, a walrus `name := …`, or `name=` (a keyword argument, or
- *   a parameter default, which holds the literal inside the function), each
- *   only if no comma at that level has ended its expression.
- *
- * `==`, `!=`, `<=`, `>=` and `=>` are not assignments. It binds more than a
- * chain of links did (`d = '…' if ok else x`, `d = ['…']`), which costs a
- * refusal only when that name is then written to.
- */
-function assignmentTargets(program: string, start: number, view: CodeView): string[] {
-  const depths = bracketDepths(program, view);
-  let level = depths[start];
-  let comma = false;
-  for (let j = start - 1; j >= 0; j--) {
-    if (view.mask[j] !== 0) continue;
-    const ch = program[j];
-    if ((ch === '(' || ch === '[') && depths[j] < level) {
-      if (!carriesOut(program, view, j)) return [];
-      level = depths[j];
-      comma = false;
-      continue;
-    }
-    if (depths[j] !== level) continue;
-    if (level === 0 && (ch === ';' || ch === '{' || ch === '}' || (ch === '\n' && !continuedAt(program, j)))) return [];
-    if (ch === ',') {
-      comma = true;
-      continue;
-    }
-    if (ch !== '=' || program[j + 1] === '=' || program[j + 1] === '>') continue;
-    const operator = AUGMENTED_OPERATORS.find(o => program.startsWith(o, j - o.length + 1));
-    // `==`, `!=`, `<=`, `>=`, and the tail of `===` and `!==`.
-    if (operator === undefined && j > 0 && '=!<>'.includes(program[j - 1])) continue;
-    const op = operator === undefined ? j : j - operator.length + 1;
-    const augmented = operator !== undefined && operator !== ':=';
-    if (level > 0 && (comma || augmented)) continue;
-    const single = (at: number): string[] => {
-      const t = targetBefore(program, at, view, depths);
-      return t === null ? [] : [t];
-    };
-    if (level > 0) return single(op);
-    const targets = op !== j ? single(op) : targetsAt(program, op, view, depths);
-    // A chain (`x = y = '…'`, JavaScript's `x = y ??= '…'` and `y ||= x =
-    // '…'`): every earlier assignment in the statement holds the value too
-    // (#2721 review).
-    for (let k = op - 1; k >= 0; k--) {
-      if (view.mask[k] !== 0 || depths[k] !== 0) continue;
-      const c = program[k];
-      if (c === ';' || c === '{' || c === '}' || (c === '\n' && !continuedAt(program, k))) break;
-      if (c !== '=' || program[k + 1] === '=' || program[k + 1] === '>') continue;
-      const earlier = AUGMENTED_OPERATORS.find(o => program.startsWith(o, k - o.length + 1));
-      if (earlier === undefined && k > 0 && '=!<>'.includes(program[k - 1])) continue;
-      if (earlier === undefined) targets.push(...targetsAt(program, k, view, depths));
-      else {
-        targets.push(...single(k - earlier.length + 1));
-        k -= earlier.length - 1;
-      }
-    }
-    return targets;
-  }
-  return [];
-}
-
-/**
- * The identifier a literal holding the name at `at` is assigned to
- * (`x = '…'`), or null. The literal is found by its own quotes, and it must
- * END at the name, or for a directory name at a file name after it, and hold
- * no newline but a line continuation: the variable then holds the path, not text that mentions it. An
- * assignment spelled inside another string (a docblock being edited) is
- * therefore not a binding. Literals separated only by spaces or a string
- * prefix are one (`'a/' 'b'`, `'a/' r'b'`), which is also how a
- * triple-quoted literal reads here: `''`, `'…'`, `''`. The literal may sit
- * anywhere in the assignment's right-hand side (#2720, `assignmentTargets`):
- * `d = os.path.join(ROOT, '…/workflow-state.json')` binds `d`. A directory
- * name may be followed by a file name or by `{…}` values, as an f-string
- * builds one: `f'…/witnesses/{f}'`.
- */
-function boundIdentifiers(program: string, at: number, protectedName: string, view: CodeView): string[] {
-  const k = view.literals.findIndex(([open, close]) => open < at && at < close);
-  if (k < 0) return [];
-  const [open, close] = view.literals[k];
-  const tail = program.slice(at + protectedName.length, close);
-  if (tail !== '' && !(protectedName.endsWith('/') && /^(?:[\w.\-/]|\{[^{}\n]*\})+$/.test(tail))) return [];
-  // A backslash-newline inside a literal is a line continuation, not a newline.
-  if (program.slice(open, close).replace(/\\\r?\n/g, '').includes('\n')) return [];
-  let start = open;
-  for (let j = k - 1; j >= 0 && /^[ \t]*(?:[rbfuRBFU]{1,2})?$/.test(program.slice(view.literals[j][1] + 1, start)); j--) {
-    start = view.literals[j][0];
-  }
-  return assignmentTargets(program, start, view);
-}
-
-/**
- * How a `#` reads. The body's language is not known here (a stdin program
- * reaches this module without its interpreter's name), and `#` means opposite
- * things: a comment in Python and shell, with or without a space after it
- * (`#don't`), and a private name in JavaScript (`this.#x`, `{ #x = 1 }`,
- * `} #f = …`). Guessing which from the tokens before it was walked around
- * (#2699 security review). So both readings are taken: `word` reads a `#`
- * starting a word as a comment, and `spaced` only one followed by whitespace.
- *
- * A `/` is the same kind of guess: in JavaScript it opens a regex literal
- * (`/\)/g`, `return /'/`) or a comment (`// don't`, or a block comment); in Python it
- * is a division, a floor division or the positional-only marker
- * (`def f(a, /, b)`). Each `#` reading is taken with JavaScript's `/` forms
- * masked (`js`) and without, and a write any of the four finds is refused.
- * A misreading costs the reading it happens in; another still sees the code.
- */
-interface Reading {
-  hash: 'word' | 'spaced';
-  js: boolean;
-}
-const READINGS: readonly Reading[] = [
-  { hash: 'word', js: false },
-  { hash: 'spaced', js: false },
-  { hash: 'word', js: true },
-  { hash: 'spaced', js: true },
-];
-
-/** A body read as code: per offset 0 code, 1 quoted or a regex literal, 2 a `#` comment; each literal's quote offsets; whether every quote closed. */
-interface CodeView {
-  mask: Uint8Array;
-  literals: Array<[number, number]>;
-  balanced: boolean;
-}
-
-/** Whether the `/` at `i` can open a regex literal: after an operator or opener, never `//` or `/*`. */
-function opensRegexLiteral(body: string, i: number): boolean {
-  if (body[i + 1] === '/' || body[i + 1] === '*') return false;
-  let j = i - 1;
-  while (j >= 0 && /\s/.test(body[j])) j--;
-  if (j < 0 || '(,=:[!&|?{};~+-*%<>^'.includes(body[j])) return true;
-  // After a keyword, not an operand: `return /'/` (#2699 review round 3). A
-  // name that only ends in one (`begin / 2`), or a property named like one
-  // (`o.in / 2`), is an operand.
-  return /(?<![\w$.])(?:return|typeof|instanceof|in|of|new|delete|void|throw|case|do|else|yield|await)$/.test(body.slice(Math.max(0, j - 11), j + 1));
-}
-
-/** The offset of the `/` closing the regex literal opened at `i`, on the same line, or -1. */
-function regexLiteralEnd(body: string, i: number): number {
-  let inClass = false;
-  for (let j = i + 1; j < body.length; j++) {
-    const ch = body[j];
-    if (ch === '\n') return -1;
-    if (ch === '\\') j++;
-    else if (ch === '[') inClass = true;
-    else if (ch === ']') inClass = false;
-    else if (ch === '/' && !inClass) return j;
-  }
-  return -1;
-}
-
-function codeMask(body: string, reading: Reading): CodeView {
-  const mask = new Uint8Array(body.length);
-  const literals: Array<[number, number]> = [];
-  let quote: string | null = null;
-  let opened = 0;
-  for (let i = 0; i < body.length; i++) {
-    const ch = body[i];
-    if (quote !== null) {
-      mask[i] = 1;
-      if (ch === '\\' && i + 1 < body.length) mask[++i] = 1;
-      else if (ch === quote) {
-        quote = null;
-        literals.push([opened, i]);
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"' || ch === '`') {
-      quote = ch;
-      opened = i;
-      mask[i] = 1;
-    } else if (ch === '#' && (i === 0 || /\s/.test(body[i - 1])) && (reading.hash === 'word' || /^\s?$/.test(body[i + 1] ?? ''))) {
-      // A comment runs to the end of the line. An apostrophe in one ("don't")
-      // would otherwise open a quote that swallows the brackets after it. Only
-      // a `#` that starts a word, so `this.#x` and `$#` stay code.
-      while (i < body.length && body[i] !== '\n') mask[i++] = 2;
-    } else if (reading.js && ch === '/' && body[i + 1] === '/') {
-      // A JavaScript line comment, read like a `#` one (#2699 review round 3).
-      while (i < body.length && body[i] !== '\n') mask[i++] = 2;
-    } else if (reading.js && ch === '/' && body[i + 1] === '*' && body.indexOf('*/', i + 2) >= 0) {
-      // A JavaScript block comment, to its `*/`. One that never closes is not
-      // one (`/[/*]/` read from the wrong `/`), so it masks nothing.
-      const end = body.indexOf('*/', i + 2) + 2;
-      while (i < end) mask[i++] = 2;
-      i--;
-    } else if (reading.js && ch === '/' && opensRegexLiteral(body, i)) {
-      // A regex literal (`/\)/g`): its brackets are not code. Only after a
-      // character a division cannot follow, so `n / 2` stays code (#2699
-      // review). Python has no regex literal and no valid `/` there.
-      const end = regexLiteralEnd(body, i);
-      if (end > i) {
-        for (let j = i; j <= end; j++) mask[j] = 1;
-        i = end;
-      }
-    }
-  }
-  return { mask, literals, balanced: quote === null };
-}
-
-/**
- * The text of every call whose argument list holds offset `at`, innermost
- * first: callee, argument list, and any method chain after it (`.f(…).g(…)`).
- * Read over code only, with quotes and `#` comments masked, so a call over
- * several lines, a `;` in a path string, or an apostrophe in a comment does
- * not split or hide it. A callee may be computed (`fs['copyFileSync'](…)`,
- * `(shutil.copy)(…)`). A body whose quotes never close cannot be read, so
- * none is returned and the window alone decides, as it did before #1407.
- * Reading such a body whole was tried and measured: it refused eight real
- * commands, all edits of docs and config, and none a write of an artifact.
- */
-function enclosingCalls(body: string, at: number, view: CodeView): string[] {
-  const { mask, balanced } = view;
-  if (!balanced) return [];
-  const open: { at: number; ch: string }[] = [];
-  for (let i = 0; i < at; i++) {
-    if (mask[i] !== 0) continue;
-    const ch = body[i];
-    if (ch === '(' || ch === '[' || ch === '{') open.push({ at: i, ch });
-    else if ((ch === ')' || ch === ']' || ch === '}') && open.length > 0) open.pop();
-  }
-  const calls: string[] = [];
-  for (let k = open.length - 1; k >= 0; k--) {
-    if (open[k].ch !== '(') continue;
-    const paren = open[k].at;
-    const start = calleeStart(body, mask, paren);
-    if (start === paren) continue;
-    calls.push(body.slice(start, chainEnd(body, mask, closingParen(body, mask, paren))));
-  }
-  return calls;
-}
-
-/** Where the callee before the `(` at `paren` starts: identifiers, dots, and bracketed groups. */
-function calleeStart(body: string, mask: Uint8Array, paren: number): number {
-  let j = paren - 1;
-  while (j >= 0 && /\s/.test(body[j])) j--;
-  let start = j + 1;
-  while (j >= 0) {
-    const ch = body[j];
-    if (mask[j] === 0 && (ch === ']' || ch === ')')) {
-      const opener = ch === ']' ? '[' : '(';
-      let depth = 0;
-      while (j >= 0) {
-        if (mask[j] === 0 && body[j] === ch) depth++;
-        else if (mask[j] === 0 && body[j] === opener && --depth === 0) break;
-        j--;
-      }
-      if (j < 0) return start;
-      start = j;
-      j--;
-    } else if (/[\w.$]/.test(ch)) {
-      start = j;
-      j--;
-    } else break;
-  }
-  return start;
-}
-
-/** The offset just past the `)` matching the `(` at `paren`, over code only, or the body's end. */
-function closingParen(body: string, mask: Uint8Array, paren: number): number {
-  let depth = 0;
-  for (let i = paren; i < body.length; i++) {
-    if (mask[i] !== 0) continue;
-    const ch = body[i];
-    if (ch === '(' || ch === '[' || ch === '{') depth++;
-    else if ((ch === ')' || ch === ']' || ch === '}') && --depth === 0) return i + 1;
-  }
-  return body.length;
-}
-
-/** Past any method chain starting at `from`: `.name`, optionally called, repeated. */
-function chainEnd(body: string, mask: Uint8Array, from: number): number {
-  let i = from;
-  for (;;) {
-    let j = i;
-    while (j < body.length && (/\s/.test(body[j]) || body[j] === '\\' || mask[j] === 2)) j++;
-    if (body[j] !== '.') return i;
-    j++;
-    while (j < body.length && /[\w$]/.test(body[j])) j++;
-    if (body[j] === '(') j = closingParen(body, mask, j);
-    if (j === i) return i;
-    i = j;
-  }
-}
+const PATH_STOPS = new Set(['\n', '\r', "'", '"', '`', '(', ',', '=', '[', '{', ';', '+']);
 
 /**
  * Verbs that modify a named file in place, with no redirect for
@@ -3069,7 +2542,10 @@ const IN_PLACE = [
 
 /** The `-c` body of a shell invocation, dequoted. */
 function shellBody(segment: string): string {
-  const m = /\s-[a-z]*c\s+([\s\S]+)$/.exec(segment);
+  // The same flag grammar as `programBody`: a grouped capital (`bash -Ec`)
+  // and a body attached to its flag (`bash -c'…'`) are both a `-c` body
+  // (security review of #2863's round 3).
+  const m = /\s-[A-Za-z]*c\s*([\s\S]+)$/.exec(segment);
   return m ? dequote(m[1]).trim() : '';
 }
 
@@ -3078,13 +2554,12 @@ function shellBody(segment: string): string {
  * t +, at most one of r w a x and one of b t, with w, a, x or + among them.
  * So 'w', 'wb', 'a+', 'r+' and 'w+b' write; 'r', 'rb' and 'rt' do not, nor a
  * word like 'raw' or 'bat'. The mode used to be `[wax]\+?`, so
- * `open(p, 'wb')` was not a write, on main too. `WRITE_INTENT` and
- * `opensForWrite` both read it from here: one decider for one question. It
- * captures nothing, so it composes into a pattern any number of times.
+ * `open(p, 'wb')` was not a write, on main too. `WRITE_INTENT` reads it
+ * from here. It captures nothing, so it composes into a pattern any number
+ * of times.
  */
 const MODE_BODY = String.raw`(?=[rwaxbt+]{1,3}['"])(?![^'"]*[rwax][^'"]*[rwax])(?![^'"]*[bt][^'"]*[bt])(?=[^'"]*[wax+])[rwaxbt+]{1,3}`;
 const WRITE_MODE_SOURCE = `(?:'${MODE_BODY}'|"${MODE_BODY}")`;
-const WRITE_MODE = new RegExp(WRITE_MODE_SOURCE);
 
 /**
  * Declared write intent inside an interpreter body.
@@ -3175,13 +2650,12 @@ const WRITE_INTENT = new RegExp(
   // cannot reach `copy2`: a digit is a word character), any `.rename(`,
   // `.unlink(`, `.rm(` or `.truncate(` (`fs.unlink`, `Path.unlink`), `os.open`
   // with a write flag (read through two levels of nested calls in the path,
-  // as the open pattern below is), and `openSync` beside `open`. None of these joins
-  // `WRITE_CALLEES`; its docblock says why.
+  // as the open pattern below is), and `openSync` beside `open`.
   String.raw`\b(?:writeFileSync|appendFileSync|createWriteStream|copyFileSync|renameSync|unlinkSync|rmSync|truncateSync|writeFile|appendFile|copyFile|cpSync|write_text|write_bytes|json\.dump|os\.remove|os\.rename|os\.replace|os\.unlink|shutil\.(?:copy2?|copyfile|copytree|move|rmtree))\b|\.(?:rename|unlink|rm|truncate|cp)\s*\(|\bos\.open\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\bO_(?:WRONLY|RDWR|CREAT|TRUNC|APPEND)\b|(?<!stdout)(?<!stderr)\.write\s*\(|\bopen(?:Sync)?\s*\([^)]*` +
     WRITE_MODE_SOURCE +
     // #2699 review: the mode after nested calls in the path, two levels deep.
-    // `opensForWrite` reads any depth, but only in a body that parses; this is
-    // what the window still reads in one whose quotes never close.
+    // Deeper nesting is outside the window: the reader that followed it went
+    // with the rest of program-body reading in #2858 (ADR-027 decision 3).
     String.raw`|\bopen(?:Sync)?\s*\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*` +
     WRITE_MODE_SOURCE,
 );
@@ -3244,52 +2718,26 @@ function namesOutsideScratch(text: string, list: string[], exempt: Exemption): s
 }
 
 /**
- * Protected names in a program body, counting only ABSOLUTE spellings
- * outside a scratch tree (#1240).
- *
- * The stricter reading exists because of what it costs otherwise, measured
- * rather than reasoned: scanning an interpreter body for a protected NAME
- * newly refused **23** real commands, and every one of them was an agent
- * building hook FIXTURES in a `/tmp` tree with an assembled path —
- * `open(os.path.join(dst, n), "w")`, where the only word carrying
- * `.hook.ts` is the relative suffix itself. A relative fragment cannot be
- * shown to be scratch, so the fail-closed reading in `isScratchPath`
- * correctly refuses to exempt it, and the result is that the fixture work
- * #1175 exists to unblock gets refused by the arm added beside it.
- *
- * So this arm asks for an absolute path. The spelling it is there to catch
- * — `open("<run store>/workflow-state.json", "w")` inside a heredoc — is
- * absolute, and the 23 are not. The arm it mirrors (arm 3, the `-c` form)
- * keeps its looser reading: that behaviour is pre-existing and measured,
- * and tightening it is not this change's business.
- */
-function absoluteNamesOutsideScratch(text: string, exempt: Exemption): string[] {
-  const out: string[] = [];
-  for (const p of ALL_PROTECTED) {
-    const words = pathWordsContaining(text, p).filter(w => w.startsWith('/'));
-    if (words.length === 0) continue;
-    if (words.every(exempt)) continue;
-    out.push(p);
-  }
-  return out;
-}
-
-/**
  * The `-c`/`-e` program of an interpreter segment, with only its OUTER
  * quoting removed (#1277).
  *
  * `shellBody` next door `dequote`s, which is right for a shell body about to
  * be re-parsed as shell and wrong for every other language: it deletes the
  * only thing that marks where one string literal ends and the next
- * expression begins. `bodyTargets` is the whole point of this function, and
- * it cannot answer its question on a view with no quotes in it.
+ * expression begins. The chain reader (`collectBody`) reads a body's literals
+ * for what it makes and mentions, and it cannot do that on a view with no
+ * quotes in it.
  *
- * An unmatched outer quote leaves the text as it stands. `bodyTargets` then
- * reports the body `unreadable` rather than guessing, which is the
- * fail-closed direction.
+ * An unmatched outer quote leaves the text as it stands. `readLiterals` then
+ * returns `null` and the body names every path rather than guessing, which
+ * is the fail-closed direction.
  */
 export function programBody(segment: string): string {
-  const m = /\s-[a-z]*[ce]\s+([\s\S]+)$/.exec(segment);
+  // `\s*`, not `\s+`: `python3 -c'open(…)'` hands python the body with no
+  // space after the flag, and an empty view here hid its quoted `open` mode
+  // (review of #2863, round 2).
+  // `[A-Za-z]`: `python3 -Ic …` groups `-I` with `-c` (review of #2863, round 3).
+  const m = /\s-[A-Za-z]*[ce]\s*([\s\S]+)$/.exec(segment);
   if (!m) return '';
   const raw = m[1].trim();
   const q = raw[0];
@@ -3300,273 +2748,9 @@ export function programBody(segment: string): string {
 }
 
 /**
- * A literal that STANDS ALONE as an argument is one nothing transforms, so
- * the path it spells is the path the program hands to the filesystem.
- *
- * Both sets are closed-world and that is the point. They enumerate what may
- * legally DELIMIT an argument, not what may operate on one — so a language
- * whose concatenation operator nobody here thought of reads as "not
- * delimited", which refuses. The other spelling, a denylist of operators
- * (`+`, `%`, `.replace`, an f-string, …), is a detector narrower than what
- * it detects — `.claude/rules/checks-must-be-able-to-fail.md` — and it is
- * what #1276's stopgap was a second attempt at.
- *
- * ## `=` and `:` ARE openers, and the rebinding question moved (#1371)
-
- * A round of #1371 dropped them, on the finding that `p = "/tmp/x"` records
- * a target nothing then follows through its reassignment:
- *
- *     p = '/tmp/fix/workflow-state.json'
- *     p = p.replace('/tmp/fix', os.environ['RUNGATE_WORK_DIR'])
- *     open(p, 'w').write('{}')
- *
- * Dropping them worked and was the wrong place to answer it. `inWritePosition`
- * answers the same question generally — a binding at statement level is an
- * argument of no call, so it is not a write position — and it also catches the
- * dict KEY, the ternary branch, and the inner call's default that the `:` drop
- * reached only by accident or not at all. Measured: with `inWritePosition` in
- * place, restoring `=` and `:` moves nothing — 0 newly blocked and 0 newly
- * allowed over 132,196 real commands, and the same exemption population.
- *
- * So they are restored, because two deciders answering one question are
- * behaviourally one, no behavioural test can tell them apart, and the next
- * reader deletes whichever looks redundant — the fourth shape in
- * `.claude/rules/checks-must-be-able-to-fail.md`. The measurement above is
- * exactly the evidence that they WERE two deciders.
- *
- * What this set still answers alone is ADJACENCY: `x + "/tmp/…"` has an
- * operator against the literal, and no question about write position can see
- * that.
- *
- * A closing bracket is neither an opener nor a closer. It ENDS the group the
- * literal sits in and leaves the outer expression still running, so the walk
- * steps past it and keeps asking — which is how `Path("/tmp/x")
- * .relative_to(…)` is told from `shutil.copy(src, "/tmp/x")`. The first
- * version of this stopped at the `)` and reported the pathlib spelling as a
- * target; its own CONTROL row caught it, and that row is in the tests.
- */
-const ARG_OPENS = new Set(['(', ',', '[', '{', '=', ':', ';']);
-const ARG_CLOSES = new Set([')', ',', ']', '}', ';', ':']);
-const GROUP_CLOSES = new Set([')', ']', '}']);
-
-export interface BodyTargets {
-  /** Carrying literals that stand alone — the paths the program can write. */
-  targets: string[];
-  /** Carrying literals an expression consumes. The destination is NOT these. */
-  fragments: string[];
-  /**
-   * Literals resolving inside a protected tree, whatever they spell and
-   * whether or not anything transforms them (#1371).
-   *
-   * `targets` and `fragments` are both filtered by `ALL_PROTECTED`, so
-   * `targets.every(isScratchPath)` quantifies over a set the caller chose the
-   * membership of. This one is not filtered by a name list at all, which is
-   * the point: the property it reports does not depend on `ALL_PROTECTED`
-   * being complete, and completeness is what failed.
-   */
-  protectedLiterals: string[];
-  /**
-   * Path-shaped literals the reader could NOT place — an expansion it cannot
-   * perform, a backtick, or a relative path whose meaning depends on a
-   * working directory. Kept on their own list rather than folded into
-   * `protectedLiterals`, so that afterwards the reason a body was refused is
-   * still readable: "it names a live tree" and "I could not tell" are
-   * different facts and only one of them is a finding about the command.
-   */
-  unplaceable: string[];
-  /** The body does not read as a sequence of complete literals. */
-  unreadable: boolean;
-}
-
-/**
- * Where a literal sits, as THREE readings and not two (#1371, second round).
- *
- * The first version of this returned a boolean behind
- * `if (!value.startsWith('/')) return false`, and the review was right that
- * the word *absolute* in the remedy I was given is where the hole came
- * from. `~/.rungate/run`, `$HOME/.rungate/run` and `${HOME}/.claude` all
- * took that early exit, and the caller read `false` as **not a protected
- * target** rather than as **I could not place this** — a silent skip, one
- * layer inside the remedy for silent skips.
- *
- * The asymmetry that settles it: a false `unplaceable` costs a refused
- * exemption, which somebody notices and fixes. A false `elsewhere` costs a
- * bypass, which nobody notices.
- *
- * Expansion handles the spellings we thought of; `unplaceable` handles the
- * ones we did not, and it is the half that matters. Both are kept because
- * expansion is what stops the fail-closed half from refusing every ordinary
- * `~/`-spelled read.
- */
-type Placement = 'protected' | 'unplaceable' | 'elsewhere';
-
-/** A leading `~`, `$HOME` or `${HOME}`, which the runtime or shell expands. */
-const HOME_PREFIX = /^(?:~|\$HOME|\$\{HOME\})(?=\/|$)/;
-
-/**
- * Path-shaped and NOT placeable: an expansion we cannot perform, a backtick,
- * or a relative path whose meaning depends on a working directory this
- * module cannot see. `isScratchPath` already gives a relative path exactly
- * this reading — "only an ABSOLUTE path can be placed in a tree" — so this
- * is that rule applied on the other side of the same question.
- */
-const UNPLACEABLE = /[$`~]/;
-
-function expandHome(value: string): string {
-  const home = process.env.HOME || '';
-  if (!home) return value;
-  return value.replace(HOME_PREFIX, home);
-}
-
-/**
- * One site per reading, so a mutation battery can remove the live-tree
- * reading without removing the fail-closed one and report which rows each
- * is actually holding up. Inlining either verdict at a second site would
- * let a refusal bypass the mutation and the rows would go green having
- * witnessed nothing — `.claude/rules/checks-must-be-able-to-fail.md`.
- */
-const IN_LIVE_TREE: Placement = 'protected';
-const CANNOT_PLACE: Placement = 'unplaceable';
-
-/**
- * ## The case comparison is the VOLUME's to make, and it makes it (#1371)
- *
- * The review asked for both sides of the live-tree comparison to be
- * case-folded, as `names()` already is, because `/Users/JHORN/…` and
- * `/Users/jhorn/…` are one file and two strings on this volume. It was
- * built, and then the mutation battery refused to witness it: removing the
- * fold left the SHOUTED row refused anyway, because `resolveThroughLinks`
- * climbs to the deepest EXISTING ancestor and `realpathSync` returns the
- * canonical case — `/USERS` comes back `/Users`. So the fold decided
- * nothing that the resolution had not already decided.
- *
- * It is not shipped, and the reason is not thrift. Two deciders answering
- * one question are behaviourally one, no test can tell them apart, and the
- * next reader deletes whichever looks redundant. And on a case-SENSITIVE
- * volume the fold is the wrong answer rather than a spare one: there
- * `/Users/JHORN/x` really is a different file, which the fold would report
- * as live. `names()` folds for a different situation — it matches a
- * basename inside a command string where nothing resolves anything.
- *
- * CI proved both halves of that, and corrected the heading this note used
- * to carry. It said the differential "does not exist here", measured on
- * macOS — and the SHOUTED row went red on the Linux runner, where
- * `/HOME/RUNNER/.rungate/run` is a path that does not exist and is not the
- * artifact. The guard was right on both volumes; the claim was macOS's,
- * read as universal. The row now probes the volume and asserts the verdict
- * tracks it in BOTH directions, so a blind `.toLowerCase()` fold reddens it
- * on Linux and dropping the resolution reddens it on macOS.
- *
- * #1211 / #1358 is the same QUESTION about `WorkflowStateGuard` and may
- * well have a different answer, because that matcher has no resolution step
- * to fall back on. Worth reading this note before fixing it there.
- */
-function placeLiteral(value: string, live: string[]): Placement {
-  const expanded = expandHome(value);
-  // UNPLACEABLE is asked FIRST, and the order is the fix for a hole the
-  // other way round left open (#1411 review): `"$RG"` carries no slash, so
-  // a slash test in front of this one answered `elsewhere` — "I placed it,
-  // and it is not protected" — for a value nothing had placed. Witnessed:
-  // `shutil.copy("/tmp/fix/workflow-state.json", os.path.expandvars("$RG"))`
-  // was ALLOWED before this swap and is refused after it. The slash-bearing
-  // spelling of the same command was already refused, which is what made
-  // the gap invisible.
-  if (UNPLACEABLE.test(expanded)) return CANNOT_PLACE;
-  // Not path-shaped at all: a mode string, a JSON blob, a module name. The
-  // exemption would never apply again if these ended it.
-  if (!expanded.includes('/')) return 'elsewhere';
-  // A RELATIVE path-shaped literal stays `elsewhere`, and that is measured
-  // rather than comfortable. Treating one as unplaceable costs 7 real
-  // commands and halves the exemption population (13 segments to 6),
-  // because `'hornjason/pai-config'` and `'./lib/x.ts'` are slash-bearing
-  // and are not paths — and it does not even close the class it was
-  // widened for, since `'.'` and `'x'` carry no slash at all. The honest
-  // closure for a relative destination is `inWritePosition`, which asks
-  // only about literals the write actually consumes.
-  if (!expanded.startsWith('/')) return 'elsewhere';
-  const normalised = resolve(expanded);
-  if (inAnyTree(normalised, live)) return IN_LIVE_TREE;
-  const real = resolveThroughLinks(normalised);
-  // Nothing in the chain resolved, so this is a path we could not place —
-  // not a path we placed outside the live trees. The distinction is the
-  // whole of #1371's third round, and `isScratchPath` already notes that an
-  // unreachable fail-OPEN in a fail-closed module reads as permission.
-  if (real === null) return CANNOT_PLACE;
-  // Both spellings, for the reason `protectedTrees` gives at length:
-  // `resolve` normalises `..` and does not follow a link, so a pre-existing
-  // symlink out of scratch is invisible to the first reading.
-  if (inAnyTree(real, live)) return IN_LIVE_TREE;
-  return 'elsewhere';
-}
-
-/**
- * Which path literals in an interpreter body can be shown to be the write
- * TARGET, and which are merely fragments of an expression that computes one
- * (#1277).
- *
- * ## The mistake this replaces
- *
- * Every escape in this family is the same one wearing a different costume:
- * the exemption read a path LITERAL off the command line and treated it as
- * the destination. #1276 shipped a labelled stopgap — "is every absolute
- * literal in the body scratch" — which closed the one spelling that had been
- * measured and left the class open, because a computed destination need not
- * leave a non-scratch literal behind. Four spellings that it exempts and
- * this refuses are asserted in `test/bash-write-guard.test.ts`; the one that
- * matters least is also the one that reads worst:
- *
- *     bun -e 'writeFileSync("/tmp/x/workflow-state.json"
- *               .replace("/tmp/x", process.env.RUNGATE_WORK_DIR), "{}")'
- *
- * Every absolute literal in it is scratch. The write lands in the run store.
- *
- * ## What is asked instead
- *
- * A literal is a target only when nothing between it and the filesystem
- * transforms it — then, and only then, `isScratchPath` resolving it answers
- * the real question. A carrying literal that does NOT stand alone is not
- * evidence against the write, it is the ABSENCE of evidence for it, so it
- * ends the exemption rather than being ignored. That is the same fail-closed
- * reading `isScratchPath` already applies to a relative path.
- *
- * The three things this still does not do are stated rather than hidden.
- * It cannot see an assembled NAME (`'workflow' + '-state.json'`) — no
- * literal carries the artifact, so arm 3 never receives a candidate, which
- * is a limit of the candidate search and has its own asserted row. It does
- * not read a program in a FILE. And `eval` defeats it, as it defeats any
- * reading of a program that does not run it.
- */
-export function bodyTargets(body: string): BodyTargets {
-  const targets: string[] = [];
-  const fragments: string[] = [];
-  const protectedLiterals: string[] = [];
-  const unplaceable: string[] = [];
-  const lits = readLiterals(body);
-  // An unterminated literal means every boundary after it is a guess.
-  if (!lits) return { targets: [], fragments: [], protectedLiterals: [], unplaceable: [], unreadable: true };
-  /** Every literal span, so the backward walk can step over one. */
-  const spans: [number, number][] = lits.map(l => [l.start, l.end]);
-  // Read once per body rather than once per literal: each call realpaths up
-  // to six trees, and a body has as many literals as it likes.
-  const live = protectedTrees();
-  for (const { value, start: i, end: j } of lits) {
-    const where = placeLiteral(value, live);
-    if (where === 'protected') protectedLiterals.push(value);
-    if (where === 'unplaceable') unplaceable.push(value);
-    if (ALL_PROTECTED.some(p => value.toLowerCase().includes(p.toLowerCase()))) {
-      const pos = standsAlone(body, i, j) ? inWritePosition(body, i, spans) : UNPROVEN;
-      if (pos === 'destination') targets.push(value);
-      // `argument` is deliberately in neither list — see `inWritePosition`.
-      else if (pos === 'unproven') fragments.push(value);
-    }
-  }
-  return { targets, fragments, protectedLiterals, unplaceable, unreadable: false };
-}
-
-/**
  * The string literals of an interpreter body, with the index of each opening
- * and closing quote — or `null` when one is never closed (#1367 split this
- * out of `bodyTargets` so the chain reader uses the same one reader).
+ * and closing quote — or `null` when one is never closed. #1367 split it out
+ * of the body-target reader #2858 deleted; the chain reader is its caller.
  */
 function readLiterals(body: string): Array<{ value: string; start: number; end: number }> | null {
   const out: Array<{ value: string; start: number; end: number }> = [];
@@ -3605,205 +2789,8 @@ function readLiterals(body: string): Array<{ value: string; start: number; end: 
   return out;
 }
 
-/**
- * Whitespace, including a newline. See `standsAlone` for why the newline is
- * in here rather than carrying a rule of its own.
- */
+/** Whitespace, including a newline. */
 const WHITESPACE = new Set([' ', '\t', '\n', '\r']);
-
-/**
- * The callees a literal may be a direct argument of and still be the write
- * TARGET (#1371, second round).
- *
- * This is a WHITELIST OF POSITIONS, which is why it is allowed to exist at
- * all. The thing refused twice on this PR is a denylist of TRANSFORMS —
- * `.replace(`, `+`, `%`, an f-string — because a transform nobody listed
- * reads as "no transform" and the exemption holds; `Path("/tmp/x")
- * .relative_to(…)` is the standing proof and it is a CONTROL row. A
- * whitelist fails the other way: a callee nobody listed is not a recognised
- * write position, so the literal is a fragment and the exemption ends.
- *
- * The names are not a new list. They are the names already in
- * `WRITE_INTENT`, which is what makes a command a candidate for arm 3 in
- * the first place — so a verb missing here is a verb that never brought a
- * command to this question.
- *
- * `remove`, `rename`, `replace`, `unlink` and `write` are qualified rather
- * than matched bare: `str.replace` and `stdout.write` are not writes to a
- * file, and a bare match would read a transform as a write position, which
- * is the denylist's failure wearing a whitelist's clothes.
- *
- * The verbs #2701 added to `WRITE_INTENT` are deliberately NOT here, so this
- * list is no longer exactly `WRITE_INTENT`'s names. A name here is trusted
- * by its last segment alone, and a body can define its own function under
- * it: with `rm` listed, `def rm(p): os.remove(os.environ['RG'])` and then
- * `rm('/tmp/fix/workflow-state.json')` read the scratch literal as the
- * write's target and exempted the body, a shape main refused (#2704 review).
- * Matching the binding forms was tried and walked around twice (a compound
- * statement, a parameter, a loop variable, a tuple). Left out, an unlisted
- * callee ends the exemption, which is the direction above: a fixture writing
- * through one of #2701's verbs is refused. The names already here carry that
- * hole (`def copy`), pinned as a CONCESSION row and owned by #2705.
- */
-const WRITE_CALLEES = new Set([
-  'writeFileSync',
-  'appendFileSync',
-  'createWriteStream',
-  'copyFileSync',
-  'renameSync',
-  'unlinkSync',
-  'rmSync',
-  'truncateSync',
-  'write_text',
-  'open',
-  'dump',
-  'copy',
-  'copyfile',
-  'copytree',
-  'move',
-  'rmtree',
-]);
-const QUALIFIED_WRITE_CALLEES = new Set([
-  'os.remove',
-  'os.rename',
-  'os.replace',
-  'os.unlink',
-  'os.rmdir',
-  'shutil.copy',
-  'shutil.copyfile',
-  'shutil.copytree',
-  'shutil.move',
-  'shutil.rmtree',
-  'json.dump',
-]);
-
-/**
- * WHICH argument of a recognised write call is the destination (#1411).
- *
- * Recognising the callee is not enough, because most of these take a SOURCE
- * as well: `shutil.copy("/tmp/fix/workflow-state.json", dest)` put a scratch
- * literal in `targets` while the destination was a name nothing tracks, and
- * `targets.every(isScratchPath)` then exempted a copy whose destination was
- * unknown. Witnessed allowed before this map and refused after it.
- *
- * `-1` means NO argument of that callee is ever a destination path:
- * `json.dump(obj, fp)` writes to a file object, and `p.write_text(data)`
- * writes to its RECEIVER. A literal argument of either is data, and reading
- * it as a target is the same defect pointed the other way.
- *
- * The default is 0 rather than "unknown", because every remaining name in
- * `WRITE_CALLEES` takes its path first and a name that reaches here has
- * already passed the whitelist.
- */
-const DEST_INDEX = new Map<string, number>([
-  ['copy', 1],
-  ['copyfile', 1],
-  ['copytree', 1],
-  ['copyFileSync', 1],
-  ['move', 1],
-  ['rename', 1],
-  ['renameSync', 1],
-  ['replace', 1],
-  ['dump', -1],
-  ['write_text', -1],
-]);
-
-function destIndexOf(name: string): number {
-  const last = name.slice(name.lastIndexOf('.') + 1);
-  const at = DEST_INDEX.get(last);
-  return at === undefined ? 0 : at;
-}
-
-function isWriteCallee(name: string): boolean {
-  if (!name) return false;
-  if (QUALIFIED_WRITE_CALLEES.has(name)) return true;
-  const last = name.slice(name.lastIndexOf('.') + 1);
-  return WRITE_CALLEES.has(last);
-}
-
-/**
- * Is the literal beginning at `start` a DIRECT argument of a recognised
- * write call?
- *
- * The walk goes backwards to the opener of the group the literal sits in,
- * stepping over balanced groups and over literal spans already read — a
- * `(` inside a string is not a bracket. Three endings, and only the first
- * is a yes:
- *
- *   a `(` at depth 0      the literal is an argument of that call; read the
- *                         callee in front of it and ask the whitelist
- *   a `[` or `{` at 0     the literal is an element of a list or an entry
- *                         in a dict, not an argument of anything
- *   the start of the body the literal is at statement level: a binding, a
- *                         bare expression, a dict key with no enclosing call
- *
- * This is what makes the exemption a claim about the WRITE rather than
- * about a path that appears somewhere near one, and it is what the two
- * earlier rounds were each reaching for with a cheaper instrument.
- *
- * ## Three answers, because two of them conflated placed with unreadable
- *
- * `argument` is a literal that IS a direct argument of a recognised write
- * call and is NOT at the destination index — `shutil.copy`'s source, or
- * `json.dump`'s object. A boolean had to call that `unproven`, which is a
- * fragment, which ends the exemption: with the index map added and two
- * answers available, `shutil.copy('/tmp/a/x', '/tmp/b/x')` went from
- * allowed to refused, and that command is the exact shape #1175 exists to
- * unblock. It is three CONTROL rows across three describes and all three
- * went red together, which is what a control is for.
- *
- * So: `destination` counts as a target, `unproven` ends the exemption, and
- * `argument` does neither — the literal is placed, and placed somewhere
- * that is not the write. A command whose ONLY literal is an `argument`
- * still reaches `targets.length === 0` and is refused.
- */
-type Position = 'destination' | 'argument' | 'unproven';
-const IS_DESTINATION: Position = 'destination';
-const UNPROVEN: Position = 'unproven';
-
-function inWritePosition(body: string, start: number, spans: [number, number][]): Position {
-  let i = start - 1;
-  let depth = 0;
-  /** Depth-0 commas between the opener and the literal: its argument index. */
-  let index = 0;
-  while (i >= 0) {
-    const span = spans.find(([s, e]) => i >= s && i <= e);
-    if (span) {
-      i = span[0] - 1;
-      continue;
-    }
-    const c = body[i];
-    if (c === ')' || c === ']' || c === '}') {
-      depth++;
-    } else if (c === '(') {
-      if (depth === 0) {
-        const callee = calleeBefore(body, i);
-        if (!isWriteCallee(callee)) return UNPROVEN;
-        return index === destIndexOf(callee) ? IS_DESTINATION : 'argument';
-      }
-      depth--;
-    } else if (c === '[' || c === '{') {
-      if (depth === 0) return UNPROVEN;
-      depth--;
-    } else if (c === ',') {
-      if (depth === 0) index++;
-    } else if (c === '?') {
-      // A ternary BRANCH is not a destination, it is one of two candidates,
-      // and the guard has no way to say which runs. `:` is an `ARG_OPEN`, so
-      // the false branch read as a complete argument and the walk continued
-      // past `?` to the write call's own paren — witnessed:
-      // `writeFileSync(x ? d : "/tmp/fix/workflow-state.json", "{}")` was
-      // ALLOWED, while the same command with the literal in the TRUE branch
-      // was already refused, because `?` is not an `ARG_OPEN` and the
-      // literal fell out as a fragment. That asymmetry is the whole finding:
-      // one spelling of one expression was fail-closed by accident and the
-      // other was not.
-      if (depth === 0) return UNPROVEN;
-    }
-    i--;
-  }
-  return UNPROVEN;
-}
 
 /** The dotted name immediately in front of an opening parenthesis. */
 function calleeBefore(body: string, openIndex: number): string {
@@ -3812,113 +2799,6 @@ function calleeBefore(body: string, openIndex: number): string {
   let end = i + 1;
   while (i >= 0 && /[A-Za-z0-9_$.]/.test(body[i])) i--;
   return body.slice(i + 1, end);
-}
-
-/**
- * Is the literal spanning `[start, end]` a complete argument on both sides,
- * and is every expression ENCLOSING it also complete?
- *
- * ## A newline is whitespace, not a delimiter (#1371)
- *
- * It used to be one: a newline at the literal's own depth ENDED the
- * expression, on the reading that a newline ends a statement. The AI review
- * on #1371 found what that costs, and it is the whole of #1277 — the
- * headline escape, with one newline inserted:
- *
- *     writeFileSync("/tmp/x/workflow-state.json"
- *       .replace("/tmp/x", process.env.RUNGATE_WORK_DIR), "{}")
- *
- * The literal is followed by a newline, so it read as a complete argument;
- * the `.replace` on the next line was never looked at. Both JavaScript and
- * Python continue an expression across a newline, so "a newline ends a
- * statement" is true only of a statement nothing encloses — which this walk
- * cannot tell apart from a line break inside one. A detector a reformat
- * defeats is the second shape in
- * `.claude/rules/checks-must-be-able-to-fail.md`, and it defeated the exact
- * witness the PR was written for.
- *
- * So the walk looks THROUGH whitespace in both directions to the real
- * delimiter, which is the same question it was always asking. It keeps the
- * ordinary multi-line fixture, because looking back through a newline from
- * a literal that starts a line lands on the `(` or `,` that really opened
- * it.
- *
- * ## The LEADING half has no witness, and that is said rather than implied
- *
- * The trailing half is the escape above, executed. The leading half —
- * `x +\n  "…"`, where a literal opening a line read as unconsumed — is
- * symmetry, and no harmful instance of it exists that I could write: for it
- * to matter the literal must be scratch AND carry a protected artifact AND
- * be the right operand of a concatenation, and a scratch absolute path is
- * not a suffix of anything. It is kept because the two halves ask one
- * question and an asymmetric rule invites the next reader to restore the
- * half that looks arbitrary. Measured cost over 131,942 real commands:
- * 0 newly blocked, 0 newly allowed, and the exemption population does not
- * move. `bodyTargets` reporting it as a fragment is asserted in the tests;
- * no verdict claim is made for it, because none was earned.
- */
-function standsAlone(body: string, start: number, end: number): boolean {
-  let a = start - 1;
-  while (a >= 0 && WHITESPACE.has(body[a])) a--;
-  if (a >= 0 && !ARG_OPENS.has(body[a])) return false;
-
-  let b = end + 1;
-  for (;;) {
-    while (b < body.length && WHITESPACE.has(body[b])) b++;
-    if (b >= body.length) return true;
-    const c = body[b];
-    if (GROUP_CLOSES.has(c)) {
-      b++;
-      continue;
-    }
-    return ARG_CLOSES.has(c);
-  }
-}
-
-/**
- * Can every write this body could make to a protected artifact be shown to
- * land in a scratch tree?
- *
- * Five ways to answer no, and all five are the absence of evidence rather
- * than evidence of harm: the body cannot be read, a carrying literal is
- * consumed by an expression, the body names a live tree, the body names a
- * path the reader cannot PLACE, or no literal carries the artifact at all.
- * The exemption's job is to say YES.
- *
- * With five refusals stacked, the failure that costs us is no longer a
- * bypass — it is an exemption that silently never applies again, and every
- * refusal row stays green through exactly that. So the CONTROL rows are the
- * load-bearing half of the suite, and the corpus reading that matters most
- * is `exempt > 0`, not `newly blocked == 0`.
- *
- * ## Why the live-tree reading is a separate question (#1371)
- *
- * The last line is `every` over `targets`, and `targets` only ever receives
- * literals that matched `ALL_PROTECTED`. So the quantifier ranges over a set
- * the command's author chooses the membership of, and the two readings come
- * apart on a body that writes a protected artifact into scratch AND touches
- * a live tree under a name no list has:
- *
- *     shutil.copy('/tmp/fix/workflow-state.json', '$HOME/.rungate/run')
- *
- * Every member of `targets` is scratch, so `every` says yes; the copy lands
- * in the run store. `main` refused this, this module allowed it until
- * #1371, and 50,189 real commands could not see it — an honest caller does
- * not write it, which is exactly who it is worth something to.
- *
- * `protectedLiterals` is the reading that does not go through a name list,
- * so it cannot be walked around by choosing a basename. The alternative on
- * the table was a second whole-body gate ANDed with this one, and it was
- * refused: two deciders answering one question are behaviourally one, no
- * test can tell them apart, and the next reader deletes the live half —
- * `.claude/rules/checks-must-be-able-to-fail.md`, the fourth shape.
- */
-function bodyTargetsAreScratch(body: string, exempt: Exemption): boolean {
-  const { targets, fragments, protectedLiterals, unplaceable, unreadable } = bodyTargets(body);
-  if (unreadable || fragments.length > 0) return false;
-  if (protectedLiterals.length > 0 || unplaceable.length > 0) return false;
-  if (targets.length === 0) return false;
-  return targets.every(exempt);
 }
 
 const ALL_PROTECTED = [...PROTECTED_FILES, ...PROTECTED_HOOKS];
@@ -3935,9 +2815,10 @@ const ALL_PROTECTED = [...PROTECTED_FILES, ...PROTECTED_HOOKS];
  * The scratch exemption is decided per DESTINATION against the WHOLE command
  * (#1367): the chain context is read once, lazily — most commands name no
  * protected artifact and never ask — and each step gets a judge that knows
- * its position and which words are its own. A body this command runs is
- * decided as a command of its own, inheriting what the enclosing command
- * made and named before it (`outer`).
+ * its position and which words are its own. A shell body this command runs
+ * is decided as a command of its own, inheriting what the enclosing command
+ * made and named before it (`outer`). An interpreter body that is not shell
+ * gets no exemption at all (#2858).
  */
 export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): BashWriteDecision {
   if (!cmd) return ALLOW;
@@ -3959,19 +2840,26 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
   // of a protected artifact. Reading a Python body as shell finds nothing,
   // which is how `python3 <<'PY'` stayed allowed after the shell spellings
   // were closed.
-  for (const [k, { shell, program }] of interpreterPrograms(cmd).entries()) {
+  for (const [k, { shell, program, quoted }] of interpreterPrograms(cmd).entries()) {
     if (shell) {
       const inner = decideBashWrite(program, depth + 1, () => outerFor(getCtx(), `prog:${k}`, -1));
       if (inner.blocked) return inner;
       continue;
     }
-    const exempt = judgeFor(getCtx, { src: `prog:${k}`, only: new Set(bodyTargets(program).targets) }, -1);
-    // #1277: the same target question as arm 3 below. A stdin program is
-    // the arm 3 body reached by another route, and it had NO body gate at
-    // all — so the `.replace` spelling #1276 closed for `-e` was still open
-    // here, in a heredoc, for as long as the stopgap existed.
-    const pf = absoluteNamesOutsideScratch(program, bodyTargetsAreScratch(program, exempt) ? exempt : NO_EXEMPTION).find(p =>
-      writesNear(program, p) || callWrites(program, p),
+    // #2858 (ADR-027): arm 3's write-verb question, and no scratch
+    // exemption in front of it. A stdin program is the arm 3 body reached by
+    // another route; a declared write verb near a protected name refuses it
+    // whatever directory the name sits in, and however it is spelled.
+    //
+    // #1240 counted only absolute spellings here, because a relative
+    // fragment could not be shown to be scratch and refusing it refused 23
+    // fixture builds the exemption existed for. With the exemption gone a
+    // relative spelling is the same write, and the absolute-only reading
+    // allowed `open('workflow-state.json','w')` from the run store, and any
+    // absolute path with a space in it, which the word split cut in two
+    // (review of #2863, round 2).
+    const pf = ALL_PROTECTED.find(
+      p => names(program, [p]) !== null && (writesNear(program, p) || (quoted !== undefined && writesNear(quoted, p))),
     );
     if (pf) {
       return {
@@ -4038,7 +2926,7 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
     //    this asks for a declared write verb rather than refusing every
     //    interpreter that names a protected artifact, and for what that
     //    concession costs.
-    const isInterpreter = isInterpreterWord(word) && /\s-[a-z]*[ce]\b/.test(code);
+    const isInterpreter = isInterpreterWord(word) && /\s-[A-Za-z]*[ce]\b/.test(code);
     const isMutatingFind = word === 'find' && FIND_MUTATING.test(code);
 
     // 3a. A shell `-c` body is shell. Read it as shell rather than scanning
@@ -4057,41 +2945,31 @@ export function decideBashWrite(cmd: string, depth = 0, outer?: () => Outer): Ba
       // REJECTED. See `WRITE_INTENT` for the numbers and for the one fact
       // that decided it.
       //
-      // #1361 merge: this branch read the exemption with `bodyIsAllScratch`
-      // (#1269). `main` has since replaced that with the TARGET question
-      // below (#1277), which its own comment says closes the class #1269's
-      // predicate only sampled. Main's is kept and `bodyIsAllScratch` is
-      // deleted rather than left defined-and-uncalled — a superseded
-      // predicate still in the file is the next reader's second decider.
-      // #1277: the exemption asks whether the body's write TARGET can be
-      // shown to be scratch — see `bodyTargets`. It replaces #1276's
-      // all-absolute-literals stopgap, which this closes the class of.
+      // #2858 (ADR-027 decisions 2 and 3): an interpreter body gets no
+      // scratch exemption. Reading a program for where it writes was deleted
+      // with `bodyTargets` and `callWrites`: no real command used the
+      // exemption, and every review of it found a way through. So a declared
+      // write verb near a protected name refuses the body wherever the name
+      // points, and a verb the window cannot see allows it — an accident
+      // guard's trade, stated in ADR-027.
       //
-      // Two cases keep the plain `exempt`, because their destinations are
-      // SHELL WORDS and not source literals, so `namesOutsideScratch`
-      // already asks the target question of them directly: a mutating
-      // `find`, whose operands are on the command line, and a shell `-c`
-      // body, which arm 3a re-enters as shell. Handing either to a reader of
-      // string literals would refuse them for having none.
-      // An interpreter's own words are NOT excused the way a verb's are: the
-      // program can do anything with its arguments and environment before it
-      // writes. Only the body's write targets are the write's own.
+      // A mutating `find` keeps the plain `exempt`: its destinations are
+      // SHELL WORDS on the command line, so `namesOutsideScratch` asks the
+      // target question of them directly. A shell `-c` body does not: arm 3a
+      // has already judged its shell writes with the exemption, and what is
+      // left for this arm is a write VERB near a name, which in a shell body
+      // can only be an interpreter body inside it. Exempting that let
+      // `bash -c "mkdir -p /tmp/q && python3 -c \"open('/tmp/q/…','w')\""`
+      // through, while the same body unwrapped was refused (local review).
+      //
+      // The window reads two views of one text. `bare` has had every quote
+      // stripped by `dequote`, so a name split across adjacent literals is
+      // whole there (#1407 security review); the body keeps its quotes, so
+      // an `open(…, 'w')` mode is still a quoted literal there, which is what
+      // `WRITE_INTENT` matches.
       const body = programBody(seg);
-      const bodyJudge = judgeFor(getCtx, { src: `body:${i}`, only: new Set(bodyTargets(body).targets) }, i);
-      const bodyExempt =
-        isMutatingFind || isShellWord(word)
-          ? exempt
-          : bodyTargetsAreScratch(body, bodyJudge)
-            ? bodyJudge
-            : NO_EXEMPTION;
-      const candidates = namesOutsideScratch(bare, ALL_PROTECTED, bodyExempt);
-      // #1407: `callWrites` reads the body, which keeps its quotes; `bare`
-      // has had every quote stripped by `dequote`. A name the body does not
-      // spell as written (split across adjacent literals, say) is whole only
-      // in `bare`, so it is read there instead (security review).
-      const pf = isMutatingFind
-        ? (candidates[0] ?? null)
-        : (candidates.find(p => writesNear(bare, p) || callWrites(body !== '' && body.includes(p) ? body : bare, p)) ?? null);
+      const candidates = namesOutsideScratch(bare, ALL_PROTECTED, isMutatingFind ? exempt : NO_EXEMPTION);
+      const pf = isMutatingFind ? (candidates[0] ?? null) : (candidates.find(p => writesNear(bare, p) || writesNear(body, p)) ?? null);
       if (pf) {
         return {
           blocked: true,
