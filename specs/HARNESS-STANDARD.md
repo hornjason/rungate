@@ -12769,5 +12769,5 @@ same name, so an agent asking for "ship" could get either (#2882). Jason
 named the harness skill `ship-issue` on 2026-11-26.
 `docs/adr/ADR-029-rename-the-ship-skill.md` orders the change.
 
-- [ ] SC-2819: No file rungate generates for a consumer, and no live source, spec or test of rungate's own, tells an agent to call `Skill("ship")`; they name `Skill("ship-issue")`, and only dated records under `docs/adr/`, `docs/research/` and `reference/` keep the old name
+- [ ] SC-2819: No file rungate generates for a consumer, and no live source, spec or test of rungate's own, tells an agent to invoke the ship skill by its old name; they name `Skill("ship-issue")`, only dated records under `docs/adr/`, `docs/research/` and `reference/` keep the old name, and every reader of the local brief-policy override looks in `skills/ship-issue/` before `skills/ship/`
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
