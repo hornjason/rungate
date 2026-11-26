@@ -300,7 +300,7 @@ function isCpLinkFlag(w: string): boolean {
  */
 function segmentLinks(seg: string): boolean {
   const word = commandWord(seg);
-  const view = word === 'eval' ? dequote(seg) : stripQuoted(seg); // `eval` runs its quoted text
+  const view = /^\s*eval\s/.test(seg) ? dequote(seg) : stripQuoted(seg); // `eval` runs its quoted text
   if (word === 'ln' || word === 'link' || LINK_AT_COMMAND.test(view)) return true;
   return word === 'cp' && scanSegment(seg).words.some(isCpLinkFlag);
 }
@@ -1037,7 +1037,7 @@ export function dequote(s: string): string {
 }
 
 /** Wrappers and reserved words that come before the real command word (#2866: `timeout`, `do`, `then`). */
-const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs|nice|timeout|stdbuf|doas|caffeinate|exec|ionice|setsid|busybox|builtin|do|then|else|elif|if|while|until|!)$/;
+const WRAPPERS = /^(?:sudo|env|nohup|time|command|xargs|nice|timeout|stdbuf|doas|caffeinate|exec|ionice|setsid|busybox|builtin|eval|do|then|else|elif|if|while|until|!)$/;
 
 /**
  * A variable assignment prefix, by the POSIX shape: an identifier, an
@@ -1465,11 +1465,13 @@ export function writeTargets(segment: string, whole: string = segment): string[]
     for (let i = at + 1; i < words.length; i++) {
       const [name, ...value] = words[i].split('=');
       const long = name.length >= 3 && '--target-directory'.startsWith(name);
-      const short = name.startsWith('--') ? null : /^-[A-Za-z]*?t(.*)$/.exec(words[i]);
+      // only a run of value-less flags may sit before the `t`: `-Sext` is `-S ext` (#2870)
+      const short = name.startsWith('--') ? null : /^-[abdfHilLnPpRrsuvxcCD]*t(.*)$/.exec(words[i]);
       if (!words[at].endsWith('rsync') && (long || short)) dir = (long ? value.join('=') : short![1]) || words[++i] || null;
       else if (!words[i].startsWith('-')) args.push(words[i]);
     }
-    if (dir !== null) for (const src of args) targets.push(`${dir.replace(/\/+$/, '')}/${src.replace(/^.*\//, '')}`);
+    // DIR itself too: `xargs cp -t DIR` takes its sources from stdin (#2870)
+    if (dir !== null) for (const src of ['', ...args]) targets.push(`${dir.replace(/\/+$/, '')}/${src.replace(/^.*\//, '')}`);
     else if (args.length >= 2) {
       const dest = args[args.length - 1];
       targets.push(dest);
@@ -1827,6 +1829,13 @@ export function decideBashWrite(cmd: string, depth = 0, linkInCommand = false): 
           `What it writes cannot be read off the command line, so it is refused.`,
       };
     }
+  }
+
+  // An unquoted command substitution runs a command of its own: `echo $(cp a b)`
+  // (#2870). Quoted text is skipped: a program body quoting `cp …` runs nothing.
+  for (const m of stripQuoted(stripHeredocs(cmd)).matchAll(/\$\(([^()]*)\)|`([^`]*)`/g)) {
+    const inner = decideBashWrite(m[1] ?? m[2] ?? '', depth + 1, links);
+    if (inner.blocked) return inner;
   }
 
   const segs = segments(cmd);

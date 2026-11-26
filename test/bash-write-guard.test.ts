@@ -4087,6 +4087,25 @@ describe("#2859: an accident guard, sized and judged by the real directory", () 
     ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
+  // #2870 review round 1: `-t DIR` with its sources on stdin still writes
+  // into DIR; a copy inside `$(…)` or backticks is a copy; a `t` inside a
+  // value flag's attached argument (`-Sext`) is not `-t`; `eval cp` is cp.
+  test("xargs cp -t DIR, a copy inside a substitution, cp -Sext and eval cp all name the destination (#2870)", () => {
+    for (const cmd of [
+      `xargs cp -t ${LIVE}/witnesses/`,
+      `ls /tmp/fixture* | xargs cp -t ${LIVE}/witnesses/`,
+      `echo $(cp /tmp/x.json ${LIVE}/run/${STATE})`,
+      `x=$(cp /tmp/a ${LIVE}/run/${SALT})`,
+      `echo \`cp /tmp/a ${LIVE}/run/${STATE}\``,
+      `cp -Sext /tmp/seed ${LIVE}/run/${STATE}`,
+      `install -gstaff /tmp/x ${LIVE}/run/${SALT}`,
+      `eval cp /tmp/forged.json ${LIVE}/run/${STATE}`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [`xargs cp -t ${FIX}`, `echo $(cat ${LIVE}/run/${STATE})`, `x=$(grep -c cp ${LIVE}/run/${STATE})`]) {
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+    }
+  });
+
   test("cp's link flag is read as the shell hands it over, and ln behind a wrapper is ln", () => {
     for (const cmd of [
       `cp '-s' ${LIVE}/run/${STATE} ${FIX}/x.json`,
