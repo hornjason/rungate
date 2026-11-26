@@ -16,6 +16,7 @@
  */
 import { spawnSync } from "child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { codeOf, probePath } from "./path-probe";
 import { join } from "path";
 import { z } from "zod";
 import {
@@ -244,10 +245,54 @@ interface ConfigFileAccess {
 const DIR_REL = ".claude/rungate";
 const MONOLITH_REL = ".claude/rungate.json";
 
+/**
+ * A rungate config that is there and cannot be read (#2875): a file at mode
+ * 000, a dangling link, a directory the read cannot search, a directory or
+ * FIFO at a config file's name. It is never `absent`. Like malformed JSON
+ * (ADR-001 D2) it throws, naming the path and the code, so no caller can take
+ * it for an unconfigured project. A caller that reports instead of failing
+ * catches this class by name; malformed JSON is a different error and still
+ * propagates.
+ */
+export class ConfigUnreadable extends Error {
+  constructor(
+    readonly path: string,
+    readonly code: string,
+  ) {
+    super(`rungate config ${path} is there and cannot be read (${code})`);
+    this.name = "ConfigUnreadable";
+  }
+}
+
+/**
+ * The working tree, read through {@link probePath} (#2875). `exists` is
+ * false only when nothing is at the name; something there that cannot be
+ * followed or searched throws {@link ConfigUnreadable}. `read` opens only a
+ * regular file, so a FIFO at a config file's name cannot hang the read, and a
+ * read that fails is named the same way. JSON is parsed by the caller, so a
+ * malformed file still throws its own error.
+ */
 function treeAccess(projectRoot: string): ConfigFileAccess {
   return {
-    exists: rel => existsSync(join(projectRoot, rel)),
-    read: rel => readFileSync(join(projectRoot, rel), "utf-8"),
+    exists: rel => {
+      const abs = join(projectRoot, rel);
+      const p = probePath(abs);
+      if (p.kind === "unreadable") throw new ConfigUnreadable(abs, p.code);
+      return p.kind !== "absent";
+    },
+    read: rel => {
+      const abs = join(projectRoot, rel);
+      const p = probePath(abs);
+      if (p.kind !== "file") {
+        const code = p.kind === "unreadable" ? p.code : p.kind === "dir" ? "EISDIR" : p.kind === "absent" ? "ENOENT" : "not a regular file";
+        throw new ConfigUnreadable(abs, code);
+      }
+      try {
+        return readFileSync(abs, "utf-8");
+      } catch (e) {
+        throw new ConfigUnreadable(abs, codeOf(e));
+      }
+    },
     locate: rel => join(projectRoot, rel),
   };
 }
@@ -300,7 +345,14 @@ function resolveWith(files: ConfigFileAccess): ConfigResolution {
  */
 export function configLocation(projectRoot: string): string | null {
   const files = treeAccess(projectRoot);
-  const layout = layoutOf(files);
+  let layout: ConfigLayout;
+  try {
+    layout = layoutOf(files);
+  } catch (e) {
+    // The path that could not be read is the one to cite (#2875).
+    if (e instanceof ConfigUnreadable) return e.path;
+    throw e;
+  }
   return layout.kind === "absent" ? null : files.locate(layout.rel);
 }
 
@@ -694,12 +746,16 @@ export function writeScaffoldedConfig(
   return { status: "created", path: dirPath };
 }
 
+/**
+ * The project's compliance rules, or null when it has none. Read through
+ * {@link treeAccess}, as every other config file is (#2875 review round 1):
+ * `existsSync` read a dangling `compliance.json` as no compliance config,
+ * while `resolveConfig` on the same tree named it unreadable.
+ */
 export function loadComplianceConfig(projectRoot: string): ComplianceConfig | null {
-  const dirPath = join(projectRoot, ".claude", "rungate", "compliance.json");
-  if (existsSync(dirPath)) {
-    return readJson(dirPath);
-  }
-  return null;
+  const files = treeAccess(projectRoot);
+  const rel = `${DIR_REL}/compliance.json`;
+  return files.exists(rel) ? JSON.parse(files.read(rel)) : null;
 }
 
 export function buildDirToCompMap(compliance: ComplianceConfig): Record<string, string> {

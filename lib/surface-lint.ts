@@ -20,9 +20,12 @@
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "path";
 
-import { resolveConfig } from "./config-loader";
+import { ConfigUnreadable, resolveConfig } from "./config-loader";
+import { codeOf, probePath, type Probe } from "./path-probe";
 import { readFences } from "./markdown-fence";
 import { isPathScoped } from "../scripts/check-instruction-surface";
+
+export { probePath, type Probe };
 
 /** The files a consumer's agents load or are pointed at, read whole, when the scaffold rendered them. */
 export const SURFACE_FILES = ["CLAUDE.md", "AGENTS.md", ".github/copilot-instructions.md"] as const;
@@ -98,15 +101,24 @@ export class NotRenderedSurface extends Error {
  * nothing unreadable, is still missing.
  * Directories are walked at any depth (review, PR #2632), skipping what no
  * session loads, as on the user side. The config marker is
- * `resolveConfig`'s to decide (#2849 local review: #2875).
+ * `resolveConfig`'s to decide (#2849 local review: #2875): a config that is
+ * there and cannot be read is named in `unreadable` and is not a missing
+ * marker, and a malformed one still throws.
  */
 export function readRenderedSurface(root: string): RenderedSurface {
   const abs = resolve(root);
-  const config = resolveConfig(abs).status;
   const reader = surfaceReader(at => {
     const rel = relative(abs, at);
     return !rel.startsWith("..") && !isAbsolute(rel) ? rel.split(sep).join("/") : at;
   });
+  let config: "resolved" | "absent" | "unread";
+  try {
+    config = resolveConfig(abs).status;
+  } catch (e) {
+    if (!(e instanceof ConfigUnreadable)) throw e;
+    reader.note(e.path, e.code);
+    config = "unread";
+  }
   const agentsMd = probePath(join(abs, "AGENTS.md")).kind;
   for (const f of SURFACE_FILES) reader.read(join(abs, f));
   // Per directory: whether a surface file is there, read or not.
@@ -177,77 +189,6 @@ export type UserSurface = RenderedSurface;
  */
 function neverLoaded(name: string): boolean {
   return name === "node_modules" || name.startsWith(".");
-}
-
-/** The error code an fs call failed with, or its message when it has none. */
-function codeOf(e: unknown): string {
-  return (e as NodeJS.ErrnoException).code ?? (e as Error).message;
-}
-
-/** What is at a path, following links, or why it could not be read. */
-export type Probe = { kind: "dir" | "file" | "other" } | { kind: "absent" } | { kind: "unreadable"; code: string };
-
-/**
- * The one reading of a user-level path (review round 4 of #2844). Earlier
- * rounds fixed one errno per round across three separate readers. Every
- * user-side touch now goes through this function, so "missing" and "could
- * not be read" are told apart in one place:
- *
- * - **absent**: nothing at the name. ENOENT or ENOTDIR from `stat`, `lstat`
- *   finds nothing either, and the nearest ancestor that exists is a directory
- *   or a regular file, not a link that leads nowhere (review round 6 of
- *   #2844). Nothing can be under a regular file, so a path through one is
- *   absent. Under a dangling link, the path is unreadable, not missing.
- * - **unreadable**: something is there and cannot be followed or read. A
- *   dangling or looping link, EACCES, or any other error.
- *
- * The project side reads through it too (#2849): `readRenderedSurface`,
- * `inRenderedTree` and `resolveTarget` decide presence here and nowhere
- * else, so neither side reads an unreadable path as a missing one.
- */
-export function probePath(abs: string): Probe {
-  try {
-    const st = statSync(abs);
-    return { kind: st.isDirectory() ? "dir" : st.isFile() ? "file" : "other" };
-  } catch (e) {
-    const code = codeOf(e);
-    if (code !== "ENOENT" && code !== "ENOTDIR") return { kind: "unreadable", code };
-    try {
-      lstatSync(abs);
-    } catch (e2) {
-      const code2 = codeOf(e2);
-      if (code2 !== "ENOENT" && code2 !== "ENOTDIR") return { kind: "unreadable", code: code2 };
-      const blocked = blockingAncestor(abs);
-      return blocked === null ? { kind: "absent" } : { kind: "unreadable", code: blocked };
-    }
-    return { kind: "unreadable", code };
-  }
-}
-
-/**
- * Why the nearest ancestor of `abs` that exists stops a read, or null when
- * it does not: a link to nowhere (ENOENT), or a directory the walk up could
- * not look into (its error code).
- */
-function blockingAncestor(abs: string): string | null {
-  for (let d = dirname(abs); d !== dirname(d); d = dirname(d)) {
-    let isLink: boolean;
-    try {
-      isLink = lstatSync(d).isSymbolicLink();
-    } catch (e) {
-      const code = codeOf(e);
-      if (code === "ENOENT" || code === "ENOTDIR") continue;
-      return code;
-    }
-    if (!isLink) return null;
-    try {
-      statSync(d);
-      return null;
-    } catch (e) {
-      return codeOf(e);
-    }
-  }
-  return null;
 }
 
 /**
