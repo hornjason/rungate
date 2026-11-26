@@ -1471,7 +1471,7 @@ export function writeTargets(segment: string, whole: string = segment): string[]
       const short = name.startsWith('--') ? null : /^-[abdfHilLnPpRrsuvxcCDTZ]*t(.*)$/.exec(words[i]);
       if (!rsync && (long || short)) dir = (long ? value.join('=') : short![1]) || words[++i] || null;
       // a value-taking option's separate value is no operand: `--suffix .bak` (#2870)
-      else if (!rsync && /^(?:-[abdfHilLnPpRrsuvxcCDTZ]*[Smog]|--(?:suffix|mode|owner|group|strip-program))$/.test(words[i])) i++;
+      else if (!rsync && (/^-[abdfHilLnPpRrsuvxcCDTZ]*[Smog]$/.test(words[i]) || (name.length >= 4 && !words[i].includes('=') && ['--suffix', '--mode', '--owner', '--group', '--strip-program'].some(o => o.startsWith(name))))) i++;
       else if (!words[i].startsWith('-')) args.push(words[i]);
     }
     // DIR itself too: `xargs cp -t DIR` takes its sources from stdin (#2870)
