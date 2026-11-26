@@ -187,12 +187,14 @@ export function readBoardInputs(projectRoot: string): {
     return value === "" ? null : value;
   };
   const merge = row.mergeWorkflow;
+  const mergeWorkflow = read("mergeWorkflow");
   return {
     engineSpec: read("engineSpec"),
     milestonePrefix: read("milestonePrefix"),
-    mergeWorkflow: read("mergeWorkflow"),
-    mergeWorkflowIgnored:
-      merge === undefined || merge === null || (typeof merge === "string" && merge.trim() !== "") ? null : JSON.stringify(merge),
+    mergeWorkflow,
+    // One decider (#2872 round 4): ignored is "present, and `read` made it
+    // null", so an edit to `read` moves both answers together.
+    mergeWorkflowIgnored: merge === undefined || merge === null || mergeWorkflow !== null ? null : JSON.stringify(merge),
   };
 }
 

@@ -257,7 +257,13 @@ describe("SC-1449: the accessors read the directory layout, which is what the ol
     try {
       for (const row of rows) {
         writeFileSync(at, JSON.stringify(row.board === undefined ? {} : { board: row.board }));
-        expect(readBoardInputs(root), row.why).toEqual({ mergeWorkflowIgnored: null, ...row.want });
+        const got = readBoardInputs(root);
+        expect(got, row.why).toEqual({ mergeWorkflowIgnored: null, ...row.want });
+        // #2872 round 4: the warning and the reading agree on every row, so
+        // they cannot drift: ignored exactly when present and read as unset
+        const present = row.board !== null && typeof row.board === "object" && !Array.isArray(row.board) &&
+          (row.board as Record<string, unknown>).mergeWorkflow != null;
+        expect(got.mergeWorkflowIgnored !== null, row.why).toBe(present && got.mergeWorkflow === null);
       }
     } finally {
       cleanup();
