@@ -773,7 +773,14 @@ describe("#2849: the project-side reader tells a missing file from one it cannot
     const root = planted();
     rmSync(join(root, ".claude", "commands"), { recursive: true, force: true });
     writeFileSync(join(root, ".claude", "commands"), "not a directory\n");
-    expect(unread(promptAudit(root))).toContain(".claude/commands (ENOTDIR)");
+    expect(unread(promptAudit(root))).toContain(".claude/commands (not a directory)");
+    // round 3: a FIFO there is named with the same plain reason, not an errno
+    const fifo = planted();
+    rmSync(join(fifo, ".claude", "commands"), { recursive: true, force: true });
+    expect(spawnSync("mkfifo", [join(fifo, ".claude", "commands")]).status).toBe(0);
+    const line = unread(promptAudit(fifo));
+    expect(line).toContain(".claude/commands (not a directory)");
+    expect(line).not.toContain("ENOTDIR");
   });
 
   test("#2876 review: a user CLAUDE.md that is a FIFO or a directory, and a user rules that is a file, are named on the user line", () => {
@@ -784,7 +791,7 @@ describe("#2849: the project-side reader tells a missing file from one it cannot
     writeFileSync(join(fifoHome, ".claude", "rules"), "not a directory\n");
     const fifo = userLine(promptAudit(rendered, undefined, { home: fifoHome }));
     expect(fifo).toContain(`${USER_PREFIX}CLAUDE.md (not a regular file)`);
-    expect(fifo).toContain(`${USER_PREFIX}rules (ENOTDIR)`);
+    expect(fifo).toContain(`${USER_PREFIX}rules (not a directory)`);
     const dirHome = mkdtempSync(join(scratch, "home-2876-"));
     mkdirSync(join(dirHome, ".claude", "CLAUDE.md"), { recursive: true });
     expect(userLine(promptAudit(rendered, undefined, { home: dirHome }))).toContain(`${USER_PREFIX}CLAUDE.md (EISDIR)`);

@@ -116,7 +116,7 @@ export function readRenderedSurface(root: string): RenderedSurface {
     const p = reader.probe(at);
     present.set(d, p.kind === "unreadable" || (p.kind === "dir" && reader.walk(at, neverLoaded) > 0));
     // There, and not a directory: named, and still no marker (#2876 review).
-    if (p.kind === "file" || p.kind === "other") reader.note(at, "ENOTDIR");
+    if (p.kind === "file" || p.kind === "other") reader.note(at, NOT_A_DIRECTORY);
   }
 
   const missing: string[] = [];
@@ -282,7 +282,7 @@ export function readUserSurface(home: string): UserSurface {
     }
     const p = reader.probe(at);
     if (p.kind === "dir") reader.walk(at, neverLoaded);
-    else if (p.kind === "file" || p.kind === "other") reader.note(at, "ENOTDIR");
+    else if (p.kind === "file" || p.kind === "other") reader.note(at, NOT_A_DIRECTORY);
   }
   return { root, files: reader.files, unreadable: reader.unreadable, probe: reader.probe, readText: reader.readText };
 }
@@ -296,6 +296,13 @@ export function readUserSurface(home: string): UserSurface {
  * surface. Past it the walk stops, and says so in `unreadable`.
  */
 export const WALK_ENTRY_CAP = 20_000;
+
+/**
+ * Why a directory entry that is a file or a FIFO is named (#2876 round 3).
+ * `stat` answered, so no errno applies; `ENOTDIR` read as a failed call.
+ * Plain words, as `readText` says "not a regular file" of the reverse.
+ */
+const NOT_A_DIRECTORY = "not a directory";
 
 /**
  * The one reader both surfaces are read through (#2849): every presence
