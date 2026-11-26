@@ -710,16 +710,51 @@ describe("#2849: the project-side reader tells a missing file from one it cannot
     expect(() => promptAudit(root)).toThrow(/not a rendered consumer[^\n]*\.claude\/rules\/\*\.md/);
   });
 
-  test("CONTROL: a regular file at .claude/agents, or rules holding only a dangling non-.md link, is still not rendered", () => {
+  test("CONTROL: a regular file at .claude/agents, or rules holding only a non-.md file, is still not rendered", () => {
     const file = planted();
     rmSync(join(file, ".claude", "agents"), { recursive: true, force: true });
     writeFileSync(join(file, ".claude", "agents"), "not a directory\n");
     expect(() => promptAudit(file)).toThrow(/not a rendered consumer[^\n]*\.claude\/agents\/\*\.md/);
-    const dangling = planted();
-    rmSync(join(dangling, ".claude", "rules"), { recursive: true, force: true });
-    mkdirSync(join(dangling, ".claude", "rules"));
-    symlinkSync("nowhere", join(dangling, ".claude", "rules", "README"));
-    expect(() => promptAudit(dangling)).toThrow(/not a rendered consumer[^\n]*\.claude\/rules\/\*\.md/);
+    const readme = planted();
+    rmSync(join(readme, ".claude", "rules"), { recursive: true, force: true });
+    mkdirSync(join(readme, ".claude", "rules"));
+    writeFileSync(join(readme, ".claude", "rules", "README"), "not a rule\n");
+    expect(() => promptAudit(readme)).toThrow(/not a rendered consumer[^\n]*\.claude\/rules\/\*\.md/);
+  });
+
+  test("#2876 review: rules whose only entry is a link that cannot be followed are unread, never a missing marker", () => {
+    const root = planted(["CLAUDE.md", PRESSURE]);
+    rmSync(join(root, ".claude", "rules"), { recursive: true, force: true });
+    mkdirSync(join(root, ".claude", "rules"));
+    symlinkSync("nowhere", join(root, ".claude", "rules", "shared"));
+    const audit = promptAudit(root);
+    expect(unread(audit)).toContain(".claude/rules/shared (ENOENT)");
+    expect(of(audit, "pressure-density")).toContain("consumer CLAUDE.md");
+  });
+
+  test("#2876 review: a project surface directory that is a regular file is named", () => {
+    const root = planted();
+    rmSync(join(root, ".claude", "commands"), { recursive: true, force: true });
+    writeFileSync(join(root, ".claude", "commands"), "not a directory\n");
+    expect(unread(promptAudit(root))).toContain(".claude/commands (ENOTDIR)");
+  });
+
+  test("#2876 review: a user CLAUDE.md that is a FIFO or a directory, and a user rules that is a file, are named on the user line", () => {
+    const userLine = (audit: PromptAudit) => audit.unmeasured.filter(l => l.includes("user-level path(s)")).join("\n");
+    const fifoHome = mkdtempSync(join(scratch, "home-2876-"));
+    mkdirSync(join(fifoHome, ".claude"));
+    expect(spawnSync("mkfifo", [join(fifoHome, ".claude", "CLAUDE.md")]).status).toBe(0);
+    writeFileSync(join(fifoHome, ".claude", "rules"), "not a directory\n");
+    const fifo = userLine(promptAudit(rendered, undefined, { home: fifoHome }));
+    expect(fifo).toContain(`${USER_PREFIX}CLAUDE.md (not a regular file)`);
+    expect(fifo).toContain(`${USER_PREFIX}rules (ENOTDIR)`);
+    const dirHome = mkdtempSync(join(scratch, "home-2876-"));
+    mkdirSync(join(dirHome, ".claude", "CLAUDE.md"), { recursive: true });
+    expect(userLine(promptAudit(rendered, undefined, { home: dirHome }))).toContain(`${USER_PREFIX}CLAUDE.md (EISDIR)`);
+    // CONTROL: a home with none of them names nothing
+    const empty = mkdtempSync(join(scratch, "home-2876-"));
+    mkdirSync(join(empty, ".claude"));
+    expect(userLine(promptAudit(rendered, undefined, { home: empty }))).toBe("");
   });
 
   test("walk: a linked commands directory is read without its node_modules or dot-directories", () => {
@@ -748,9 +783,10 @@ describe("#2849: the project-side reader tells a missing file from one it cannot
     rmSync(join(root, "node_modules"), { recursive: true, force: true });
     symlinkSync("nowhere", join(root, "node_modules"));
     const audit = promptAudit(root);
-    // answered by the package copy, which has no Zebra table: a finding, and nothing named unread
+    // answered by the package copy, which has no Zebra table: a finding; and the
+    // local copy an agent here would open is named as unread (#2876 review)
     expect(of(audit, "dangling-read-target")).toEqual(["consumer CLAUDE.md"]);
-    expect(unread(audit)).not.toContain("node_modules");
+    expect(unread(audit)).toContain("node_modules/rungate/README.md (ENOENT)");
   });
 
   test("lintRenderedTree, given only a path, refuses a tree with an unread path rather than calling it clean", () => {

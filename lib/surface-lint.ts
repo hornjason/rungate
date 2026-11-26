@@ -92,8 +92,10 @@ export class NotRenderedSurface extends Error {
  * in `unreadable` and the rest is still read. `AGENTS.md` and the two
  * directory markers count as missing only when nothing that could be them is
  * there: an unsearchable `.claude/rules`, or a rule in it that will not open,
- * is unread, not a tree the scaffold never rendered. A regular file at a
- * directory's name, or a directory with no `.md` in it, is still missing.
+ * is unread, not a tree the scaffold never rendered, and so is an entry in it
+ * that cannot be followed, since it may be a linked directory of rules. A
+ * regular file at a directory's name, or a directory holding no `.md` and
+ * nothing unreadable, is still missing.
  * Directories are walked at any depth (review, PR #2632), skipping what no
  * session loads, as on the user side. The config marker is
  * `resolveConfig`'s to decide (#2849 local review: #2875).
@@ -113,6 +115,8 @@ export function readRenderedSurface(root: string): RenderedSurface {
     const at = join(abs, d);
     const p = reader.probe(at);
     present.set(d, p.kind === "unreadable" || (p.kind === "dir" && reader.walk(at, neverLoaded) > 0));
+    // There, and not a directory: named, and still no marker (#2876 review).
+    if (p.kind === "file" || p.kind === "other") reader.note(at, "ENOTDIR");
   }
 
   const missing: string[] = [];
@@ -267,9 +271,16 @@ export function readUserSurface(home: string): UserSurface {
   });
   for (const entry of USER_SURFACE) {
     const at = join(root, entry.path);
+    // A file entry goes through `read`, which names a directory or a FIFO at
+    // its name; a directory entry that is something else is named too, as on
+    // the project side (#2876 review). Absent is silent on both.
+    if (entry.kind === "file") {
+      reader.read(at);
+      continue;
+    }
     const p = reader.probe(at);
-    if (entry.kind === "file" && p.kind === "file") reader.read(at);
-    if (entry.kind === "dir" && p.kind === "dir") reader.walk(at, neverLoaded);
+    if (p.kind === "dir") reader.walk(at, neverLoaded);
+    else if (p.kind === "file" || p.kind === "other") reader.note(at, "ENOTDIR");
   }
   return { root, files: reader.files, unreadable: reader.unreadable, probe: reader.probe, readText: reader.readText };
 }
@@ -333,9 +344,9 @@ function surfaceReader(nameOf: (abs: string) => string) {
    * directory the walk is already inside is a cycle, named and not followed.
    *
    * Returns how many surface entries it met, read or not: each `.md` that is
-   * there, and each directory it could not list, since that may hold one. An
-   * unreadable entry with another name is named in `unreadable` (it may be a
-   * linked directory) and not counted.
+   * there, each directory it could not list, and each entry it could not
+   * follow at all, whatever its name, since that may be a linked directory of
+   * them (#2876 review). A regular file or FIFO with another name is neither.
    */
   const walk = (abs: string, skip: (name: string) => boolean, inside: ReadonlySet<string> = new Set()): number => {
     if (capped) return 0;
@@ -360,8 +371,9 @@ function surfaceReader(nameOf: (abs: string) => string) {
       const at = join(abs, name);
       const p = probe(at);
       if (p.kind === "dir") met += walk(at, skip, here);
+      else if (p.kind === "unreadable") met += 1;
       else if (name.endsWith(".md") && p.kind !== "absent") {
-        if (p.kind !== "unreadable") read(at);
+        read(at);
         met += 1;
       }
     }
@@ -497,19 +509,20 @@ export function readTargets(surface: RenderedSurface): ReadTarget[] {
  */
 function resolveTarget(surface: RenderedSurface, target: string, packageRoot: string): string | null | "unread" {
   const local = resolve(surface.root, target);
-  const here = probePath(local).kind;
+  // An unreadable local copy is named even when the package answers below: an
+  // agent in this tree opens the local one (#2876 review).
+  const here = surface.probe(local).kind;
   if (here !== "absent" && here !== "unreadable") return local;
-  // A `node_modules/rungate/…` target the installed package answers is
-  // answered, even when the local copy cannot be read (#2849 local review).
+  // A `node_modules/rungate/…` target the installed package answers is still
+  // checked there (#2849 local review).
   const pkg = target.match(/^node_modules\/rungate\/(.+)$/);
   if (pkg !== null) {
     const there = join(packageRoot, pkg[1]);
-    const kind = probePath(there).kind;
+    const kind = surface.probe(there).kind;
     if (kind !== "absent" && kind !== "unreadable") return there;
-    if (kind === "unreadable") return surface.probe(there).kind === "unreadable" ? "unread" : null;
+    if (kind === "unreadable") return "unread";
   }
-  // Recorded only now, so a path the package answered is never named as unread.
-  return here === "unreadable" && surface.probe(local).kind === "unreadable" ? "unread" : null;
+  return here === "unreadable" ? "unread" : null;
 }
 
 /** Whether a markdown text holds a table its heading or header row calls `name`. */
