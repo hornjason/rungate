@@ -121,6 +121,16 @@ const THREAD_SECTION_RULE = "\n\n---\n\n";
  */
 export const THREAD_BODY_BUDGET = 60_000;
 
+/**
+ * The line a thread holding several findings ends with (#2874 review). One
+ * resolution answers every finding in it — that is the point of sharing — so
+ * the thread says so where the person resolving it reads. Last, after every
+ * key marker, so the first line is still the first finding's summary.
+ */
+function sharedThreadNote(findings: number): string {
+  return `_These ${findings} findings share this line. Resolving the thread answers all of them, so reply to each, or leave it open until each is fixed or answered._`;
+}
+
 /** One thread to post: the request, how many findings it holds, and each finding's own body. */
 interface AnchoredThread {
   request: AiReviewThreadRequest;
@@ -171,7 +181,7 @@ function threadsPerAnchor(requests: readonly AiReviewThreadRequest[]): {
   const length = (chunk: readonly Section[]): number =>
     chunk.reduce((n, s) => n + s.body.length, 0) + THREAD_SECTION_RULE.length * Math.max(0, chunk.length - 1);
   const threadOf = (request: AiReviewThreadRequest, chunk: readonly Section[]): AnchoredThread => ({
-    request: { ...request, body: chunk.map(s => s.body).join(THREAD_SECTION_RULE) },
+    request: { ...request, body: [...chunk.map(s => s.body), ...(chunk.length < 2 ? [] : [sharedThreadNote(chunk.length)])].join(THREAD_SECTION_RULE) },
     findings: chunk.reduce((n, s) => n + s.findings, 0),
     sections: chunk.map(s => s.body),
   });
