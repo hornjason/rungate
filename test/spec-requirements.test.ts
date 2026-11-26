@@ -494,3 +494,32 @@ describe("SC-2623: a new spec is born asking which claim it serves", () => {
     }
   });
 });
+
+describe("#2869: an empty frontmatter key reads as empty, never as the next line", () => {
+  test("criteria: none with an empty criteria-reason: is refused, though a key follows it", () => {
+    const dir = specDir();
+    try {
+      writeSpec(dir, "EMPTY.md", "doc-type: spec\ngoverns: x\ncriteria: none\ncriteria-reason:\nstatus: active", "# Prose.");
+      const reading = readSpecRequirements(dir, "EMPTY.md");
+      expect(reading.reason, "the next line was read as the reason").toBeNull();
+      const v = requirementViolations([reading]);
+      expect(v).toHaveLength(1);
+      expect(v[0]).toContain("no \"criteria-reason:\"");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an empty serves: still reads as present and empty, and a filled reason still reads", () => {
+    const dir = specDir();
+    try {
+      writeSpec(dir, "S.md", "doc-type: spec\ngoverns: x\nserves:\ncriteria: none\ncriteria-reason: redirect stub", "# Go.");
+      const reading = readSpecRequirements(dir, "S.md");
+      expect(reading.serves, "an empty serves: read as absent, or as the next line").toBe("");
+      expect(reading.reason).toBe("redirect stub");
+      expect(reading.declaredNone).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

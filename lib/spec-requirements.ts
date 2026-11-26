@@ -75,10 +75,16 @@ export interface SpecRequirementReading {
   serves: string | null;
 }
 
+/**
+ * A frontmatter key's value: `null` when the key is absent, `""` when it is
+ * present and empty (#2869). The value is read from the key's own line only:
+ * `\s*` used to cross the newline, so an empty `criteria-reason:` read the
+ * next line (`status: active`) as its reason.
+ */
 function frontmatterField(content: string, key: string): string | null {
   const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!fm) return null;
-  const m = fm[1].match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
+  const m = fm[1].match(new RegExp(`^${key}:[ \\t]*(.*)$`, "m"));
   return m ? m[1].trim() : null;
 }
 
@@ -96,15 +102,12 @@ export function readSpecRequirements(specsDir: string, rel: string): SpecRequire
 }
 
 /**
- * The `serves:` value, keeping "present and empty" apart from "absent".
- * `frontmatterField` needs one character after the colon, so an empty key
- * would otherwise read as no key at all — an opt-in that silently opts out.
+ * The `serves:` value, keeping "present and empty" apart from "absent", so an
+ * empty key is refused rather than read as an opt-out. `frontmatterField`
+ * keeps that apart for every key since #2869, so this is one reader, not two.
  */
 function servesField(content: string): string | null {
-  const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!fm) return null;
-  const m = fm[1].match(/^serves:[ \t]*(.*)$/m);
-  return m ? m[1].trim() : null;
+  return frontmatterField(content, "serves");
 }
 
 /**
