@@ -162,15 +162,22 @@ export function readBoardInputs(projectRoot: string): {
   milestonePrefix: string | null;
   /**
    * The consumer's merge workflow, by its `name:` (ADR-022, SC-2787). A merge
-   * it makes with GITHUB_TOKEN starts no push run, so adr-accepted.yml also
-   * runs when it completes. Absent means no such workflow, and nothing changes.
+   * it makes with GITHUB_TOKEN starts no push run, so adr-accepted.yml and
+   * specs-placed.yml (#2862) also run when it completes. Absent means no such
+   * workflow, and nothing changes.
    */
   mergeWorkflow: string | null;
+  /**
+   * `board.mergeWorkflow` as written, when it is present and reads as unset:
+   * not a string, or blank (#2872 review). The generated files are then
+   * push-only, and only the scaffold can say why; otherwise `null`.
+   */
+  mergeWorkflowIgnored: string | null;
 } {
   const config = tryLoadRungateConfig(projectRoot);
   const board = (config as Record<string, unknown> | null)?.board;
   if (!board || typeof board !== "object" || Array.isArray(board)) {
-    return { engineSpec: null, milestonePrefix: null, mergeWorkflow: null };
+    return { engineSpec: null, milestonePrefix: null, mergeWorkflow: null, mergeWorkflowIgnored: null };
   }
   const row = board as Record<string, unknown>;
   const read = (key: string): string | null => {
@@ -179,7 +186,16 @@ export function readBoardInputs(projectRoot: string): {
     const value = raw.trim();
     return value === "" ? null : value;
   };
-  return { engineSpec: read("engineSpec"), milestonePrefix: read("milestonePrefix"), mergeWorkflow: read("mergeWorkflow") };
+  const merge = row.mergeWorkflow;
+  const mergeWorkflow = read("mergeWorkflow");
+  return {
+    engineSpec: read("engineSpec"),
+    milestonePrefix: read("milestonePrefix"),
+    mergeWorkflow,
+    // One decider (#2872 round 4): ignored is "present, and `read` made it
+    // null", so an edit to `read` moves both answers together.
+    mergeWorkflowIgnored: merge === undefined || merge === null || mergeWorkflow !== null ? null : JSON.stringify(merge),
+  };
 }
 
 /**

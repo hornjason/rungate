@@ -49,7 +49,7 @@ import {
   AI_REVIEW_WORKFLOW_NAME,
   buildAiReviewUnmeasuredWorkflow,
 } from "./ai-review-unmeasured-workflow";
-import { buildAdrAcceptedWorkflow, mergeWorkflowWarning } from "./adr-accepted-workflow";
+import { buildAdrAcceptedWorkflow, mergeWorkflowIgnoredWarning, mergeWorkflowWarning } from "./adr-accepted-workflow";
 import { buildSpecsPlacedWorkflow } from "./specs-placed-workflow";
 import { buildConsumerIntakeWorkflow } from "./consumer-intake-workflow";
 import { buildCriterionLabelWorkflow } from "./criterion-label-workflow";
@@ -4658,9 +4658,11 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     const warning = mergeWorkflowWarning(boardInputs.mergeWorkflow, names, unreadable);
     if (warning !== null) actions.push(warning);
   }
+  if (boardInputs.mergeWorkflowIgnored !== null) actions.push(mergeWorkflowIgnoredWarning(boardInputs.mergeWorkflowIgnored));
 
   // SC-2780, ADR-018 Decision 1: a push to main that changes specs/ runs
-  // every opted-in family through the engine. The families are read at run
+  // every opted-in family through the engine, and with board.mergeWorkflow
+  // set so does that workflow's merge (#2862). The families are read at run
   // time by the published CLI, so nothing here names a spec.
   const specsPlacedYml = buildSpecsPlacedWorkflow({
     runsOn,
@@ -4669,6 +4671,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     setupBunWith: bunStep,
     setupBunEnv: setupBunEnv("        "),
     version: harnessVersion(),
+    mergeWorkflow: boardInputs.mergeWorkflow,
   });
 
   // SC-2784, ADR-020 Decision 2: a consumer's issue is triaged when it is

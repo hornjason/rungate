@@ -105,17 +105,21 @@ export interface AdrAcceptedWorkflowOptions {
  *
  * A reading the API could not give is not "nothing merged": `go` stays
  * true and the run does today's full work, which is idempotent.
+ *
+ * `specs-placed.yml` gates its own merge-triggered runs with it too, reading
+ * its own runs, and adds `extra`: whether anything under specs/ changed (#2862).
  */
-export function buildMergedGateScript(): string {
+export function buildMergedGateScript(workflowFile: string = ADR_ACCEPTED_WORKFLOW_FILE, extra: readonly string[] = []): string {
   return [
     `go=true`,
     `main=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_REF_NAME" --jq .sha) || main=""`,
-    `last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${ADR_ACCEPTED_WORKFLOW_FILE}/runs?status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""') || last=""`,
+    `last=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${workflowFile}/runs?status=success&per_page=1" --jq '.workflow_runs[0].head_sha // ""') || last=""`,
     `if [ -z "$main" ]; then`,
     `  echo "::notice::The head of $GITHUB_REF_NAME could not be read, so whether anything merged is UNMEASURED; running the full placement."`,
     `elif [ -n "$last" ] && [ "$main" = "$last" ]; then`,
     `  echo "Nothing reached $GITHUB_REF_NAME since this workflow last succeeded at $last."; go=false`,
     `fi`,
+    ...extra,
     `echo "go=$go" >> "$GITHUB_OUTPUT"`,
   ].join("\n");
 }
@@ -132,8 +136,21 @@ export function mergeWorkflowWarning(mergeWorkflow: string | null, names: readon
   return (
     `WARN: board.mergeWorkflow is ${JSON.stringify(mergeWorkflow)}, and no workflow under .github/workflows has that name ` +
     `(${names.length === 0 ? "none found" : names.map(n => JSON.stringify(n)).join(", ")}).${unread} ` +
-    `adr-accepted.yml's workflow_run trigger names it, so it never fires and a merge made by automation places nothing. ` +
+    `The workflow_run triggers in adr-accepted.yml and specs-placed.yml name it, so the trigger never fires and a merge made by automation places nothing. ` +
     `Set board.mergeWorkflow to the merging workflow's name: exactly, and re-run rungate scaffold.`
+  );
+}
+
+/**
+ * The warning a scaffold prints when `board.mergeWorkflow` is present and
+ * reads as unset — not a string, or blank (#2872 review) — given it as
+ * written. No workflow_run trigger is written, and nothing else would say why.
+ */
+export function mergeWorkflowIgnoredWarning(written: string): string {
+  return (
+    `WARN: board.mergeWorkflow is ${written}, which names no workflow, so it is read as unset. ` +
+    `adr-accepted.yml and specs-placed.yml get no workflow_run trigger, and a merge made by automation places nothing. ` +
+    `Set board.mergeWorkflow to the merging workflow's name:, or remove it, and re-run rungate scaffold.`
   );
 }
 
