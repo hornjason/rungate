@@ -12761,3 +12761,12 @@ None of the mutations is left in the tree; all were run and reverted, and
 `lib/scaffold/ai-review-step.ts`, `.github/workflows/ai-review.yml` and
 `test/ai-review-untrusted-restore.test.ts` were confirmed byte-identical to
 the measured source afterwards by SHA-256, never by `git checkout --`.
+
+## The ship skill is named ship-issue (ADR-029)
+
+Claude Code ships a built-in `/ship`, and the harness's ship skill had the
+same name, so an agent asking for "ship" could get either (#2882). Jason
+named the harness skill `ship-issue` on 2026-11-26.
+`docs/adr/ADR-029-rename-the-ship-skill.md` orders the change.
+
+- [ ] SC-2819: No file rungate generates for a consumer, and no live source, spec or test of rungate's own, tells an agent to call `Skill("ship")`; they name `Skill("ship-issue")`, and only dated records under `docs/adr/`, `docs/research/` and `reference/` keep the old name
