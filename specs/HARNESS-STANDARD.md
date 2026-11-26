@@ -12647,6 +12647,16 @@ criteria are its decomposition rows, worded as Jason approved them on
 - [x] SC-2775: scripts/build-workflow-launch.ts contains [bundleLibCores] — `workflows/ship.js` carries no hand copy of `lib/`: each copied function is bundled from its module, and a test fails if an INLINED or Mirror-of block remains
       proved-by: test/workflow-launch-build.test.ts "SC-2775: ship.js carries no hand copy of lib/"
 
+## The ship skill is named ship-issue (ADR-029)
+
+Claude Code ships a built-in `/ship`, and the harness's ship skill had the
+same name, so an agent asking for "ship" could get either (#2882). Jason
+named the harness skill `ship-issue` on 2026-11-26.
+`docs/adr/ADR-029-rename-the-ship-skill.md` orders the change.
+
+- [ ] SC-2819: No file rungate generates for a consumer, and no live source, spec or test of rungate's own, tells an agent to invoke the ship skill by its old name; they name `Skill("ship-issue")`, only dated records under `docs/adr/`, `docs/research/` and `reference/` keep the old name, and every reader of the local brief-policy override looks in `skills/ship-issue/` before `skills/ship/`
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
+
 ## The ai-review baseline was read fifteen seconds before the restore (#836)
 
 `.github/workflows/ai-review.yml` reads the tree, then
@@ -12761,13 +12771,3 @@ None of the mutations is left in the tree; all were run and reverted, and
 `lib/scaffold/ai-review-step.ts`, `.github/workflows/ai-review.yml` and
 `test/ai-review-untrusted-restore.test.ts` were confirmed byte-identical to
 the measured source afterwards by SHA-256, never by `git checkout --`.
-
-## The ship skill is named ship-issue (ADR-029)
-
-Claude Code ships a built-in `/ship`, and the harness's ship skill had the
-same name, so an agent asking for "ship" could get either (#2882). Jason
-named the harness skill `ship-issue` on 2026-11-26.
-`docs/adr/ADR-029-rename-the-ship-skill.md` orders the change.
-
-- [ ] SC-2819: No file rungate generates for a consumer, and no live source, spec or test of rungate's own, tells an agent to invoke the ship skill by its old name; they name `Skill("ship-issue")`, only dated records under `docs/adr/`, `docs/research/` and `reference/` keep the old name, and every reader of the local brief-policy override looks in `skills/ship-issue/` before `skills/ship/`
-<!-- REVIEW: unmatched (no registry pattern was close enough) -->
