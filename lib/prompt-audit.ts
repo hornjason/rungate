@@ -57,7 +57,7 @@
  * upstream drafts, so none of them is ever drafted.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join, relative, sep } from "path";
+import { dirname, join } from "path";
 
 import { BRIEF_CONSTRAINTS_SECTION, HARD_CONSTRAINTS_SECTION, readPreservedSection, type SectionSpec } from "./agents-md-sections";
 import { generateScopedRules } from "./generators/agents-md";
@@ -303,25 +303,6 @@ const userPlaces = (root: string, home: string): PathPlaces => (file, token) => 
   return looksLikeRepoPath(token) ? [join(root, dirname(file), token), join(root, token)] : null;
 };
 
-/**
- * A probe over `root` that names each unreadable path in `unread`. The
- * project side's dangling-path lint reads paths with the same `probePath` as
- * the user side (review round 5 of #2844), so that lint never reports a file
- * in an unsearchable directory as missing. The project surface reader
- * (`readRenderedSurface` and `resolveTarget` in `lib/surface-lint.ts`) still
- * decides presence with `existsSync`; see `probePath`.
- */
-function recordingProbe(root: string, unread: string[]): (abs: string) => Probe {
-  return abs => {
-    const p = probePath(abs);
-    if (p.kind === "unreadable") {
-      const entry = `${relative(root, abs).split(sep).join("/")} (${p.code})`;
-      if (!unread.includes(entry)) unread.push(entry);
-    }
-    return p;
-  };
-}
-
 function danglingPathFindings(
   surface: RenderedSurface,
   owners: Map<string, Owner[]>,
@@ -433,15 +414,13 @@ export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, op
     if (own === undefined) return "consumer";
     return line === null ? (own.includes("harness") ? "harness" : "consumer") : own[line - 1] ?? "consumer";
   };
-  const findings: AuditFinding[] = lintRenderedTree(root, SURFACE_LINTS).map(f => {
+  // The surface read once: every lint's unreadable path lands in its
+  // `unreadable`, which the project UNMEASURED line reads below (#2849).
+  const findings: AuditFinding[] = lintRenderedTree(surface, SURFACE_LINTS).map(f => {
     const line = lineOf(f.message);
     return { lint: f.lint, file: f.file, line, owner: ownerAt(f.file, line), message: f.message };
   });
-  const projectUnread: string[] = [];
-  findings.push(
-    ...pressureFindings(surface, owners),
-    ...danglingPathFindings(surface, owners, projectPlaces(surface.root), recordingProbe(surface.root, projectUnread)),
-  );
+  findings.push(...pressureFindings(surface, owners), ...danglingPathFindings(surface, owners, projectPlaces(surface.root), surface.probe));
   // #2835: a project-owned finding in a file the scaffold keeps only because
   // it predates the stamp says how to take the generator's version.
   for (const f of findings) {
@@ -449,7 +428,7 @@ export function promptAudit(root: string, packageRoot: string = PACKAGE_ROOT, op
     const note = f.owner === "consumer" && text !== undefined ? (preStampNote(f.file, text) ?? orphanNote(f.file, text)) : null;
     if (note !== null) f.message = `${f.message} (${note})`;
   }
-  const projectLine = unreadLine("project", projectUnread, "");
+  const projectLine = unreadLine("project", surface.unreadable, "");
   const unmeasured = projectLine === null ? [] : [projectLine];
   if (opts.home === undefined) return { root: surface.root, lints: [...PROMPT_AUDIT_LINTS], findings, user: null, unmeasured: [...unmeasured, USER_SURFACE_UNREAD] };
   const user = userFindings(opts.home);

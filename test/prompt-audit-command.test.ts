@@ -35,7 +35,7 @@ import {
   type PromptAudit,
 } from "../lib/prompt-audit";
 import { symptomKeys } from "../lib/finding-arbiter";
-import { SURFACE_LINTS, USER_SURFACE } from "../lib/surface-lint";
+import { SURFACE_LINTS, USER_SURFACE, UnreadSurface, lintRenderedTree } from "../lib/surface-lint";
 import { ACCEPT_GENERATED_RULE, acceptGeneratedAdvice, generatedVersionSteps, stampProvenance } from "../lib/rule-provenance";
 import { commitFixture, initFixtureRepo } from "./helpers/git-fixture";
 
@@ -640,5 +640,146 @@ describe("#2778: the user-level surface is reported unread by default and linted
     expect(user.stdout).toContain("user-owned (1)");
     expect(user.stdout).toContain("[dangling-path] ~/.claude/skills/x/SKILL.md: line 1 names `references/gone.md`");
     expect(user.stdout).toContain("No harness-owned finding");
+  });
+});
+
+/**
+ * #2849: the project side reads every path through `probePath`, as the user
+ * side has since #2844. A link is followed; a path that is there and cannot be
+ * read is named on the project UNMEASURED line, never reported as missing and
+ * never fatal; a read is attempted only on a file. Rounds 4 to 10 of #2844
+ * found these one site per round, so the matrix below was written first, one
+ * row per site.
+ */
+describe("#2849: the project-side reader tells a missing file from one it cannot read", () => {
+  const unread = (audit: PromptAudit) => audit.unmeasured.filter(l => l.startsWith("UNMEASURED: ") && l.includes("project path(s)")).join("\n");
+  /** Run `fn` with `path` at `mode`, restoring it after, so the scratch cleanup can remove it. */
+  const withMode = <T>(path: string, mode: number, fn: () => T): T => {
+    chmodSync(path, mode);
+    try {
+      return fn();
+    } finally {
+      chmodSync(path, 0o755);
+    }
+  };
+  const asRoot = process.getuid?.() === 0; // root reads and searches mode-000 paths anyway
+
+  test("mdIn: a project rule that is a symbolic link is linted under its own name", () => {
+    const root = planted(["shared/linked.md", PRESSURE]);
+    symlinkSync(join("..", "..", "shared", "linked.md"), join(root, ".claude", "rules", "linked.md"));
+    const audit = promptAudit(root);
+    expect(of(audit, "pressure-density")).toContain("consumer .claude/rules/linked.md");
+    expect(unread(audit)).toBe("");
+  });
+
+  test("readRenderedSurface: a dangling CLAUDE.md is named as unread, and a missing one is not", () => {
+    const root = planted();
+    rmSync(join(root, "CLAUDE.md"), { force: true });
+    expect(unread(promptAudit(root)), "a missing CLAUDE.md is absent, not unread").toBe("");
+    symlinkSync("nowhere.md", join(root, "CLAUDE.md"));
+    expect(unread(promptAudit(root))).toContain("CLAUDE.md (ENOENT)");
+  });
+
+  test.skipIf(asRoot)("readRenderedSurface: a CLAUDE.md that cannot be read is named as unread, and the run still reports", () => {
+    const root = planted(["CLAUDE.md", PRESSURE]);
+    const audit = withMode(join(root, "CLAUDE.md"), 0o000, () => promptAudit(root));
+    expect(unread(audit)).toContain("CLAUDE.md (EACCES)");
+    expect(of(audit, "pressure-density")).not.toContain("consumer CLAUDE.md");
+  });
+
+  test.skipIf(asRoot)("readRenderedSurface: an unsearchable .claude/rules is named as unread, never as a missing marker", () => {
+    const root = planted(["CLAUDE.md", PRESSURE]);
+    const audit = withMode(join(root, ".claude", "rules"), 0o000, () => promptAudit(root));
+    expect(unread(audit)).toContain(".claude/rules (EACCES)");
+    // the rest is still linted
+    expect(of(audit, "pressure-density")).toContain("consumer CLAUDE.md");
+  });
+
+  test("readRenderedSurface: a .claude/rules that is a dangling link is named as unread, never as a missing marker", () => {
+    const root = planted(["CLAUDE.md", PRESSURE]);
+    rmSync(join(root, ".claude", "rules"), { recursive: true, force: true });
+    symlinkSync("nowhere", join(root, ".claude", "rules"));
+    const audit = promptAudit(root);
+    expect(unread(audit)).toContain(".claude/rules (ENOENT)");
+    expect(of(audit, "pressure-density")).toContain("consumer CLAUDE.md");
+  });
+
+  test("CONTROL: a tree with no .claude/rules at all is still not a rendered consumer", () => {
+    const root = planted();
+    rmSync(join(root, ".claude", "rules"), { recursive: true, force: true });
+    expect(() => promptAudit(root)).toThrow(/not a rendered consumer[^\n]*\.claude\/rules\/\*\.md/);
+  });
+
+  test("CONTROL: a regular file at .claude/agents, or rules holding only a dangling non-.md link, is still not rendered", () => {
+    const file = planted();
+    rmSync(join(file, ".claude", "agents"), { recursive: true, force: true });
+    writeFileSync(join(file, ".claude", "agents"), "not a directory\n");
+    expect(() => promptAudit(file)).toThrow(/not a rendered consumer[^\n]*\.claude\/agents\/\*\.md/);
+    const dangling = planted();
+    rmSync(join(dangling, ".claude", "rules"), { recursive: true, force: true });
+    mkdirSync(join(dangling, ".claude", "rules"));
+    symlinkSync("nowhere", join(dangling, ".claude", "rules", "README"));
+    expect(() => promptAudit(dangling)).toThrow(/not a rendered consumer[^\n]*\.claude\/rules\/\*\.md/);
+  });
+
+  test("walk: a linked commands directory is read without its node_modules or dot-directories", () => {
+    const root = planted(["vendor/cmds/x.md", PRESSURE], ["vendor/cmds/node_modules/pkg/README.md", PRESSURE], ["vendor/cmds/.hidden/y.md", PRESSURE]);
+    symlinkSync(join("..", "..", "vendor", "cmds"), join(root, ".claude", "commands", "shared"));
+    const pressure = of(promptAudit(root), "pressure-density");
+    expect(pressure).toContain("consumer .claude/commands/shared/x.md");
+    expect(pressure.filter(f => f.includes("node_modules") || f.includes(".hidden"))).toEqual([]);
+  });
+
+  test("resolveTarget: a node_modules/rungate target the installed package answers is checked there, even when the local copy is a dangling link", () => {
+    const root = planted(["CLAUDE.md", "Find it in the Zebra table in node_modules/rungate/README.md."]);
+    rmSync(join(root, "node_modules"), { recursive: true, force: true });
+    symlinkSync("nowhere", join(root, "node_modules"));
+    const audit = promptAudit(root);
+    // answered by the package copy, which has no Zebra table: a finding, and nothing named unread
+    expect(of(audit, "dangling-read-target")).toEqual(["consumer CLAUDE.md"]);
+    expect(unread(audit)).not.toContain("node_modules");
+  });
+
+  test("lintRenderedTree, given only a path, refuses a tree with an unread path rather than calling it clean", () => {
+    const root = planted(["CLAUDE.md", "Check gone/guide.md first."]);
+    symlinkSync("nowhere", join(root, "gone"));
+    expect(() => lintRenderedTree(root, SURFACE_LINTS)).toThrow(UnreadSurface);
+    expect(() => lintRenderedTree(root, SURFACE_LINTS)).toThrow(/gone\/guide\.md \(ENOENT\)/);
+    // CONTROL: the same tree with the target present lints clean
+    const fine = planted(["CLAUDE.md", "Check here/guide.md first."], ["here/guide.md", "present"]);
+    expect(lintRenderedTree(fine, SURFACE_LINTS)).toEqual([]);
+  });
+
+  test.skipIf(asRoot)("resolveTarget: a brief naming a file under an unsearchable directory is named as unread, not as missing", () => {
+    // bare, so only dangling-read-target reads it: dangling-path reads backticked paths
+    const root = planted(["CLAUDE.md", "Check locked/guide.md first."], ["locked/guide.md", "present"]);
+    const audit = withMode(join(root, "locked"), 0o000, () => promptAudit(root));
+    expect(of(audit, "dangling-read-target"), "an unreadable target was reported as missing").toEqual([]);
+    expect(unread(audit)).toContain("locked/guide.md (EACCES)");
+  });
+
+  test("hasTableNamed: a table named in a directory called x.md is named as unread, and the audit does not abort", () => {
+    const root = planted(["CLAUDE.md", "Find the spec in the Specs table in docs/x.md."]);
+    mkdirSync(join(root, "docs", "x.md"), { recursive: true });
+    const audit = promptAudit(root);
+    expect(of(audit, "dangling-read-target")).toEqual([]);
+    expect(unread(audit)).toContain("docs/x.md (EISDIR)");
+  });
+
+  test("CONTROL: a table named in a real file that lacks it is still a finding", () => {
+    const root = planted(["CLAUDE.md", "Find the spec in the Specs table in docs/x.md."], ["docs/x.md", "# Notes\n\nno table here"]);
+    expect(of(promptAudit(root), "dangling-read-target")).toEqual(["consumer CLAUDE.md"]);
+  });
+
+  test("readRenderedSurface: a CLAUDE.md that is a FIFO is named and never opened, so the run cannot hang on it", () => {
+    const root = planted();
+    rmSync(join(root, "CLAUDE.md"), { force: true });
+    const made = spawnSync("mkfifo", [join(root, "CLAUDE.md")]);
+    expect(made.status, String(made.stderr)).toBe(0);
+    expect(unread(promptAudit(root))).toContain("CLAUDE.md (not a regular file)");
+  });
+
+  test("lib/surface-lint.ts decides presence through probePath alone: no existsSync is left in it", () => {
+    expect(readFileSync(join(ROOT, "lib", "surface-lint.ts"), "utf-8")).not.toMatch(/\bexistsSync\b/);
   });
 });
