@@ -168,14 +168,14 @@ const CLAIM_SECTIONS = /^(?:Done, for the harness|The claims)\b/;
  * The sections a standing table may sit under (#2869): a heading that names
  * standing or status. That covers the template's `## Standing`, rungate's
  * `## Where we actually stand`, and what a consumer calls its own, such as
- * `## Current standing` or `## Status` (review round 1: two fixed names
- * refused a correct table under any other). A `| 2 | 40 |` row under a
+ * `## Current standing`, `## Standings` or `## Status` (review rounds 1 and 2:
+ * two fixed names, then the bare word forms, refused a correct table). A `| 2 | 40 |` row under a
  * heading that names neither, such as `## Background`, is not a standing row,
  * so it cannot stand in for a claim the standing table leaves out. As with
  * claims, a table above every `## ` heading still counts: there is no other
  * section it could belong to.
  */
-const STANDING_SECTIONS = /\b(?:stand|standing|status)\b/i;
+const STANDING_SECTIONS = /\b(?:stand(?:s|ings?)?|status(?:es)?)\b/i;
 
 /** Read the structure out of a SUCCESS.md. Pure; takes the text. */
 export function parseSuccessDoc(text: string): SuccessDoc {

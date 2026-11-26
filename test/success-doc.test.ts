@@ -1633,7 +1633,7 @@ describe("#2869: standing rows are read only from the standing table's section",
   test("rows under a section named for standing or status are read, and a row above every section still is", () => {
     expect(parseSuccessDoc(background("| 1 | 40 |")).standingRows).toEqual([1]);
     // The template's heading, rungate's, and the names a consumer gives its own (review round 1).
-    for (const heading of ["## Where we actually stand", "## Current standing", "## Status", "## Claim status"]) {
+    for (const heading of ["## Where we actually stand", "## Current standing", "## Status", "## Claim status", "## Standings", "## Where each claim stands", "## Statuses"]) {
       expect(parseSuccessDoc(FILLED.replace("## Standing", heading)).standingRows, heading).toEqual([1]);
     }
     // CONTROL: the same table under a heading that names neither is not a standing table.
