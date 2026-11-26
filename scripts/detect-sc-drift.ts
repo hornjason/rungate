@@ -35,15 +35,23 @@ export interface StaleDetail {
   keyword: string;  // The keyword that's missing
 }
 
+/** The extensions a file path in a criterion ends in. */
+const FILE_EXT_SOURCE = String.raw`\.(?:ts|js|md|json)`;
+
 /**
  * A file path in a criterion, read only from its start (#2883). A listed
- * directory that follows `/`, a word character, `.` or `-` is a segment of
- * some other path, not the start of this one, so a consumer's
- * `src/lib/x.ts` is never read as `lib/x.ts` and reported missing. Both
- * readers below build on this one source, so they cannot disagree about
- * where a path starts.
+ * directory that follows a word character, `.`, `-` or a `/` inside
+ * another path is a segment of that path, not the start of this one, so a
+ * consumer's `src/lib/x.ts` is never read as `lib/x.ts` and reported
+ * missing. A root-relative `./lib/x.ts` or `/lib/x.ts` names the same file
+ * as `lib/x.ts` and is read as it (review round 1); `../lib/x.ts` is not.
+ * Both readers below build on this one source, so they cannot disagree
+ * about where a path starts.
  */
-const PATH_SOURCE = String.raw`(?<![\w./-])((?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]]+\.(?:ts|js|md|json))`;
+const PATH_SOURCE = String.raw`(?<![\w./-])(?:\.?\/)?((?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]]+${FILE_EXT_SOURCE})`;
+
+/** A file named directly before a clause, whether or not {@link PATH_SOURCE} reads it. */
+const NAMED_FILE_BEFORE = new RegExp(String.raw`\S+${FILE_EXT_SOURCE}\s+$`);
 
 /**
  * Extract file paths from SC statement text.
@@ -112,7 +120,13 @@ export function containsSubject(statement: string): string | null {
 export function containsClauses(statement: string): Array<{ path: string | null; keywords: string[] }> {
   const out: Array<{ path: string | null; keywords: string[] }> = [];
   for (const m of statement.matchAll(/(?<!not )contains \[([^\]]+)\]/g)) {
-    const before = statement.slice(0, m.index).match(new RegExp(String.raw`${PATH_SOURCE}\s+$`));
+    const head = statement.slice(0, m.index);
+    const before = head.match(new RegExp(String.raw`${PATH_SOURCE}\s+$`));
+    // A clause on a file this reader does not read (`src/lib/x.ts`) is that
+    // file's, not every path's: binding it to null would check its keywords
+    // in each other file the criterion names, the #2287 class (review round
+    // 1). Its keywords are checked nowhere, as its existence is not.
+    if (!before && NAMED_FILE_BEFORE.test(head)) continue;
     out.push({ path: before ? before[1] : null, keywords: m[1].split(",").map(k => k.trim()).filter(Boolean) });
   }
   return out;
