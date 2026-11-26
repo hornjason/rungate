@@ -1630,9 +1630,14 @@ describe("#2869: standing rows are read only from the standing table's section",
     expect(v).toContain("claim 2 has no row in the standing table");
   });
 
-  test("rows under ## Standing and under ## Where we actually stand are read, and a row above every section still is", () => {
+  test("rows under a section named for standing or status are read, and a row above every section still is", () => {
     expect(parseSuccessDoc(background("| 1 | 40 |")).standingRows).toEqual([1]);
-    expect(parseSuccessDoc(FILLED.replace("## Standing", "## Where we actually stand")).standingRows).toEqual([1]);
+    // The template's heading, rungate's, and the names a consumer gives its own (review round 1).
+    for (const heading of ["## Where we actually stand", "## Current standing", "## Status", "## Claim status"]) {
+      expect(parseSuccessDoc(FILLED.replace("## Standing", heading)).standingRows, heading).toEqual([1]);
+    }
+    // CONTROL: the same table under a heading that names neither is not a standing table.
+    expect(parseSuccessDoc(FILLED.replace("## Standing", "## Background")).standingRows).toEqual([]);
     const noSections = ["### Claim 1 — a real claim that is long enough", "**How it fails:** it is wrong.", "", "| 1 | untested |"].join("\n");
     expect(parseSuccessDoc(noSections).standingRows).toEqual([1]);
   });
