@@ -106,12 +106,13 @@ import {
   listPRs,
   parseOwnerRepo,
   TRUSTED_ASSOCIATIONS,
-  trustedAuthor,
   WORKFLOW_BOT_LOGIN,
+  workflowBotAuthored,
   type GitHubClient,
+  type OpenIssue,
   type OpenIssuePage,
 } from "./github";
-import { closedIssueCounts } from "./issue-decomposition";
+import { closedIssueCounts, PLANNED_ISSUE_FOOTER } from "./issue-decomposition";
 import { branchOf, toplevel } from "./launch-base";
 import { readWorktreeRemote, repoSlug, type RemoteReading } from "./worktree-repo";
 import {
@@ -3096,8 +3097,9 @@ export async function openPrForBranch(
  * that something was already reported; it is text somebody on the internet
  * wrote, and this gate turns it into a refusal.
  *
- * - **Author trust.** Only `OWNER`/`MEMBER`/`COLLABORATOR`; see
- *   `TRUSTED_ASSOCIATIONS`.
+ * - **Author trust.** `OWNER`/`MEMBER`/`COLLABORATOR`, or an issue an
+ *   accepted ADR's plan filed as this repository's workflow bot; see
+ *   `trustedAuthor`.
  * - **A key cap per issue.** One issue stuffed with symptom keys matches
  *   everything, so it is dropped rather than allowed to.
  *
@@ -3160,6 +3162,25 @@ export function describeDrops(dropped: readonly CorpusDrop[]): string {
 }
 
 /**
+ * Whether an issue's text may be used to suppress a filing: a trusted
+ * association, or an issue an accepted ADR's plan filed (#2901).
+ *
+ * The plan files as this repository's workflow bot with association `NONE`,
+ * so without the second arm a filing was never compared against the plan's
+ * own issues. The bot's login is not enough on its own: the pinned status
+ * issue (`scripts/status-view.ts`) is opened by the same bot and its text is
+ * rebuilt from the tracker, issue titles anybody can write included, so a
+ * login-only rule made outside text a suppressor (#2906 review). The plan's
+ * text is a merged ADR's, and every issue it files carries
+ * `PLANNED_ISSUE_FOOTER` at the start of a line, which a title quoted inside
+ * a list item cannot: a GitHub title holds no newline.
+ */
+export function trustedAuthor(issue: Pick<OpenIssue, "authorAssociation" | "authorLogin" | "authorType" | "body">): boolean {
+  if (TRUSTED_ASSOCIATIONS.has(issue.authorAssociation)) return true;
+  return workflowBotAuthored(issue) && issue.body.split("\n").some(line => line.startsWith(PLANNED_ISSUE_FOOTER));
+}
+
+/**
  * The open-issue page as a comparison set, or the reading that says why not.
  *
  * **It takes the PAGE and not the issues** (#1374). The count that decides
@@ -3203,7 +3224,7 @@ export function trustedCorpus(page: OpenIssuePage): CorpusReading {
         reason: "untrusted-author",
         detail:
           `author association ${issue.authorAssociation === "" ? "(absent)" : issue.authorAssociation}` +
-          ` is not one of ${[...TRUSTED_ASSOCIATIONS].join("/")}, and the author is not this repository's workflow bot (${WORKFLOW_BOT_LOGIN})`,
+          ` is not one of ${[...TRUSTED_ASSOCIATIONS].join("/")}, and it is not an issue the plan filed as this repository's workflow bot (${WORKFLOW_BOT_LOGIN}, a line starting ${JSON.stringify(PLANNED_ISSUE_FOOTER.trim())})`,
       });
       continue;
     }

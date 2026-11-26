@@ -111,7 +111,7 @@ import {
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
 import { API_BOOLEAN_FLAGS, filingDirectory, UNREADABLE_COMMAND } from "../lib/issue-create-override";
-import { decomposedBody } from "../lib/issue-decomposition";
+import { decomposedBody, PLANNED_ISSUE_FOOTER } from "../lib/issue-decomposition";
 import {
   ISSUE_SECTIONS,
   headingFor,
@@ -1107,8 +1107,23 @@ describe("#1261 the four suppression classes", () => {
   // #2901: an accepted ADR's plan files its issues from this repository's
   // own workflow, so their author is `github-actions[bot]` with association
   // NONE. Dropping them meant a duplicate of a placed issue was never caught.
-  test("FG-290: an issue this repository's workflow bot filed is in the corpus", () => {
-    const planIssue = trusted({ authorAssociation: "NONE", authorLogin: "github-actions[bot]", authorType: "Bot" });
+  /** A body the plan's own composer wrote, so a change to its footer reaches these cases. */
+  const planBody = decomposedBody(
+    {
+      criterion: "CRC-B5",
+      outcome: "`retryBudget` in lib/command-retry.ts: 144 of 234 over 5060.",
+      files: ["lib/command-retry.ts"],
+      milestone: null,
+      blockedBy: [],
+      line: 3,
+    },
+    "## Criteria this serves",
+    "docs/adr/ADR-1-x.md",
+  );
+  const bot = { authorAssociation: "NONE", authorLogin: "github-actions[bot]", authorType: "Bot" };
+
+  test("FG-290: an issue the plan filed as this repository's workflow bot is in the corpus", () => {
+    const planIssue = trusted({ ...bot, body: planBody });
     expect(kept(trustedCorpus(page([planIssue]))), "the plan's own issue is compared against").toHaveLength(1);
   });
 
@@ -1119,10 +1134,23 @@ describe("#1261 the four suppression classes", () => {
       { authorLogin: "stranger", authorType: "User" },
       {},
     ]) {
-      const r = trustedCorpus(page([trusted({ authorAssociation: "NONE", ...author })]));
+      const r = trustedCorpus(page([trusted({ authorAssociation: "NONE", body: planBody, ...author })]));
       expect(kept(r), `${JSON.stringify(author)} is not trusted`).toEqual([]);
       const drop = r.dropped.find(d => d.reason === "untrusted-author");
       expect(drop?.detail, "the drop says which bot would have been trusted").toContain("github-actions[bot]");
+    }
+  });
+
+  // #2906 review: the pinned status issue is opened by the same bot, and its
+  // text is rebuilt from the tracker — titles anybody can write included.
+  test("FG-292: the bot's login alone trusts nothing: its status issue, or the plan's line quoted mid-line, stays out", () => {
+    for (const body of [
+      "<!-- rungate:status-view -->\n- [`retryBudget` in lib/command-retry.ts: 144 of 234 over 5060](https://x.invalid/1)",
+      `- [${PLANNED_ISSUE_FOOTER}docs/adr/ADR-1-x.md\` \`retryBudget\` in lib/command-retry.ts](https://x.invalid/1)`,
+    ]) {
+      const r = trustedCorpus(page([trusted({ ...bot, body })]));
+      expect(kept(r), body).toEqual([]);
+      expect(r.dropped.map(d => d.reason)).toEqual(["untrusted-author"]);
     }
   });
 
@@ -2306,6 +2334,22 @@ describe("FG-72..FG-78: the corpus count is the population, not the survivors", 
   });
 
   const read = async (data: unknown[]) => trustedCorpus(await listOpenIssues(clientReturning(data), "o/r"));
+
+  // #2906 review: the login and the account type reach `OpenIssue` through
+  // `listOpenIssues`, so the plan's issue is kept only if that copy is made.
+  test("FG-293: the bot's login and account type are read from the REST row's user", async () => {
+    const body = decomposedBody(
+      { criterion: "CRC-B5", outcome: issueRow(7).body, files: ["lib/widget.ts"], milestone: null, blockedBy: [], line: 3 },
+      "## Criteria this serves",
+      "docs/adr/ADR-1-x.md",
+    );
+    const planRow = { ...issueRow(7), author_association: "NONE", body };
+    const kept = await read([{ ...planRow, user: { login: "github-actions[bot]", type: "Bot" } }]);
+    expect(kept.reading === "MEASURED" ? kept.findings.map(f => f.id) : kept.reading).toEqual(["7"]);
+    // CONTROL: the same row with no user is dropped, so the copy is what kept it.
+    const bare = await read([planRow]);
+    expect(bare.dropped.map(d => d.reason)).toEqual(["untrusted-author"]);
+  });
 
   test("FG-72 BASELINE: a page of pull requests is UNMEASURED, not an empty tracker", async () => {
     const r = await read(Array.from({ length: 100 }, (_, i) => prRow(i + 1)));

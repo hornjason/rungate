@@ -526,17 +526,18 @@ export const TRUSTED_ASSOCIATIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The account a workflow in THIS repository writes as with its own token.
- * An accepted ADR's plan files its issues this way, with association `NONE`,
- * so without it the duplicate check never compared a filing against the
- * plan's own issues (#2901). A fork's pull-request run gets a read-only
- * token and cannot open an issue as it, so its text is the repository's.
+ * The account a workflow in THIS repository writes as with its own token,
+ * with association `NONE` (#2901). A fork's pull-request run gets a
+ * read-only token and cannot open an issue as it.
  */
 export const WORKFLOW_BOT_LOGIN = "github-actions[bot]";
 
-/** Whether an issue's text may be used to suppress something: a trusted association, or this repository's workflow bot. */
-export function trustedAuthor(issue: Pick<OpenIssue, "authorAssociation" | "authorLogin" | "authorType">): boolean {
-  if (TRUSTED_ASSOCIATIONS.has(issue.authorAssociation)) return true;
+/**
+ * Whether this repository's workflow bot opened the issue: login and account
+ * type, both. Who wrote the issue is not what wrote its text, so this alone
+ * trusts nothing — `trustedAuthor` in `lib/issue-filing-gate.ts` decides.
+ */
+export function workflowBotAuthored(issue: Pick<OpenIssue, "authorLogin" | "authorType">): boolean {
   return issue.authorType === "Bot" && issue.authorLogin === WORKFLOW_BOT_LOGIN;
 }
 
