@@ -2,7 +2,7 @@
 doc-type: adr
 status: accepted
 created: 2026-11-25
-updated: 2026-11-25
+updated: 2026-11-26
 ---
 
 # ADR-028 — Every consumer gets a feature map, and a card for each feature, generated from what the project declares
