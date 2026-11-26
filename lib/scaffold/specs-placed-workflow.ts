@@ -53,9 +53,11 @@
  * A merge made with GITHUB_TOKEN starts no push run, so with
  * `board.mergeWorkflow` set this also runs when that workflow completes, as
  * `adr-accepted.yml` does (ADR-022, #2862). It runs the same steps, behind
- * the same gate `adr-accepted.yml` uses: a completion while main has not
- * moved since this workflow last succeeded skips everything, and any other
- * runs the full placement, which is idempotent. The wait for an earlier ADR
+ * the gate `adr-accepted.yml` uses plus {@link SPECS_CHANGED_CHECK}: a
+ * completion skips everything when main has not moved since this workflow
+ * last succeeded, or when it moved and no file under specs/ changed, as the
+ * push trigger's path filter would. Any other runs the full placement, which
+ * is idempotent. The wait for an earlier ADR
  * placement runs on both events, because a bot merge starts both workflows.
  * Unset, the file is exactly the push-only one.
  */
