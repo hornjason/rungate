@@ -77,15 +77,18 @@ export const PROVENANCE_KEY = "generated-sha";
 export const ACCEPT_GENERATED_RULE = "rungate scaffold . --fix";
 
 /**
- * How a preserved file reaches the generator's version (review of #2852). A
- * file with no stamp may predate it, and deleting it discards nothing rungate
- * did not write. A stamped file was edited after rungate wrote it, so deleting
- * it discards that edit, and the advice says so and offers the way that keeps
- * it. One sentence for every PRESERVED line, so the scaffold never tells a
- * consumer to delete an edit that `prompt-audit` declines to name.
+ * How a preserved file reaches the generator's version (review of #2852).
+ * Deleting a file discards everything in it, so the advice says so either way.
+ * A file with no stamp may predate it, or may be the project's own; what
+ * nobody can tell from here is whether it holds a `## Project-owned` section,
+ * so the warning names one (round 3). A stamped file was edited after rungate
+ * wrote it, so the advice also offers the way that keeps the edit. One
+ * sentence for every PRESERVED line and for `prompt-audit`'s pre-stamp note,
+ * so no surface tells a consumer to delete what another warns about.
  */
 export function acceptGeneratedAdvice(existing: string | null): string {
-  if (existing === null || declaredSha(existing) === null) return `to accept it, delete the file and re-run \`${ACCEPT_GENERATED_RULE}\``;
+  if (existing === null || declaredSha(existing) === null)
+    return `to accept it, delete the file, which discards everything in it, a \`## Project-owned\` section included, and re-run \`${ACCEPT_GENERATED_RULE}\``;
   return (
     `to keep the edit, move it under \`## Project-owned\`; to take the generator's version instead, ` +
     `delete the file, which discards the edit, and re-run \`${ACCEPT_GENERATED_RULE}\``

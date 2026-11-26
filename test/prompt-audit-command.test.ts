@@ -254,7 +254,12 @@ describe("SC-2805: `rungate prompt-audit` runs the rendered-surface lints plus p
     expect(preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n")).toContain("decides on its next run");
     expect(preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n")).not.toContain("keeps it as yours.");
     // Review of #2852: the scaffold's PRESERVED advice never tells a consumer to delete an edit without saying so.
-    expect(acceptGeneratedAdvice("no stamp at all\n")).toBe(`to accept it, delete the file and re-run \`${ACCEPT_GENERATED_RULE}\``);
+    expect(acceptGeneratedAdvice("no stamp at all\n")).toContain(`re-run \`${ACCEPT_GENERATED_RULE}\``);
+    // Round 3 of #2852: a delete discards a `## Project-owned` section too, and
+    // both surfaces that advise one say so.
+    for (const advice of [acceptGeneratedAdvice("no stamp at all\n"), acceptGeneratedAdvice(null), preStampNote(".claude/rules/docs-routing.md", "no stamp at all\n") ?? ""]) {
+      expect(advice, advice).toContain("discards everything in it, a `## Project-owned` section included");
+    }
     expect(acceptGeneratedAdvice(null)).toContain("to accept it, delete the file");
     expect(acceptGeneratedAdvice(stampedEdited)).toContain("discards the edit");
     expect(acceptGeneratedAdvice(stampedEdited)).toContain("## Project-owned");
