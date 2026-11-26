@@ -35,14 +35,35 @@ export interface StaleDetail {
   keyword: string;  // The keyword that's missing
 }
 
+/** The extensions a file path in a criterion ends in. */
+const FILE_EXT_SOURCE = String.raw`\.(?:ts|js|md|json)`;
+
+/**
+ * A file path in a criterion, read whole and from its start (#2883). The
+ * path must pass through a listed directory, and it is read from the start
+ * of its token: a consumer's `src/lib/x.ts` is checked as `src/lib/x.ts`,
+ * never as `lib/x.ts`, which is not there (review round 2: reading nothing
+ * let a missing nested file pass). A root-relative `./lib/x.ts` or
+ * `/lib/x.ts` is the same file as `lib/x.ts` and is read as it (round 1).
+ * A token opening with `@` or `~` is an alias or home path this reader
+ * cannot resolve, so it is not read (round 2). Both readers below build on
+ * this one source, so they cannot disagree about where a path starts.
+ */
+const PATH_SOURCE = String.raw`(?<![\w./@~-])(?:\.?\/)?((?:[\w.-]+\/)*(?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]\`'"]+${FILE_EXT_SOURCE})`;
+
+/** What may close a quoted path before the clause it names: `\`lib/x.ts\` contains [...]` (round 2). */
+const CLOSE_QUOTE_SOURCE = String.raw`[\`'"]?`;
+
+/** A file named directly before a clause, quoted or not, whether or not {@link PATH_SOURCE} reads it. */
+const NAMED_FILE_BEFORE = new RegExp(String.raw`\S+${FILE_EXT_SOURCE}${CLOSE_QUOTE_SOURCE}\s+$`);
+
 /**
  * Extract file paths from SC statement text.
  * Matches patterns like: lib/foo.ts, scripts/bar.ts, test/baz.test.ts, etc.
  */
 function extractFilePaths(statement: string): string[] {
   const paths: string[] = [];
-  // Match file paths: (lib|scripts|test|gates|workflows|hooks)/...(.ts|.js|.md|.json|.hook.ts)
-  const pathPattern = /((?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]]+\.(?:ts|js|md|json))/g;
+  const pathPattern = new RegExp(PATH_SOURCE, "g");
   let match;
   while ((match = pathPattern.exec(statement)) !== null) {
     paths.push(match[1]);
@@ -103,7 +124,15 @@ export function containsSubject(statement: string): string | null {
 export function containsClauses(statement: string): Array<{ path: string | null; keywords: string[] }> {
   const out: Array<{ path: string | null; keywords: string[] }> = [];
   for (const m of statement.matchAll(/(?<!not )contains \[([^\]]+)\]/g)) {
-    const before = statement.slice(0, m.index).match(/((?:lib|scripts|test|gates|workflows|hooks)\/[^\s,\]]+\.(?:ts|js|md|json))\s+$/);
+    const head = statement.slice(0, m.index);
+    const before = head.match(new RegExp(String.raw`${PATH_SOURCE}${CLOSE_QUOTE_SOURCE}\s+$`));
+    // A clause on a file this reader does not read is that file's, not every
+    // path's. `SUCCESS.md` and `config/x.json` sit in no listed directory,
+    // so PATH_SOURCE never reads them. Binding the clause to null would check
+    // its keywords in each other file the criterion names, the #2287 class
+    // (review round 1). Its keywords are checked nowhere, as its existence is
+    // not.
+    if (!before && NAMED_FILE_BEFORE.test(head)) continue;
     out.push({ path: before ? before[1] : null, keywords: m[1].split(",").map(k => k.trim()).filter(Boolean) });
   }
   return out;
