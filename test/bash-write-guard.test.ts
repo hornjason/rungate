@@ -4121,6 +4121,8 @@ describe("#2859: an accident guard, sized and judged by the real directory", () 
       `sudo -D/tmp chmod 777 ${LIVE}/run/${SALT}`,
       `cp /tmp/a ${LIVE}/run/${STATE} --suffix .bak`,
       `cp /tmp/a ${LIVE}/run/${STATE} -S .bak`,
+      // round 4: `--st` is cp's --strip-trailing-slashes, no value, so the source is an operand
+      `cp --st /tmp/forged.json ${LIVE}/witnesses/state.json`,
     ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
     // single quotes run nothing
     expect(decideBashWrite(`echo '$(cp /tmp/x ${LIVE}/run/${SALT})'`).blocked).toBe(false);
