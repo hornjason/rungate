@@ -240,12 +240,12 @@ describe("behavioral-cache: lookup table structure", () => {
     expect(total, "no behavioral SCs were found at all — the count is vacuous")
       .toBeGreaterThan(20);
     expect(untestable).toBeGreaterThanOrEqual(10);
-    // 20 → 27 with ADR-028 (#2856): its seven criteria, SC-2812 to SC-2818,
-    // are behavioural feature criteria written by `create-sc --behavioral`.
-    // No eval criterion maps them; each is proved by a test of its own and
-    // ticked through the behavioural ratchet, as SC-2811 is. The band moves
-    // in the ADR Jason merges, so the move is his to see.
-    expect(untestable).toBeLessThanOrEqual(27);
+    // 20 → 27 with ADR-028 (#2856), then 27 → 19 with #2898: Jason dropped
+    // the behavioural tag on SC-2811 and on ADR-028's seven, SC-2812 to
+    // SC-2818, on 2026-11-26. A tagged criterion can never be ticked from a
+    // test, and each of the eight is proved by a test of its own. The ceiling
+    // is what is left, so a new unmapped behavioural criterion turns it red.
+    expect(untestable).toBeLessThanOrEqual(19);
   });
 });
 
