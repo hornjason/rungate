@@ -1611,3 +1611,42 @@ describe("#515: the residue check survives a reflow, and still catches a partial
     });
   });
 });
+
+describe("#2869: standing rows are read only from the standing table's section", () => {
+  const background = (rows: string) =>
+    FILLED.replace(
+      "## What this is not",
+      `## Background\n\n| Claim | Count |\n|---|---|\n${rows}\n\n## What this is not`,
+    );
+  const twoClaims = FILLED.replace(
+    "## Standing",
+    "### Claim 2 — every refusal names the file it refused\n\n**How it fails:** a refusal prints no path.\n\n## Standing",
+  );
+
+  test("a | 2 | row in an unrelated ## Background table does not stand in for claim 2's standing row", () => {
+    const doc = twoClaims.replace("## What this is not", "## Background\n\n| Claim | Count |\n|---|---|\n| 2 | 40 |\n\n## What this is not");
+    expect(parseSuccessDoc(doc).standingRows, "a Background row was read as a standing row").toEqual([1]);
+    const v = successViolations(doc, NO_RESIDUE_CHECK).violations.join("\n");
+    expect(v).toContain("claim 2 has no row in the standing table");
+  });
+
+  test("rows under a section named for standing or status are read, and a row above every section still is", () => {
+    expect(parseSuccessDoc(background("| 1 | 40 |")).standingRows).toEqual([1]);
+    // The template's heading, rungate's, and the names a consumer gives its own (review round 1).
+    for (const heading of ["## Where we actually stand", "## Current standing", "## Status", "## Claim status", "## Standings", "## Where each claim stands", "## Statuses"]) {
+      expect(parseSuccessDoc(FILLED.replace("## Standing", heading)).standingRows, heading).toEqual([1]);
+    }
+    // CONTROL: the same table under a heading that names neither is not a standing table.
+    expect(parseSuccessDoc(FILLED.replace("## Standing", "## Background")).standingRows).toEqual([]);
+    const noSections = ["### Claim 1 — a real claim that is long enough", "**How it fails:** it is wrong.", "", "| 1 | untested |"].join("\n");
+    expect(parseSuccessDoc(noSections).standingRows).toEqual([1]);
+  });
+
+  test("CONTROL: rungate's own SUCCESS.md still reads a standing row for every claim it states", () => {
+    const text = readFileSync(join(import.meta.dir, "..", "SUCCESS.md"), "utf-8");
+    const doc = parseSuccessDoc(text);
+    const stated = doc.claims.map(c => c.number);
+    expect(stated.length).toBeGreaterThan(0);
+    expect(stated.filter(n => !doc.standingRows.includes(n)), "a claim lost its standing row").toEqual([]);
+  });
+});
