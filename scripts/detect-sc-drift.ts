@@ -126,10 +126,12 @@ export function containsClauses(statement: string): Array<{ path: string | null;
   for (const m of statement.matchAll(/(?<!not )contains \[([^\]]+)\]/g)) {
     const head = statement.slice(0, m.index);
     const before = head.match(new RegExp(String.raw`${PATH_SOURCE}${CLOSE_QUOTE_SOURCE}\s+$`));
-    // A clause on a file this reader does not read (`src/lib/x.ts`) is that
-    // file's, not every path's: binding it to null would check its keywords
-    // in each other file the criterion names, the #2287 class (review round
-    // 1). Its keywords are checked nowhere, as its existence is not.
+    // A clause on a file this reader does not read is that file's, not every
+    // path's. `SUCCESS.md` and `config/x.json` sit in no listed directory,
+    // so PATH_SOURCE never reads them. Binding the clause to null would check
+    // its keywords in each other file the criterion names, the #2287 class
+    // (review round 1). Its keywords are checked nowhere, as its existence is
+    // not.
     if (!before && NAMED_FILE_BEFORE.test(head)) continue;
     out.push({ path: before ? before[1] : null, keywords: m[1].split(",").map(k => k.trim()).filter(Boolean) });
   }
