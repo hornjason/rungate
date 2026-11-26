@@ -28,13 +28,15 @@
  *
  * - `AGENTS.md`: rungate's, except under `## Hard Constraints`.
  * - A rule or command: rungate's, except under `## Project-owned`, exactly
- *   when its `generated-sha` stamp still covers its text (`stampCovers`).
- *   That is the reading `scaffold --fix` writes from, so a file this calls
- *   rungate's is one the scaffold rewrites, and one it calls the project's is
- *   one the scaffold preserves (#2835). A file with no stamp, a pre-stamp
- *   scaffold's output included, is the project's. When such a file has a name
- *   the generator writes, its findings say how to take the generator's
- *   version (`ACCEPT_GENERATED_RULE`).
+ *   when its `generated-sha` stamp still covers its text (`stampCovers`)
+ *   AND the generator still writes a file of that name (`hasGeneratedName`).
+ *   The stamp half is the reading `scaffold --fix` writes from, so a file
+ *   this calls rungate's is one the scaffold rewrites (#2835). A stamped file
+ *   under a name the generator no longer writes is the project's: no
+ *   scaffold rewrites it, and its findings say to delete it (`orphanNote`).
+ *   A file with no stamp, a pre-stamp scaffold's output included, is the
+ *   project's; when it has a generated name, its findings say how to take
+ *   the generator's version (`ACCEPT_GENERATED_RULE`).
  * - A brief whose name has a template in rungate's `templates/agent-briefs/`:
  *   rungate's, except under `## Project Constraints`.
  * - Everything else, `CLAUDE.md` included: the consumer's.
