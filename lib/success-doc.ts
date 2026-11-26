@@ -135,6 +135,9 @@ export interface SuccessClaim {
   statement: string;
   /** The text after `**How it fails:**`, or null when the line is absent. */
   howItFails: string | null;
+  /** The `## ` section it sits under, and whether it took the `N. **…**` form (#2868). */
+  section: string;
+  numbered: boolean;
 }
 
 export interface SuccessDoc {
@@ -147,13 +150,18 @@ export interface SuccessDoc {
 
 /**
  * The claim numbers a SUCCESS.md states, sorted and once each, in either
- * layout `parseSuccessDoc` reads. A claim still carrying the template's
- * placeholder states nothing. SC-2623's `serves:` check and the filing
- * gate's `claimsIn` both read claims through this, so a consumer's file is
- * read the way rungate's is (#2865).
+ * layout `parseSuccessDoc` reads. A `### Claim N` heading is a claim wherever
+ * it sits; a `N. **…**` line, which is ordinary markdown, only under a claims
+ * section (#2868). A claim whose statement `unfilled()` reads as unwritten
+ * states nothing. SC-2623's `serves:` check and the filing gate's `claimsIn`
+ * both read claims through this, so a consumer's file is read the way
+ * rungate's is (#2865).
  */
+const CLAIM_SECTIONS = /^(?:Done, for the harness|The claims)\b/;
 export function successClaimNumbers(text: string): number[] {
-  const stated = parseSuccessDoc(text).claims.filter(c => !unfilled(c.statement));
+  const stated = parseSuccessDoc(text).claims.filter(
+    c => (!c.numbered || CLAIM_SECTIONS.test(c.section)) && !unfilled(c.statement),
+  );
   return [...new Set(stated.map(c => c.number))].sort((a, b) => a - b);
 }
 
@@ -165,6 +173,7 @@ export function parseSuccessDoc(text: string): SuccessDoc {
   const lines = text.split("\n");
 
   let current: SuccessClaim | null = null;
+  let section = "";
   // A fence closes only on its own marker (#2130): a `~~~` line inside a
   // ``` block used to toggle the block shut.
   const { roles } = readFences(lines);
@@ -173,14 +182,18 @@ export function parseSuccessDoc(text: string): SuccessDoc {
     if (roles[i] === "fence") continue;
     if (line.includes(PLACEHOLDER_MARKER)) placeholderLines.push(i + 1);
     if (roles[i] === "code") continue;
+    const h2 = /^##(?!#)\s+(.*?)\s*$/.exec(line); // `\s*$` takes a CRLF's \r
+    if (h2) section = h2[1].trim();
 
     let heading: RegExpExecArray | null = null;
-    for (const form of CLAIM_FORMS) {
+    let numbered = false;
+    for (const [k, form] of CLAIM_FORMS.entries()) {
       heading = form.exec(line);
+      numbered = k === 1;
       if (heading) break;
     }
     if (heading) {
-      current = { number: Number(heading[1]), statement: heading[2].trim(), howItFails: null };
+      current = { number: Number(heading[1]), statement: heading[2].trim(), howItFails: null, section, numbered };
       claims.push(current);
       continue;
     }

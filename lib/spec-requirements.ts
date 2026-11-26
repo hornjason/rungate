@@ -118,25 +118,23 @@ export function servesViolations(readings: SpecRequirementReading[], claims: num
   for (const r of readings) {
     if (r.serves === null) continue;
     if (claims === null || claims.length === 0) {
-      out.push(
-        `${r.spec} declares "serves: ${r.serves}" and SUCCESS.md's claims could not be read, so the ` +
-          `declaration is UNMEASURED, not accepted.`,
-      );
+      const why = claims === null ? "SUCCESS.md's claims could not be read" : "SUCCESS.md states no claims yet";
+      out.push(`${r.spec} declares "serves: ${r.serves}" and ${why}, so the declaration is UNMEASURED, not accepted.`);
       continue;
     }
     const parts = r.serves.split(",").map(p => p.trim());
     if (parts.length === 0 || parts.some(p => !/^\d+$/.test(p))) {
       out.push(
         `${r.spec} declares "serves: ${r.serves}", which is not a list of SUCCESS.md claim numbers. ` +
-          `Name the claim(s) it serves from "## Done, for the harness", e.g. "serves: 7".`,
+          `Name the SUCCESS.md claim number(s) it serves, e.g. "serves: 7".`,
       );
       continue;
     }
     const unknown = parts.map(Number).filter(n => !claims.includes(n));
     if (unknown.length > 0) {
       out.push(
-        `${r.spec} declares it serves claim ${unknown.join(", ")}, which SUCCESS.md's "Done, for the ` +
-          `harness" does not state (it states ${claims.join(", ")}).`,
+        `${r.spec} declares it serves claim ${unknown.join(", ")}, which SUCCESS.md does not state ` +
+          `(it states ${claims.join(", ")}).`,
       );
     }
   }

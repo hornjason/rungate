@@ -402,7 +402,11 @@ describe("SC-1709: both claim forms parse, and the real documents are the cases"
     // left it green.
     const h = parseSuccessDoc(FILLED).claims;
     const n = parseSuccessDoc(numberedDoc).claims;
-    expect(n, "the two claim forms do not parse to the same structure").toEqual(h);
+    // #2868: the parse records which form each claim took, so compare
+    // everything else, and the form marker on its own.
+    const strip = (cs: typeof h) => cs.map(({ numbered: _form, ...rest }) => rest);
+    expect(strip(n), "the two claim forms do not parse to the same structure").toEqual(strip(h));
+    expect([n[0]?.numbered, h[0]?.numbered]).toEqual([true, false]);
     expect(h.length, "the comparison above is over an empty list").toBeGreaterThan(0);
     expect(numbered.violations).toEqual(heading.violations);
   });

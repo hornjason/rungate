@@ -329,6 +329,33 @@ describe("SC-2623: a spec says which SUCCESS.md claim it serves", () => {
     }
   });
 
+  // #2868 review round 1: a numbered bold line is common markdown, so it is
+  // a claim only under a claims section; a `### Claim N` heading is a claim
+  // wherever it sits. Unscoped, a stray list revived an unfilled claim.
+  test("SC-2623 (#2868): a numbered bold line outside the claims section is not a claim", () => {
+    const stray = `${TEMPLATE_MD}\n## How we know\n\n3. **Run the suite before filing.**\n`;
+    expect(successClaimNumbers(stray)).toEqual([1, 2]);
+    const unfilledTemplate = readFileSync(join(REPO, "templates", "SUCCESS-TEMPLATE.md"), "utf-8");
+    const notClaims = `${unfilledTemplate}\n## What this is not\n\n1. **Not a feature list or a mission statement**\n`;
+    expect(successClaimNumbers(notClaims)).toEqual([]);
+    expect(claimsIn(notClaims)).toEqual({ kind: "unwritten" });
+    // a CRLF file keeps its section
+    expect(successClaimNumbers(CLAIMS_MD.replace(/\n/g, "\r\n"))).toEqual([1, 2, 7]);
+    // the same list under the template's claims heading is the claims
+    expect(successClaimNumbers("# S\n## The claims\n\n1. **Every gate can fail, observed failing.**\n")).toEqual([1]);
+  });
+
+  test("SC-2623 (#2868): the refusals name no section, and no stated claims is not 'could not be read'", () => {
+    for (const line of ["serves: TODO", "serves: 9"]) {
+      for (const v of servesOf(line)) expect(v, line).not.toContain("Done, for the harness");
+    }
+    const reading = { spec: "S.md", criteria: 1, declaredNone: false, reason: null, serves: "2" };
+    const none = servesViolations([reading], []);
+    expect(none).toHaveLength(1);
+    expect(none[0]).toContain("states no claims yet");
+    expect(none[0]).not.toContain("could not be read");
+  });
+
   test("SC-2623: a declared claim that exists is clean, and an absent key is untouched", () => {
     expect(servesOf("serves: 7")).toEqual([]);
     expect(servesOf("serves: 1, 7")).toEqual([]);
