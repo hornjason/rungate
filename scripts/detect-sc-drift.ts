@@ -44,7 +44,7 @@ const READ_EXTENSIONS = /\.(?:ts|js|md|json)$/;
 /** What one token of criterion prose is, read as a path (#2897). */
 export type PathToken =
   | { kind: "listed"; path: string }
-  | { kind: "unread-file" | "alias" | "absolute" | "pattern" | "url" | "none" };
+  | { kind: "unread-file" | "alias" | "absolute" | "pattern" | "none" };
 
 /** What may follow a path inside its token and still name it: a line reference or an anchor (#2907 review). */
 const LOCATION_SUFFIX = /^(?::L?\d+(?:[-–:]L?\d+)*|#[\w.-]*)$/;
@@ -55,7 +55,7 @@ const LOCATION_SUFFIX = /^(?::L?\d+(?:[-–:]L?\d+)*|#[\w.-]*)$/;
  * disagree about what a path is. `bound` is false when a separator, a
  * sentence end, a closing bracket, a possessive or other text follows the
  * path: such a token ends a naming, so it cannot be the subject of the clause
- * after it.
+ * after it. A possessive (`lib/x.ts's`) is text after the path.
  *
  * - Quotes, backticks, emphasis and angle brackets around a token are not
  *   part of it, nor is an opening parenthesis or bracket.
@@ -64,8 +64,9 @@ const LOCATION_SUFFIX = /^(?::L?\d+(?:[-–:]L?\d+)*|#[\w.-]*)$/;
  *   is a line reference or anchor (`lib/x.ts:10-20`, `lib/x.ts#L42`), which
  *   still names the file, or text, which ends the naming. The extension ends
  *   where the run ends, so `lib/parser.tsx` is not `lib/parser.ts`.
- * - A URL, a glob, an alias (`@/`, `~/`) and an absolute path outside the
- *   project are not paths in this tree. A root-relative `/lib/x.ts` is
+ * - A glob, an alias (`@/`, `~/`) and an absolute path outside the project
+ *   are not paths in this tree. A URL reads as an absolute path from its
+ *   `//`, so it is not one either. A root-relative `/lib/x.ts` is
  *   `lib/x.ts`, because its first segment is a listed directory.
  * - A path is read whole, from its start, when a directory before its file is
  *   on the list and it ends in a read extension. A scoped segment inside it
@@ -77,12 +78,11 @@ export function classifyPathToken(raw: string): { token: PathToken; bound: boole
   let bound = true;
   for (let prev = ""; prev !== core; ) {
     prev = core;
-    const separated = core.replace(/[,.;:?!)\]—–]+$/, "").replace(/['’]s$/, "");
+    const separated = core.replace(/[,.;:?!)\]—–]+$/, "");
     if (separated !== core) bound = false;
     core = separated.replace(/[`'">*]+$/, "");
   }
   const of = (token: PathToken) => ({ token, bound });
-  if (core.includes("://")) return of({ kind: "url" });
   if (/[*?{}<>|]/.test(core)) return of({ kind: "pattern" });
   // The token's path is its first run of path characters that reads as one;
   // a prefix before it (`key:lib/x.ts`) is not part of it.
