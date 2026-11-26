@@ -16,7 +16,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "os";
 import { join } from "path";
 import { CLI_COMMANDS } from "../lib/cli-commands";
-import { ADR_ACCEPTED_WORKFLOW_FILE } from "../lib/scaffold/adr-accepted-workflow";
+import { ADR_ACCEPTED_WORKFLOW_FILE, mergeWorkflowNotAStringWarning } from "../lib/scaffold/adr-accepted-workflow";
 import {
   SPECS_PLACED_COMMANDS,
   SPECS_PLACED_GROUP,
@@ -31,8 +31,8 @@ import { workflowCensus } from "../lib/scaffold/workflow-census";
 
 const ROOT = join(import.meta.dir, "..");
 
-/** Scaffold a throwaway consumer; hand back the generated specs-placed.yml. `board` is its config's board block. */
-function generated(board?: Record<string, unknown>): string {
+/** Scaffold a throwaway consumer; hand back the generated specs-placed.yml. `board` is its config's board block; `actions` collects what the scaffold prints. */
+function generated(board?: Record<string, unknown>, actions: string[] = []): string {
   const root = mkdtempSync(join(tmpdir(), "rg-specs-placed-"));
   try {
     mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
@@ -41,7 +41,7 @@ function generated(board?: Record<string, unknown>): string {
       JSON.stringify({ project: "fixture", repo: "fixture/fixture", ci: { bunVersion: "1.3.14" }, test: { command: "bun test" }, ...(board ? { board } : {}) }),
     );
     writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture", version: "0.0.0" }));
-    createCiWorkflows(root, [], { force: true });
+    createCiWorkflows(root, actions, { force: true });
     const path = join(root, ".github", "workflows", SPECS_PLACED_WORKFLOW_FILE);
     return existsSync(path) ? readFileSync(path, "utf-8") : "";
   } finally {
@@ -372,10 +372,17 @@ describe("#2862: a merge made by automation runs specs-placed.yml too", () => {
   // biome-ignore lint: the parsed workflow is untyped YAML.
   const steps: any[] = doc?.jobs?.[SPECS_PLACED_JOB]?.steps ?? [];
 
-  /** Run the gate step's own script with a stub `gh`; hand back what it wrote to GITHUB_OUTPUT. */
-  function gate(main: string, last: string, compare = "echo specs/A.md"): string {
+  /**
+   * Run the gate step's own script with a stub `gh`; hand back what it wrote
+   * to GITHUB_OUTPUT. `files` is the compare API's file list, put through the
+   * step's own `--jq` filter by a real jq; `null` is a compare call that fails.
+   */
+  function gate(main: string, last: string, files: Record<string, unknown>[] | null = [{ filename: "specs/A.md" }]): string {
     const dir = mkdtempSync(join(tmpdir(), "rg-specs-placed-gate-"));
     try {
+      const fixture = join(dir, "compare.json");
+      writeFileSync(fixture, JSON.stringify({ files: files ?? [] }));
+      const compare = files === null ? "exit 1" : `while [ $# -gt 0 ] && [ "$1" != --jq ]; do shift; done; jq -r "$2" ${JSON.stringify(fixture)}`;
       writeFileSync(join(dir, "gh"), `#!/bin/bash\ncase "$*" in *compare/*) ${compare} ;; *commits/*) echo ${JSON.stringify(main)} ;; *runs*) echo ${JSON.stringify(last)} ;; esac\n`);
       chmodSync(join(dir, "gh"), 0o755);
       const out = join(dir, "out.txt");
@@ -425,13 +432,36 @@ describe("#2862: a merge made by automation runs specs-placed.yml too", () => {
   });
 
   test("main moved but nothing under specs/ changed: skip, as the push trigger's path filter would", () => {
-    expect(gate("abc", "def", "printf 'lib/a.ts\\nREADME.md\\n'")).toBe("go=false");
-    expect(gate("abc", "def", "printf 'lib/a.ts\\nspecs/B.md\\n'")).toBe("go=true");
+    expect(gate("abc", "def", [{ filename: "lib/a.ts" }, { filename: "README.md" }])).toBe("go=false");
+    expect(gate("abc", "def", [{ filename: "lib/a.ts" }, { filename: "specs/B.md" }])).toBe("go=true");
+  });
+
+  test("#2872 review: a spec renamed out of specs/ changed specs/, as the push trigger's path filter reads it", () => {
+    expect(gate("abc", "def", [{ filename: "docs/FOO.md", previous_filename: "specs/FOO.md", status: "renamed" }])).toBe("go=true");
+    // CONTROL: a rename that never touched specs/ still skips
+    expect(gate("abc", "def", [{ filename: "docs/FOO.md", previous_filename: "lib/FOO.md", status: "renamed" }])).toBe("go=false");
   });
 
   test("a changed-file list it cannot read, or one at the API's ceiling, is UNMEASURED: the full placement runs", () => {
-    expect(gate("abc", "def", "exit 1")).toBe("go=true");
-    expect(gate("abc", "def", "for i in $(seq 1 300); do echo lib/f$i.ts; done")).toBe("go=true");
+    expect(gate("abc", "def", null)).toBe("go=true");
+    const lib = (n: number) => Array.from({ length: n }, (_, i) => ({ filename: `lib/f${i}.ts` }));
+    expect(gate("abc", "def", lib(300))).toBe("go=true");
+    // a rename prints two lines and is one file: 299 of them are under the ceiling
+    expect(gate("abc", "def", lib(299).map(f => ({ ...f, previous_filename: `old/${f.filename}` })))).toBe("go=false");
+  });
+
+  test("#2872 review: a board.mergeWorkflow that is not a string writes no trigger, and the scaffold says why", () => {
+    for (const value of [["Approve on green"], 7, true]) {
+      const actions: string[] = [];
+      expect(generated({ mergeWorkflow: value }, actions), JSON.stringify(value)).toBe(YML);
+      expect(actions.filter(a => a.includes("board.mergeWorkflow"))).toEqual([mergeWorkflowNotAStringWarning(JSON.stringify(value))]);
+    }
+    // CONTROL: absent, null and a string are not this warning
+    for (const board of [{}, { mergeWorkflow: null }, { mergeWorkflow: "Approve on green" }]) {
+      const actions: string[] = [];
+      generated(board, actions);
+      expect(actions.some(a => a.includes("not a string")), JSON.stringify(board)).toBe(false);
+    }
   });
 
   test("a name the config gets wrong: no trigger is written, and every run says so", () => {

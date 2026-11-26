@@ -87,13 +87,17 @@ export const SPECS_PLACED_GROUP = "specs-placed";
  * becomes the next base, which is right: nothing in that range touched specs.
  * A list it cannot read, or one at the compare API's 300-file ceiling, is
  * UNMEASURED and runs the full placement.
+ *
+ * Each file is an `F` line, and a rename adds a `P` line for its old name
+ * (#2872 review): a spec moved out of specs/ changed specs/, as the push
+ * trigger's path filter reads it. The ceiling counts `F` lines, one per file.
  */
 export const SPECS_CHANGED_CHECK: readonly string[] = [
   `if [ "$go" = true ] && [ -n "$last" ] && [ -n "$main" ]; then`,
-  `  if files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$last...$main?per_page=100" --jq '.files[].filename'); then`,
-  `    if [ "$(printf '%s\\n' "$files" | grep -c .)" -ge 300 ]; then`,
+  `  if files=$(gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$last...$main?per_page=100" --jq '.files[] | "F \\(.filename)", ((.previous_filename // empty) | "P \\(.)")'); then`,
+  `    if [ "$(printf '%s\\n' "$files" | grep -c '^F ')" -ge 300 ]; then`,
   `      echo "::notice::300 or more files changed since $last, so whether specs/ changed is UNMEASURED; running the full placement."`,
-  `    elif ! printf '%s\\n' "$files" | grep -q '^specs/'; then`,
+  `    elif ! printf '%s\\n' "$files" | grep -q '^[FP] specs/'; then`,
   `      echo "Nothing under specs/ changed between $last and $main."; go=false`,
   `    fi`,
   `  else`,
