@@ -1432,7 +1432,8 @@ describe("#1411 WITNESS: a link made by a verb that is not `ln`", () => {
     ["cp '-L' quoted, which still creates no link", `cp '-L' /tmp/a/${STATE} ${FIX}/${STATE}`],
     ["cp '-r' quoted", `cp '-r' /tmp/a/${STATE} ${FIX}/${STATE}`],
     ["cp with a variable in the PATH rather than the flag", `cp -r "$SRC" ${FIX}/${STATE}`],
-    ["cp -t/tmp/p, an attached argument and no link letter", `cp -t/tmp/p /tmp/a/${STATE} && echo '{}' > ${FIX}/${STATE}`],
+    // #2867: `-t` is now read, so its directory must exist, as a fixture's does
+    ["cp -tDIR, an attached argument and no link letter", `cp -t${FIX} /tmp/a/${STATE} && echo '{}' > ${FIX}/${STATE}`],
     ["cp -S.bak, a suffix argument", `cp -S.bak /tmp/a/${STATE} ${FIX}/${STATE}`],
     ["cp --sparse=always, a long option that is not a link", `cp --sparse=always /tmp/a/${STATE} ${FIX}/${STATE}`],
     ["cp with a quoted filename containing a backslash", `cp 'a\\b.txt' ${FIX}/${STATE}`],
@@ -4037,6 +4038,120 @@ describe("#2859: an accident guard, sized and judged by the real directory", () 
         rmSync(away, { recursive: true, force: true });
       }
     });
+  });
+
+  // #2867: a copy's real destination and verb, in three spellings main and
+  // #2866 both missed: `-t DIR`, a wrapper flag that takes a word, and a
+  // wrapper on no list. The copy verb is found where it stands, as `tee` is.
+  test("cp -t, a wrapper flag that takes a word, and an unlisted wrapper still name the destination (#2867)", () => {
+    for (const cmd of [
+      `cp -t ${LIVE}/witnesses/ /tmp/forged.json`,
+      `cp --target-directory=${LIVE}/witnesses/ /tmp/x.json`,
+      `mv --target-directory ${LIVE}/witnesses /tmp/x.json`,
+      `cp -rt ${LIVE}/hooks /tmp/X.hook.ts`,
+      `timeout -s KILL 30 cp /tmp/a.json ${LIVE}/run/${STATE}`,
+      `sudo -u x cp /tmp/a ${LIVE}/run/${STATE}`,
+      `doas -u x mv /tmp/a ${LIVE}/run/${STATE}`,
+      `ionice -c3 cp /tmp/fixture.json ${LIVE}/run/${STATE}`,
+      `setsid cp /tmp/a ${LIVE}/run/${STATE}`,
+      `busybox cp /tmp/a ${LIVE}/run/${STATE}`,
+      `ionice -c3 ln -s ${LIVE}/run/${STATE} ${FIX}/x`,
+      `setsid ln -s ${LIVE}/run/${SALT} ${FIX}/x`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [
+      `cp -t ${FIX} /tmp/x/${STATE}`,
+      `ionice -c3 cp /tmp/a ${FIX}/${STATE}`,
+      `rsync -t /tmp/a ${FIX}/${STATE}`,
+      `grep -n cp ${LIVE}/run/${STATE}`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  // #2867 local review: the copy verb is read where a command stands, not
+  // anywhere, so a read that mentions `cp` stays a read; `\cp` and `(cp` are
+  // `cp`; and `--target-directory` is read in every prefix GNU accepts.
+  test("the copy verb is where the command stands: escaped and subshell copies are copies, a grep naming cp is a read (#2867)", () => {
+    for (const cmd of [
+      `\\cp /tmp/a ${LIVE}/run/${STATE}`,
+      `(cp /tmp/a ${LIVE}/run/${STATE})`,
+      `\\mv -t ${LIVE}/run /tmp/${STATE}`,
+      `cp --target=${LIVE}/run /tmp/${STATE}`,
+      `cp --target-dir ${LIVE}/run /tmp/${STATE}`,
+      // a lazy cluster: `-texport/…` is `-t export/…`, a relative directory, not `-texpor` + `t/…`
+      `cp -texport${FIX} /tmp/x/${STATE}`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [
+      `grep -c cp ${LIVE}/run/${STATE} ${LIVE}/run2/${STATE}`,
+      `rg -n cp ${LIVE}/hooks/a.hook.ts ${LIVE}/hooks/b.hook.ts`,
+      `grep -rn install /opt/a ${LIVE}/run/${STATE}`,
+      `echo mv old ${LIVE}/run/${STATE}`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+  });
+
+  // #2870 review round 1: `-t DIR` with its sources on stdin still writes
+  // into DIR; a copy inside `$(…)` or backticks is a copy; a `t` inside a
+  // value flag's attached argument (`-Sext`) is not `-t`; `eval cp` is cp.
+  test("xargs cp -t DIR, a copy inside a substitution, cp -Sext and eval cp all name the destination (#2870)", () => {
+    for (const cmd of [
+      `xargs cp -t ${LIVE}/witnesses/`,
+      `ls /tmp/fixture* | xargs cp -t ${LIVE}/witnesses/`,
+      `echo $(cp /tmp/x.json ${LIVE}/run/${STATE})`,
+      `x=$(cp /tmp/a ${LIVE}/run/${SALT})`,
+      `echo \`cp /tmp/a ${LIVE}/run/${STATE}\``,
+      `cp -Sext /tmp/seed ${LIVE}/run/${STATE}`,
+      `install -gstaff /tmp/x ${LIVE}/run/${SALT}`,
+      `eval cp /tmp/forged.json ${LIVE}/run/${STATE}`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [`xargs cp -t ${FIX}`, `echo $(cat ${LIVE}/run/${STATE})`, `x=$(grep -c cp ${LIVE}/run/${STATE})`]) {
+      expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
+    }
+  });
+
+  // #2870 review round 2: a double-quoted substitution runs (only single
+  // quotes stop it), and its body keeps its own quotes; `-Zt` is `-t`; an
+  // attached wrapper flag with a slash is a flag; a trailing `--suffix .bak`
+  // is a value, not the destination.
+  test("a double-quoted substitution, cp -Zt, env -C/dir cp and a trailing --suffix still name the destination (#2870)", () => {
+    for (const cmd of [
+      `echo "$(cp /tmp/x ${LIVE}/run/${SALT})"`,
+      `echo $(cp /tmp/forged.json "${LIVE}/run/${STATE}")`,
+      `echo "\`cp /tmp/a ${LIVE}/run/${STATE}\`"`,
+      `echo "$(echo x > ${LIVE}/run/${STATE})"`,
+      `cp -Zt ${LIVE}/witnesses/ /tmp/forged.json`,
+      `env -C/tmp/scratch cp /tmp/forged.json ${LIVE}/witnesses/x`,
+      `sudo -D/tmp chmod 777 ${LIVE}/run/${SALT}`,
+      `cp /tmp/a ${LIVE}/run/${STATE} --suffix .bak`,
+      `cp /tmp/a ${LIVE}/run/${STATE} -S .bak`,
+      // round 4: `--st` is cp's --strip-trailing-slashes, no value, so the source is an operand
+      `cp --st /tmp/forged.json ${LIVE}/witnesses/state.json`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    // single quotes run nothing
+    expect(decideBashWrite(`echo '$(cp /tmp/x ${LIVE}/run/${SALT})'`).blocked).toBe(false);
+  });
+
+  // #2870 review round 5: `eval` joins its words and runs them as a command
+  // line, so a quoted body is the same command as the unquoted one. Before,
+  // the quoted body was one word and no verb, and the copy was allowed.
+  test("a copy or redirect in a quoted eval body is read as the command it runs (#2870)", () => {
+    for (const cmd of [
+      `eval 'cp -p src ${LIVE}/run/${STATE}'`,
+      `eval 'cp /tmp/forged.json ${LIVE}/run/${STATE}'`,
+      `eval "cp /tmp/forged.json ${LIVE}/run/${STATE}"`,
+      `eval 'cp /tmp/forged.json' "${LIVE}/run/${STATE}"`,
+      `command eval 'mv /tmp/a ${LIVE}/run/${SALT}'`,
+      `eval 'echo x > ${LIVE}/run/${STATE}'`,
+      `true && eval 'cp /tmp/a ${LIVE}/witnesses/x'`,
+      // one leading `--` ends eval's options in bash, and `-` does in zsh
+      `eval -- 'cp /tmp/a ${LIVE}/run/${STATE}'`,
+      `command eval -- 'mv /tmp/a ${LIVE}/run/${SALT}'`,
+      `eval - 'cp /tmp/a ${LIVE}/run/${STATE}'`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(true);
+    for (const cmd of [
+      `eval 'echo cp /tmp/a ${LIVE}/run/${STATE}'`,
+      `echo eval 'cp /tmp/a ${LIVE}/run/${STATE}'`,
+      `eval "$(ssh-agent -s)"`,
+      `eval 'cat ${LIVE}/run/${STATE}'`,
+      `eval -- 'echo cp /tmp/a ${LIVE}/run/${STATE}'`,
+    ]) expect(decideBashWrite(cmd).blocked, cmd).toBe(false);
   });
 
   test("cp's link flag is read as the shell hands it over, and ln behind a wrapper is ln", () => {
