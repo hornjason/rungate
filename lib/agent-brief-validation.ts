@@ -306,20 +306,20 @@ export function validateAgentBrief(
     });
   }
 
-  // Check 3: Ship-active (Engineer only)
+  // Check 3: Ship-active (Engineer only). An advisory, not a refusal (#2881):
+  // only a user can start a ship run, so a block stopped every agent working
+  // an issue outside one, and a project in direct-ship mode never starts one.
   if (isEngineer) {
     const shipMarker = checkShipActive(workDir) || checkWorkflowState(workDir);
     const isStale = shipMarker ? (Date.now() - new Date(shipMarker.ts).getTime()) > SHIP_MARKER_TTL_MS : true;
     if (!shipMarker || isStale) {
+      outputs.push(
+        `ADVISORY: no ship session — no fresh .ship-active marker in ~/.rungate/. This Engineer spawn runs without what a ship run's SCOPE adds: the issue's scope, its acceptance criteria, DISCOVERY, and sizing. Put them in the brief yourself, or start a ship run if this work needs its gates.`
+      );
       signalEvents.push({
-        ts: new Date().toISOString(), type: 'agent_spawn',
-        agent: agent.label.toLowerCase(), blocked: true, block_reason: 'no_ship_session',
+        ts: new Date().toISOString(), type: 'agent_spawn_advisory',
+        agent: agent.label.toLowerCase(), blocked: false, advisory_reason: 'no_ship_session',
       });
-      return {
-        action: 'block', agent,
-        blockReason: `Engineer (Marcus) requires an active ship session. No .ship-active marker found in ~/.rungate/. Run Skill('ship') first — ship writes the marker during SCOPE. Direct Engineer spawns bypass SCOPE (templates, ACs, DISCOVERY, sizing) and produce incomplete gate artifacts.`,
-        outputs, signalEvents,
-      };
     }
   }
 
