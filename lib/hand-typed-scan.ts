@@ -271,11 +271,9 @@ function keyName(prop: AstNode): string | null {
   return null;
 }
 
-/** `module.exports`, or `exports.<name>`. */
-const isCommonJsExport = (n: AstNode) =>
-  n.type === "MemberExpression" &&
-  (((n.object as AstNode).type === "Identifier" && (n.object as AstNode).name === "module" && (n.property as AstNode).name === "exports") ||
-    ((n.object as AstNode).type === "Identifier" && (n.object as AstNode).name === "exports"));
+/** `module.exports`. */
+const isModuleExports = (n: AstNode) =>
+  n.type === "MemberExpression" && (n.object as AstNode).type === "Identifier" && (n.object as AstNode).name === "module" && (n.property as AstNode).name === "exports";
 
 /**
  * The object literals a file gives as definitions: what a top-level
@@ -296,7 +294,7 @@ function definitions(tree: AstNode): AstNode[] {
     else if (s.type === "ExpressionStatement") {
       const e = s.expression as AstNode;
       if (e.type === "CallExpression") take(e);
-      else if (e.type === "AssignmentExpression" && isCommonJsExport(e.left as AstNode)) take(e.right as AstNode);
+      else if (e.type === "AssignmentExpression" && isModuleExports(e.left as AstNode)) take(e.right as AstNode);
     }
   }
   return out;
