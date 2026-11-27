@@ -1168,6 +1168,17 @@ describe("#1261 the four suppression classes", () => {
     expect(duplicateCollisions(restated, kept(trustedCorpus(page([filedC])))).map(c => c.id)).toEqual(["42"]);
   });
 
+  // #2906 review round 3, Jason's option 1 (2026-11-27): a planned body
+  // with CRLF line endings is still a planned body, cut at the same heading.
+  test("FG-295: a planned body with CRLF line endings is trusted, and compared on its own row", () => {
+    const row = (criterion: string, outcome: string, files: string[]) => ({ criterion, outcome, files, milestone: null, blockedBy: [], line: 3 });
+    const crlf = (r: ReturnType<typeof row>) => decomposedBody(r, "## Criteria this serves", "docs/adr/ADR-9-plan.md").replace(/\n/g, "\r\n");
+    const filedA = trusted({ number: 51, title: "Gate reads plan rows", ...bot, body: crlf(row("CRC-B5", "the gate reads plan rows", ["lib/issue-filing-gate.ts"])) });
+    expect(kept(trustedCorpus(page([filedA]))), "a CRLF planned body is the plan's own filing").toHaveLength(1);
+    const siblingB = { id: "new", title: "Gate and client agree on authors", body: crlf(row("CRC-B6", "the client and gate agree", ["lib/issue-filing-gate.ts", "lib/github.ts"])) };
+    expect(duplicateCollisions(siblingB, kept(trustedCorpus(page([filedA])))), "the shared template is cut at its heading").toEqual([]);
+  });
+
   test("FG-35: one issue cannot name enough to match everything", () => {
     const stuffed = Array.from({ length: MAX_KEYS_PER_EXISTING_ISSUE + 10 }, (_, i) => `\`symbolNumber${i}\``).join(" ");
     expect(kept(trustedCorpus(page([trusted({ body: stuffed })]))), "over the cap, so dropped whole").toEqual([]);

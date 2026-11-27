@@ -661,7 +661,8 @@ export function isPlannedIssueBody(body: string): boolean {
  * named a file, and a sibling row sharing one file read as a duplicate.
  */
 export function plannedRowText(body: string): string {
-  const lines = body.split("\n");
+  // CRLF too: the heading is matched as a whole line (#2906 review round 3).
+  const lines = body.split(/\r?\n/);
   const at = lines.indexOf(PLANNED_TEMPLATE_HEADING);
   return at < 0 ? body : lines.slice(0, at).join("\n");
 }
