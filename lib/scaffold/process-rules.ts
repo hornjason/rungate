@@ -50,7 +50,8 @@ export const PROCESS_STEPS: readonly ProcessStep[] = [
     step: 2,
     text:
       "Bigger than one issue, or a rule or gate change: an ADR from `docs/adr/TEMPLATE.md`, its criteria in " +
-      "the spec, and `/dry-run` until the repository owner agrees; the owner merges it.",
+      "the spec, and `/dry-run` until the repository owner agrees; the author then sets `status: accepted` " +
+      "in the same pull request, and the owner merges it.",
     names: ["docs/adr/TEMPLATE.md", "/dry-run", "merges it"],
   },
   {
@@ -98,7 +99,9 @@ ${steps}
 
 Steps 3 and 4 are enforced: \`adr-accepted.yml\` places an accepted ADR's plan,
 and \`closing-references\` is the check that refuses a pull request breaking
-step 4. Steps 1 and 2 are yours.
+step 4. It also refuses one whose ADR carries a plan and still says
+\`status: proposed\`, because that plan would never be placed (ADR-030).
+Steps 1 and 2 are otherwise yours.
 `;
 }
 

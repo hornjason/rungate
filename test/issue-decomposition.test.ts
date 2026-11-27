@@ -24,6 +24,7 @@ import {
   decomposedBody,
   parseDecompositionPlan,
   planDecomposition,
+  proposedWithPlan,
 } from "../lib/issue-decomposition";
 import { readSuiteRun } from "../lib/suite-run-reading";
 
@@ -1740,5 +1741,25 @@ describe("#2339: a plan links rows to existing issues, both directions", () => {
     const r = await decompose(plan("| CRC-C2 | an outcome long enough to pass | lib/a.ts | — | — |"), api);
     expect(r.code, r.said).toBe(0);
     expect(asked).toEqual([]);
+  });
+});
+
+// #2921: the predicate the closing-references audit refuses on. The audit's
+// own cases (test/audit-closing-references.test.ts) claim the criterion.
+describe("#2921: an ADR is refused for merge only while it says proposed and carries a plan", () => {
+  const TABLE = "| Criterion | Outcome | Files | Milestone | Blocked by |\n|---|---|---|---|---|\n";
+  const doc = (frontmatter: string, body: string) => `---\n${frontmatter}\n---\n\n# ADR\n\n${body}`;
+
+  test("proposed with a Decomposition table, in any YAML spelling of the status", () => {
+    for (const status of ["proposed", '"proposed"', "'Proposed'", "PROPOSED"]) {
+      expect(proposedWithPlan(doc(`status: ${status}`, TABLE)), status).toBe(true);
+    }
+  });
+
+  test("any other status, no table, or a status only the body states, is not refused", () => {
+    expect(proposedWithPlan(doc("status: accepted", TABLE))).toBe(false);
+    expect(proposedWithPlan(doc("status: superseded", TABLE))).toBe(false);
+    expect(proposedWithPlan(doc("status: proposed", "No plan here."))).toBe(false);
+    expect(proposedWithPlan(`# ADR\n\nstatus: proposed\n\n${TABLE}`), "a body line is not frontmatter").toBe(false);
   });
 });

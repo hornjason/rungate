@@ -816,3 +816,14 @@ export function closedIssueCounts(issue: { state_reason: string | null; author_a
 export function hasDecompositionTable(text: string): boolean {
   return /^\|\s*Criterion\s*\|\s*Outcome\s*\|/m.test(text);
 }
+
+/**
+ * An ADR whose merge is refused (SC-2820, ADR-030 decision 1): it carries a
+ * Decomposition table and still says `status: proposed`. Merged like that,
+ * its plan is never placed, because {@link adrPlacement} places a plan only
+ * when the status changes to `accepted`. Any other status is not refused, so
+ * a superseded ADR that carries a plan can still be edited.
+ */
+export function proposedWithPlan(text: string): boolean {
+  return adrStatus(text) === "proposed" && hasDecompositionTable(text);
+}

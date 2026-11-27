@@ -655,10 +655,12 @@ acceptance test, so it is also the honest answer to *when is the engine done*
       proved-by: test/adr-accepted-workflow.test.ts "SC-2788: a merge-triggered run closes the issues the merged pull requests declare"
       fingerprint: 3e729c9d
       placement: Phase 7
-- [ ] SC-2820: a pull request that changes an ADR carrying a Decomposition table is refused by `closing-references` while that ADR still says `status: proposed`, so the owner's merge is never the step that accepts a plan; an ADR with no Decomposition table, or with any other status, is not refused (Jason, 2026-11-27, ADR-030)
+- [x] SC-2820: a pull request that changes an ADR carrying a Decomposition table is refused by `closing-references` while that ADR still says `status: proposed`, so the owner's merge is never the step that accepts a plan; an ADR with no Decomposition table, or with any other status, is not refused (Jason, 2026-11-27, ADR-030)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       placement: Phase 7
+      proved-by: test/audit-closing-references.test.ts "SC-2820: a pull request carrying a proposed ADR with a plan is refused"
+      fingerprint: 15234959
 - [ ] SC-2822: when `project-state.json` has no `goal`, `work-status` and the status view show the goal from SUCCESS.md's `## The thing` and say that is where it came from, and a project with no stages reads "no stages written" instead of UNMEASURED for the whole plan; rungate's own ladder is read as before (ADR-030)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test

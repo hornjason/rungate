@@ -565,7 +565,12 @@ const UNCLAIMED_RATCHET = 150;
 // project it runs in, a reading of the CLI against a consumer tree that no
 // registered pattern expresses; the SC-2821 describe in test/create-sc.test.ts
 // names it (2026-11-27).
-const CLAIMED_UNBINDABLE = 219;
+// 220: SC-2820 (#2921) ticked by `sync-sc-status --only SC-2820` — a pull
+// request carrying a proposed ADR with a plan is refused by the closing-
+// references audit, a reading of the audit against a checkout that no
+// registered pattern expresses; the SC-2820 describe in
+// test/audit-closing-references.test.ts names it (2026-11-27).
+const CLAIMED_UNBINDABLE = 220;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
