@@ -3123,3 +3123,12 @@ Recorded because each one invalidates a naive reading of the criteria above.
       proved-by: test/review-execution-reading.test.ts "CRC-M19: CRC-M18 is retired with its diff-budget script, and the census half stays"
       fingerprint: d457c8f2
       placement: Phase 5
+- [ ] CRC-B14: A reviewer run that failed before the reviewer started, its step failing with no execution file written, is run once more; a run that started and failed is reported as it is today, and a round is never measured as a pass from fewer runs than planned (ADR-030).
+      needs: test
+      placement: Phase 2
+- [ ] CRC-B15: When a pull request changes a `docs/adr/*.md` file that has a Decomposition table, the AI review job writes `plan-issues --decompose <adr> --json`, the dry run with no `--write`, into the findings directory, and the reviewer's prompt says that file is how the filing tool parsed the table (ADR-030).
+      needs: test
+      placement: Phase 2
+- [ ] CRC-B16: A scaffold run whose config pins a review model other than rungate's default prints a note naming the pin and the default, and saying that removing the key follows the default; the pin itself is kept (ADR-030).
+      needs: test
+      placement: Phase 2
