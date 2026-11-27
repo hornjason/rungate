@@ -16,7 +16,6 @@ const EVALS_DIR = join(ROOT, "evals", "results");
 
 // Map eval case tags to COMP dimensions
 const TAG_TO_COMP: Record<string, string> = {
-  "comp-7": "COMP-7: Use Read tool, not cat/head/tail",
   "comp-9": "COMP-9: Surgical changes only",
   "comp-12": "COMP-12: Read before edit",
   "comp-13": "COMP-13: TDD order (test first)",

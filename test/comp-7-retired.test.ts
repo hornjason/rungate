@@ -21,6 +21,7 @@ import { buildDefaultHooks } from "../lib/scaffold/defaults";
 import { getCriteria, type Role } from "../lib/transcript-checker";
 import {
   detectHillClimbNeeds,
+  hillClimbSectionPreference,
   setComplianceProjectRoot,
   type ComplianceReport,
 } from "../lib/compliance-report";
@@ -118,6 +119,11 @@ describe("#2939: no hill-climb revives COMP-7 from the history file", () => {
     expect(ids).toContain("COMP-6");
     expect(ids).not.toContain(RETIRED_COMP);
     expect(ids).not.toContain(RETIRED_DIRECTIVE);
+  });
+
+  test("and a COMP-7 action handed in by hand has no section to land in", () => {
+    expect(hillClimbSectionPreference("COMP-6")).not.toBeNull();
+    expect(hillClimbSectionPreference(RETIRED_COMP)).toBeNull();
   });
 
   test("under the fallback maps a project with no compliance.json gets", () => {

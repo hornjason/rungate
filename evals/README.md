@@ -33,7 +33,7 @@ claude plugin eval . --runs 1 --ablation none --trust-plugin \
 claude plugin eval . --trust-plugin --allow-tools "Write" "Edit" --no-publish
 
 # Single case
-claude plugin eval . --case marcus-no-cat --runs 1 --ablation none \
+claude plugin eval . --case marcus-reads-before-edit --runs 1 --ablation none \
   --trust-plugin --allow-tools "Write" "Edit" --no-publish
 
 # With Bash (requires no SSH symlinks in ~/.ssh)
@@ -48,7 +48,6 @@ claude plugin eval . --trust-plugin --threshold 0.7 --json results.json \
 
 | Case | COMP | What it tests | Graders |
 |------|------|--------------|---------|
-| marcus-no-cat | COMP-7 | Uses Read tool, not cat/head/tail | tool_used + llm |
 | marcus-reads-before-edit | COMP-12 | Reads file before editing | tool_order + tool_used |
 | serena-analysis-only | — | No code writes, provides analysis | tool_used (min:0/max:0) + llm |
 | aditi-visual-review | — | Reviews a UI component against the brief's accessibility and spacing rules: REVISION_NEEDED with specific CSS fixes, and no source edits | tool_used (min:0/max:0) + llm |

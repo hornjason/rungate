@@ -167,6 +167,10 @@ const COMP_RULES: Record<string, string> = {
   "COMP-4": "Spec-drift hash update",
   "COMP-5": "Governing spec context",
   "COMP-6": "No duplicate reads",
+  // Retired by #2939 and graded no more. Kept because the history file holds
+  // COMP-7 verdicts recorded before that, and a v1 entry carries no rule text
+  // of its own: without this label those trend lines would read as a bare id.
+  "COMP-7": "No cat/head via Bash",
   "COMP-8": "PROJECT-STATE context",
   "COMP-9": "Tool call budget",
   "COMP-10": "Grep:Read ratio",
