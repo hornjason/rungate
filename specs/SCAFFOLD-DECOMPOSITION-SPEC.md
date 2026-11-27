@@ -1426,5 +1426,6 @@ moves both numbers together, which is the same argument that produced
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2817: The scaffold ships the feature-map command and a rule that states the adapter contract
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
-- [ ] SC-2818: Rungate reports what is typed by hand: quoted lists that name registered features, documents nothing generates or checks, and hand-typed totals that disagree with the registry
+- [x] SC-2818: Rungate reports what is typed by hand: quoted lists that name registered features, documents nothing generates or checks, and hand-typed totals that disagree with the registry
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      proved-by: test/hand-typed-scan.test.ts "SC-2818: rungate reports what is typed by hand"
