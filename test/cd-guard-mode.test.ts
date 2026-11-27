@@ -241,9 +241,12 @@ describe("#992 — one decider, and registered where the repo can see it", () =>
     };
     for (const d of ["lib", "hooks", "gates", "scripts"]) walk(join(ROOT, d));
     expect(offenders, `a second definition of isHarnessProject: ${offenders.join(", ")}`).toEqual([]);
-    // And the original caller uses the lifted one rather than having lost it.
-    expect(readFileSync(join(ROOT, "hooks", "BashToolGuard.hook.ts"), "utf-8"))
-      .toContain("from '../lib/harness-project'");
+    // And both callers use the lifted one rather than having lost it. The
+    // original caller, BashToolGuard, was retired by #2939.
+    for (const hook of ["TopLevelCdGuard.hook.ts", "BunTestPathGuard.hook.ts"]) {
+      expect(readFileSync(join(ROOT, "hooks", hook), "utf-8"), hook)
+        .toContain("from '../lib/harness-project'");
+    }
   });
 
   test("AC-10: the hook is DECLARED in the inventory and NOT registered at project scope (#1578)", () => {

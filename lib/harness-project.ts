@@ -1,8 +1,9 @@
 /**
  * "Is this directory inside a rungate-harnessed project?" — one decider.
  *
- * Lifted out of `hooks/BashToolGuard.hook.ts`, where it was a private
- * function, because #992 needs the same question answered by a second hook.
+ * Lifted out of BashToolGuard (retired with COMP-7 by #2939), where it was a
+ * private function, because #992 needs the same question answered by a
+ * second hook. TopLevelCdGuard and BunTestPathGuard are its callers now.
  * A second inline copy would be two deciders for one question, which is this
  * repository's most frequently repeated defect and is named as the thing to
  * avoid in #992's own comments.
@@ -29,7 +30,7 @@
  * into a crash. The question here is "is there a harness here", not "is it
  * valid".
  *
- * Issue: #992. Extracted from #COMP-7's `BashToolGuard`.
+ * Issue: #992.
  */
 
 import { existsSync } from "fs";

@@ -38,7 +38,7 @@ import {
 } from "../lib/compliance-report";
 
 const REINFORCEMENT =
-  "NEVER read a file with cat, head, or tail via Bash — use Read with offset/limit.";
+  "Read each file exactly ONCE. Use offset/limit to get what you need in one pass.";
 
 const BRIEF = `---
 name: discovery
@@ -53,8 +53,8 @@ name: discovery
 
 function action(): HillClimbAction {
   return {
-    compId: "COMP-7",
-    rule: "No cat/head via Bash",
+    compId: "COMP-6",
+    rule: "No duplicate reads",
     reinforcement: REINFORCEMENT,
     consecutiveFails: 3,
     tier: 1,
@@ -136,7 +136,7 @@ describe("hill-climb destination", () => {
       const { briefPath, untrackedDir } = fixture();
       const result = applyHillClimb(briefPath, [action()], { destination, untrackedDir });
       expect(result.applied.length).toBe(1);
-      expect(result.applied[0]).toContain("COMP-7");
+      expect(result.applied[0]).toContain("COMP-6");
       expect(result.applied[0]).toContain(destination);
     }
   });

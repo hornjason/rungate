@@ -47,7 +47,7 @@ import {
 } from "../lib/compliance-report";
 
 const REINFORCEMENT =
-  "NEVER read a file with cat, head, or tail via Bash — use Read with offset/limit.";
+  "Read each file exactly ONCE. Use offset/limit to get what you need in one pass.";
 
 const HEADING = "## Context (READ THIS FIRST)";
 
@@ -66,8 +66,8 @@ ${HEADING}
 
 function action(): HillClimbAction {
   return {
-    compId: "COMP-7",
-    rule: "No cat/head via Bash",
+    compId: "COMP-6",
+    rule: "No duplicate reads",
     reinforcement: REINFORCEMENT,
     consecutiveFails: 3,
     tier: 1,

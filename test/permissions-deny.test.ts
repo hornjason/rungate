@@ -14,7 +14,8 @@ describe("permissions.deny (#45, narrowed in #62)", () => {
 
   test("head is NOT denied by glob — the glob cannot see file operands", () => {
     // "Bash(head *)" matched stdin filters too (`bun test | head -20`).
-    // BashToolGuard + lib/bash-file-read.ts handle head precisely instead.
+    // BashToolGuard handled head precisely until #2939 retired COMP-7, and
+    // nothing refuses a head or tail file read since.
     expect(settings.permissions.deny).not.toContain("Bash(head *)");
   });
 

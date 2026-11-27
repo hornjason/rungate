@@ -167,6 +167,9 @@ const COMP_RULES: Record<string, string> = {
   "COMP-4": "Spec-drift hash update",
   "COMP-5": "Governing spec context",
   "COMP-6": "No duplicate reads",
+  // Retired by #2939 and graded no more. Kept because the history file holds
+  // COMP-7 verdicts recorded before that, and a v1 entry carries no rule text
+  // of its own: without this label those trend lines would read as a bare id.
   "COMP-7": "No cat/head via Bash",
   "COMP-8": "PROJECT-STATE context",
   "COMP-9": "Tool call budget",
@@ -366,7 +369,6 @@ function getDirToComp(): Record<string, string> {
   if (config) return buildDirToCompMap(config);
   return {
     "DIR-L29": "COMP-2",
-    "DIR-L25": "COMP-7",
     "DIR-L31": "COMP-6",
     "DIR-L23": "COMP-6",
   };
@@ -376,7 +378,6 @@ function getReinforcementMap(): Record<string, string> {
   const config = getComplianceConfig();
   if (config) return buildReinforcementMap(config);
   return {
-    "COMP-7": "NEVER read a file with cat, head, or tail via Bash — use Read with offset/limit. Piping output into head/tail as a stdin filter is fine (no file operand).",
     "COMP-12": "Grep BEFORE Read for any file not in Key Files. Find the section, then Read with offset/limit.",
     "COMP-13": "Write the test file BEFORE the implementation file. Tool-call order is mechanically checked.",
     "COMP-6": "Read each file exactly ONCE. Use offset/limit to get what you need in one pass.",
@@ -393,7 +394,6 @@ function getTierPromotions(): Record<string, { tier: 2 | 3; promotion: string }>
   const config = getComplianceConfig();
   if (config) return buildTierPromotionMap(config);
   return {
-    "COMP-7": { tier: 3, promotion: "Deploy BashToolGuard hook" },
     "COMP-12": { tier: 2, promotion: "Add grep-before-read reinforcement" },
     "COMP-13": { tier: 2, promotion: "Add TDD-sequence reinforcement" },
     "COMP-6": { tier: 2, promotion: "Add duplicate-read detection reinforcement" },
@@ -631,9 +631,9 @@ export type HillClimbSection = (typeof HILL_CLIMB_SECTIONS)[number];
  *
  * The primary is the section the rule is ABOUT, which is also what
  * `lib/transcript-checker.ts` records in each criterion's `source` for the
- * four it names: COMP-2 is `marcus.md § Testing Rules`, COMP-9 is
- * `marcus.md § Efficiency Rules`, COMP-6 and COMP-7 are `marcus.md § Never
- * Do`. The rest are classified the same way — a prohibition under `Never Do`,
+ * three it names: COMP-2 is `marcus.md § Testing Rules`, COMP-9 is
+ * `marcus.md § Efficiency Rules`, COMP-6 is `marcus.md § Never Do`. The
+ * rest are classified the same way — a prohibition under `Never Do`,
  * a tool-economy rule under `Efficiency Rules`, a test-ordering rule under
  * `Testing Rules`.
  *
@@ -650,7 +650,6 @@ const COMP_PRIMARY_SECTION: Record<string, HillClimbSection> = {
   "COMP-4": "## Never Do",
   "COMP-5": "## Never Do",
   "COMP-6": "## Never Do",
-  "COMP-7": "## Never Do",
   "COMP-8": "## Never Do",
   "COMP-9": "## Efficiency Rules",
   "COMP-10": "## Efficiency Rules",

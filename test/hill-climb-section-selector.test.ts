@@ -185,7 +185,7 @@ describe("SC-2302: a brief carrying ANY one of the headings accepts every COMP",
     const WITHOUT =
       "# Marcus\n\n## Efficiency Rules\n\n- e\n\n## Testing Rules\n\n- t\n\n## Never Do\n\n- n\n";
     const WITH = `${WITHOUT}\n${HILL_CLIMB_DURABLE_SECTION}\n\n- a project rule.\n`;
-    for (const id of ["COMP-2", "COMP-7", "COMP-9"]) {
+    for (const id of ["COMP-2", "COMP-6", "COMP-9"]) {
       expect(resolveHillClimbSection(id, WITHOUT)).toMatchObject({ kind: "RESOLVED" });
       expect((resolveHillClimbSection(id, WITHOUT) as { heading: string }).heading).not.toBe(
         HILL_CLIMB_DURABLE_SECTION,
@@ -213,7 +213,7 @@ describe("SC-2302: a brief carrying ANY one of the headings accepts every COMP",
     // being fixed, reported correctly.
     for (const [id, heading] of [
       ["COMP-2", "## Testing Rules"],
-      ["COMP-7", "## Never Do"],
+      ["COMP-6", "## Never Do"],
       ["COMP-9", "## Efficiency Rules"],
     ] as const) {
       expect(resolveHillClimbSection(id, ALL_THREE)).toEqual({
@@ -230,17 +230,17 @@ describe("SC-2303: a brief with none of the three still refuses — #646's state
   const NONE = "# Quinn\n\n## Core Rule\n\n- Test it.\n\n## Report Format\n\n- Say what ran.\n";
 
   test("nothing is applied and the outcome is NO_SECTION", () => {
-    const { applied, kinds, sentences } = runOne(NONE, "COMP-7");
+    const { applied, kinds, sentences } = runOne(NONE, "COMP-6");
     expect(applied).toEqual([]);
     expect(kinds).toEqual(["NO_SECTION"]);
-    expect(sentences).toEqual(["COMP-7: no suitable section found in brief"]);
+    expect(sentences).toEqual(["COMP-6: no suitable section found in brief"]);
   });
 
   test("the brief on disk is unchanged, not merely unreported", () => {
     // A refusal that still wrote something would read identically through
     // the return value. `COMMIT` is the destination that writes in place.
     writeFileSync(briefPath, NONE);
-    const r = applyHillClimb(briefPath, [action("COMP-7")], { destination: "COMMIT" });
+    const r = applyHillClimb(briefPath, [action("COMP-6")], { destination: "COMMIT" });
     expect(r.applied).toEqual([]);
     expect(readFileSync(briefPath, "utf-8")).toBe(NONE);
     expect(r.write.path).toBeNull();
@@ -260,7 +260,7 @@ describe("SC-2304: an unmapped COMP id is refused BY NAME, not as a missing head
     expect(hillClimbSkipSentence(unmapped as never)).toContain("COMP-9001");
     expect(hillClimbSkipSentence(unmapped as never)).toContain("no destination heading declared");
 
-    const noHeadings = resolveHillClimbSection("COMP-7", "# Marcus\n\n## House Style\n\n- x\n");
+    const noHeadings = resolveHillClimbSection("COMP-6", "# Marcus\n\n## House Style\n\n- x\n");
     expect(noHeadings.kind).toBe("NO_SECTION");
   });
 
@@ -333,7 +333,7 @@ describe("SC-2305: the reinforcement lands INSIDE the resolved section", () => {
   test("a resolved section that is LAST still takes it inside itself", () => {
     const BRIEF = "# Marcus\n\n## Workflow\n\n- w\n\n## Never Do\n\n- n\n";
     writeFileSync(briefPath, BRIEF);
-    applyHillClimb(briefPath, [action("COMP-7")], { destination: "COMMIT" });
+    applyHillClimb(briefPath, [action("COMP-6")], { destination: "COMMIT" });
     const after = readFileSync(briefPath, "utf-8");
     expect(after.indexOf(REINFORCEMENT_PREFIX)).toBeGreaterThan(after.indexOf("## Never Do"));
     // The only heading after the insertion point is none — so the claim
@@ -347,7 +347,7 @@ describe("SC-2305: the reinforcement lands INSIDE the resolved section", () => {
     // `### Never Do`, and the insertion arithmetic then measures from an
     // index one past where the line starts.
     const BRIEF = "# Marcus\n\n## Efficiency Rules\n\n### Never Do\n\n- n\n";
-    const r = resolveHillClimbSection("COMP-7", BRIEF);
+    const r = resolveHillClimbSection("COMP-6", BRIEF);
     expect(r).toMatchObject({ kind: "RESOLVED", heading: "## Efficiency Rules" });
     expect((r as { index: number }).index).toBe(BRIEF.indexOf("## Efficiency Rules"));
   });

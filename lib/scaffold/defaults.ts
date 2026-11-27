@@ -153,16 +153,6 @@ export function buildDefaultRoles(): Record<string, Record<string, unknown>> {
 export function buildDefaultHooks(): HookRegistration[] {
   return [
     {
-      name: "BashToolGuard",
-      hookFor: "PreToolUse",
-      command: "bun ${RUNGATE_HOOKS_DIR}/BashToolGuard.hook.ts",
-      enabled: true,
-      deployToConsumers: true,
-      scope: "user",
-      matcher: "Bash",
-      description: "Blocks cat/head/tail file reading — agents must use the Read tool",
-    },
-    {
       name: "TestSuiteGuard",
       hookFor: "PreToolUse",
       command: "bun ${RUNGATE_HOOKS_DIR}/TestSuiteGuard.hook.ts",

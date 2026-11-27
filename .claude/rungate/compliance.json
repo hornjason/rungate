@@ -20,16 +20,6 @@
       },
       "threshold": { "consecutive": 3, "promote": 5 }
     },
-    "COMP-7": {
-      "description": "No cat/head/tail via Bash",
-      "directives": ["DIR-L25"],
-      "reinforcement": "NEVER use cat, head, or tail via Bash — including piped (grep | head). Use Read with offset/limit.",
-      "tiers": {
-        "1": { "action": "reinforce-brief" },
-        "3": { "action": "deploy-hook", "hook": "BashToolGuard" }
-      },
-      "threshold": { "consecutive": 3, "promote": 5 }
-    },
     "COMP-9": {
       "description": "Tool call budget limit",
       "directives": [],

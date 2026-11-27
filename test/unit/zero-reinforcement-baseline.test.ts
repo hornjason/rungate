@@ -104,7 +104,7 @@ describe("SC-2116 / SC-2302: one heading in a brief is enough, for every COMP", 
     // insertion point the whole time. 136 of 193 recorded actions, measured
     // with `scripts/replay-hill-climb-history.ts`; 1 of 193 after the fix,
     // and that one is quinn, whose brief carries none of the three.
-    const { applied, kinds } = runOne(TESTING_ONLY, "COMP-7");
+    const { applied, kinds } = runOne(TESTING_ONLY, "COMP-6");
     expect(applied).toHaveLength(1);
     expect(kinds).toEqual([]);
   });
@@ -115,7 +115,7 @@ describe("SC-2116 / SC-2302: one heading in a brief is enough, for every COMP", 
     // ONE thing — the heading, renamed to something outside the three — has
     // to flip it back to a refusal, or the pair measures nothing (#585).
     const NO_HEADINGS = `# Marcus\n\n## House Style\n\n- Write the test first.\n`;
-    const { applied, kinds } = runOne(NO_HEADINGS, "COMP-7");
+    const { applied, kinds } = runOne(NO_HEADINGS, "COMP-6");
     expect(applied).toEqual([]);
     expect(kinds).toEqual(["NO_SECTION"]);
   });
@@ -131,7 +131,7 @@ describe("SC-2116: an N/A resets the consecutive-fail counter", () => {
    * case would stay green. `detectHillClimbNeeds` is the exported binding
    * that consumes it, so the claim is asked of the thing that does the work.
    */
-  const detectsFor = (lastN: string[], compId = "COMP-7"): boolean => {
+  const detectsFor = (lastN: string[], compId = "COMP-6"): boolean => {
     const report = {
       role: ROLE,
       compTrends: [{ compId, rule: `${compId}: rule`, lastN, passRate: 0, direction: "stable" }],

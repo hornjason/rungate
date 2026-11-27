@@ -195,7 +195,7 @@ describe("compliance-report", () => {
         belowThreshold: true,
         trend: { pcts: [62], direction: "stable" },
         compTrends: [
-          { compId: "COMP-7", rule: "No cat/head via Bash", lastN: ["IGNORED", "IGNORED", "IGNORED"], passRate: 0, direction: "stable" },
+          { compId: "COMP-6", rule: "No duplicate reads", lastN: ["IGNORED", "IGNORED", "IGNORED"], passRate: 0, direction: "stable" },
           { compId: "COMP-13", rule: "TDD ordering", lastN: ["FOLLOWED", "FOLLOWED", "FOLLOWED"], passRate: 1, direction: "stable" },
           { compId: "COMP-12", rule: "Grep before Read", lastN: ["IGNORED", "FOLLOWED", "IGNORED"], passRate: 0.33, direction: "stable" },
         ],
@@ -203,7 +203,7 @@ describe("compliance-report", () => {
       };
       const actions = detectHillClimbNeeds(report);
       expect(actions.length).toBe(1);
-      expect(actions[0].compId).toBe("COMP-7");
+      expect(actions[0].compId).toBe("COMP-6");
       expect(actions[0].consecutiveFails).toBe(3);
     });
 
@@ -241,9 +241,9 @@ name: marcus
 1. Write test first
 `);
       const actions: HillClimbAction[] = [{
-        compId: "COMP-7",
-        rule: "No cat/head via Bash",
-        reinforcement: "NEVER use cat, head, or tail via Bash — including piped (grep | head). Use Read with offset/limit.",
+        compId: "COMP-6",
+        rule: "No duplicate reads",
+        reinforcement: "Read each file exactly ONCE. Use offset/limit to get what you need in one pass.",
         consecutiveFails: 3,
         tier: 1,
       }];
@@ -255,12 +255,12 @@ name: marcus
       // shipped loop's choice, which #648 moved.
       const result = applyHillClimb(briefPath, actions, { destination: "COMMIT" });
       expect(result.applied.length).toBe(1);
-      expect(result.applied[0]).toContain("COMP-7");
+      expect(result.applied[0]).toContain("COMP-6");
 
       expect(result.write).toEqual({ destination: "COMMIT", path: briefPath });
       const updated = readFileSync(result.write.path as string, "utf-8");
       expect(updated).toContain("REINFORCED (auto)");
-      expect(updated).toContain("NEVER use cat");
+      expect(updated).toContain("Read each file exactly ONCE");
     });
 
     test("applyHillClimb skips if reinforcement already present", () => {
@@ -270,15 +270,15 @@ name: marcus
 ---
 
 ## Efficiency Rules
-- NEVER use cat, head, or tail via Bash — including piped (grep | head). Use Read with offset/limit.
+- Read each file exactly ONCE. Use offset/limit to get what you need in one pass.
 
 ## Workflow
 1. Write test first
 `);
       const actions: HillClimbAction[] = [{
-        compId: "COMP-7",
-        rule: "No cat/head via Bash",
-        reinforcement: "NEVER use cat, head, or tail via Bash — including piped (grep | head). Use Read with offset/limit.",
+        compId: "COMP-6",
+        rule: "No duplicate reads",
+        reinforcement: "Read each file exactly ONCE. Use offset/limit to get what you need in one pass.",
         consecutiveFails: 4,
         tier: 1,
       }];
@@ -312,25 +312,6 @@ name: marcus
       expect(actions[0].consecutiveFails).toBe(6);
       expect(actions[0].tier).toBe(3);
       expect(actions[0].promotion).toContain("test-run limiter");
-    });
-
-    test("detectHillClimbNeeds maps DIR-L25 to COMP-7 for escalation", () => {
-      const report: ComplianceReport = {
-        role: "discovery",
-        issue: "#100",
-        current: { followed: 3, total: 6, pct: 50 },
-        threshold: 70,
-        belowThreshold: true,
-        trend: { pcts: [50], direction: "stable" },
-        compTrends: [
-          { compId: "DIR-L25", rule: "cat via Bash", lastN: ["VIOLATED", "VIOLATED", "VIOLATED", "VIOLATED", "VIOLATED"], passRate: 0, direction: "stable" },
-        ],
-        alerts: [],
-      };
-      const actions = detectHillClimbNeeds(report);
-      expect(actions.length).toBe(1);
-      expect(actions[0].compId).toBe("COMP-7");
-      expect(actions[0].tier).toBe(3);
     });
 
     test("detectHillClimbNeeds reads from compliance.json when available", () => {

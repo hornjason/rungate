@@ -1,15 +1,5 @@
 [
   {
-    "name": "BashToolGuard",
-    "hookFor": "PreToolUse",
-    "command": "bun ${RUNGATE_HOOKS_DIR}/BashToolGuard.hook.ts",
-    "enabled": true,
-    "deployToConsumers": true,
-    "scope": "user",
-    "matcher": "Bash",
-    "description": "Blocks cat/head/tail file reading — enforces COMP-7 mechanically (Tier 3)"
-  },
-  {
     "name": "TopLevelCdGuard",
     "hookFor": "PreToolUse",
     "command": "bun ${RUNGATE_HOOKS_DIR}/TopLevelCdGuard.hook.ts",
