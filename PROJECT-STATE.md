@@ -2,11 +2,11 @@
 
 **Current phase: Engine — a spec becomes a readable board, with nothing hand-run (ADR-009) — IN PROGRESS**
 
-**Session 107 (2026-11-26)** — ADR-027 is accepted and its plan placed; its first row, #2863, is in review. 0.8.49 shipped. The session record reads one zone through one reader, and an AI-review finding with no reply now refuses. Waiting on Jason: ADR-028, the behavioural tag on SC-2811 and ADR-028's criteria, and the reporails bump.
+**Session 108 (2026-11-27)** — ADR-028's manifest and code-map rows are merged, and the typed-by-hand scan is approved to merge. Jason decided the six PRs parked at round 3: three merge as they are, three after a named small fix. Waiting on Jason: ADR-029 (#2900), what "checked" means in #2914, and the scaffold profile record (#2860).
 
-Suite: 27 PRs merged (#2804 to #2852); one release, 0.8.49.
-Issues opened: #2805, #2806, #2809, #2813, #2816, #2817, #2818, #2820, #2822, #2824, #2825, #2828, #2832, #2833, #2834, #2835, #2837, #2838, #2841, #2842, #2845, #2848, #2849, #2853, #2855, #2856, #2858, #2859, #2860, #2861, #2862
-Issues closed: #1162, #1186, #1290, #1455, #2778, #2781, #2785, #2792, #2797, #2800, #2802, #2805, #2809, #2813, #2816, #2817, #2818, #2820, #2824, #2825, #2828, #2832, #2833, #2834, #2835, #2837, #2841, #2842, #2845, #2848, #2853
+Suite: 18 PRs merged (#2857 to #2911); no release.
+Issues opened: #2865, #2867, #2869, #2871, #2873, #2875, #2877, #2878, #2879, #2881, #2882, #2883, #2888, #2889, #2890, #2891, #2892, #2893, #2894, #2895, #2896, #2897, #2898, #2901, #2903, #2905, #2908, #2912, #2914
+Issues closed: #2724, #2838, #2849, #2856, #2859, #2862, #2865, #2867, #2869, #2875, #2878, #2879, #2883, #2888, #2889, #2896, #2897, #2898, #2903
 
 Read this before anything else. The suite is green under a CLEAN ENVIRONMENT, which is a stronger claim than the one this file made yesterday — run `bun scripts/test-clean-env.ts`, not `bun test`, before believing any gate. Plain `bun test` passes on this machine for reasons that have nothing to do with the code.
 
@@ -100,6 +100,16 @@ Suite: 25/25 SCs done.
 
 ---
 
+**Session 2026-11-27 session 108 (ADR-028's manifest and code-map rows land; six PRs parked at round 3 are decided; ADR-029 waits on Jason):**
+- MERGED: 18 PRs since session 107 (#2857 to #2911), the last of them (#2907) on 2026-11-27. No release.
+- ADR-028 IS ACCEPTED AND ITS FIRST ROWS ARE IN: Jason merged ADR-028 (#2857) and #2880 placed its plan. The feature-manifest schema and validator (#2910, SC-2812) and a code map that reads every router and every page (#2911, SC-2813) are merged. The typed-by-hand scan (#2913, SC-2818) is approved to merge. The rows left are the proof chain (#2890), the stale-manifest check (#2893) and the feature-map command.
+- ADR-027'S PLAN IS DONE: the write guard is an accident guard cut under 2,000 lines (#2866, closing #2859), and it reads cp -t, a wrapper flag that takes a word, and unlisted wrappers (#2870).
+- ONE PRESENCE DECIDER: one decider answers "is it there?" for both surfaces (#2887), and its answer is opaque, so a hand-read is a compile error (#2909). An unreadable config is named, never read as absent (#2885), and a missing file is told apart from one that cannot be read (#2876).
+- DRIFT DETECTION READS PATHS BY RULE: a path is read only from its start (#2884), and one token classifier is tested against a table of 46 token rules (#2907). Its leftovers are in #2908.
+- REVIEW AND CI: findings that share a file and line post as one thread (#2874); a failed durations upload no longer fails the test job (#2904); SC-2811 and SC-2812 to SC-2818 lost their (behavioral) tag on Jason's ruling, and SC-2811 is ticked from its tests (#2902).
+- PARKED AND DECIDED: six PRs stopped at review round 3 under rule 5. On 2026-11-27 Jason chose to merge #2907, #2911 and #2913 as they are (leftovers in #2908, #2912 and #2914), and the named small fix, then merge, for #2906, #2899 and #2915.
+- WAITING ON JASON: merge ADR-029 (#2900, the harness ship skill renamed ship-issue); what "checked by a test" means for the typed-by-hand scan (#2914); where the scaffold records its profile (#2860).
+
 **Session 2026-11-26 session 107 (ADR-027 is accepted and its first row is in review; 0.8.49 ships; the session record has one zone and one reader; an AI-review finding with no reply now refuses):**
 - MERGED: 27 PRs since session 106 (#2804 to #2852), the last of them (#2852) on 2026-11-26. One release: 0.8.49 (#2850, closing #2848).
 - ADR-027 IS ACCEPTED: the bash write guard is an accident guard, not a boundary. Jason merged it as proposed in #2843, and #2854 set it accepted so the merge placed its plan: #2858 (drop program-body reading and the interpreter scratch exemption) and #2859 (cut the module to the size SC-2810 states), the second blocked by the first. #2858's pull request, #2863, deletes the body readers and lib/interpreter-calls.ts; over 110,795 real commands it refuses 2 more than main and allows none main refuses. It reached review round 4 with only advisory findings, and it does not tick SC-2811 (see below).
@@ -119,12 +129,4 @@ Suite: 25/25 SCs done.
 - A CORRECTION: session 105 was dated 2026-11-25, the UTC day, while it was written on the New York evening of 2026-11-24. The currency test compares days in America/New_York, not UTC, so a session dated ahead hides a day of merges. Its date is corrected here, and #2785 makes the writer stamp in that zone and refuses a session dated after its stamp.
 - WAITING ON JASON: #2756 (#2731), the write guard's callee identity, stopped at review round 4 under rule 5 and needs his waiver and a hand merge. #2778 needs a criterion, or a statement that it serves none; it is the last open issue in Engine Phase 7.
 - OPEN: #2798 (#2792, the settings helper, review round 2) and #2785 (one zone for the session record). #2797 (milestone wording and the converter's one-column table) is built. Filed: #2800 (a wording guard), #2801 (session lists checked against git), #2802 (the hook census and quoted assignments).
-
-**Session 2026-11-24 session 105 (ADR-026 is accepted and its first row ships; the forge probe reads all six behaviours live; the filing guards read commands with a bash grammar):**
-- MERGED: 14 PRs since session 104 (#2729, #2735, #2740, #2742, #2744 to #2746, #2748, #2750, #2753 to #2755, #2768, #2777), the last of them (#2777) on 2026-11-24. One release: 0.8.47 (#2748).
-- ADR-026 IS ACCEPTED AND ITS FIRST ROW SHIPS: Jason accepted ADR-026 (#2755, closing #2488). A criterion's phase is a `placement:` line beneath it, and the phase list is printed on demand, never stored. Its four rows were filed into Engine Phase 7 as #2764 to #2767. Row 1 shipped: placement is read from the line beneath each criterion through the one parser every reader uses (#2777, closing #2764), and SC-2806 ticked. Row 3, the printed view and the table converter, is open as #2782 (#2766), and its dry run converts both placed specs with nothing refused. Row 2, promotion writing a placement line (#2765), is built and waits for #2782, because both bank the same ratchet.
-- THE FORGE PROBE READS ALL SIX BEHAVIOURS LIVE: the forge behaviours our tools rest on are probed live, and the tree is held to their inventory (#2750, closing #1910). The two that need a throwaway pull request are probed too (#2768, closing #2749), and SC-2765 ticked. The arm-time row tells arm-time from fire-time with a stale pin GitHub refuses ('expected head oid does not match the current head oid'). Whether the merge compares the pin again when it fires is not observed, and the row says so.
-- THE FILING GUARDS READ COMMANDS WITH A BASH GRAMMAR (#2735, #2746), released as 0.8.47. ship.js's shellQuote copy goes to the launch bundle, and a test fails if ship.js carries an inlined or mirrored block (#2742, #2744 and #2745, closing #2737, #2734 and #2738). A rejected evidence command is recorded on the AC (#2740). AI review out-of-turns messages name ci.reviewDepth (#2729). The aditi and discovery briefs have eval cases (#2753, #2754).
-- WAITING ON JASON: #2756 (#2731, #2705), the write guard's callee identity, stopped at review round 4 under rule 5. It replaces #2726, which took the same issue to round 4 first and was closed unmerged on 2026-11-24. It refuses everything main refuses and 75 of its 79 witness rows besides; the redesign the reviewers asked for is #2772. It needs his waiver and a hand merge. #2778, filed by the DDB consumer (prompt-audit does not read the user-level ~/.claude files), needs a criterion or a declared none.
-- OPEN: #2780 (#2779, the reporting-upstream example path) and #2782 (#2766). Filed: #2757, #2772, #2781.
 
