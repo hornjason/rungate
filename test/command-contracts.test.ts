@@ -136,7 +136,7 @@ describe("the commands #1746 creates are executable, not prose", () => {
   /**
    * The one binding that decides whether a command file is safe to run. The
    * population is every command on disk, not the two this issue names —
-   * `ship-issue.md` had the same defect and nobody reported it, and a sweep
+   * `ship-issue.md`, since retired (#2931), had the same defect and nobody reported it, and a sweep
    * drawn around the members somebody named is still a patch.
    */
   function blocksTakingArguments(dir: string): string[] {
@@ -148,6 +148,14 @@ describe("the commands #1746 creates are executable, not prose", () => {
     }
     return hits;
   }
+
+  // #2931 (ADR-029 decision 6): the harness ship skill is named ship-issue, so
+  // a project command of the same name is the collision the rename removes.
+  test("#2931: no command of rungate's own answers to /ship-issue", () => {
+    const names = readdirSync(COMMANDS).filter(f => f.endsWith(".md")).map(f => f.replace(/\.md$/, ""));
+    expect(names.length, "no command files found, so this case measured nothing").toBeGreaterThan(0);
+    expect(names).not.toContain("ship-issue");
+  });
 
   test("no executable block takes an argument, and the check that says so can fail", () => {
     expect(
