@@ -161,10 +161,10 @@ export const SHIP_LAUNCH_SCRIPT = "workflows/ship.run.js";
  * into two renderers. The `"harness"` arm is byte-identical to what the
  * generator emitted before #911 except for the launch path #2288 changed and
  * the skill's new name, with a line for a machine without it, from #2930
- * (ADR-029) —
- * `test/ship-mode.test.ts` asserts that
- * against the file in this repository rather than against a copy of the
- * string, so a reformat here is caught.
+ * (ADR-029). `test/ship-mode.test.ts` pins it to that pre-#911 body by the
+ * body's recorded sha, applying only those changes, so a reformat here is
+ * caught. This repository's own rule file is compared with whichever mode
+ * it declares, which is direct today.
  */
 export function shipWorkflowRule(policy: ShipPolicy): string {
   if (policy.mode === "harness") {
@@ -228,7 +228,8 @@ and the reason above are the answer.
 ## This is temporary, and reversible in one line
 
 Set \`ship.mode\` back to \`"harness"\` in \`${CONFIG_PATH}\` and re-scaffold.
-Nothing about the harness has been removed — \`Skill("ship-issue")\` and
-\`workflows/ship.js\` are unchanged and still work.
+Nothing about the harness has been removed: \`workflows/ship.js\` is unchanged
+and still works, and \`Skill("ship-issue")\` launches it wherever that skill is
+installed.
 `;
 }

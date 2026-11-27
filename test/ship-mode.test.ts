@@ -481,6 +481,13 @@ describe("#2930: the generated ship rule names the ship-issue skill, and says wh
     expect(direct).not.toMatch(OLD_CALL);
   });
 
+  // Review round 1 of #2937: until ADR-029 step 1 the skill is installed on
+  // one machine, so the direct rule must not say it works everywhere.
+  test("the direct rule says the skill launches the workflow where it is installed, not that it works everywhere", () => {
+    expect(direct).toContain("wherever that skill is");
+    expect(direct).not.toMatch(/Skill\("ship-issue"\)`? and\s+`?workflows\/ship\.js`? are unchanged and still work/);
+  });
+
   test("the minimal profile's reason for leaving the rule out names the ship-issue skill", () => {
     const reason = RULES_NOT_MINIMAL.get("ship-workflow.md");
     expect(reason).toContain('Skill("ship-issue")');
