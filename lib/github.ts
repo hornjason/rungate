@@ -498,6 +498,9 @@ export interface OpenIssue {
    * caller that has something to lose.
    */
   authorAssociation: string;
+  /** The author's login and account type (`User`, `Bot`), verbatim; absent when the API gave none (#2901). */
+  authorLogin?: string;
+  authorType?: string;
 }
 
 /**
@@ -521,6 +524,22 @@ export const TRUSTED_ASSOCIATIONS: ReadonlySet<string> = new Set([
   "MEMBER",
   "COLLABORATOR",
 ]);
+
+/**
+ * The account a workflow in THIS repository writes as with its own token,
+ * with association `NONE` (#2901). A fork's pull-request run gets a
+ * read-only token and cannot open an issue as it.
+ */
+export const WORKFLOW_BOT_LOGIN = "github-actions[bot]";
+
+/**
+ * Whether this repository's workflow bot opened the issue: login and account
+ * type, both. Who wrote the issue is not what wrote its text, so this alone
+ * trusts nothing — `trustedAuthor` in `lib/issue-filing-gate.ts` decides.
+ */
+export function workflowBotAuthored(issue: Pick<OpenIssue, "authorLogin" | "authorType">): boolean {
+  return issue.authorType === "Bot" && issue.authorLogin === WORKFLOW_BOT_LOGIN;
+}
 
 /**
  * Open issues, newest first, **pull requests excluded** (#1261).
@@ -630,6 +649,8 @@ export async function listOpenIssues(
       // membership test in `TRUSTED_ASSOCIATIONS`, which is the reading a
       // caller should get when GitHub did not say.
       authorAssociation: typeof row.author_association === "string" ? row.author_association : "",
+      authorLogin: typeof row.user?.login === "string" ? row.user.login : undefined,
+      authorType: typeof row.user?.type === "string" ? row.user.type : undefined,
     });
   }
   // `>=` and not `>`: a full page is the only observation available, and the

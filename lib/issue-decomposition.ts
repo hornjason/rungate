@@ -642,6 +642,31 @@ export function planDecomposition(
  */
 export const PLANNED_ISSUE_FOOTER = "Created by `rungate plan-issues --decompose ";
 
+/**
+ * The heading of the section `decomposedBody` writes the same way for every
+ * row. Everything from it down is template, the footer included.
+ */
+const PLANNED_TEMPLATE_HEADING = "## How we will know";
+
+/** Whether `decomposedBody` wrote a body: a line starts with its footer. */
+export function isPlannedIssueBody(body: string): boolean {
+  return body.split("\n").some(line => line.startsWith(PLANNED_ISSUE_FOOTER));
+}
+
+/**
+ * What a planned issue's own row supplied: its body above the template
+ * section every row shares (#2906 review). That section names
+ * `scripts/sync-sc-status.ts`, `.claude/rules/claiming-sc-coverage.md` and
+ * the plan's path, so two rows of one plan shared three keys before either
+ * named a file, and a sibling row sharing one file read as a duplicate.
+ */
+export function plannedRowText(body: string): string {
+  // CRLF too: the heading is matched as a whole line (#2906 review round 3).
+  const lines = body.split(/\r?\n/);
+  const at = lines.indexOf(PLANNED_TEMPLATE_HEADING);
+  return at < 0 ? body : lines.slice(0, at).join("\n");
+}
+
 export function decomposedBody(
   row: DecompositionRow,
   criteriaHeading: string,
@@ -666,7 +691,7 @@ export function decomposedBody(
     ``,
     ...row.files.map(f => `- \`${f}\``),
     ``,
-    `## How we will know`,
+    PLANNED_TEMPLATE_HEADING,
     ``,
     `A test names \`${row.criterion}\` in a declaring position, and`,
     `\`bun scripts/sync-sc-status.ts\` ticks the criterion from that claim.`,

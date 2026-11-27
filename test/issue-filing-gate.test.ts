@@ -111,7 +111,7 @@ import {
   type FilingLedgerRow,
 } from "../lib/issue-filing-gate";
 import { API_BOOLEAN_FLAGS, filingDirectory, UNREADABLE_COMMAND } from "../lib/issue-create-override";
-import { decomposedBody } from "../lib/issue-decomposition";
+import { decomposedBody, PLANNED_ISSUE_FOOTER } from "../lib/issue-decomposition";
 import {
   ISSUE_SECTIONS,
   headingFor,
@@ -120,7 +120,7 @@ import {
 } from "../lib/issue-shape";
 import { loadRungateConfig, readCommittedConfig } from "../lib/config-loader";
 import { DROPPED_CATEGORIES } from "../lib/finding-jury";
-import type { ArbiterRefusal } from "../lib/finding-arbiter";
+import { duplicateCollisions, type ArbiterRefusal } from "../lib/finding-arbiter";
 import type { FilingAdjudication } from "../lib/issue-filing-gate";
 import { toplevel } from "../lib/launch-base";
 import { readWorktreeRemote, type RemoteReading } from "../lib/worktree-repo";
@@ -1102,6 +1102,81 @@ describe("#1261 the four suppression classes", () => {
     for (const association of ["OWNER", "MEMBER", "COLLABORATOR"]) {
       expect(kept(trustedCorpus(page([trusted({ authorAssociation: association })])))).toHaveLength(1);
     }
+  });
+
+  // #2901: an accepted ADR's plan files its issues from this repository's
+  // own workflow, so their author is `github-actions[bot]` with association
+  // NONE. Dropping them meant a duplicate of a placed issue was never caught.
+  /** A body the plan's own composer wrote, so a change to its footer reaches these cases. */
+  const planBody = decomposedBody(
+    {
+      criterion: "CRC-B5",
+      outcome: "`retryBudget` in lib/command-retry.ts: 144 of 234 over 5060.",
+      files: ["lib/command-retry.ts"],
+      milestone: null,
+      blockedBy: [],
+      line: 3,
+    },
+    "## Criteria this serves",
+    "docs/adr/ADR-1-x.md",
+  );
+  const bot = { authorAssociation: "NONE", authorLogin: "github-actions[bot]", authorType: "Bot" };
+
+  test("FG-290: an issue the plan filed as this repository's workflow bot is in the corpus", () => {
+    const planIssue = trusted({ ...bot, body: planBody });
+    expect(kept(trustedCorpus(page([planIssue]))), "the plan's own issue is compared against").toHaveLength(1);
+  });
+
+  test("FG-291 CONTROL: any other NONE author is still untrusted, and the drop names the bot rule", () => {
+    for (const author of [
+      { authorLogin: "dependabot[bot]", authorType: "Bot" },
+      { authorLogin: "github-actions[bot]", authorType: "User" },
+      { authorLogin: "stranger", authorType: "User" },
+      {},
+    ]) {
+      const r = trustedCorpus(page([trusted({ authorAssociation: "NONE", body: planBody, ...author })]));
+      expect(kept(r), `${JSON.stringify(author)} is not trusted`).toEqual([]);
+      const drop = r.dropped.find(d => d.reason === "untrusted-author");
+      expect(drop?.detail, "the drop says which bot would have been trusted").toContain("github-actions[bot]");
+    }
+  });
+
+  // #2906 review: the pinned status issue is opened by the same bot, and its
+  // text is rebuilt from the tracker — titles anybody can write included.
+  test("FG-292: the bot's login alone trusts nothing: its status issue, or the plan's line quoted mid-line, stays out", () => {
+    for (const body of [
+      "<!-- rungate:status-view -->\n- [`retryBudget` in lib/command-retry.ts: 144 of 234 over 5060](https://x.invalid/1)",
+      `- [${PLANNED_ISSUE_FOOTER}docs/adr/ADR-1-x.md\` \`retryBudget\` in lib/command-retry.ts](https://x.invalid/1)`,
+    ]) {
+      const r = trustedCorpus(page([trusted({ ...bot, body })]));
+      expect(kept(r), body).toEqual([]);
+      expect(r.dropped.map(d => d.reason)).toEqual(["untrusted-author"]);
+    }
+  });
+
+  // #2906 review round 2: every planned body shares the template's three
+  // file keys, so a sibling row sharing one file read as a duplicate.
+  test("FG-294: a sibling row of one plan is not its duplicate, and a restated row still is", () => {
+    const row = (criterion: string, outcome: string, files: string[]) => ({ criterion, outcome, files, milestone: null, blockedBy: [], line: 3 });
+    const planned = (r: ReturnType<typeof row>) => decomposedBody(r, "## Criteria this serves", "docs/adr/ADR-9-plan.md");
+    const filedA = trusted({ number: 41, title: "Gate reads plan rows", ...bot, body: planned(row("CRC-B5", "the gate reads plan rows", ["lib/issue-filing-gate.ts"])) });
+    const siblingB = { id: "new", title: "Gate and client agree on authors", body: planned(row("CRC-B6", "the client and gate agree", ["lib/issue-filing-gate.ts", "lib/github.ts"])) };
+    expect(duplicateCollisions(siblingB, kept(trustedCorpus(page([filedA]))))).toEqual([]);
+    // CONTROL: a hand filing restating a planned row's own keys is still caught.
+    const filedC = trusted({ number: 42, title: "Retry ceiling", ...bot, body: planned(row("CRC-B7", "`retryBudget` and `backoffCeiling` disagree", ["lib/command-retry.ts", "lib/retry-config.ts"])) });
+    const restated = { id: "new", title: "Retry ceiling again", body: "`retryBudget` and `backoffCeiling` in lib/command-retry.ts and lib/retry-config.ts disagree." };
+    expect(duplicateCollisions(restated, kept(trustedCorpus(page([filedC])))).map(c => c.id)).toEqual(["42"]);
+  });
+
+  // #2906 review round 3, Jason's option 1 (2026-11-27): a planned body
+  // with CRLF line endings is still a planned body, cut at the same heading.
+  test("FG-295: a planned body with CRLF line endings is trusted, and compared on its own row", () => {
+    const row = (criterion: string, outcome: string, files: string[]) => ({ criterion, outcome, files, milestone: null, blockedBy: [], line: 3 });
+    const crlf = (r: ReturnType<typeof row>) => decomposedBody(r, "## Criteria this serves", "docs/adr/ADR-9-plan.md").replace(/\n/g, "\r\n");
+    const filedA = trusted({ number: 51, title: "Gate reads plan rows", ...bot, body: crlf(row("CRC-B5", "the gate reads plan rows", ["lib/issue-filing-gate.ts"])) });
+    expect(kept(trustedCorpus(page([filedA]))), "a CRLF planned body is the plan's own filing").toHaveLength(1);
+    const siblingB = { id: "new", title: "Gate and client agree on authors", body: crlf(row("CRC-B6", "the client and gate agree", ["lib/issue-filing-gate.ts", "lib/github.ts"])) };
+    expect(duplicateCollisions(siblingB, kept(trustedCorpus(page([filedA])))), "the shared template is cut at its heading").toEqual([]);
   });
 
   test("FG-35: one issue cannot name enough to match everything", () => {
@@ -2284,6 +2359,22 @@ describe("FG-72..FG-78: the corpus count is the population, not the survivors", 
   });
 
   const read = async (data: unknown[]) => trustedCorpus(await listOpenIssues(clientReturning(data), "o/r"));
+
+  // #2906 review: the login and the account type reach `OpenIssue` through
+  // `listOpenIssues`, so the plan's issue is kept only if that copy is made.
+  test("FG-293: the bot's login and account type are read from the REST row's user", async () => {
+    const body = decomposedBody(
+      { criterion: "CRC-B5", outcome: issueRow(7).body, files: ["lib/widget.ts"], milestone: null, blockedBy: [], line: 3 },
+      "## Criteria this serves",
+      "docs/adr/ADR-1-x.md",
+    );
+    const planRow = { ...issueRow(7), author_association: "NONE", body };
+    const kept = await read([{ ...planRow, user: { login: "github-actions[bot]", type: "Bot" } }]);
+    expect(kept.reading === "MEASURED" ? kept.findings.map(f => f.id) : kept.reading).toEqual(["7"]);
+    // CONTROL: the same row with no user is dropped, so the copy is what kept it.
+    const bare = await read([planRow]);
+    expect(bare.dropped.map(d => d.reason)).toEqual(["untrusted-author"]);
+  });
 
   test("FG-72 BASELINE: a page of pull requests is UNMEASURED, not an empty tracker", async () => {
     const r = await read(Array.from({ length: 100 }, (_, i) => prRow(i + 1)));
