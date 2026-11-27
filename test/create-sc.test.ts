@@ -569,3 +569,114 @@ describe("#2845: create-sc places a criterion after the last one, and --behavior
     }
   }, 60_000);
 });
+
+/**
+ * Covers SC-2821 (CONFIG-DRIVEN-TESTING-SPEC.md), #2922, ADR-030 item 4.
+ *
+ * `create-sc` set its root to the package's own directory and was registered
+ * without `projectRootFlag`, so run from a consumer it allocated against
+ * rungate's packaged specs and reservation store, and moved rungate's bank.
+ * The consumer below is ADR-030's reproduction: criteria 10 and 50, a reserved
+ * block 200 to 210, and a deferred spec banked in its own tree. The ids are
+ * built from constants, so this file never spells an id in rungate's
+ * namespace: they are the scratch consumer's.
+ */
+describe("SC-2821: create-sc allocates, reads the reservation store and moves the deferral bank in the project it runs in", () => {
+  const BIN = join(ROOT, "bin", "rungate.ts");
+  const BANK = join(ROOT, ".claude", "spec-deferral-ratchet.json");
+  const OWNER = "consumer-block";
+  const [FIRST, SECOND, FROM, TO, OTHER] = [10, 50, 200, 210, 300];
+  const line = (id: number, sentence: string) => `- [ ] SC-${id}: ${sentence} (behavioral)`;
+  const scratch: string[] = [];
+  afterEach(() => {
+    for (const d of scratch.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  const spec = (deferred: boolean) =>
+    [
+      "---",
+      "doc-type: spec",
+      "testable: true",
+      ...(deferred ? ["board-scope: deferred"] : []),
+      "---",
+      "",
+      "# Consumer",
+      "",
+      "## Success Criteria",
+      "",
+      `- [ ] SC-${FIRST}: the consumer's first criterion`,
+      `- [ ] SC-${SECOND}: the consumer's second criterion`,
+      "",
+    ].join("\n");
+
+  /** A consumer tree: one plain spec, one deferred spec in its own bank, and a reserved block. */
+  function consumer(): string {
+    const root = mkdtempSync(join(tmpdir(), "rg-2922-consumer-"));
+    scratch.push(root);
+    mkdirSync(join(root, "specs"), { recursive: true });
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(join(root, "specs", "PLAIN-SPEC.md"), spec(false));
+    writeFileSync(join(root, "specs", "DEFERRED-SPEC.md"), spec(true));
+    // A third spec holding the consumer's highest id, so a registry read from
+    // the wrong tree shows in the number a no-block allocation gets.
+    writeFileSync(join(root, "specs", "OTHER-SPEC.md"), ["# Other", "", "## Success Criteria", "", `- [ ] SC-${OTHER}: the consumer's highest`, ""].join("\n"));
+    writeFileSync(
+      join(root, "specs", "sc-reservations.json"),
+      `${JSON.stringify({ reservations: [{ owner: OWNER, from: FROM, to: TO }] }, null, 2)}\n`,
+    );
+    writeFileSync(
+      join(root, ".claude", "spec-deferral-ratchet.json"),
+      `${JSON.stringify({ deferred: [{ path: "specs/DEFERRED-SPEC.md", criteria: 2 }] }, null, 2)}\n`,
+    );
+    return root;
+  }
+
+  /** As a consumer types it: the published entry point, from the consumer's directory. */
+  const dispatched = (cwd: string, args: string[]) => {
+    const r = spawnSync("bun", [BIN, "create-sc", ...args], { cwd, env: { ...process.env }, encoding: "utf-8", timeout: 60_000 });
+    return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+  };
+
+  test("from a consumer's directory, the id comes out of the consumer's reserved block and lands in its spec", () => {
+    const root = consumer();
+    const r = dispatched(root, ["--behavioral", "a consumer's new criterion", "--spec", "specs/PLAIN-SPEC.md", "--owner", OWNER]);
+    expect(r.status, r.out).toBe(0);
+    const after = readFileSync(join(root, "specs", "PLAIN-SPEC.md"), "utf-8");
+    expect(after).toContain(line(FROM, "a consumer's new criterion"));
+    expect(r.out).toContain(`owner: ${OWNER}`);
+    expect(r.out, "the consumer's store was not the one read").not.toContain("reservation store could not be consulted");
+  });
+
+  test("an owner with no block gets an id above every block in the consumer's store and every id its specs state", () => {
+    const root = consumer();
+    const r = dispatched(root, ["--behavioral", "no block of its own", "--spec", "specs/PLAIN-SPEC.md", "--owner", "nobody"]);
+    expect(r.status, r.out).toBe(0);
+    expect(readFileSync(join(root, "specs", "PLAIN-SPEC.md"), "utf-8")).toContain(line(OTHER + 1, "no block of its own"));
+  });
+
+  test("a deferred consumer spec moves the consumer's bank by one, and rungate's own bank is untouched", () => {
+    const root = consumer();
+    const ours = readFileSync(BANK, "utf-8");
+    const r = dispatched(root, ["--behavioral", "a deferred consumer criterion", "--spec", "specs/DEFERRED-SPEC.md", "--owner", OWNER]);
+    expect(r.status, r.out).toBe(0);
+    const bank = JSON.parse(readFileSync(join(root, ".claude", "spec-deferral-ratchet.json"), "utf-8"));
+    expect(bank.deferred).toEqual([{ path: "specs/DEFERRED-SPEC.md", criteria: 3 }]);
+    expect(readFileSync(BANK, "utf-8")).toBe(ours);
+  });
+
+  test("given --project-root from another directory, a relative --spec is the project's", () => {
+    const root = consumer();
+    const r = runCreateSC(["--behavioral", "named by its root", "--spec", "specs/PLAIN-SPEC.md", "--owner", OWNER, "--project-root", root]);
+    expect(r.exitCode, r.stdout + r.stderr).toBe(0);
+    expect(readFileSync(join(root, "specs", "PLAIN-SPEC.md"), "utf-8")).toContain(line(FROM, "named by its root"));
+  });
+
+  test("--project-root with no directory refuses, and writes nothing", () => {
+    const root = consumer();
+    const before = readFileSync(join(root, "specs", "PLAIN-SPEC.md"), "utf-8");
+    const r = spawnSync("bun", [SCRIPT, "--behavioral", "x y z", "--spec", "specs/PLAIN-SPEC.md", "--project-root"], { cwd: root, encoding: "utf-8", timeout: 15_000 });
+    expect(r.status).toBe(1);
+    expect(`${r.stdout}${r.stderr}`).toContain("--project-root was given with no directory");
+    expect(readFileSync(join(root, "specs", "PLAIN-SPEC.md"), "utf-8")).toBe(before);
+  });
+});
