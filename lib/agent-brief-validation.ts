@@ -165,6 +165,10 @@ export function checkShipActive(workDir: string): ShipMarker | null {
 function checkWorkflowState(workDir: string): ShipMarker | null {
   if (!existsSync(workDir)) return null;
   const BUILD_PHASES = ['BUILD', 'VERIFY', 'SHIP', 'DONE'];
+  // Every live-phase file is read and the newest decides: returning the first
+  // one readdir lists let a days-old DONE file hide a live BUILD run (#2899
+  // review round 3).
+  let newest: { issue: number; mtimeMs: number } | null = null;
   try {
     const entries = readdirSync(workDir, { withFileTypes: true });
     for (const entry of entries) {
@@ -178,12 +182,13 @@ function checkWorkflowState(workDir: string): ShipMarker | null {
         if (wf.issue && wf.phase && BUILD_PHASES.includes(wf.phase)) {
           // Its age is the file's, not "now": a run that finished or crashed
           // days ago is no session (#2899 review round 2).
-          return { issue: wf.issue, ts: new Date(statSync(wfPath).mtimeMs).toISOString() };
+          const mtimeMs = statSync(wfPath).mtimeMs;
+          if (!newest || mtimeMs > newest.mtimeMs) newest = { issue: wf.issue, mtimeMs };
         }
       } catch {}
     }
   } catch {}
-  return null;
+  return newest ? { issue: newest.issue, ts: new Date(newest.mtimeMs).toISOString() } : null;
 }
 
 function findSizingFromCheckpoint(workDir: string): string | null {

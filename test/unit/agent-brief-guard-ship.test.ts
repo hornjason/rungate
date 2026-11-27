@@ -387,6 +387,35 @@ describe('AgentBriefGuard — ship-active enforcement', () => {
       expect(r.signalEvents).toContainEqual(expect.objectContaining({ advisory_reason: 'no_ship_session' }));
     });
 
+    // #2899 review round 3, Jason's option 1: every live-phase file is read and
+    // the newest decides, so the order readdir lists them in cannot matter. The
+    // names swap between the two cases, so one of them lists the old file first.
+    for (const [doneName, liveName] of [['a-66-done', 'b-67-live'], ['b-66-done', 'a-67-live']]) {
+      it(`a three-day-old DONE file does not hide a live BUILD run (${doneName} beside ${liveName})`, () => {
+        const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+        mkdirSync(join(workDir, doneName), { recursive: true });
+        const done = join(workDir, doneName, 'workflow-state.json');
+        writeFileSync(done, JSON.stringify({ issue: 66, phase: 'DONE' }));
+        utimesSync(done, old, old);
+        mkdirSync(join(workDir, liveName), { recursive: true });
+        writeFileSync(join(workDir, liveName, 'workflow-state.json'), JSON.stringify({ issue: 67, phase: 'BUILD' }));
+        const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+        expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(false);
+        expect(r.signalEvents.some(e => e.advisory_reason === 'no_ship_session')).toBe(false);
+      });
+    }
+
+    it('the real marker reader returns the newest of two valid markers, in either order', () => {
+      createShipMarker('a-60-old', 60, '2026-06-29T10:00:00Z');
+      createShipMarker('b-65-new', 65, '2026-06-29T14:00:00Z');
+      expect(readShipMarker(workDir)).toEqual({ issue: 65, ts: '2026-06-29T14:00:00Z' });
+      rmSync(workDir, { recursive: true, force: true });
+      mkdirSync(workDir, { recursive: true });
+      createShipMarker('a-65-new', 65, '2026-06-29T14:00:00Z');
+      createShipMarker('b-60-old', 60, '2026-06-29T10:00:00Z');
+      expect(readShipMarker(workDir)).toEqual({ issue: 65, ts: '2026-06-29T14:00:00Z' });
+    });
+
     it('the permission-mode refusal is unchanged with no ship session', () => {
       const r = validateAgentBrief(brief(undefined) as never, workDir, tempDir);
       expect(r.action).toBe('block');
