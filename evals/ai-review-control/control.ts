@@ -136,6 +136,16 @@ export interface ReviewControlSubject {
   lines: readonly [number, number] | null;
   /** Text the declared range must contain, so the range cannot rot silently. */
   marker: string | null;
+  /**
+   * #2928. The producer a planted diff leaves wrong while it treats the
+   * symptom somewhere else. When set, a blocking finding in range counts as
+   * DETECTED only if its summary or failure scenario names this identifier:
+   * REVIEW.md tells the reviewer to say what the cause was, and a finding on
+   * the guard that never names the producer is the silence about the cause
+   * that instruction calls out. `null` on every other case, which scores as
+   * before.
+   */
+  cause: string | null;
   /** Absolute path of the candidate — the post-change file under review. */
   candidatePath: string;
   /** Absolute path of the baseline — the committed pre-change file. */
@@ -329,7 +339,7 @@ export function cleanArmOutcome(
 }
 
 /** True when a finding names this subject's planted file and lands in range. */
-export function findingHitsPlant(
+function findingInPlantRange(
   subject: ReviewControlSubject,
   finding: Record<string, unknown>,
 ): boolean {
@@ -339,6 +349,29 @@ export function findingHitsPlant(
   const line = finding[f.line];
   if (typeof line !== "number" || !Number.isFinite(line)) return false;
   return line >= subject.lines[0] && line <= subject.lines[1];
+}
+
+/**
+ * #2928. True when the subject declares no cause, or the finding's summary or
+ * failure scenario names it as a whole identifier. `readRoundCaps` and
+ * `_readRoundCap` are other names, so they do not count.
+ */
+export function findingNamesCause(
+  subject: ReviewControlSubject,
+  finding: Record<string, unknown>,
+): boolean {
+  if (subject.cause === null) return true;
+  const f = AI_REVIEW_FINDING_FIELDS;
+  const word = new RegExp(`(?<![A-Za-z0-9_$])${subject.cause.replace(/\$/g, "\\$")}(?![A-Za-z0-9_$])`);
+  return [finding[f.summary], finding[f.failureScenario]].some(t => typeof t === "string" && word.test(t));
+}
+
+/** True when a finding lands in the plant's range and, if the case declares a cause, names it. */
+export function findingHitsPlant(
+  subject: ReviewControlSubject,
+  finding: Record<string, unknown>,
+): boolean {
+  return findingInPlantRange(subject, finding) && findingNamesCause(subject, finding);
 }
 
 /**
@@ -410,6 +443,13 @@ export function readReviewControl(
       const item = finding as Record<string, unknown>;
       if (item[f.file] !== subject.file) continue;
       if (findingHitsPlant(subject, item) && severityBlocks(item[f.severity])) continue;
+      if (subject.cause !== null && findingInPlantRange(subject, item) && severityBlocks(item[f.severity])) {
+        detail.push(
+          `names no cause: ${renderFinding(i, item)} — it lands on the plant and blocks, but never names ` +
+            `\`${subject.cause}\`, the producer the diff leaves wrong`,
+        );
+        continue;
+      }
       detail.push(
         `near miss: ${renderFinding(i, item)} — the plant is at ` +
           `${subject.file}:${subject.lines?.[0]}-${subject.lines?.[1]} and must block`,
@@ -419,7 +459,9 @@ export function readReviewControl(
     if (outcome === "MISSED") {
       detail.push(
         `MISSED: no blocking finding at ${subject.file}:` +
-          `${subject.lines?.[0]}-${subject.lines?.[1]}. ${subject.note}`,
+          `${subject.lines?.[0]}-${subject.lines?.[1]}` +
+          (subject.cause === null ? "" : ` names \`${subject.cause}\``) +
+          `. ${subject.note}`,
       );
     }
     return {
@@ -701,6 +743,14 @@ export function loadReviewControlSubjects(dir: string): ReviewControlSubject[] {
       if (kind === "planted" && lines === null) {
         throw new Error(`${manifestPath}: planted case ${c.id} needs a two-number lines range`);
       }
+      // #2928. A declared cause that cannot be read is refused, never read as
+      // no cause: that would score a symptom-only finding DETECTED.
+      if ("cause" in c && kind === "clean") {
+        throw new Error(`${manifestPath}: clean case ${c.id} declares a cause, which only a planted case can carry`);
+      }
+      if ("cause" in c && (typeof c.cause !== "string" || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(c.cause))) {
+        throw new Error(`${manifestPath}: planted case ${c.id} has cause ${JSON.stringify(c.cause)}, which is not one identifier`);
+      }
       const candidatePath = join(subjectDir, c.candidate);
       const baselinePath = join(subjectDir, baseline);
       const candidateText = kind === "clean" ? readFileSync(candidatePath, "utf-8") : null;
@@ -710,6 +760,7 @@ export function loadReviewControlSubjects(dir: string): ReviewControlSubject[] {
         file: reviewPath,
         lines,
         marker: typeof c.marker === "string" ? c.marker : null,
+        cause: typeof c.cause === "string" ? c.cause : null,
         candidatePath,
         baselinePath,
         changedLines:

@@ -1,0 +1,26 @@
+{
+  "id": "symptom-guard",
+  "reviewPath": "lib/review-round-cap.ts",
+  "baseline": "baseline.ts",
+  "reviewPathRationale": "lib/review-round-cap.ts exists in neither the tree nor the specs, for the reason worktree-state-write gives (#1513): a subject staged over a live module is scored on findings about the staging. lib/ is where the reviewer looks, and REVIEW.md's Do not flag list excludes nothing under it.",
+  "provenance": "Written for this subject, not copied from a module: a producer, readRoundCap, and two callers that read it. A subject about where a fix sits needs both callers in the one file the reviewer is handed, and no live module has that shape at this size.",
+  "measures": "CRC-B2 — on a bug fix, whether the reviewer looks for the root cause. The report the diff answers is \"an unreadable round cap stops every review round\". Both candidates make that report stop. The planted one guards the caller where it surfaced, so readRoundCap still returns NaN and roundsLeftLabel still prints \"NaN rounds left\". The clean one fixes readRoundCap. REVIEW.md tells the reviewer to say what the cause was and whether the diff reaches it, so a finding on the guard that never names readRoundCap is the silence about the cause the instruction calls out.",
+  "cases": [
+    {
+      "id": "symptom-guard/planted",
+      "kind": "planted",
+      "candidate": "planted.ts",
+      "lines": [9, 18],
+      "marker": "Number.isNaN(read)",
+      "cause": "readRoundCap",
+      "defect": "The guard in mayStartRound replaces a NaN cap with the default, so a round can start again, but readRoundCap still returns NaN for an unreadable cap and roundsLeftLabel, the other caller, still reads it. The diff treats the symptom where it was reported and leaves the producer wrong.",
+      "failureScenario": "A consumer sets the cap to \"three\". Rounds start again after this change, and the review comment under the verdict reads \"NaN rounds left\" on every round, because roundsLeftLabel calls readRoundCap and nothing changed there."
+    },
+    {
+      "id": "symptom-guard/clean",
+      "kind": "clean",
+      "candidate": "clean.ts",
+      "why": "The same NaN-to-default fallback, written in readRoundCap instead of in one caller, so both callers get the default. It changes as many lines as the planted candidate and uses the same expression, so a reviewer can tell the two apart only by where the fix sits. test/review-negative-control.test.ts runs all three files over a table of caps and round counts: both candidates agree at mayStartRound, the planted one still prints NaN at roundsLeftLabel, and the clean one never does."
+    }
+  ]
+}

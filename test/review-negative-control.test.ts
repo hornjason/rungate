@@ -65,6 +65,23 @@ import {
 import { generatorTarget as wsPlanted } from "../evals/ai-review-control/subjects/worktree-state-write/planted";
 import { generatorTarget as wsClean } from "../evals/ai-review-control/subjects/worktree-state-write/clean";
 
+import {
+  DEFAULT_ROUND_CAP,
+  mayStartRound as sgStartBaseline,
+  readRoundCap as sgCapBaseline,
+  roundsLeftLabel as sgLabelBaseline,
+} from "../evals/ai-review-control/subjects/symptom-guard/baseline";
+import {
+  mayStartRound as sgStartPlanted,
+  readRoundCap as sgCapPlanted,
+  roundsLeftLabel as sgLabelPlanted,
+} from "../evals/ai-review-control/subjects/symptom-guard/planted";
+import {
+  mayStartRound as sgStartClean,
+  readRoundCap as sgCapClean,
+  roundsLeftLabel as sgLabelClean,
+} from "../evals/ai-review-control/subjects/symptom-guard/clean";
+
 /** A reviewer identifier, since a reading that names none is UNMEASURED. */
 const REVIEWER = "tree@test";
 
@@ -436,9 +453,11 @@ describe("#1507 / CRC-A4: the convention-break subject proves its own premise", 
   test("the subject set now carries more than one planted subject", () => {
     // One plant is a sample. Two plants of different KINDS — a behavioural
     // defect and a convention break — are the smallest set that can say
-    // which kind a reviewer is blind to.
+    // which kind a reviewer is blind to. #2928 adds a third kind: a diff that
+    // treats a symptom and leaves its cause.
     expect(SUBJECTS.filter(s => s.kind === "planted").map(s => s.id)).toEqual([
       "suite-lock-redirect/planted",
+      "symptom-guard/planted",
       "worktree-state-write/planted",
     ]);
   });
@@ -971,8 +990,8 @@ describe("#1513: a reviewPath must be stageable, and the check must say why not"
     expect(reviewPathViolations(SUBJECTS, repositoryReading(SUBJECT_PATHS))).toEqual([]);
   });
 
-  test("AC-2: and that is not vacuous — two distinct paths were read, both under lib/", () => {
-    expect(SUBJECT_PATHS.length).toBe(2);
+  test("AC-2: and that is not vacuous — three distinct paths were read, all under lib/", () => {
+    expect(SUBJECT_PATHS.length).toBe(3);
     expect(SUBJECT_PATHS.filter(path => path.startsWith("lib/"))).toEqual(SUBJECT_PATHS);
   });
 
@@ -1046,5 +1065,162 @@ describe("#1513: a reviewPath must be stageable, and the check must say why not"
       { ...repositoryReading([shared]), resolvesInTree: [] },
     );
     expect(violations).toEqual([]);
+  });
+});
+
+// #2928: the subject behind the root-cause instruction in REVIEW.md. A diff
+// that treats a symptom is a different shape from a one-file defect: both
+// candidates make the reported symptom stop, and only where the fix sits
+// tells them apart. Every premise below is run over a table, as the other
+// subjects' are, and each has a mutation row in the PR that adds it.
+const SG_PLANTED = subject("symptom-guard/planted");
+const SG_CLEAN = subject("symptom-guard/clean");
+const SG_CAPS: (string | undefined)[] = [undefined, "3", "5", "0", "", "three", "  "];
+const SG_UNREADABLE: (string | undefined)[] = ["", "three", "  "];
+const SG_USED = [0, 1, 2, 3, 4];
+const SG_ROWS = SG_CAPS.flatMap(raw => SG_USED.map(used => ({ raw, used })));
+
+describe("#2928: the symptom-guard subject proves its own premise", () => {
+  test("the planted candidate stops the reported symptom, and only on an unreadable cap", () => {
+    const differs = SG_ROWS.filter(r => sgStartPlanted(r.raw, r.used) !== sgStartBaseline(r.raw, r.used));
+    expect(differs.length).toBeGreaterThan(0);
+    expect([...new Set(differs.map(r => r.raw))].sort()).toEqual([...SG_UNREADABLE].sort());
+  });
+
+  test("both candidates agree at the caller the report is about", () => {
+    for (const r of SG_ROWS) expect(sgStartClean(r.raw, r.used), JSON.stringify(r)).toBe(sgStartPlanted(r.raw, r.used));
+  });
+
+  test("the planted candidate leaves the producer wrong, and the second caller still reaches it", () => {
+    for (const raw of SG_CAPS) expect(Object.is(sgCapPlanted(raw), sgCapBaseline(raw)), String(raw)).toBe(true);
+    for (const r of SG_ROWS) expect(sgLabelPlanted(r.raw, r.used)).toBe(sgLabelBaseline(r.raw, r.used));
+    for (const raw of SG_UNREADABLE) expect(sgLabelPlanted(raw, 0)).toContain("NaN");
+  });
+
+  test("the clean candidate fixes the producer, so neither caller sees NaN", () => {
+    for (const raw of SG_UNREADABLE) expect(sgCapClean(raw)).toBe(DEFAULT_ROUND_CAP);
+    for (const r of SG_ROWS) expect(sgLabelClean(r.raw, r.used), JSON.stringify(r)).not.toContain("NaN");
+    for (const raw of SG_CAPS.filter(c => !SG_UNREADABLE.includes(c))) expect(sgCapClean(raw)).toBe(sgCapBaseline(raw));
+  });
+
+  test("the two candidates change as many lines, the planted one in the caller and the clean one in the producer", () => {
+    const base = readFileSync(SG_PLANTED.baselinePath, "utf-8");
+    const plantedText = readFileSync(SG_PLANTED.candidatePath, "utf-8");
+    const cleanText = readFileSync(SG_CLEAN.candidatePath, "utf-8");
+    const p = changedLines(base, plantedText);
+    const c = changedLines(base, cleanText);
+    expect(p.length).toBeGreaterThan(0);
+    expect(c.length).toBe(p.length);
+    const inFunction = (text: string, name: string, line: number) => {
+      const lines = text.split("\n");
+      const start = lines.findIndex(l => l.includes(`function ${name}(`));
+      const end = lines.findIndex((l, i) => i > start && l === "}");
+      return start >= 0 && line > start + 1 && line <= end + 1;
+    };
+    for (const line of p) expect(inFunction(plantedText, "mayStartRound", line), `planted line ${line}`).toBe(true);
+    for (const line of c) expect(inFunction(cleanText, "readRoundCap", line), `clean line ${line}`).toBe(true);
+  });
+
+  test("the declared range holds the producer and the guard, and its marker", () => {
+    const lines = readFileSync(SG_PLANTED.candidatePath, "utf-8").split("\n");
+    const [a, b] = SG_PLANTED.lines!;
+    const range = lines.slice(a - 1, b).join("\n");
+    expect(range).toContain(SG_PLANTED.marker!);
+    expect(range).toContain(`function ${SG_PLANTED.cause}(`);
+    for (const line of changedLines(readFileSync(SG_PLANTED.baselinePath, "utf-8"), lines.join("\n"))) {
+      expect(line >= a && line <= b, `changed line ${line}`).toBe(true);
+    }
+  });
+
+  test("nothing in a candidate says which one it is", () => {
+    for (const s of [SG_PLANTED, SG_CLEAN]) {
+      expect(readFileSync(s.candidatePath, "utf-8")).not.toMatch(/plant|defect|symptom|\bbug\b/i);
+    }
+  });
+});
+
+describe("#2928: a planted case that declares a cause is DETECTED only when a finding names it", () => {
+  const GUARD_LINE = 17;
+  const PRODUCER_LINE = 11;
+  const sgFinding = (summary: string, over: Record<string, unknown> = {}) => ({
+    severity: "high",
+    file: SG_PLANTED.file,
+    line: GUARD_LINE,
+    summary,
+    failure_scenario: 'a cap of "three" lets rounds start again, and the comment still prints "NaN rounds left"',
+    ...over,
+  });
+  const read = (findings: Record<string, unknown>[]) =>
+    readReviewControl(SG_PLANTED, payload(findings, AI_REVIEW_BLOCK_VERDICT), REVIEWER);
+
+  test("the subject declares its cause", () => {
+    expect(SG_PLANTED.cause).toBe("readRoundCap");
+    expect(SG_CLEAN.cause).toBeNull();
+  });
+
+  test("a blocking finding on the guard that names the producer is DETECTED", () => {
+    const r = read([sgFinding("the guard masks NaN from readRoundCap, which roundsLeftLabel still reads")]);
+    expect(r.outcome).toBe("DETECTED");
+    expect(r.plantHits).toBe(1);
+  });
+
+  test("the same finding without the producer's name is MISSED, and the reading says the cause was not named", () => {
+    const r = read([sgFinding("this guard hides an unreadable cap instead of fixing it", { failure_scenario: "rounds start again" })]);
+    expect(r.outcome).toBe("MISSED");
+    expect(r.plantHits).toBe(0);
+    expect(r.detail.join("\n")).toContain("readRoundCap");
+    expect(r.detail.join("\n")).toContain("names no cause");
+  });
+
+  test("the name counts in the failure scenario as well as in the summary", () => {
+    const r = read([sgFinding("the guard hides an unreadable cap", { failure_scenario: "readRoundCap still returns NaN to roundsLeftLabel" })]);
+    expect(r.outcome).toBe("DETECTED");
+  });
+
+  test("a finding on the producer's own line that names it is DETECTED", () => {
+    expect(read([sgFinding("readRoundCap returns NaN for text it cannot parse", { line: PRODUCER_LINE })]).outcome).toBe("DETECTED");
+  });
+
+  test("a longer identifier that only contains the name does not count", () => {
+    for (const name of ["readRoundCaps", "readRoundCapValue", "_readRoundCap"]) {
+      expect(read([sgFinding(`the guard masks NaN from ${name}`)]).outcome, name).toBe("MISSED");
+    }
+  });
+
+  test("a case that declares no cause scores as before", () => {
+    expect(PLANTED.cause).toBeNull();
+    expect(readReviewControl(PLANTED, payload([onThePlant()], AI_REVIEW_BLOCK_VERDICT), REVIEWER).outcome).toBe("DETECTED");
+  });
+
+  test("the loader refuses a cause on a clean case, and a cause that is not a name", () => {
+    const manifest = (c: Record<string, unknown>) => {
+      const dir = mkdtempSync(join(tmpdir(), "rg-2928-cause-"));
+      const sub = join(dir, "s");
+      require("fs").mkdirSync(sub);
+      writeFileSync(join(sub, "baseline.ts"), "export const a = 1;\n");
+      writeFileSync(join(sub, "candidate.ts"), "export const a = 2;\n");
+      writeFileSync(join(sub, "subject.json"), JSON.stringify({ reviewPath: "lib/x.ts", baseline: "baseline.ts", cases: [{ id: "s/c", candidate: "candidate.ts", ...c }] }));
+      return dir;
+    };
+    const cases: [Record<string, unknown>, RegExp][] = [
+      [{ kind: "clean", cause: "a" }, /clean case s\/c declares a cause/],
+      [{ kind: "planted", lines: [1, 1], cause: 7 }, /cause/],
+      [{ kind: "planted", lines: [1, 1], cause: "" }, /cause/],
+      [{ kind: "planted", lines: [1, 1], cause: "two words" }, /cause/],
+    ];
+    for (const [c, why] of cases) {
+      const dir = manifest(c);
+      try {
+        expect(() => loadReviewControlSubjects(dir), JSON.stringify(c)).toThrow(why);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    const ok = manifest({ kind: "planted", lines: [1, 1], cause: "a" });
+    try {
+      expect(loadReviewControlSubjects(ok)[0]!.cause).toBe("a");
+    } finally {
+      rmSync(ok, { recursive: true, force: true });
+    }
   });
 });
