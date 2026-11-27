@@ -129,13 +129,35 @@ export function buildMergedGateScript(workflowFile: string = ADR_ACCEPTED_WORKFL
  * under `.github/workflows` (#2842), or null when one has that `name:`. The
  * trigger matches the merging workflow's `name:` exactly, so a typo writes a
  * trigger that never fires and nothing else reports it.
+ *
+ * `nameless` is each workflow with no `name:`, by its path (#2873). GitHub's
+ * workflow syntax says that "if you omit `name`, GitHub displays the workflow
+ * file path relative to the root of the repository", and the `workflow_run`
+ * section of "Events that trigger workflows" shows `workflows:` only with
+ * names: it does not say a path matches. Read 2026-11-26. So a nameless
+ * workflow named by its path is UNMEASURED, and every nameless workflow is
+ * listed by its path rather than left out of the warning.
  */
-export function mergeWorkflowWarning(mergeWorkflow: string | null, names: readonly string[], unreadable: readonly string[] = []): string | null {
+export function mergeWorkflowWarning(
+  mergeWorkflow: string | null,
+  names: readonly string[],
+  unreadable: readonly string[] = [],
+  nameless: readonly string[] = [],
+): string | null {
   if (mergeWorkflow === null || names.includes(mergeWorkflow)) return null;
+  // A path is compared as GitHub shows it: from the repository root, so a leading ./ is dropped.
+  if (nameless.includes(mergeWorkflow.replace(/^\.\//, ""))) {
+    return (
+      `WARN: board.mergeWorkflow is ${JSON.stringify(mergeWorkflow)}, a workflow with no name:. GitHub shows a workflow with no name: by its path, ` +
+      `but its documentation does not say a workflow_run trigger matches one by its path, so whether the triggers in adr-accepted.yml and ` +
+      `specs-placed.yml fire is UNMEASURED. Give that workflow a name:, set board.mergeWorkflow to it, and re-run rungate scaffold.`
+    );
+  }
   const unread = unreadable.length === 0 ? "" : ` ${unreadable.join(", ")} could not be read, so whether one of them has it is UNMEASURED.`;
+  const seen = [...names.map(n => JSON.stringify(n)), ...nameless.map(p => `${p} (no name:)`)];
   return (
     `WARN: board.mergeWorkflow is ${JSON.stringify(mergeWorkflow)}, and no workflow under .github/workflows has that name ` +
-    `(${names.length === 0 ? "none found" : names.map(n => JSON.stringify(n)).join(", ")}).${unread} ` +
+    `(${seen.length === 0 ? "none found" : seen.join(", ")}).${unread} ` +
     `The workflow_run triggers in adr-accepted.yml and specs-placed.yml name it, so the trigger never fires and a merge made by automation places nothing. ` +
     `Set board.mergeWorkflow to the merging workflow's name: exactly, and re-run rungate scaffold.`
   );
