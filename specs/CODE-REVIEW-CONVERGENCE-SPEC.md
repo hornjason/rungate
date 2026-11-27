@@ -1822,6 +1822,9 @@ instance of it.
 - **CRC-N6** **Named because it was measured, with nothing built.** Five consecutive rounds on #1614 re-raised one already-fixed defect: four consecutive rounds from a docblock that QUOTED the removed regex, and the FINAL round — after the quotation was deleted — from the PARAPHRASE that replaced it, reconstructing a regex literal that appears nowhere in the tree. CRC-N4's dedupe cannot absorb it, because the suppression key is `file \0 line-text \0 summary` and a regenerated finding carries a new summary: it is not a repeat, it is a new finding about code that does not exist. The near-miss is *"do not quote dead code in comments"*, which was applied and then defeated. The reading is in *Measured non-obvious facts*. **It is deliberately NOT a request for new machinery** — the prior-art section above found that a verification gate re-checking each finding against the real code at the cited line is the documented mitigation for the wider class it belongs to, and that gate is CRC-B4. This criterion names the case so a verifier can be held to it; it does not ask for a second mechanism beside one already planned.
 - **CRC-H2** Risky code requires a human. There is no `CODEOWNERS` and no required approval, so nothing does.
 - **CRC-M16** Added 2026-11-12 (ADR-015, #1816). `AI_REVIEW_ROUND_CAP` in `lib/ai-review-rounds.ts` counts the reviewer's rounds; nothing reads what the author does after the round-three step-back.
+- **CRC-B14** Added 2026-11-27 (ADR-030, #2917). Nothing retries a reviewer run. A round is three runs merged into one result, and a round where any run failed is never a pass, so one run that could not connect fails the job: on the DailyBriefDashboard consumer's run 45858831620, attempt 1, run 2 of 3 failed in about one second with "Unable to connect". The only retry in the job is the round counter's.
+- **CRC-B15** Added 2026-11-27 (ADR-030, #2917). The reviewer has Read, Grep, Glob and Write only, so it cannot run `plan-issues`, and nothing in the review job mentions it. On the DailyBriefDashboard consumer's #2455 and #2458 it reported twice that a comma in a Blocked by cell splits one blocker into two; the dry run linked both blockers correctly.
+- **CRC-B16** Added 2026-11-27 (ADR-030, #2917). The scaffold honours a review model pin over the default and says nothing when they differ. The DailyBriefDashboard consumer's hand-typed `ci.vertex.model: claude-sonnet-5` kept the old model after the default moved to Haiku 5.5, until its #2425 removed the key.
 
 ### Shipped since this audit was taken
 
@@ -3123,3 +3126,12 @@ Recorded because each one invalidates a naive reading of the criteria above.
       proved-by: test/review-execution-reading.test.ts "CRC-M19: CRC-M18 is retired with its diff-budget script, and the census half stays"
       fingerprint: d457c8f2
       placement: Phase 5
+- [ ] CRC-B14: A reviewer run that failed before its first model call is run once more; a run that reached the model and failed, or was cut short, is reported as it is today, and a round is never measured as a pass from fewer runs than planned (Jason, 2026-11-27, ADR-030).
+      needs: test
+      placement: Phase 2
+- [ ] CRC-B15: When a pull request changes a `docs/adr/*.md` file that has a Decomposition table, the AI review job writes `plan-issues --decompose <adr> --json`, the dry run with no `--write`, into the findings directory, and the reviewer's prompt says that file is how the filing tool parsed the table (Jason, 2026-11-27, ADR-030).
+      needs: test
+      placement: Phase 2
+- [ ] CRC-B16: A scaffold run whose config pins a review model other than rungate's default prints a note naming the pin and the default, and saying that removing the key follows the default; the pin itself is kept (Jason, 2026-11-27, ADR-030).
+      needs: test
+      placement: Phase 2

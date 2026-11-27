@@ -1255,3 +1255,15 @@ marker's literal text — so a spec describing the mechanism reported itself
 as a spec with an unresolved marker in it. It is named rather than quoted
 now. `.claude/rules/checks-must-be-able-to-fail.md` has caught this shape
 in prose four times; describing the detector is cheaper than widening it.
+
+## create-sc allocates in the project it runs in (ADR-030)
+
+`create-sc` sets its root to rungate's own package directory, so run from a
+consumer it allocates against rungate's packaged specs and ignores the
+consumer's specs and reservation store. A scratch consumer on 0.8.49 with a
+reserved block of 200 to 210 was handed an id above rungate's own highest.
+`sync-sc-status` had the same defect and takes `--project-root` since #2360.
+`docs/adr/ADR-030-a-consumer-sets-nothing-by-hand.md` orders the fix.
+
+- [ ] SC-2821: `rungate create-sc` takes `--project-root` as `sync-sc-status` does, and run from a consumer it allocates the id, reads the reservation store and moves the deferral bank in the consumer's tree, never in rungate's own packaged files (ADR-030)
+<!-- REVIEW: unmatched (no registry pattern was close enough) -->
