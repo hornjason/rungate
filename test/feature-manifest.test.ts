@@ -134,6 +134,7 @@ describe("#2888: names the tree does not hold are refused", () => {
       ["src//cases.ts", "is not written plainly; write it as 'src/cases.ts'"],
       ["src/x/../cases.ts", "is not written plainly; write it as 'src/cases.ts'"],
       ["src/", "is not written plainly; write it as 'src'"],
+      ["src/a\u0000.ts", "holds a control character"],
     ]) {
       expect(refusalsOf(edit(m => (m.features[0].entryFiles = [bad])), watching)).toEqual([`feature 'cases' file '${bad}' ${why}`]);
     }
@@ -216,6 +217,9 @@ describe("#2888: against a real tree, read through the presence decider", () => 
   writeFileSync(join(root, "src", "shared", "db.ts"), "export {};\n");
   symlinkSync(join(root, "nowhere.ts"), join(root, "src", "dangling.ts"));
   const fifo = spawnSync("mkfifo", [join(root, "src", "pipe.ts")]);
+  const outside = mkdtempSync(join(scratch, "outside-"));
+  writeFileSync(join(outside, "secret.ts"), "export {};\n");
+  symlinkSync(outside, join(root, "src", "elsewhere"));
   const real = treeReading(root, { pages: ["/cases", "/home"], routes: ["GET /api/cases"] });
 
   test("each kind of thing at a name gets its own reading", () => {
@@ -223,12 +227,27 @@ describe("#2888: against a real tree, read through the presence decider", () => 
     expect(real.fileAt("src/gone.ts")).toEqual({ kind: "absent" });
     expect(real.fileAt("src/pages")).toEqual({ kind: "other" });
     expect(real.fileAt("src/dangling.ts")).toEqual({ kind: "unread", why: "ENOENT" });
-    if (fifo.status === 0) expect(real.fileAt("src/pipe.ts")).toEqual({ kind: "other" });
+    // Required, not skipped: a FIFO that could not be made is a reading not taken.
+    expect(fifo.status, String(fifo.stderr)).toBe(0);
+    expect(real.fileAt("src/pipe.ts")).toEqual({ kind: "other" });
   });
 
   test("the sample manifest is valid against it, and a missing file is refused", () => {
     expect(validateManifest(manifest(), real).verdict).toBe("valid");
     expect(refusalsOf(edit(m => (m.features[0].entryFiles = ["src/gone.ts"])), real)).toEqual(["feature 'cases' names 'src/gone.ts', which the tree does not hold"]);
+  });
+
+  test("a name the tree spells differently is refused on every file system (#2910 review)", () => {
+    expect(real.fileAt("src/Cases.ts")).toMatchObject(process.platform === "darwin" ? { kind: "spelled", as: "src/cases.ts" } : { kind: "absent" });
+    const spelled = tree({ fileAt: rel => (rel === "src/Cases.ts" ? { kind: "spelled", as: "src/cases.ts" } : FILES[rel] ?? { kind: "absent" }) });
+    expect(refusalsOf(edit(m => (m.features[0].entryFiles = ["src/Cases.ts"])), spelled)).toEqual(["feature 'cases' names 'src/Cases.ts', which the tree spells 'src/cases.ts'"]);
+  });
+
+  test("a file reached through a link that leaves the tree is refused (#2910 review)", () => {
+    expect(real.fileAt("src/elsewhere/secret.ts")).toEqual({ kind: "outside" });
+    expect(refusalsOf(edit(m => (m.features[0].entryFiles = ["src/elsewhere/secret.ts"])), real)).toEqual([
+      "feature 'cases' names 'src/elsewhere/secret.ts', which leads outside the repository through a link",
+    ]);
   });
 
   test("with no pages or routes read, the reader supplies no reading, so they are unmeasured", () => {

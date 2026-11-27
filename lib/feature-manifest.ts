@@ -23,7 +23,8 @@
  * The tree's pages and routes are a reading the caller supplies. Producing
  * them from every router is the code map's job (SC-2813, #2889).
  */
-import { join, posix } from "path";
+import { readdirSync, realpathSync } from "fs";
+import { join, posix, relative, sep } from "path";
 import { z } from "zod";
 
 import { Presence } from "./path-probe";
@@ -85,8 +86,19 @@ export const featureManifestSchema = z
 
 export type FeatureManifest = z.infer<typeof featureManifestSchema>;
 
-/** What is at a path in the tree, as the caller read it. */
-export type FileReading = { kind: "file" } | { kind: "other" } | { kind: "absent" } | { kind: "unread"; why: string };
+/**
+ * What is at a path in the tree, as the caller read it. `spelled` is a file
+ * the tree holds under a different spelling, which a case-insensitive file
+ * system finds and a case-sensitive one does not (#2910 review); `outside` is
+ * a file reached through a link that leaves the tree.
+ */
+export type FileReading =
+  | { kind: "file" }
+  | { kind: "other" }
+  | { kind: "absent" }
+  | { kind: "unread"; why: string }
+  | { kind: "spelled"; as: string }
+  | { kind: "outside" };
 
 /** The tree a manifest is checked against. A missing `pages` or `routes` is a reading not taken, never an empty one. */
 export interface TreeReading {
@@ -106,7 +118,7 @@ export function treeReading(root: string, read: { pages?: Iterable<string>; rout
     fileAt: rel => {
       let why = "";
       return Presence.decide(join(root, rel), "file", (_, w) => (why = w)).on<FileReading>({
-        present: () => ({ kind: "file" }),
+        present: () => asSpelled(root, rel),
         // The decider names something of another kind and calls it absent;
         // it names nothing when nothing is there.
         absent: () => (why === "" ? { kind: "absent" } : { kind: "other" }),
@@ -118,6 +130,36 @@ export function treeReading(root: string, read: { pages?: Iterable<string>; rout
   };
 }
 
+/**
+ * A file the decider found, held to the tree's own spelling of every segment
+ * and to the tree itself. A directory that cannot be listed, or a path that
+ * cannot be resolved, is unread, never taken as the right spelling.
+ */
+function asSpelled(root: string, rel: string): FileReading {
+  let dir = root;
+  const actual: string[] = [];
+  for (const seg of rel.split("/")) {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch (e) {
+      return { kind: "unread", why: (e as NodeJS.ErrnoException).code ?? String(e) };
+    }
+    const name = names.includes(seg) ? seg : names.find(n => n.toLowerCase() === seg.toLowerCase());
+    if (name === undefined) return { kind: "absent" };
+    actual.push(name);
+    dir = join(dir, name);
+  }
+  if (actual.join("/") !== rel) return { kind: "spelled", as: actual.join("/") };
+  try {
+    const inside = relative(realpathSync(root), realpathSync(join(root, rel)));
+    if (inside === ".." || inside.startsWith(`..${sep}`) || inside.startsWith(sep)) return { kind: "outside" };
+  } catch (e) {
+    return { kind: "unread", why: (e as NodeJS.ErrnoException).code ?? String(e) };
+  }
+  return { kind: "file" };
+}
+
 export type ManifestVerdict =
   | { verdict: "valid"; manifest: FeatureManifest }
   | { verdict: "unmeasured"; manifest: FeatureManifest; unmeasured: string[] }
@@ -125,6 +167,7 @@ export type ManifestVerdict =
 
 /** Why a path cannot name a file in the tree, or null when it can. */
 function pathProblem(rel: string): string | null {
+  if (/[\u0000-\u001f]/.test(rel)) return "holds a control character";
   if (rel.includes("\\")) return "uses a backslash; paths are written with '/'";
   if (rel.startsWith("/")) return "is absolute; paths are written from the repository root";
   if (posix.normalize(rel) !== rel || rel.endsWith("/")) return `is not written plainly; write it as '${posix.normalize(rel).replace(/\/$/, "")}'`;
@@ -180,6 +223,8 @@ export function validateManifest(value: unknown, tree: TreeReading): ManifestVer
     if (at.kind === "absent") refusals.push(`${owner} names '${rel}', which the tree does not hold`);
     else if (at.kind === "other") refusals.push(`${owner} names '${rel}', which is not a file`);
     else if (at.kind === "unread") unmeasured.push(`${owner} file '${rel}' could not be read (${at.why})`);
+    else if (at.kind === "spelled") refusals.push(`${owner} names '${rel}', which the tree spells '${at.as}'`);
+    else if (at.kind === "outside") refusals.push(`${owner} names '${rel}', which leads outside the repository through a link`);
   }
 
   for (const [kind, held] of [
