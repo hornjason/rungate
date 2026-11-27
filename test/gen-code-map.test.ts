@@ -3,7 +3,7 @@
  * AC-4: Tests generators with mock ProjectScan data
  */
 import { test, expect, describe, afterAll } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { FRESHNESS_NOTICE, generateCodeMap } from "../lib/generators/code-map";
@@ -383,6 +383,37 @@ describe("SC-2813: every router's routes, every page, and what could not be attr
     const body = ['import { Hono } from "hono";', "const api = new Hono();", "", 'api.get("/café", c => c.text("ok"));'].join("\r\n");
     const md = codeMap({ "src/api.ts": `\uFEFF${body}` });
     expect(rows(md, /^### GET /)).toEqual(["| /café | api | src/api.ts | 4 |"]);
+  });
+
+  test("a macro import is refused, never run, and its file is named as unparsed (security review)", () => {
+    const root = mkdtempSync(join(scratch, "macro-"));
+    const marker = join(root, "MACRO_RAN");
+    plant(root, {
+      "lib/boom.ts": `import { writeFileSync } from "fs";\nexport function boom() { writeFileSync(${JSON.stringify(marker)}, "ran"); return "x"; }\n`,
+      "src/routes.ts": `import { boom } from ${JSON.stringify(join(root, "lib", "boom.ts"))} with { type: "macro" };\nimport { Hono } from "hono";\nconst router = new Hono();\nrouter.get("/m", c => c.text(boom()));\n`,
+    });
+    const proc = Bun.spawnSync(["bun", GENERATOR, root], { cwd: join(import.meta.dir, "..") });
+    expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+    expect(existsSync(marker), "the scanned project's macro ran").toBe(false);
+    expect(readFileSync(join(root, "CODE-MAP.md"), "utf-8")).toContain("could not be parsed, so their routes and pages are not counted: src/routes.ts");
+  });
+
+  test("a link is never followed: no loop through an ancestor, no file outside the project (security review)", () => {
+    const outside = mkdtempSync(join(scratch, "outside-"));
+    plant(outside, { "x.ts": 'import { Hono } from "hono";\nconst o = new Hono();\no.get("/outside", c => c.text(""));\n' });
+    const root = mkdtempSync(join(scratch, "links-"));
+    plant(root, { "src/api.ts": 'import { Hono } from "hono";\nconst api = new Hono();\napi.get("/inside", c => c.text(""));\n' });
+    symlinkSync(root, join(root, "src", "loop"));
+    symlinkSync(outside, join(root, "src", "elsewhere"));
+    const proc = Bun.spawnSync(["bun", GENERATOR, root], { cwd: join(import.meta.dir, "..") });
+    expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+    const md = readFileSync(join(root, "CODE-MAP.md"), "utf-8");
+    expect(rows(md, /^### GET /)).toEqual(["| /inside | api | src/api.ts | 3 |"]);
+  });
+
+  test("a path with a column or row break stays one cell (security review)", () => {
+    const md = codeMap({ "src/api.ts": 'import { Hono } from "hono";\nconst api = new Hono();\napi.get("/a|b\\nc", c => c.text(""));\n' });
+    expect(rows(md, /^### GET /)).toEqual(["| /a\\|b c | api | src/api.ts | 0 |"]);
   });
 
   test("CONTROL: a project with no routers and no pages renders neither section", () => {

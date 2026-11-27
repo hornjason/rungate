@@ -8,7 +8,7 @@
  * machine-generated architecture snapshot. Agents read this to understand
  * the codebase without exploring manually.
  */
-import { existsSync, readFileSync, readdirSync, writeFileSync, statSync } from "fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync, statSync } from "fs";
 import { join, basename, extname, posix, relative } from "path";
 import { parse as parseJs } from "acorn";
 import { localCalendarDay } from "../lib/local-calendar-day";
@@ -101,6 +101,9 @@ const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "out", "cove
 /** `router` is null for a route-shaped call on no router the file creates: listed, and counted apart. */
 interface Route { method: string; path: string; file: string; line: number; router: string | null }
 interface Page { path: string; file: string; line: number }
+/** A value as one markdown table cell: no row break, no column break, no control character. */
+const cell = (v: string) => v.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\|/g, "\\|");
+
 interface RouteScan { routes: Route[]; pages: Page[]; unattributed: number; files: number; unparsed: string[] }
 
 /** Every source file under `root` a route or page could be declared in: no tests, no build output, no declarations. */
@@ -113,12 +116,16 @@ function sourceFiles(root: string, dir = root, out: string[] = []): string[] {
   }
   for (const name of entries.sort()) {
     const full = join(dir, name);
-    let isDir: boolean;
+    // lstat, not stat: a link is never followed, so a link to an ancestor
+    // cannot loop the walk and a link out of the project is never read.
+    let st: ReturnType<typeof lstatSync>;
     try {
-      isDir = statSync(full).isDirectory();
+      st = lstatSync(full);
     } catch {
       continue;
     }
+    if (st.isSymbolicLink()) continue;
+    const isDir = st.isDirectory();
     if (isDir) {
       if (!SKIP_DIRS.has(name)) sourceFiles(root, full, out);
     } else if (SOURCE_EXT.has(extname(name)) && !/\.d\.[mc]?ts$|\.(test|spec)\.[^.]+$/.test(name)) {
@@ -227,7 +234,11 @@ function scanRoutesAndPages(root: string): RouteScan {
       text = readFileSync(join(root, file), "utf-8");
       const ext = extname(file);
       const loader = ext === ".tsx" ? "tsx" : ext === ".jsx" ? "jsx" : /\.[mc]?ts$/.test(ext) ? "ts" : "js";
-      const js = new Bun.Transpiler({ loader }).transformSync(text);
+      // Macros off: Bun's transpiler otherwise RUNS an `import … with { type:
+      // "macro" }` while transforming, which would execute the scanned
+      // project's code. With them off, such a file is refused and listed as
+      // unparsed below.
+      const js = new Bun.Transpiler({ loader, macro: false } as unknown as ConstructorParameters<typeof Bun.Transpiler>[0]).transformSync(text);
       ast = parseJs(js, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true, allowAwaitOutsideFunction: true, allowReturnOutsideFunction: true }) as unknown as Node;
     } catch {
       scan.unparsed.push(file);
@@ -471,12 +482,12 @@ if (routes.length > 0 || routeScan.unattributed > 0 || routeScan.unparsed.length
   }
   let routeTable = "## API Routes\n\n";
   routeTable += `${routerRoutes} route(s) on the routers ${routeScan.files} parsed file(s) create. ${routeScan.unattributed} route-shaped call(s) could not be attributed to a router a file creates; they are listed with — as their router.\n\n`;
-  if (routeScan.unparsed.length) routeTable += `UNMEASURED: ${routeScan.unparsed.length} file(s) could not be parsed, so their routes and pages are not counted: ${routeScan.unparsed.join(", ")}\n\n`;
+  if (routeScan.unparsed.length) routeTable += `UNMEASURED: ${routeScan.unparsed.length} file(s) could not be parsed, so their routes and pages are not counted: ${routeScan.unparsed.map(cell).join(", ")}\n\n`;
   for (const [method, methodRoutes] of Object.entries(byMethod).sort()) {
     routeTable += `### ${method} (${methodRoutes.length})\n\n`;
     routeTable += "| Path | Router | File | Line |\n|------|--------|------|------|\n";
     for (const r of methodRoutes.sort((a, b) => a.path.localeCompare(b.path) || a.file.localeCompare(b.file))) {
-      routeTable += `| ${r.path} | ${r.router ?? "—"} | ${r.file} | ${r.line} |\n`;
+      routeTable += `| ${cell(r.path)} | ${cell(r.router ?? "—")} | ${cell(r.file)} | ${r.line} |\n`;
     }
     routeTable += "\n";
   }
@@ -487,7 +498,7 @@ if (routes.length > 0 || routeScan.unattributed > 0 || routeScan.unparsed.length
 if (routeScan.pages.length > 0) {
   let pageTable = `## Pages (${routeScan.pages.length})\n\n| Path | File | Line |\n|------|------|------|\n`;
   for (const p of [...routeScan.pages].sort((a, b) => a.path.localeCompare(b.path) || a.file.localeCompare(b.file))) {
-    pageTable += `| ${p.path} | ${p.file} | ${p.line} |\n`;
+    pageTable += `| ${cell(p.path)} | ${cell(p.file)} | ${p.line} |\n`;
   }
   sections.push(pageTable.trim());
 }
