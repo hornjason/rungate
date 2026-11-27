@@ -555,7 +555,12 @@ const UNCLAIMED_RATCHET = 150;
 // router, and counts the route calls it could not attribute, a reading of the
 // generator's output that no registered pattern expresses; the SC-2813
 // describe in test/gen-code-map.test.ts names it (2026-11-26).
-const CLAIMED_UNBINDABLE = 217;
+// 218: SC-2818 (#2891) ticked by `sync-sc-status --only SC-2818` — the scan
+// reports quoted lists naming registered features, documents nothing generates
+// or checks, and hand-typed totals that disagree with the registry, a reading
+// of a repository that no registered pattern expresses; the SC-2818 describes
+// in test/hand-typed-scan.test.ts name it (2026-11-26).
+const CLAIMED_UNBINDABLE = 218;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
