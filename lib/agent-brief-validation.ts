@@ -17,6 +17,7 @@ import {
   statSync,
 } from 'fs';
 import { join } from 'path';
+import { shipSkillPath } from './ship-skill-folder';
 
 // --- Interfaces ---
 
@@ -220,7 +221,7 @@ function findSizingFromCheckpoint(workDir: string): string | null {
 }
 
 function validateBriefPolicies(baseDir: string, agent: AgentDef, prompt: string): string[] {
-  const policyPath = join(baseDir, 'skills', 'ship', 'brief-policies.json');
+  const policyPath = shipSkillPath(baseDir, 'brief-policies.json');
   if (!existsSync(policyPath)) return [];
   try {
     const raw = readFileSync(policyPath, 'utf-8').trim();

@@ -3,6 +3,7 @@ import { join, basename, dirname } from "path";
 import { fileURLToPath } from "url";
 import { plantCanaries, getDefaultCanaries } from "../lib/canary.js";
 import { tryLoadRungateConfig } from "../lib/config-loader";
+import { shipSkillPath } from "../lib/ship-skill-folder";
 import {
   classifyContextDoc, classifyContextDocs, contextDocLines, contextDocNotes, hasBriefUnsafeChars,
   type ContextDocVerdict,
@@ -44,14 +45,13 @@ const PACKAGED_BRIEF_POLICIES = join(
   "brief-policies.json",
 );
 
-/** A local edit layered over the shipped policies. Absent is the normal case. */
-const BRIEF_POLICIES_OVERRIDE = join(
-  process.env.HOME || "",
-  ".claude",
-  "skills",
-  "ship",
-  "brief-policies.json",
-);
+/**
+ * A local edit layered over the shipped policies, in the ship skill's folder
+ * (`ship-issue` before `ship`, #2932). Absent is the normal case.
+ */
+function briefPoliciesOverride(): string {
+  return shipSkillPath(join(process.env.HOME || "", ".claude"), "brief-policies.json");
+}
 
 export async function assembleBrief(opts: AssembleBriefInput): Promise<AssembleResult> {
   const { slug, workDir, projectRoot } = opts;
@@ -382,11 +382,12 @@ export function loadBriefPolicies(): any {
     );
   }
   const shipped = JSON.parse(readFileSync(PACKAGED_BRIEF_POLICIES, "utf-8"));
-  if (!existsSync(BRIEF_POLICIES_OVERRIDE)) return shipped;
+  const overridePath = briefPoliciesOverride();
+  if (!existsSync(overridePath)) return shipped;
 
   // Per agent type, so an override naming only `marcus` does not delete the
   // shipped `quinn` and `rook` entries.
-  const override = JSON.parse(readFileSync(BRIEF_POLICIES_OVERRIDE, "utf-8"));
+  const override = JSON.parse(readFileSync(overridePath, "utf-8"));
   return {
     ...shipped,
     ...override,
