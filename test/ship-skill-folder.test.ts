@@ -161,7 +161,7 @@ describe("#2932: no source reader spells the skill folder's path outside the res
         const around = code.slice(Math.max(0, m.index - 60), m.index + m[0].length + 30);
         hits.push(`${f}: ${around.replace(/\s+/g, " ").trim()}`);
       }
-      const skills = SKILLS_PART.exec(code), ship = SHIP_PART.exec(code);
+      const skills = code.match(SKILLS_PART), ship = code.match(SHIP_PART);
       if (hits.length === before && skills && ship) {
         hits.push(`${f}: names the skills folder (${skills[0]}) and the skill (${ship[0]}) apart`);
       }
