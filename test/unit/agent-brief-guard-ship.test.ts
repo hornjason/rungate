@@ -1,10 +1,11 @@
 /**
- * Regression tests for AgentBriefGuard.hook.ts — ship-active enforcement
+ * Regression tests for AgentBriefGuard.hook.ts — the ship-active check
  * Covers:
- *   1. Engineer BLOCKED when no .ship-active marker exists anywhere in MEMORY/WORK/
- *   2. Engineer ALLOWED when valid .ship-active marker exists (< 4 hours old)
- *   3. Engineer BLOCKED when marker exists but is > 4 hours old (stale)
+ *   1. Engineer ALLOWED with an advisory when no .ship-active marker exists (#2881)
+ *   2. Engineer ALLOWED, with no advisory, when a valid marker exists (< 4 hours old)
+ *   3. Engineer ALLOWED with the advisory when the marker is > 4 hours old (#2881)
  *   4. Quinn/Rook NOT affected by ship-active check (they pass without marker)
+ *   5. The permission-mode refusal still blocks an Engineer with no ship session
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
@@ -16,9 +17,11 @@ import {
   existsSync,
   readdirSync,
   readFileSync,
+  utimesSync,
 } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { validateAgentBrief, checkShipActive as readShipMarker } from '../../lib/agent-brief-validation';
 
 let tempDir: string;
 let workDir: string;
@@ -192,7 +195,9 @@ describe('AgentBriefGuard — ship-active enforcement', () => {
       });
     }
 
-    it('BLOCKS Engineer when no .ship-active marker exists', async () => {
+    // #2881: an agent working an issue outside a ship run may use the
+    // Engineer; it is told what a ship run would have added instead.
+    it('ALLOWS Engineer with an advisory when no .ship-active marker exists (#2881)', async () => {
       const proc = Bun.spawn(['bun', 'run', hookPath], {
         stdin: Buffer.from(makePayload('Engineer')),
         stdout: 'pipe',
@@ -204,9 +209,10 @@ describe('AgentBriefGuard — ship-active enforcement', () => {
       const stderr = await new Response(proc.stderr).text();
       await proc.exited;
 
-      expect(stdout).toContain('"decision":"block"');
-      expect(stdout).toContain('ship');
-      expect(stderr).toContain('BLOCKED');
+      expect(stdout).not.toContain('"decision":"block"');
+      expect(stdout).toContain('ADVISORY: no ship session');
+      expect(stderr).toContain('spawn validated');
+      expect(stderr).not.toContain('BLOCKED');
     });
 
     it('ALLOWS Engineer when valid .ship-active marker exists', async () => {
@@ -230,7 +236,7 @@ describe('AgentBriefGuard — ship-active enforcement', () => {
       expect(stderr).toContain('spawn validated');
     });
 
-    it('BLOCKS Engineer when marker is stale (> 4 hours old)', async () => {
+    it('ALLOWS Engineer with the advisory when the marker is stale (> 4 hours old) (#2881)', async () => {
       const staleTs = new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString();
       createShipMarker('65-engineer-guard', 65, staleTs);
 
@@ -245,9 +251,23 @@ describe('AgentBriefGuard — ship-active enforcement', () => {
       const stderr = await new Response(proc.stderr).text();
       await proc.exited;
 
-      expect(stdout).toContain('"decision":"block"');
-      expect(stdout).toContain('ship');
-      expect(stderr).toContain('BLOCKED');
+      expect(stdout).not.toContain('"decision":"block"');
+      expect(stdout).toContain('ADVISORY: no ship session');
+      expect(stderr).toContain('spawn validated');
+    });
+
+    it('ALLOWS Engineer with no advisory when a valid marker exists (#2881)', async () => {
+      createShipMarker('65-engineer-guard', 65, new Date().toISOString());
+      const proc = Bun.spawn(['bun', 'run', hookPath], {
+        stdin: Buffer.from(makePayload('Engineer')),
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: { ...process.env, PAI_DIR: tempDir, RUNGATE_WORK_DIR: workDir, HOOK_EVENT: 'PreToolUse' },
+      });
+      const stdout = await new Response(proc.stdout).text();
+      await proc.exited;
+      expect(stdout).not.toContain('"decision":"block"');
+      expect(stdout).not.toContain('ADVISORY: no ship session');
     });
 
     it('Quinn NOT affected — passes with active ship session', async () => {
@@ -288,6 +308,118 @@ describe('AgentBriefGuard — ship-active enforcement', () => {
       expect(stdout).not.toContain('"decision":"block"');
       expect(stdout).toContain('system-reminder');
       expect(stderr).toContain('spawn validated');
+    });
+  });
+
+  // #2881: what the decision itself returns, read without the hook process.
+  describe('validateAgentBrief: no ship session is an advisory, not a refusal (#2881)', () => {
+    const brief = (mode: string | undefined) => ({
+      tool_name: 'Agent',
+      tool_input: {
+        prompt: ['## Context', '## Task', '## Verify', '## Report back'].join('\n\nContent here.\n\n'),
+        subagent_type: 'Engineer',
+        ...(mode ? { mode } : {}),
+      },
+    });
+
+    it('passes, names what a ship run adds, and logs an unblocked no_ship_session signal', () => {
+      const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+      expect(r.action).toBe('pass');
+      const advisory = r.outputs.find(o => o.startsWith('ADVISORY: no ship session'));
+      expect(advisory).toBeDefined();
+      for (const word of ['scope', 'criteria', 'discovery', 'sizing']) expect(advisory!.toLowerCase()).toContain(word);
+      expect(r.signalEvents).toContainEqual(expect.objectContaining({
+        type: 'agent_spawn_advisory', agent: 'marcus', blocked: false, advisory_reason: 'no_ship_session',
+      }));
+      expect(r.signalEvents.some(e => e.blocked === true)).toBe(false);
+    });
+
+    it('a fresh marker gives no advisory and no no_ship_session signal', () => {
+      createShipMarker('65-engineer-guard', 65, new Date().toISOString());
+      const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+      expect(r.action).toBe('pass');
+      expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(false);
+      expect(r.signalEvents.some(e => e.advisory_reason === 'no_ship_session')).toBe(false);
+    });
+
+    // #2899 review round 1: a marker whose date cannot be read is no evidence
+    // of a session, at either reader; and a stale marker must not hide a live
+    // ship run's workflow-state.json.
+    it('a marker with an unreadable date is no session: the advisory is printed', () => {
+      createShipMarker('65-bad-date', 65, 'not-a-date');
+      const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+      expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(true);
+    });
+
+    it('an unreadable date beside a fresh marker does not hide the fresh one', () => {
+      createShipMarker('65-bad-date', 65, 'yesterday');
+      createShipMarker('66-fresh', 66, new Date().toISOString());
+      const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+      expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(false);
+    });
+
+    it('a stale marker does not hide a live ship run in workflow-state.json', () => {
+      createShipMarker('60-old', 60, new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString());
+      mkdirSync(join(workDir, '66-live'), { recursive: true });
+      writeFileSync(join(workDir, '66-live', 'workflow-state.json'), JSON.stringify({ issue: 66, phase: 'BUILD' }));
+      const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+      expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(false);
+      expect(r.signalEvents.some(e => e.advisory_reason === 'no_ship_session')).toBe(false);
+    });
+
+    // #2899 review round 2: the reader itself drops an unreadable date, so the
+    // row does not depend on which marker readdir returns first; and a
+    // workflow-state.json is live only while it is fresh.
+    it('the marker reader drops a marker whose date does not parse', () => {
+      createShipMarker('65-bad-date', 65, 'not-a-date');
+      expect(readShipMarker(workDir)).toBeNull();
+    });
+
+    it('a workflow-state.json left by a finished run days ago is no session', () => {
+      const dir = join(workDir, '66-done');
+      mkdirSync(dir, { recursive: true });
+      const wf = join(dir, 'workflow-state.json');
+      writeFileSync(wf, JSON.stringify({ issue: 66, phase: 'DONE' }));
+      const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+      utimesSync(wf, old, old);
+      const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+      expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(true);
+      expect(r.signalEvents).toContainEqual(expect.objectContaining({ advisory_reason: 'no_ship_session' }));
+    });
+
+    // #2899 review round 3, Jason's option 1: every live-phase file is read and
+    // the newest decides, so the order readdir lists them in cannot matter. The
+    // same two directories swap contents between the cases, so whatever order
+    // readdir uses (APFS lists by name hash), one case lists the old file first.
+    for (const [doneName, liveName] of [['run-x', 'run-y'], ['run-y', 'run-x']]) {
+      it(`a three-day-old DONE file does not hide a live BUILD run (${doneName} beside ${liveName})`, () => {
+        const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+        mkdirSync(join(workDir, doneName), { recursive: true });
+        const done = join(workDir, doneName, 'workflow-state.json');
+        writeFileSync(done, JSON.stringify({ issue: 66, phase: 'DONE' }));
+        utimesSync(done, old, old);
+        mkdirSync(join(workDir, liveName), { recursive: true });
+        writeFileSync(join(workDir, liveName, 'workflow-state.json'), JSON.stringify({ issue: 67, phase: 'BUILD' }));
+        const r = validateAgentBrief(brief('bypassPermissions') as never, workDir, tempDir);
+        expect(r.outputs.some(o => o.startsWith('ADVISORY: no ship session'))).toBe(false);
+        expect(r.signalEvents.some(e => e.advisory_reason === 'no_ship_session')).toBe(false);
+      });
+    }
+
+    it('the real marker reader returns the newest of two valid markers, in either order', () => {
+      createShipMarker('run-x', 60, '2026-06-29T10:00:00Z');
+      createShipMarker('run-y', 65, '2026-06-29T14:00:00Z');
+      expect(readShipMarker(workDir)).toEqual({ issue: 65, ts: '2026-06-29T14:00:00Z' });
+      createShipMarker('run-x', 65, '2026-06-29T14:00:00Z');
+      createShipMarker('run-y', 60, '2026-06-29T10:00:00Z');
+      expect(readShipMarker(workDir)).toEqual({ issue: 65, ts: '2026-06-29T14:00:00Z' });
+    });
+
+    it('the permission-mode refusal is unchanged with no ship session', () => {
+      const r = validateAgentBrief(brief(undefined) as never, workDir, tempDir);
+      expect(r.action).toBe('block');
+      expect(r.blockReason).toContain('bypassPermissions');
+      expect(r.signalEvents).toContainEqual(expect.objectContaining({ blocked: true, block_reason: 'missing_bypass_permissions' }));
     });
   });
 });

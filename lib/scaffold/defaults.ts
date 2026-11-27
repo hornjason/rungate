@@ -197,7 +197,7 @@ export function buildDefaultHooks(): HookRegistration[] {
       deployToConsumers: true,
       scope: "project",
       matcher: "Agent",
-      description: "Validates agent brief templates and enforces the ship-active marker",
+      description: "Validates agent brief templates, and warns an Engineer spawn that has no fresh ship-active marker",
     },
     {
       name: "AgentVerdictCapture",
