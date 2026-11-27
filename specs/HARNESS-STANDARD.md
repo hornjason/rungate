@@ -12654,7 +12654,7 @@ same name, so an agent asking for "ship" could get either (#2882). Jason
 named the harness skill `ship-issue` on 2026-11-26.
 `docs/adr/ADR-029-rename-the-ship-skill.md` orders the change.
 
-- [ ] SC-2819: No file rungate generates for a consumer, and no live source, spec or test of rungate's own, tells an agent to invoke the ship skill by its old name; they name `Skill("ship-issue")`, only dated records under `docs/adr/`, `docs/research/` and `reference/` keep the old name, no command of rungate's own answers to `/ship-issue`, and every reader of a file in the skill's folder looks in `~/.claude/skills/ship-issue/` before `~/.claude/skills/ship/`
+- [ ] SC-2819: No file rungate generates for a consumer, and no live source, spec or test of rungate's own, tells an agent to invoke the ship skill by its old name; they name `Skill("ship-issue")`, only dated records under `docs/adr/`, `docs/research/` and `reference/` keep the old name, no command of rungate's own answers to `/ship-issue`, and every read of a file in the skill's folder goes through one exported resolver, which looks in `~/.claude/skills/ship-issue/` before `~/.claude/skills/ship/`
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 
 ## The ai-review baseline was read fifteen seconds before the restore (#836)
