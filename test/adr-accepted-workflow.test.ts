@@ -745,6 +745,8 @@ describe("#2842: the merge trigger's name is checked, kept current, and a run th
     expect(typo).not.toContain("none found");
     // CONTROL: no workflow at all still reads "none found", and a name that matches is silent.
     expect(mergeWorkflowWarning("Merge", [], [], [])).toContain("none found");
+    expect(mergeWorkflowWarning("Merge", [], [], [])).toContain("so the trigger never fires");
+    expect(mergeWorkflowWarning("Merge", [], [".github/workflows/x.yml (bad)"], [])).toContain("unless one of the files that could not be read has it, the trigger never fires");
     expect(mergeWorkflowWarning("Merge", ["Merge"], [], [path])).toBeNull();
 
     const root = mkdtempSync(join(tmpdir(), "rg-2873-nameless-"));
@@ -781,13 +783,17 @@ describe("#2842: the merge trigger's name is checked, kept current, and a run th
         expect(w).not.toContain("never fires");
       }
       expect(warnings("Approve")).toEqual([]);
-      expect(warnings("2024")).toEqual([]);
+      // A name that is not text is never guessed at: 2024 and 1.0 are read as numbers, so the name GitHub shows is unread.
+      const number = warnings("2024");
+      expect(number).toHaveLength(1);
+      expect(number[0]).toContain(".github/workflows/year.yml (its name: is not text");
+      expect(number[0]).toContain("unless one of the files that could not be read has it, the trigger never fires");
       const missing = warnings(".github/workflows/absent.yml");
       expect(missing).toHaveLength(1);
       expect(missing[0]).toContain(`${path} (no name:)`);
       expect(missing[0]).toContain(".github/workflows/blank.yml (no name:)");
       expect(missing[0]).toContain(".github/workflows/quoted.yml (no name:)");
-      expect(missing[0]).toContain(".github/workflows/listname.yml (its name: is not a single value)");
+      expect(missing[0]).toContain(".github/workflows/listname.yml (its name: is not text");
       for (const f of ["empty.yml", "multi.yml"]) {
         expect(missing[0]).toContain(`.github/workflows/${f} (not one workflow mapping)`);
         expect(missing[0]).not.toContain(`.github/workflows/${f} (no name:)`);

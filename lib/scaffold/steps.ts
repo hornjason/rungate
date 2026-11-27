@@ -4654,9 +4654,10 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     const names: string[] = [];
     const unreadable: string[] = [];
     // #2873: a workflow with no name:, or a blank one, is shown by GitHub
-    // under its path, so it is listed by that path, never dropped. A number or
-    // a boolean is shown as written. A file that is not one workflow mapping
-    // (empty, several documents, a bare value) is named as unreadable.
+    // under its path, so it is listed by that path, never dropped. A name that
+    // is not text (`name: 1.0` parses to the number 1) is not guessed at: the
+    // name GitHub shows for it is unread, so it is named as unreadable, as is a
+    // file that is not one workflow mapping (empty, several documents, a bare value).
     const nameless: string[] = [];
     const dir = join(root, ".github", "workflows");
     for (const f of existsSync(dir) ? readdirSorted(dir).filter(n => /\.ya?ml$/.test(n)) : []) {
@@ -4668,9 +4669,8 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
         }
         const name = (doc as { name?: unknown }).name;
         if (typeof name === "string" && name.trim() !== "") names.push(name);
-        else if (typeof name === "number" || typeof name === "boolean") names.push(String(name));
         else if (name === undefined || name === null || typeof name === "string") nameless.push(`.github/workflows/${f}`);
-        else unreadable.push(`.github/workflows/${f} (its name: is not a single value)`);
+        else unreadable.push(`.github/workflows/${f} (its name: is not text, so the name GitHub shows for it is UNMEASURED)`);
       } catch (e) {
         unreadable.push(`.github/workflows/${f} (${(e as Error).message})`);
       }

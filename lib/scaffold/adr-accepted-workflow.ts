@@ -158,7 +158,7 @@ export function mergeWorkflowWarning(
   return (
     `WARN: board.mergeWorkflow is ${JSON.stringify(mergeWorkflow)}, and no workflow under .github/workflows has that name ` +
     `(${seen.length === 0 ? "none found" : seen.join(", ")}).${unread} ` +
-    `The workflow_run triggers in adr-accepted.yml and specs-placed.yml name it, so the trigger never fires and a merge made by automation places nothing. ` +
+    `The workflow_run triggers in adr-accepted.yml and specs-placed.yml name it, so ${unreadable.length === 0 ? "" : "unless one of the files that could not be read has it, "}the trigger never fires and a merge made by automation places nothing. ` +
     `Set board.mergeWorkflow to the merging workflow's name: exactly, and re-run rungate scaffold.`
   );
 }
