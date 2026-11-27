@@ -146,6 +146,14 @@ export interface ReviewControlSubject {
    * before.
    */
   cause: string | null;
+  /**
+   * #2929 review round 1. The other caller the cause still reaches, which
+   * REVIEW.md also asks the reviewer to say. When set beside `cause`, a
+   * finding must name both: a finding that names the producer only to clear
+   * it ("readRoundCap itself is correct") rarely names the second caller.
+   * `null` when the case declares none.
+   */
+  reachedBy: string | null;
   /** Absolute path of the candidate — the post-change file under review. */
   candidatePath: string;
   /** Absolute path of the baseline — the committed pre-change file. */
@@ -179,8 +187,16 @@ export interface ReviewControlReading {
   blockingCount: number | null;
   /** Non-blocking findings — noise, reported, never fatal. */
   advisoryCount: number | null;
-  /** Blocking findings that landed on this subject's declared plant. */
+  /** Blocking findings that landed on this subject's declared plant and, where it declares a cause, named it. */
   plantHits: number;
+  /**
+   * #2929 review round 1. Blocking findings in the plant's range, whether or
+   * not they named its cause. A finding on the plant that names no cause is a
+   * miss for recall, but it is a finding about the plant, so precision counts
+   * it here and never as a false positive. Equal to `plantHits` on a case
+   * that declares no cause.
+   */
+  onPlant: number;
   /**
    * #1533. Clean arm only: blocking findings on no line the candidate
    * changed — named in `detail`, never scored. `null` on a planted arm and
@@ -241,6 +257,7 @@ function unmeasuredReading(
     blockingCount: null,
     advisoryCount: null,
     plantHits: 0,
+    onPlant: 0,
     preExistingBlocking: null,
     payloadOutcome: null,
     unmeasuredReasons: reasons,
@@ -360,10 +377,20 @@ export function findingNamesCause(
   subject: ReviewControlSubject,
   finding: Record<string, unknown>,
 ): boolean {
-  if (subject.cause === null) return true;
+  return missingCauseNames(subject, finding).length === 0;
+}
+
+/**
+ * #2929. The declared cause names (`cause`, then `reachedBy`) that the
+ * finding's summary and failure scenario, read together, never name as a
+ * whole identifier. Empty when the case declares none.
+ */
+function missingCauseNames(subject: ReviewControlSubject, finding: Record<string, unknown>): string[] {
   const f = AI_REVIEW_FINDING_FIELDS;
-  const word = new RegExp(`(?<![A-Za-z0-9_$])${subject.cause.replace(/\$/g, "\\$")}(?![A-Za-z0-9_$])`);
-  return [finding[f.summary], finding[f.failureScenario]].some(t => typeof t === "string" && word.test(t));
+  const text = [finding[f.summary], finding[f.failureScenario]].filter(t => typeof t === "string").join("\n");
+  return [subject.cause, subject.reachedBy]
+    .filter((name): name is string => name !== null)
+    .filter(name => !new RegExp(`(?<![A-Za-z0-9_$])${name.replace(/\$/g, "\\$")}(?![A-Za-z0-9_$])`).test(text));
 }
 
 /** True when a finding lands in the plant's range and, if the case declares a cause, names it. */
@@ -444,9 +471,10 @@ export function readReviewControl(
       if (item[f.file] !== subject.file) continue;
       if (findingHitsPlant(subject, item) && severityBlocks(item[f.severity])) continue;
       if (subject.cause !== null && findingInPlantRange(subject, item) && severityBlocks(item[f.severity])) {
+        const missing = missingCauseNames(subject, item).map(name => `\`${name}\``).join(" or ");
         detail.push(
           `names no cause: ${renderFinding(i, item)} — it lands on the plant and blocks, but never names ` +
-            `\`${subject.cause}\`, the producer the diff leaves wrong`,
+            `${missing}; a finding on this plant must name the producer the diff leaves wrong and the other caller it still reaches`,
         );
         continue;
       }
@@ -460,7 +488,7 @@ export function readReviewControl(
       detail.push(
         `MISSED: no blocking finding at ${subject.file}:` +
           `${subject.lines?.[0]}-${subject.lines?.[1]}` +
-          (subject.cause === null ? "" : ` names \`${subject.cause}\``) +
+          (subject.cause === null ? "" : ` names ${[subject.cause, subject.reachedBy].filter(n => n !== null).map(n => `\`${n}\``).join(" and ")}`) +
           `. ${subject.note}`,
       );
     }
@@ -473,6 +501,7 @@ export function readReviewControl(
       blockingCount: blocking.length,
       advisoryCount,
       plantHits: hits.length,
+      onPlant: blocking.filter(b => findingInPlantRange(subject, b)).length,
       preExistingBlocking: null,
       payloadOutcome: payload.outcome,
       unmeasuredReasons: [],
@@ -514,6 +543,7 @@ export function readReviewControl(
     blockingCount: blocking.length,
     advisoryCount,
     plantHits: 0,
+    onPlant: 0,
     preExistingBlocking,
     payloadOutcome: payload.outcome,
     unmeasuredReasons: [],
@@ -547,7 +577,8 @@ export function summariseReviewControl(readings: ReviewControlReading[]): Review
   // neither half of precision. Left in the denominator with no hit to match,
   // it read as a precision failure the reading had just said was not one.
   const blockingTotal = measured.reduce((n, r) => n + (r.blockingCount ?? 0) - (r.preExistingBlocking ?? 0), 0);
-  const plantHits = measured.reduce((n, r) => n + r.plantHits, 0);
+  // #2929: precision counts every blocking finding on a plant, named or not.
+  const onPlant = measured.reduce((n, r) => n + r.onPlant, 0);
   const advisory = measured.reduce((n, r) => n + (r.advisoryCount ?? 0), 0);
   const contradictions = measured.filter(r => r.payloadOutcome === "CONTRADICTION").length;
 
@@ -574,7 +605,7 @@ export function summariseReviewControl(readings: ReviewControlReading[]): Review
     unmeasured,
     contradictions,
     advisory,
-    precision: blockingTotal === 0 ? null : plantHits / blockingTotal,
+    precision: blockingTotal === 0 ? null : onPlant / blockingTotal,
     recall: plantedMeasured === 0 ? null : detected / plantedMeasured,
     passed: covered && unmeasured === 0 && missed === 0 && fired === 0,
     detail,
@@ -751,6 +782,15 @@ export function loadReviewControlSubjects(dir: string): ReviewControlSubject[] {
       if ("cause" in c && (typeof c.cause !== "string" || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(c.cause))) {
         throw new Error(`${manifestPath}: planted case ${c.id} has cause ${JSON.stringify(c.cause)}, which is not one identifier`);
       }
+      if ("reachedBy" in c && kind === "clean") {
+        throw new Error(`${manifestPath}: clean case ${c.id} declares a reachedBy, which only a planted case can carry`);
+      }
+      if ("reachedBy" in c && !("cause" in c)) {
+        throw new Error(`${manifestPath}: planted case ${c.id} declares reachedBy without a cause`);
+      }
+      if ("reachedBy" in c && (typeof c.reachedBy !== "string" || !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(c.reachedBy))) {
+        throw new Error(`${manifestPath}: planted case ${c.id} has reachedBy ${JSON.stringify(c.reachedBy)}, which is not one identifier`);
+      }
       const candidatePath = join(subjectDir, c.candidate);
       const baselinePath = join(subjectDir, baseline);
       const candidateText = kind === "clean" ? readFileSync(candidatePath, "utf-8") : null;
@@ -761,6 +801,7 @@ export function loadReviewControlSubjects(dir: string): ReviewControlSubject[] {
         lines,
         marker: typeof c.marker === "string" ? c.marker : null,
         cause: typeof c.cause === "string" ? c.cause : null,
+        reachedBy: typeof c.reachedBy === "string" ? c.reachedBy : null,
         candidatePath,
         baselinePath,
         changedLines:

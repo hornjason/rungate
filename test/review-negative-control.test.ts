@@ -1153,9 +1153,11 @@ describe("#2928: a planted case that declares a cause is DETECTED only when a fi
   const read = (findings: Record<string, unknown>[]) =>
     readReviewControl(SG_PLANTED, payload(findings, AI_REVIEW_BLOCK_VERDICT), REVIEWER);
 
-  test("the subject declares its cause", () => {
+  test("the subject declares its cause and the other caller the cause still reaches", () => {
     expect(SG_PLANTED.cause).toBe("readRoundCap");
+    expect(SG_PLANTED.reachedBy).toBe("roundsLeftLabel");
     expect(SG_CLEAN.cause).toBeNull();
+    expect(SG_CLEAN.reachedBy).toBeNull();
   });
 
   test("a blocking finding on the guard that names the producer is DETECTED", () => {
@@ -1178,17 +1180,52 @@ describe("#2928: a planted case that declares a cause is DETECTED only when a fi
   });
 
   test("a finding on the producer's own line that names it is DETECTED", () => {
-    expect(read([sgFinding("readRoundCap returns NaN for text it cannot parse", { line: PRODUCER_LINE })]).outcome).toBe("DETECTED");
+    expect(read([sgFinding("readRoundCap returns NaN for text it cannot parse, and roundsLeftLabel still prints it", { line: PRODUCER_LINE })]).outcome).toBe("DETECTED");
   });
 
   test("a longer identifier that only contains the name does not count", () => {
     for (const name of ["readRoundCaps", "readRoundCapValue", "_readRoundCap"]) {
-      expect(read([sgFinding(`the guard masks NaN from ${name}`)]).outcome, name).toBe("MISSED");
+      expect(read([sgFinding(`the guard masks NaN from ${name}, which roundsLeftLabel still reads`)]).outcome, name).toBe("MISSED");
     }
+  });
+
+  // Review round 1 of #2929: a finding can name the producer only to clear it.
+  // REVIEW.md asks for the producer AND whether another caller still reaches
+  // it, so both names are required; a finding that clears the producer rarely
+  // names the second caller. The residual case, both named and the producer
+  // still cleared, scores DETECTED, and the reading quotes the finding.
+  test("a finding that names the producer only to clear it is MISSED, and the reading names what it left out", () => {
+    const r = read([sgFinding("the guard in mayStartRound masks NaN; readRoundCap itself is correct and needs no change", { failure_scenario: "rounds start again" })]);
+    expect(r.outcome).toBe("MISSED");
+    expect(r.detail.join("\n")).toContain("names no cause");
+    expect(r.detail.join("\n")).toContain("roundsLeftLabel");
+  });
+
+  test("naming the other caller without the producer is MISSED too", () => {
+    expect(read([sgFinding("roundsLeftLabel still prints NaN after this change", { failure_scenario: "the comment reads NaN rounds left" })]).outcome).toBe("MISSED");
+  });
+
+  test("the two names may sit in different fields", () => {
+    expect(read([sgFinding("the guard leaves readRoundCap returning NaN", { failure_scenario: "roundsLeftLabel prints NaN rounds left" })]).outcome).toBe("DETECTED");
+  });
+
+  // Review round 1 of #2929: a finding on the plant that names no cause is a
+  // miss for recall, but it is still a finding about the plant, so it is not a
+  // false positive in the run's precision.
+  test("an on-plant finding that names no cause is MISSED for recall and still counts toward precision", () => {
+    const r = read([sgFinding("this guard hides an unreadable cap instead of fixing it", { failure_scenario: "rounds start again" })]);
+    expect(r.outcome).toBe("MISSED");
+    expect(r.plantHits).toBe(0);
+    expect(r.onPlant).toBe(1);
+    const quiet = readReviewControl(SG_CLEAN, payload([], AI_REVIEW_PASS_VERDICT), REVIEWER);
+    const run = summariseReviewControl([r, quiet]);
+    expect(run.recall).toBe(0);
+    expect(run.precision).toBe(1);
   });
 
   test("a case that declares no cause scores as before", () => {
     expect(PLANTED.cause).toBeNull();
+    expect(PLANTED.reachedBy).toBeNull();
     expect(readReviewControl(PLANTED, payload([onThePlant()], AI_REVIEW_BLOCK_VERDICT), REVIEWER).outcome).toBe("DETECTED");
   });
 
@@ -1207,6 +1244,9 @@ describe("#2928: a planted case that declares a cause is DETECTED only when a fi
       [{ kind: "planted", lines: [1, 1], cause: 7 }, /cause/],
       [{ kind: "planted", lines: [1, 1], cause: "" }, /cause/],
       [{ kind: "planted", lines: [1, 1], cause: "two words" }, /cause/],
+      [{ kind: "planted", lines: [1, 1], reachedBy: "b" }, /reachedBy without a cause/],
+      [{ kind: "planted", lines: [1, 1], cause: "a", reachedBy: "two words" }, /reachedBy/],
+      [{ kind: "clean", reachedBy: "b" }, /clean case s\/c declares a reachedBy/],
     ];
     for (const [c, why] of cases) {
       const dir = manifest(c);
