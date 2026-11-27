@@ -407,6 +407,8 @@ describe("SC-2813: every router's routes, every page, and what could not be attr
     plant(root, { "src/api.ts": 'import { Hono } from "hono";\nconst api = new Hono();\napi.get("/inside", c => c.text(""));\n' });
     symlinkSync(root, join(root, "src", "loop"));
     symlinkSync(outside, join(root, "src", "elsewhere"));
+    // A link to one file outside, with a source extension, is not read either.
+    symlinkSync(join(outside, "x.ts"), join(root, "src", "linked.ts"));
     const proc = Bun.spawnSync(["bun", GENERATOR, root], { cwd: join(import.meta.dir, "..") });
     expect(proc.exitCode, proc.stderr.toString()).toBe(0);
     const md = readFileSync(join(root, "CODE-MAP.md"), "utf-8");
