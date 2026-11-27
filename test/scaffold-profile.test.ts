@@ -113,7 +113,9 @@ describe("#449 PROFILE-2: minimal still produces an AI-friendly repo", () => {
 
   test("the AGENTS.md generated under minimal does not advertise the ship workflow", () => {
     const agents = readFileSync(join(minimal, "AGENTS.md"), "utf-8");
-    expect(agents).not.toContain("Skill(\"ship\")");
+    // Either name (#2930): after the rename, a check for only the old one would
+    // pass while the new one was advertised.
+    expect(agents).not.toMatch(/Skill\("ship(-issue)?"\)/);
   });
 });
 

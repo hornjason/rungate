@@ -62,7 +62,7 @@ export const STEPS_NOT_MINIMAL: ReadonlyMap<string, string> = new Map([
 export const RULES_NOT_MINIMAL: ReadonlyMap<string, string> = new Map([
   [
     "ship-workflow.md",
-    'instructs an agent to route all work through Skill("ship"), which has no harness here to route into',
+    'instructs an agent to route all work through Skill("ship-issue"), which has no harness here to route into',
   ],
   [
     "harness-managed.md",

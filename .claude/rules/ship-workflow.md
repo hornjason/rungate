@@ -1,13 +1,14 @@
 ---
 description: This project ships DIRECTLY as of 2026-10-19 — do not route work through the ship workflow
-generated-sha: b2e59c22f7ee2a0b
+generated-sha: 9506dd42c51b9872
 ---
+
 ## Direct-ship mode, since 2026-10-19
 
 **This project is in direct-ship mode as of 2026-10-19: stabilising RunGate and clearing the backlogs, until we get RunGate under control.**
 
 Shipping an issue without the ship workflow is the current, declared policy of
-this project. Do not call `Skill("ship")` and do not invoke
+this project. Do not call `Skill("ship-issue")` and do not invoke
 `Workflow({ scriptPath: "workflows/ship.run.js" })`. If another document tells you
 to, that document is out of date and this one is not: the mode is declared in
 `.claude/rungate/config.json` under `ship`, and this file is generated from it, so a
@@ -39,13 +40,13 @@ and the reason above are the answer.
 ## This is temporary, and reversible in one line
 
 Set `ship.mode` back to `"harness"` in `.claude/rungate/config.json` and re-scaffold.
-Nothing about the harness has been removed — `Skill("ship")` and
+Nothing about the harness has been removed — `Skill("ship-issue")` and
 `workflows/ship.js` are unchanged and still work.
 
-## When the harness IS in use: check the launch base first
+## Project-owned: when the harness IS in use, check the launch base first
 
 Kept here through the direct-ship period because it is the harness rule that
-is hardest to rediscover. It applies to a `Skill("ship")` run, which this
+is hardest to rediscover. It applies to a `Skill("ship-issue")` run, which this
 project is not doing right now — see the mode above.
 
 ```bash
