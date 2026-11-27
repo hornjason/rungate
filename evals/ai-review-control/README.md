@@ -43,6 +43,8 @@ is not a control.
 | `suite-lock-redirect/clean` | clean | a behaviour-preserving refactor of the same baseline: two locals renamed, the operand test extracted to a named function. |
 | `worktree-state-write/planted` | planted | the new arm lets a **linked worktree** through to the ok path, so the project-state generator runs with `projectRoot` set to the worktree. `CLAUDE.md` says an agent running in a worktree must never write `project-state.json`, `PROJECT-STATE.md` or `SUCCESS.md` (#296). |
 | `worktree-state-write/clean` | clean | the same change to the same arm without the break: a linked worktree gets its own outcome name instead of being lumped in with a subdirectory, and is still refused. |
+| `symptom-guard/planted` | planted | the report is "an unreadable round cap stops every review round". The diff guards `mayStartRound`, the caller where it surfaced, so rounds start again, but `readRoundCap` still returns NaN and `roundsLeftLabel`, the other caller, still prints "NaN rounds left". It declares `cause: readRoundCap` and `reachedBy: roundsLeftLabel` (#2928). |
+| `symptom-guard/clean` | clean | the same NaN-to-default fallback written in `readRoundCap`, so both callers get the default. It changes as many lines as the planted diff with the same expression. |
 
 `worktree-state-write` is a compacted copy of the decision half of
 `lib/project-state-root.ts`, with its three filesystem readings lifted into a
@@ -79,6 +81,8 @@ sentence the plant contradicts is really in `CLAUDE.md`, read from the
 repository rather than quoted in the manifest, and that the candidates agree
 line for line outside the arm. Each of those is backed by a mutation row in
 that file's header.
+
+**`symptom-guard` measures where a fix sits (#2928).** `REVIEW.md` tells the reviewer, on a bug fix, to say what produced the reported state and whether the diff reaches it. Both candidates make the report stop, so a reviewer that reads only whether the symptom is gone cannot tell them apart. The planted case declares a `cause`, the producer's name, and a `reachedBy`, the other caller it still reaches. A blocking finding in its range is DETECTED only when its summary and failure scenario, read together, name both. A finding on the guard that names neither scores MISSED, and so does one that names `readRoundCap` only to clear it, which rarely names the second caller; the reading says which names were left out. A finding that names both and still clears the producer scores DETECTED, and the reading quotes it. An on-plant finding that names no cause is a miss for recall, but it still counts toward the run's precision, because it is a finding about the plant (review round 1 of #2929). `test/review-negative-control.test.ts` runs the three files over a table of caps and round counts: the candidates agree at `mayStartRound`, the planted one still prints NaN at `roundsLeftLabel`, the clean one never does, and each changes the same number of lines: the planted one in the caller, the clean one in the producer.
 
 ## Running it locally
 
