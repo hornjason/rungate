@@ -550,7 +550,12 @@ const UNCLAIMED_RATCHET = 150;
 // manifest's schema and validator refuse a manifest naming a file, page or
 // route the tree does not hold, a reading of the validator that no registered
 // pattern expresses; test/feature-manifest.test.ts covers it (2026-11-26).
-const CLAIMED_UNBINDABLE = 216;
+// 217: SC-2813 (#2889) ticked by `sync-sc-status --only SC-2813` — the code
+// map lists every route on every router a file creates and every page in the
+// router, and counts the route calls it could not attribute, a reading of the
+// generator's output that no registered pattern expresses; the SC-2813
+// describe in test/gen-code-map.test.ts names it (2026-11-26).
+const CLAIMED_UNBINDABLE = 217;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });
