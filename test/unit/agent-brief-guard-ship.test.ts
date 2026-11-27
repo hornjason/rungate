@@ -389,8 +389,9 @@ describe('AgentBriefGuard — ship-active enforcement', () => {
 
     // #2899 review round 3, Jason's option 1: every live-phase file is read and
     // the newest decides, so the order readdir lists them in cannot matter. The
-    // names swap between the two cases, so one of them lists the old file first.
-    for (const [doneName, liveName] of [['a-66-done', 'b-67-live'], ['b-66-done', 'a-67-live']]) {
+    // same two directories swap contents between the cases, so whatever order
+    // readdir uses (APFS lists by name hash), one case lists the old file first.
+    for (const [doneName, liveName] of [['run-x', 'run-y'], ['run-y', 'run-x']]) {
       it(`a three-day-old DONE file does not hide a live BUILD run (${doneName} beside ${liveName})`, () => {
         const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
         mkdirSync(join(workDir, doneName), { recursive: true });
@@ -406,13 +407,11 @@ describe('AgentBriefGuard — ship-active enforcement', () => {
     }
 
     it('the real marker reader returns the newest of two valid markers, in either order', () => {
-      createShipMarker('a-60-old', 60, '2026-06-29T10:00:00Z');
-      createShipMarker('b-65-new', 65, '2026-06-29T14:00:00Z');
+      createShipMarker('run-x', 60, '2026-06-29T10:00:00Z');
+      createShipMarker('run-y', 65, '2026-06-29T14:00:00Z');
       expect(readShipMarker(workDir)).toEqual({ issue: 65, ts: '2026-06-29T14:00:00Z' });
-      rmSync(workDir, { recursive: true, force: true });
-      mkdirSync(workDir, { recursive: true });
-      createShipMarker('a-65-new', 65, '2026-06-29T14:00:00Z');
-      createShipMarker('b-60-old', 60, '2026-06-29T10:00:00Z');
+      createShipMarker('run-x', 65, '2026-06-29T14:00:00Z');
+      createShipMarker('run-y', 60, '2026-06-29T10:00:00Z');
       expect(readShipMarker(workDir)).toEqual({ issue: 65, ts: '2026-06-29T14:00:00Z' });
     });
 
