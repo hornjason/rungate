@@ -6,6 +6,8 @@ import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import {
   LANES,
+  boardReadInFull,
+  emptyBoardLine,
   handPlacedInReview,
   handPlacedInReviewLine,
   laneHealth,
@@ -696,7 +698,37 @@ describe("#1921 / SC-2759: handPlacedInReview", () => {
     // contains the name and throws the reading away.
     expect(call, "the report's own closing list").toMatch(/^\s*declaredClosing,\s*$/m);
     expect(call, "the report's own record of cut closing lists").toMatch(/^\s*closingTruncated,\s*$/m);
-    expect(call, "the board's own completeness").toMatch(/complete:\s*!truncated\b/);
+    // #2940: through the one decider, which an empty board passes.
+    expect(call, "the board's own completeness").toMatch(/complete:\s*boardReadInFull\(status\)/);
     expect(src, "the reading is decided and never printed").toContain("handPlacedInReviewLine(handPlaced)");
+  });
+});
+
+/**
+ * #2940: a board read in full that holds no issue cards is a measurement.
+ *
+ * DDB's new board held nothing, and every lane read "the board could not be
+ * paged in full": work-status passed `complete: !truncated && status.size > 0`.
+ * `boardStatus()` throws on a page it could not read, so the only partial
+ * reading left is an item whose field page truncated.
+ */
+describe("#2940: a board that holds no issues was read in full, and says so", () => {
+  test("an empty board and an ordinary one were read in full; a truncated field page was not", () => {
+    expect(boardReadInFull(new Map())).toBe(true);
+    expect(boardReadInFull(new Map([[1, "Ready"], [2, "(no status)"]]))).toBe(true);
+    expect(boardReadInFull(new Map([[1, "Ready"], [2, "(UNMEASURED — fields truncated)"]]))).toBe(false);
+  });
+
+  test("its lanes are readings, not floors: none says the board could not be paged", () => {
+    const empty = new Map<number, string>();
+    const rows = laneHealth(census({ counts: new Map(), pickable: 0, openAssigned: 0, cancelledClosed: 0, complete: boardReadInFull(empty) }));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.filter(r => /could not be paged/.test(r.why)).map(r => r.lane)).toEqual([]);
+    expect(rows.every(r => r.count === 0)).toBe(true);
+  });
+
+  test("an empty board says it holds no issue cards; a board holding some says nothing", () => {
+    expect(emptyBoardLine(new Map())).toContain("holds no issue cards");
+    expect(emptyBoardLine(new Map([[1, "Ready"]]))).toBeNull();
   });
 });

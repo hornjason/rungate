@@ -1903,3 +1903,14 @@ describe("SC-2764: the filing cap line names the counts and the cap they set", (
   });
 });
 
+
+// #2940: both lane readings take completeness from the one function, so an
+// empty board cannot read as unpaged in one place and paged in the other.
+describe("#2940: the report decides whether the board was read in full in one place", () => {
+  test("both lane readings call boardReadInFull, and no read is judged by its size", () => {
+    const script = readFileSync(join(ROOT, "scripts", "work-status.ts"), "utf-8");
+    expect(script.split("complete: boardReadInFull(status)").length - 1).toBe(2);
+    expect(script).not.toContain("status.size > 0");
+    expect(script).toContain("emptyBoardLine(status)");
+  });
+});
