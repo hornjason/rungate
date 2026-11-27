@@ -76,6 +76,12 @@
       "from": 290,
       "to": 295,
       "namespace": "FG"
+    },
+    {
+      "owner": "rg/2882-adr-ship-issue",
+      "from": 2819,
+      "to": 2819,
+      "note": "ADR-029 criterion (#2882)"
     }
   ]
 }
