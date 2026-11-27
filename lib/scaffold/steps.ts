@@ -4659,6 +4659,7 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
     // name GitHub shows for it is unread, so it is named as unreadable, as is a
     // file that is not one workflow mapping (empty, several documents, a bare value).
     const nameless: string[] = [];
+    const named = new Map<string, string>();
     const dir = join(root, ".github", "workflows");
     for (const f of existsSync(dir) ? readdirSorted(dir).filter(n => /\.ya?ml$/.test(n)) : []) {
       try {
@@ -4668,14 +4669,17 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
           continue;
         }
         const name = (doc as { name?: unknown }).name;
-        if (typeof name === "string" && name.trim() !== "") names.push(name);
+        if (typeof name === "string" && name.trim() !== "") {
+          names.push(name);
+          named.set(`.github/workflows/${f}`, name);
+        }
         else if (name === undefined || name === null || typeof name === "string") nameless.push(`.github/workflows/${f}`);
         else unreadable.push(`.github/workflows/${f} (its name: is not text, so the name GitHub shows for it is UNMEASURED)`);
       } catch (e) {
         unreadable.push(`.github/workflows/${f} (${(e as Error).message})`);
       }
     }
-    const warning = mergeWorkflowWarning(boardInputs.mergeWorkflow, names, unreadable, nameless);
+    const warning = mergeWorkflowWarning(boardInputs.mergeWorkflow, names, unreadable, nameless, named);
     if (warning !== null) actions.push(warning);
   }
   if (boardInputs.mergeWorkflowIgnored !== null) actions.push(mergeWorkflowIgnoredWarning(boardInputs.mergeWorkflowIgnored));

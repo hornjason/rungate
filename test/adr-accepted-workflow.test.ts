@@ -748,6 +748,10 @@ describe("#2842: the merge trigger's name is checked, kept current, and a run th
     expect(mergeWorkflowWarning("Merge", [], [], [])).toContain("so the trigger never fires");
     expect(mergeWorkflowWarning("Merge", [], [".github/workflows/x.yml (bad)"], [])).toContain("unless one of the files that could not be read has it, the trigger never fires");
     expect(mergeWorkflowWarning("Merge", ["Merge"], [], [path])).toBeNull();
+    // A named workflow given by its path is UNMEASURED too, and the warning gives its name.
+    const namedByPath = mergeWorkflowWarning(".github/workflows/ci.yml", ["CI"], [], [], new Map([[".github/workflows/ci.yml", "CI"]]))!;
+    for (const part of ["UNMEASURED", 'Set board.mergeWorkflow to "CI"']) expect(namedByPath, part).toContain(part);
+    expect(namedByPath).not.toContain("never fires");
 
     const root = mkdtempSync(join(tmpdir(), "rg-2873-nameless-"));
     try {
@@ -783,6 +787,10 @@ describe("#2842: the merge trigger's name is checked, kept current, and a run th
         expect(w).not.toContain("never fires");
       }
       expect(warnings("Approve")).toEqual([]);
+      const approveByPath = warnings(".github/workflows/approve.yml");
+      expect(approveByPath).toHaveLength(1);
+      expect(approveByPath[0]).toContain('Set board.mergeWorkflow to "Approve"');
+      expect(approveByPath[0]).not.toContain("never fires");
       // A name that is not text is never guessed at: 2024 and 1.0 are read as numbers, so the name GitHub shows is unread.
       const number = warnings("2024");
       expect(number).toHaveLength(1);

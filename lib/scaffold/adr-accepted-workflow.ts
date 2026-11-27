@@ -136,17 +136,29 @@ export function buildMergedGateScript(workflowFile: string = ADR_ACCEPTED_WORKFL
  * section of "Events that trigger workflows" shows `workflows:` only with
  * names: it does not say a path matches. Read 2026-11-26. So a nameless
  * workflow named by its path is UNMEASURED, and every nameless workflow is
- * listed by its path rather than left out of the warning.
+ * listed by its path rather than left out of the warning. `named` is each
+ * named workflow's path and name: a path that is a named workflow's is
+ * UNMEASURED for the same reason, and the warning gives the name to use.
  */
 export function mergeWorkflowWarning(
   mergeWorkflow: string | null,
   names: readonly string[],
   unreadable: readonly string[] = [],
   nameless: readonly string[] = [],
+  named: ReadonlyMap<string, string> = new Map(),
 ): string | null {
   if (mergeWorkflow === null || names.includes(mergeWorkflow)) return null;
   // A path is compared as GitHub shows it: from the repository root, so a leading ./ is dropped.
-  if (nameless.includes(mergeWorkflow.replace(/^\.\//, ""))) {
+  const asPath = mergeWorkflow.replace(/^\.\//, "");
+  const nameAtPath = named.get(asPath);
+  if (nameAtPath !== undefined) {
+    return (
+      `WARN: board.mergeWorkflow is ${JSON.stringify(mergeWorkflow)}, the path of the workflow named ${JSON.stringify(nameAtPath)}. ` +
+      `GitHub's documentation shows a workflow_run trigger matching a workflow by its name and does not say a path matches, so whether the ` +
+      `triggers in adr-accepted.yml and specs-placed.yml fire is UNMEASURED. Set board.mergeWorkflow to ${JSON.stringify(nameAtPath)}, and re-run rungate scaffold.`
+    );
+  }
+  if (nameless.includes(asPath)) {
     return (
       `WARN: board.mergeWorkflow is ${JSON.stringify(mergeWorkflow)}, a workflow with no name:. GitHub shows a workflow with no name: by its path, ` +
       `but its documentation does not say a workflow_run trigger matches one by its path, so whether the triggers in adr-accepted.yml and ` +
