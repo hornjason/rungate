@@ -101,7 +101,7 @@ Suite: 25/25 SCs done.
 ---
 
 **Session 2026-11-27 session 108 (ADR-028's manifest and code-map rows land; six PRs parked at round 3 are decided; ADR-029 waits on Jason):**
-- MERGED: 18 PRs since session 107 (#2857 to #2911), the last of them (#2907) on 2026-11-27. No release.
+- MERGED: 18 PRs since session 107, numbered #2857 to #2911. The last to merge was #2907, on 2026-11-27, a second after #2911. No release.
 - ADR-028 IS ACCEPTED AND ITS FIRST ROWS ARE IN: Jason merged ADR-028 (#2857) and #2880 placed its plan. The feature-manifest schema and validator (#2910, SC-2812) and a code map that reads every router and every page (#2911, SC-2813) are merged. The typed-by-hand scan (#2913, SC-2818) is approved to merge. The rows left are the proof chain (#2890), the stale-manifest check (#2893) and the feature-map command.
 - ADR-027'S PLAN IS DONE: the write guard is an accident guard cut under 2,000 lines (#2866, closing #2859), and it reads cp -t, a wrapper flag that takes a word, and unlisted wrappers (#2870).
 - ONE PRESENCE DECIDER: one decider answers "is it there?" for both surfaces (#2887), and its answer is opaque, so a hand-read is a compile error (#2909). An unreadable config is named, never read as absent (#2885), and a missing file is told apart from one that cannot be read (#2876).
