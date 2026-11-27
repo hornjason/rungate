@@ -69,7 +69,7 @@
       "owner": "rg/adr-030-consumer-hand-set",
       "from": 2820,
       "to": 2822,
-      "note": "ADR-030 criteria (#2917); above ADR-029's 2819, reserved on rg/2882-adr-ship-issue"
+      "note": "ADR-030 criteria (#2917); starts above SC-2819, which ADR-029's unmerged PR #2900 reserves as its only id"
     }
   ]
 }

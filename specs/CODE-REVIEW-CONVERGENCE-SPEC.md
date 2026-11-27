@@ -3126,7 +3126,7 @@ Recorded because each one invalidates a naive reading of the criteria above.
       proved-by: test/review-execution-reading.test.ts "CRC-M19: CRC-M18 is retired with its diff-budget script, and the census half stays"
       fingerprint: d457c8f2
       placement: Phase 5
-- [ ] CRC-B14: A reviewer run that failed before the reviewer started, its step failing with no execution file written, is run once more; a run that started and failed is reported as it is today, and a round is never measured as a pass from fewer runs than planned (Jason, 2026-11-27, ADR-030).
+- [ ] CRC-B14: A reviewer run that failed before its first model call is run once more; a run that reached the model and failed, or was cut short, is reported as it is today, and a round is never measured as a pass from fewer runs than planned (Jason, 2026-11-27, ADR-030).
       needs: test
       placement: Phase 2
 - [ ] CRC-B15: When a pull request changes a `docs/adr/*.md` file that has a Decomposition table, the AI review job writes `plan-issues --decompose <adr> --json`, the dry run with no `--write`, into the findings directory, and the reviewer's prompt says that file is how the filing tool parsed the table (Jason, 2026-11-27, ADR-030).

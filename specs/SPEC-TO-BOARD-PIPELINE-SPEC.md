@@ -655,7 +655,7 @@ acceptance test, so it is also the honest answer to *when is the engine done*
       proved-by: test/adr-accepted-workflow.test.ts "SC-2788: a merge-triggered run closes the issues the merged pull requests declare"
       fingerprint: 3e729c9d
       placement: Phase 7
-- [ ] SC-2820: a pull request that changes an ADR carrying a Decomposition table is refused by `closing-references` while that ADR's status is anything but `accepted`, so the owner's merge is never the step that accepts a plan; an ADR with no Decomposition table, or one already accepted, is not refused (Jason, 2026-11-27, ADR-030)
+- [ ] SC-2820: a pull request that changes an ADR carrying a Decomposition table is refused by `closing-references` while that ADR still says `status: proposed`, so the owner's merge is never the step that accepts a plan; an ADR with no Decomposition table, or with any other status, is not refused (Jason, 2026-11-27, ADR-030)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       placement: Phase 7
