@@ -528,10 +528,11 @@ describe("#479: the live reconciliation, over what the repo owns", () => {
     const unmeasured = live().filter(f => f.kind === "unmeasured");
     expect(unmeasured.length, "no entry reported UNMEASURED").toBeGreaterThan(0);
     const names = new Set(unmeasured.map(f => f.hook));
-    // BashToolGuard is the registration this repo has been running longest,
-    // and it lives in user settings. If it ever reads as measured, something
-    // has started claiming to see a file the repo does not own.
-    expect(names.has("BashToolGuard")).toBe(true);
+    // TopLevelCdGuard is declared at user scope and lives in user settings
+    // (BashToolGuard held this place until #2939 retired it). If it ever
+    // reads as measured, something has started claiming to see a file the
+    // repo does not own.
+    expect(names.has("TopLevelCdGuard")).toBe(true);
   });
 
   /**

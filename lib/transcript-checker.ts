@@ -13,7 +13,6 @@ import { harnessRootFor } from "./paths.js";
 import { stripJsComments } from "./strip-js-comments.js";
 import type { Directive } from "./directive-extractor.js";
 import { checkCanaries, type CanaryDefinition, type CanaryReport } from "./canary.js";
-import { isBashFileRead } from "./bash-file-read.js";
 // COMP-2's limit is the guard's limit. One number, one owner.
 //
 // The POLICY constant, deliberately NOT the environment-aware resolver.
@@ -663,28 +662,6 @@ const sharedCriteria: EvalCriterion[] = [
             : `${dupCount} files read multiple times: ${Object.entries(data.duplicateReads)
                 .map(([p, c]) => `${basename(p)} (${c}x)`)
                 .join(", ")}`,
-      };
-    },
-  },
-  {
-    id: "COMP-7",
-    rule: "No cat/head via Bash (use Read)",
-    weight: 5,
-    source: "marcus.md § Never Do",
-    check(data) {
-      // Shares detectBashFileRead with BashToolGuard so the grader can never
-      // flag something the hook allows (or miss something the hook blocks).
-      const catBashes = data.bashes.filter((b) =>
-        isBashFileRead(b) &&
-        !b.includes("<<") &&
-        !b.includes("/tmp/claude-") &&
-        !b.includes(".output") &&
-        !b.includes(".exit")
-      );
-      return {
-        verdict: catBashes.length === 0 ? "FOLLOWED" : "IGNORED",
-        evidence:
-          catBashes.length === 0 ? "Clean" : `${catBashes.length} cat commands found`,
       };
     },
   },

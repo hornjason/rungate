@@ -57,7 +57,6 @@ deployment path currently reaches zero hooks.
 | WorkflowStateGuard | WorkflowStateGuard.hook.ts | 97 | SC-370, SC-371 | Ideal thin trigger. **Declared at USER scope since #1585; registered live in ~/.claude/settings.json (2026-11-15, #2225).** Its matcher has no project scoping and a live `workflow-state.json` is almost never inside the project root (`lib/bash-write-guard.ts`), so it guards machine-wide state; its `project` registration never fired while `GateResultProtection` fired on the same calls from user settings. The repo no longer registers it (SC-518) and reports it UNMEASURED. Consumers still receive it — deployment filters on `deployToConsumers`, not scope. The session-start hook-currency reading reports it if user settings stops registering it (#2229). |
 | TestSuiteGuard | TestSuiteGuard.hook.ts | 45 | SC-473, SC-370, SC-625 | Ideal thin trigger — logic in lib/test-suite-lock.ts |
 | TestSuiteRelease | TestSuiteRelease.hook.ts | 42 | SC-370, SC-516, SC-517, SC-518, SC-625 | Ideal thin trigger — logic in lib/test-suite-lock.ts. **Registered nowhere (#910)** |
-| BashToolGuard | BashToolGuard.hook.ts | 82 | SC-457, SC-370 | Thin trigger — COMP-7 enforcement. Row added by #898's census, which is what first noticed it had none |
 | ProjectStateSync | ProjectStateSync.hook.ts | 43 | SC-370, SC-371 | Thin trigger — delegates to update-project-state.ts. **Registered nowhere (#910)** |
 | TopLevelCdGuard | TopLevelCdGuard.hook.ts | 108 | SC-370, SC-371 | Thin trigger — the parse and the rung both live in lib/top-level-cd.ts. **Declared a HARD REFUSAL at USER scope (#992, reclassified by #1578); registered live since #1986.** Jason's decision on the refusal, taken with the measurement in hand rather than against it: 32.7% of 31,577 recorded commands carry a top-level `cd`, every one of them real, so it fires often by design. `#1040` built the WARN→FAIL ladder and took no rung; this takes `block` by moving `CD_GUARD_DEFAULT_MODE`, so `RUNGATE_CD_GUARD=warn\|off` still reverses it without code. Scoped to harnessed projects via lib/harness-project.ts. The refusal exits through `CD_GUARD_DECISION`, the single mutable site. **#1578 corrected the scope, and the correction is the interesting part.** #992 registered it at project scope reasoning that `${CLAUDE_PROJECT_DIR}` is the worktree and every worktree carries the committed `.claude/settings.json`. The worktree does carry it; the session does not load it. Measured in a worktree registering this hook: three bare `cd` calls unrefused, while user-scoped COMP-7 fired on the same `Bash` matcher in the same session, with the decider returning `block` when invoked by hand from that cwd. So it was green, registered and inert from #1050 to #1578. What a hook protects decides its scope, and this protects the SESSION's primary directory — machine-wide under SC-518, misclassified from the start. The repo no longer registers it in `.claude/settings.json` (SC-518: dual registration fires twice) and `test/hook-registration-reconciler.test.ts` reports it UNMEASURED every run, which is the honest reading rather than a loss. Registered live in ~/.claude/settings.json (measured 2026-11-11, #1986). The session-start hook-currency reading reports it if user settings stops registering it (#2229). |
 | BunTestPathGuard | BunTestPathGuard.hook.ts | 107 | SC-370, SC-371, SC-2540, SC-2541, SC-2542, SC-2543, SC-2544, SC-2545, SC-2546, SC-2547 | Thin trigger — the parse, the stat and the rung all live in lib/bun-test-paths.ts. **Registered as a hard refusal at project scope (#1544).** `bun test` treats a path argument matching no file as a name FILTER and exits non-zero only when NOTHING matched, so `bun test <real> <absent>` exits 0 and prints a pass total. Measured on bun 1.3.14 in this tree: lone absent path → exit 1; real + absent → exit 0, `Ran 4 tests across 1 file`; real + `./`absent → exit 0 and no message at all, so the `./` prefix bun itself suggests is quieter than the bare form rather than louder and is not a remedy. The issue's headline reading of exit 0 for a LONE absent path did not reproduce — that came from a pipeline, where `$?` is the last element's. Bound to the Bash tool rather than a wrapper on a measurement: 55 sites in this tree exec `bun test` with a path argument and 49 are inside `test/`, so a wrapper covers 0 of them the day it lands and covers a hand-composed command never — and the failure that produced the issue was a hand-composed command. The declared gap is the complement: a spawn from inside a running process never reaches a PreToolUse hook. Three argument classes are skipped rather than resolved, because the hook sees the command before the shell expands it — globs, variables and substitutions, and anything not path-shaped (bun's bare-word name filter is legitimate). A path is resolved against EVERY candidate root — the tool call's cwd plus every `cd` target the command names — and refused only when absent under all of them; see SC-2545 for why that replaces modelling subshell scoping, and for the AI review on PR #1562 that found the single-root reading wrong in both directions. `RUNGATE_BUN_TEST_PATH_GUARD=warn\|off` reverses it without code. The refusal exits through `BUN_TEST_PATH_GUARD_DECISION`, the single mutable site |
@@ -77,6 +76,12 @@ machine rather than a file move, and `HookIntegrity`, which hard-codes
 `~/.pai/hooks` and `~/.claude` and duplicates `HookCurrency.hook.ts` — the
 classification itself asks for those two to be reconciled rather than both
 shipped.
+
+`BashToolGuard` (COMP-7, "use Read, not cat/head/tail via Bash") had a row
+here until #2939 retired it: Claude Code's Edit and Write tools refuse a file
+that was not Read in the session, and its bypass-mode prompt tells the model
+to read files with cat or head, so the guard refused 1,205 tool calls in 30
+days and protected nothing the platform does not.
 
 **Correctly scoped and still inert (#1585).** When #1579 moved
 `TopLevelCdGuard` to user scope, its audit found five hooks still enabled at
@@ -184,7 +189,7 @@ witness it.
 
 ### Verdicts
 
-**12 SHIP, 4 OPT-IN, 4 HARNESS-ONLY.** `StaleTTLCleanup` was classified SHIP in the
+**11 SHIP, 4 OPT-IN, 4 HARNESS-ONLY** (12 SHIP until #2939 retired BashToolGuard). `StaleTTLCleanup` was classified SHIP in the
 first pass and corrected on review: the classification had been made from the
 hook's header and first screen, and the destructive arm is behind an
 `await import` sixty lines down. AC-15 in `test/hook-traceability.test.ts` is
@@ -194,7 +199,6 @@ remote-destructive git call. **Reading a hook's header is not classifying it.**
 
 | Hook | Consumer | Why |
 |---|---|---|
-| BashToolGuard | **SHIPS** | Registered in a scaffolded consumer's `.claude/settings.local.json` by `deployHooksToConsumers`. |
 | TopLevelCdGuard | **SHIPS** | Registered in a scaffolded consumer's `.claude/settings.local.json` by `deployHooksToConsumers`. |
 | TestSuiteGuard | **SHIPS** | Registered in a scaffolded consumer's `.claude/settings.local.json` by `deployHooksToConsumers`. |
 | TestSuiteRelease | **SHIPS** | Registered in a scaffolded consumer's `.claude/settings.local.json` by `deployHooksToConsumers`. |

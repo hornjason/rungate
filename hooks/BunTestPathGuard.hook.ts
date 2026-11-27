@@ -8,7 +8,7 @@
  *
  * The decision lives in lib/bun-test-paths.ts and not here — hooks are thin
  * triggers (HOOK-ARCHITECTURE-SPEC), the same shape as TopLevelCdGuard over
- * lib/top-level-cd.ts and BashToolGuard over lib/bash-file-read.ts.
+ * lib/top-level-cd.ts.
  *
  * Refuses a Bash command that hands `bun test` a path matching no file.
  *
@@ -36,7 +36,7 @@
  * `~/.claude/settings.json`, which no PR can carry.
  *
  * SCOPED to harnessed projects via lib/harness-project.ts, the same decider
- * TopLevelCdGuard and BashToolGuard use.
+ * TopLevelCdGuard uses.
  *
  * Issue: #1544
  */
