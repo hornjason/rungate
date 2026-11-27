@@ -228,8 +228,7 @@ and the reason above are the answer.
 ## This is temporary, and reversible in one line
 
 Set \`ship.mode\` back to \`"harness"\` in \`${CONFIG_PATH}\` and re-scaffold.
-Nothing about the harness has been removed: \`workflows/ship.js\` is unchanged
-and still works, and \`Skill("ship-issue")\` launches it wherever that skill is
-installed.
+Nothing about the harness has been removed: \`workflows/ship.js\` still works,
+and \`Skill("ship-issue")\` launches it where that skill is installed.
 `;
 }
