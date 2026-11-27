@@ -746,7 +746,10 @@ describe("#2842: the merge trigger's name is checked, kept current, and a run th
     // CONTROL: no workflow at all still reads "none found", and a name that matches is silent.
     expect(mergeWorkflowWarning("Merge", [], [], [])).toContain("none found");
     expect(mergeWorkflowWarning("Merge", [], [], [])).toContain("so the trigger never fires");
-    expect(mergeWorkflowWarning("Merge", [], [".github/workflows/x.yml (bad)"], [])).toContain("unless one of the files that could not be read has it, the trigger never fires");
+    // #2915 review round 3: the unreadable list also holds a name: that was read and is not text, so both sentences say so.
+    const unread = mergeWorkflowWarning("Merge", [], [".github/workflows/x.yml (bad)"], [])!;
+    expect(unread).toContain("x.yml (bad) could not be read, or have a name: that is not text, so whether one of them has it is UNMEASURED.");
+    expect(unread).toContain("unless one of the files that could not be read, or whose name: is not text, has it, the trigger never fires");
     expect(mergeWorkflowWarning("Merge", ["Merge"], [], [path])).toBeNull();
     // A named workflow given by its path is UNMEASURED too, and the warning gives its name.
     const namedByPath = mergeWorkflowWarning(".github/workflows/ci.yml", ["CI"], [], [], new Map([[".github/workflows/ci.yml", "CI"]]))!;
@@ -795,7 +798,8 @@ describe("#2842: the merge trigger's name is checked, kept current, and a run th
       const number = warnings("2024");
       expect(number).toHaveLength(1);
       expect(number[0]).toContain(".github/workflows/year.yml (its name: is not text");
-      expect(number[0]).toContain("unless one of the files that could not be read has it, the trigger never fires");
+      expect(number[0]).toContain("could not be read, or have a name: that is not text, so whether one of them has it is UNMEASURED.");
+      expect(number[0]).toContain("unless one of the files that could not be read, or whose name: is not text, has it, the trigger never fires");
       const missing = warnings(".github/workflows/absent.yml");
       expect(missing).toHaveLength(1);
       expect(missing[0]).toContain(`${path} (no name:)`);

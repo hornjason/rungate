@@ -165,12 +165,12 @@ export function mergeWorkflowWarning(
       `specs-placed.yml fire is UNMEASURED. Give that workflow a name:, set board.mergeWorkflow to it, and re-run rungate scaffold.`
     );
   }
-  const unread = unreadable.length === 0 ? "" : ` ${unreadable.join(", ")} could not be read, so whether one of them has it is UNMEASURED.`;
+  const unread = unreadable.length === 0 ? "" : ` ${unreadable.join(", ")} could not be read, or have a name: that is not text, so whether one of them has it is UNMEASURED.`;
   const seen = [...names.map(n => JSON.stringify(n)), ...nameless.map(p => `${p} (no name:)`)];
   return (
     `WARN: board.mergeWorkflow is ${JSON.stringify(mergeWorkflow)}, and no workflow under .github/workflows has that name ` +
     `(${seen.length === 0 ? "none found" : seen.join(", ")}).${unread} ` +
-    `The workflow_run triggers in adr-accepted.yml and specs-placed.yml name it, so ${unreadable.length === 0 ? "" : "unless one of the files that could not be read has it, "}the trigger never fires and a merge made by automation places nothing. ` +
+    `The workflow_run triggers in adr-accepted.yml and specs-placed.yml name it, so ${unreadable.length === 0 ? "" : "unless one of the files that could not be read, or whose name: is not text, has it, "}the trigger never fires and a merge made by automation places nothing. ` +
     `Set board.mergeWorkflow to the merging workflow's name: exactly, and re-run rungate scaffold.`
   );
 }
