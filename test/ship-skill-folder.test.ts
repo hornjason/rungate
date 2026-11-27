@@ -5,8 +5,10 @@
  * Rounds 1 to 3 of ADR-029's review each found a reader of the folder that a
  * hand-kept list had missed, because three of them build the path from parts.
  * So the population is read from the tree: the last describe below strips
- * comments with the transpiler and refuses any other spelling of the folder's
- * path in non-test source, whole or in parts. The two tests that read the
+ * comments with the transpiler and refuses the folder's path in non-test
+ * source whole, in parts, or with either part held in a constant in the same
+ * file. A name carried in from another module, or assembled from pieces of
+ * strings, is out of its reach (review of #2936). The two tests that read the
  * folder, `gates/e2e-smoke.test.ts` and `gates/workflow.test.ts`, are in the
  * file list of ADR-029's last row, so tests join this population there.
  */
@@ -120,6 +122,12 @@ describe("#2932: no source reader spells the skill folder's path outside the res
   // (`"skills", "ship"`), in any quote. Comments are stripped first, so a
   // sentence that mentions the path is not a read.
   const SPELLING = /["'`]skills["'`]\s*,\s*["'`]ship(?:-issue)?["'`]|skills\/ship(?:-issue)?(?=[\/"'`])/g;
+  // The two parts apart, anywhere in one file: `const SHIP = "ship"` beside
+  // `join(home, ".claude", "skills", SHIP)` reads the folder and spells
+  // neither part next to the other (review of #2936). Two of the 495 files
+  // name a skills folder at all, and neither also names the skill.
+  const SKILLS_PART = /["'`]skills["'`]|skills\//;
+  const SHIP_PART = /["'`]ship(?:-issue)?["'`]|\/ship(?:-issue)?(?=[\/"'`])/;
   type TranspilerOptions = ConstructorParameters<typeof Bun.Transpiler>[0];
   const transpilers = {
     ts: new Bun.Transpiler({ loader: "ts", macro: false } as unknown as TranspilerOptions),
@@ -148,9 +156,14 @@ describe("#2932: no source reader spells the skill folder's path outside the res
     for (const f of files) {
       // Matched over the whole file, so a path split across lines is one hit.
       const code = codeOf(f, read(f));
+      const before = hits.length;
       for (const m of code.matchAll(SPELLING)) {
         const around = code.slice(Math.max(0, m.index - 60), m.index + m[0].length + 30);
         hits.push(`${f}: ${around.replace(/\s+/g, " ").trim()}`);
+      }
+      const skills = SKILLS_PART.exec(code), ship = SHIP_PART.exec(code);
+      if (hits.length === before && skills && ship) {
+        hits.push(`${f}: names the skills folder (${skills[0]}) and the skill (${ship[0]}) apart`);
       }
     }
     return hits;
@@ -171,7 +184,7 @@ describe("#2932: no source reader spells the skill folder's path outside the res
     expect(spellings(listed, f => readFileSync(join(REPO, f), "utf-8"))).toEqual([]);
   });
 
-  test("the detector sees the path whole, in parts and in either name, and not in a comment", () => {
+  test("the detector sees the path whole, in parts, through a constant and in either name, and not in a comment", () => {
     const planted: Record<string, string> = {
       "parts.ts": `const p = join(base, "skills", "ship", "x.json");`,
       "single.ts": `const p = join(base, 'skills', 'ship-issue', 'x.json');`,
@@ -181,9 +194,16 @@ describe("#2932: no source reader spells the skill folder's path outside the res
       "lines.ts": `const p = join(\n  base,\n  "skills",\n  "ship",\n  "x.json",\n);`,
       // Shaped like a real workflow: it awaits and returns at top level.
       "workflow.js": `export const meta = { name: "x" };\nconst r = await agent("x");\nconst p = join(base, "skills", "ship", "x.json");\nreturn { r, p };`,
+      // Review of #2936: either part held in a constant.
+      "constant.ts": `const SHIP = "ship";\nconst p = join(home, ".claude", "skills", SHIP, "x.json");`,
+      "split.ts": `const SKILLS = "skills";\nconst p = join(home, ".claude", SKILLS, "ship-issue", "x.json");`,
+      "template.ts": "const NAME = 'ship';\nconst p = `${home}/.claude/skills/${NAME}/x.json`;",
+      // Controls: the skill's name with no skills folder, and another skill's folder.
+      "gate-name.ts": `writeGateResult(sf, "ship", 1, 0, 0, results);`,
+      "other-skill.ts": `const p = join(home, ".claude", "skills", "board", "x.json");`,
     };
     const hits = spellings(Object.keys(planted), f => planted[f]!);
-    expect(hits.map(h => h.split(":")[0]).sort()).toEqual(["lines.ts", "parts.ts", "single.ts", "whole.ts", "workflow.js"]);
+    expect(hits.map(h => h.split(":")[0]).sort()).toEqual(["constant.ts", "lines.ts", "parts.ts", "single.ts", "split.ts", "template.ts", "whole.ts", "workflow.js"]);
   });
 
   test("a file that cannot be parsed fails the scan by name, rather than being read as clean", () => {
