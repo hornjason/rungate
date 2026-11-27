@@ -1412,8 +1412,9 @@ start, and a reading below one did not time a scaffold. A faster runner
 moves both numbers together, which is the same argument that produced
 `BUDGET_MULTIPLE` one issue earlier.
 - [x] SC-2781: lib/scaffold/managed-workflow.ts contains [HARNESS_AUTHORED_PATHS] — re-scaffold over an older generated workflow writes the current value of every path the harness authors, `on.pull_request.types` included; it never reports such a file unchanged while the fresh render differs (#2292, worded by Jason 2026-11-16)
-- [ ] SC-2812: Rungate publishes a feature-manifest schema, and its validator refuses a manifest that names a file, page or route the tree does not hold
+- [x] SC-2812: Rungate publishes a feature-manifest schema, and its validator refuses a manifest that names a file, page or route the tree does not hold
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      proved-by: test/feature-manifest.test.ts
 - [ ] SC-2813: The code map lists every route registered on any router a file creates, and every page in the router, and says how many routes it could not attribute to a router
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2814: Rungate derives each feature's proof chain (claims, criteria, tests, mutation records) and its ADRs from ADR criteria tables, keeping the source row and the provenance class of every link
