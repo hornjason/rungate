@@ -17,6 +17,7 @@ import { join } from "path";
 import {
   FEATURE_MANIFEST_VERSION,
   featureManifestSchema,
+  spellingIn,
   treeReading,
   validateManifest,
   validateManifestText,
@@ -238,7 +239,9 @@ describe("#2888: against a real tree, read through the presence decider", () => 
   });
 
   test("a name the tree spells differently is refused on every file system (#2910 review)", () => {
-    expect(real.fileAt("src/Cases.ts")).toMatchObject(process.platform === "darwin" ? { kind: "spelled", as: "src/cases.ts" } : { kind: "absent" });
+    // A case-sensitive file system finds nothing; a case-insensitive one finds
+    // the file and the spelling check names the tree's spelling. Either way, refused.
+    expect(["spelled", "absent"]).toContain(real.fileAt("src/Cases.ts").kind);
     const spelled = tree({ fileAt: rel => (rel === "src/Cases.ts" ? { kind: "spelled", as: "src/cases.ts" } : FILES[rel] ?? { kind: "absent" }) });
     expect(refusalsOf(edit(m => (m.features[0].entryFiles = ["src/Cases.ts"])), spelled)).toEqual(["feature 'cases' names 'src/Cases.ts', which the tree spells 'src/cases.ts'"]);
   });
@@ -252,5 +255,39 @@ describe("#2888: against a real tree, read through the presence decider", () => 
 
   test("with no pages or routes read, the reader supplies no reading, so they are unmeasured", () => {
     expect(validateManifest(manifest(), treeReading(root)).verdict).toBe("unmeasured");
+  });
+});
+
+/**
+ * #2910 review round 2: the spelling comparison, run with a directory lister
+ * the test supplies, so it is exercised on a case-sensitive CI file system
+ * too, where the decider never reaches it for a real file.
+ */
+describe("#2910: the tree's own spelling, on any file system", () => {
+  const listing: Record<string, string[]> = {
+    "/r": ["src"],
+    "/r/src": ["cases.ts", "caf\u0065\u0301.ts"],
+  };
+  const list = (dir: string) => {
+    if (dir === "/r/locked") throw Object.assign(new Error("denied"), { code: "EACCES" });
+    return listing[dir] ?? [];
+  };
+
+  test("the same spelling is the same", () => {
+    expect(spellingIn("/r", "src/cases.ts", list)).toEqual({ kind: "same" });
+  });
+
+  test("a different case names the tree's spelling", () => {
+    expect(spellingIn("/r", "SRC/Cases.ts", list)).toEqual({ kind: "spelled", as: "src/cases.ts" });
+  });
+
+  test("an NFC name for an NFD entry names the tree's spelling, so both platforms refuse it alike", () => {
+    expect(spellingIn("/r", "src/caf\u00e9.ts", list)).toEqual({ kind: "spelled", as: "src/caf\u0065\u0301.ts" });
+  });
+
+  test("a name no entry folds to is absent, and a directory that cannot be listed is unread", () => {
+    expect(spellingIn("/r", "src/gone.ts", list)).toEqual({ kind: "absent" });
+    listing["/r"].push("locked");
+    expect(spellingIn("/r", "locked/x.ts", list)).toEqual({ kind: "unread", why: "EACCES" });
   });
 });

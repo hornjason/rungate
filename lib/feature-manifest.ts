@@ -118,7 +118,10 @@ export function treeReading(root: string, read: { pages?: Iterable<string>; rout
     fileAt: rel => {
       let why = "";
       return Presence.decide(join(root, rel), "file", (_, w) => (why = w)).on<FileReading>({
-        present: () => asSpelled(root, rel),
+        present: () => {
+          const spelling = spellingIn(root, rel);
+          return spelling.kind === "same" ? insideTree(root, rel) : spelling;
+        },
         // The decider names something of another kind and calls it absent;
         // it names nothing when nothing is there.
         absent: () => (why === "" ? { kind: "absent" } : { kind: "other" }),
@@ -131,26 +134,39 @@ export function treeReading(root: string, read: { pages?: Iterable<string>; rout
 }
 
 /**
- * A file the decider found, held to the tree's own spelling of every segment
- * and to the tree itself. A directory that cannot be listed, or a path that
- * cannot be resolved, is unread, never taken as the right spelling.
+ * How the tree spells a path the decider found (#2910 review). A
+ * case-insensitive or normalising file system finds `src/Cases.ts` for
+ * `src/cases.ts`, or an NFC name for an NFD one, where a case-sensitive one
+ * does not; holding every segment to the directory's own listing gives both
+ * the same answer. A directory that cannot be listed is unread, never taken
+ * as the right spelling. `list` is the directory lister, so the comparison
+ * can be tested on any file system.
  */
-function asSpelled(root: string, rel: string): FileReading {
+export function spellingIn(
+  root: string,
+  rel: string,
+  list: (dir: string) => string[] = dir => readdirSync(dir),
+): { kind: "same" } | { kind: "spelled"; as: string } | { kind: "absent" } | { kind: "unread"; why: string } {
+  const fold = (n: string) => n.normalize("NFC").toLowerCase();
   let dir = root;
   const actual: string[] = [];
   for (const seg of rel.split("/")) {
     let names: string[];
     try {
-      names = readdirSync(dir);
+      names = list(dir);
     } catch (e) {
       return { kind: "unread", why: (e as NodeJS.ErrnoException).code ?? String(e) };
     }
-    const name = names.includes(seg) ? seg : names.find(n => n.toLowerCase() === seg.toLowerCase());
+    const name = names.includes(seg) ? seg : names.find(n => fold(n) === fold(seg));
     if (name === undefined) return { kind: "absent" };
     actual.push(name);
     dir = join(dir, name);
   }
-  if (actual.join("/") !== rel) return { kind: "spelled", as: actual.join("/") };
+  return actual.join("/") === rel ? { kind: "same" } : { kind: "spelled", as: actual.join("/") };
+}
+
+/** A file the decider found, held to the repository itself by its real path: a link may not lead out of it. */
+function insideTree(root: string, rel: string): FileReading {
   try {
     const inside = relative(realpathSync(root), realpathSync(join(root, rel)));
     if (inside === ".." || inside.startsWith(`..${sep}`) || inside.startsWith(sep)) return { kind: "outside" };
