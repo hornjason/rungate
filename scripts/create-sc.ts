@@ -119,7 +119,9 @@ try {
   const specArg = getFlag("spec");
   // The project's spec: a relative path is read against the root, not the
   // directory the command happened to start in.
-  const specPath = specArg === undefined ? undefined : resolve(ROOT, specArg);
+  // An empty value (an unset variable) is no spec, as it was before #2922:
+  // resolved, it would name the root itself (review of #2938).
+  const specPath = specArg ? resolve(ROOT, specArg) : undefined;
 
   if (specPath) {
     // Append to spec file

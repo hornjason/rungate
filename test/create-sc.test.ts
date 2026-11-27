@@ -680,3 +680,15 @@ describe("SC-2821: create-sc allocates, reads the reservation store and moves th
     expect(readFileSync(join(root, "specs", "PLAIN-SPEC.md"), "utf-8")).toBe(before);
   });
 });
+
+// Review round 1 of #2938: an empty `--spec` (an unset variable) printed the
+// line to stdout before #2922. Resolved against the root it named the root
+// itself and failed reading a directory.
+describe("#2922: an empty --spec still prints the line instead of writing anywhere", () => {
+  test("`--spec \"\"` exits 0 with the criterion on stdout and reads no file", () => {
+    const r = runCreateSC(["--pattern", "file-exists", "--params", '{"file":"AGENTS.md"}', "--spec", ""]);
+    expect(r.exitCode, r.stderr).toBe(0);
+    expect(r.stdout).toContain("AGENTS.md");
+    expect(r.stderr).not.toContain("EISDIR");
+  });
+});
