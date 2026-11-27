@@ -732,6 +732,89 @@ describe("#2842: the merge trigger's name is checked, kept current, and a run th
     }
   });
 
+  // #2873: GitHub shows a workflow with no name: by its path, and its
+  // documentation does not say a workflow_run trigger matches one that way.
+  // A nameless workflow is named by its path in the warning, never left out.
+  test("#2873: a workflow with no name: is named by its path, and naming it so is UNMEASURED, not 'none found'", () => {
+    const path = ".github/workflows/merge.yml";
+    const byPath = mergeWorkflowWarning(path, ["CI"], [], [path])!;
+    for (const part of [JSON.stringify(path), "no name:", "UNMEASURED", "Give that workflow a name:"]) expect(byPath, part).toContain(part);
+    expect(byPath).not.toContain("none found");
+    const typo = mergeWorkflowWarning("Merge", [], [], [path])!;
+    expect(typo).toContain(`${path} (no name:)`);
+    expect(typo).not.toContain("none found");
+    // CONTROL: no workflow at all still reads "none found", and a name that matches is silent.
+    expect(mergeWorkflowWarning("Merge", [], [], [])).toContain("none found");
+    expect(mergeWorkflowWarning("Merge", [], [], [])).toContain("so the trigger never fires");
+    // #2915 review round 3: the unreadable list also holds a name: that was read and is not text, so both sentences say so.
+    const unread = mergeWorkflowWarning("Merge", [], [".github/workflows/x.yml (bad)"], [])!;
+    expect(unread).toContain("x.yml (bad) could not be read, or have a name: that is not text, so whether one of them has it is UNMEASURED.");
+    expect(unread).toContain("unless one of the files that could not be read, or whose name: is not text, has it, the trigger never fires");
+    expect(mergeWorkflowWarning("Merge", ["Merge"], [], [path])).toBeNull();
+    // A named workflow given by its path is UNMEASURED too, and the warning gives its name.
+    const namedByPath = mergeWorkflowWarning(".github/workflows/ci.yml", ["CI"], [], [], new Map([[".github/workflows/ci.yml", "CI"]]))!;
+    for (const part of ["UNMEASURED", 'Set board.mergeWorkflow to "CI"']) expect(namedByPath, part).toContain(part);
+    expect(namedByPath).not.toContain("never fires");
+
+    const root = mkdtempSync(join(tmpdir(), "rg-2873-nameless-"));
+    try {
+      const config = (mergeWorkflow: string) =>
+        writeFileSync(
+          join(root, ".claude", "rungate", "config.json"),
+          JSON.stringify({ project: "fixture", repo: "fixture/fixture", ci: { bunVersion: "1.3.14" }, test: { command: "bun test" }, board: { ...BOARD, mergeWorkflow } }),
+        );
+      mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+      mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+      writeFileSync(join(root, ".github", "workflows", "merge.yml"), "on: pull_request\njobs: {}\n");
+      writeFileSync(join(root, ".github", "workflows", "approve.yml"), "name: Approve\non: pull_request\njobs: {}\n");
+      // An empty name:, or a blank quoted one, is no name either; a number is a name as written.
+      writeFileSync(join(root, ".github", "workflows", "blank.yml"), "name:\non: pull_request\njobs: {}\n");
+      writeFileSync(join(root, ".github", "workflows", "quoted.yml"), 'name: "  "\non: pull_request\njobs: {}\n');
+      writeFileSync(join(root, ".github", "workflows", "year.yml"), "name: 2024\non: pull_request\njobs: {}\n");
+      // Files that are not one workflow mapping are named as unreadable, never as nameless.
+      writeFileSync(join(root, ".github", "workflows", "empty.yml"), "");
+      writeFileSync(join(root, ".github", "workflows", "multi.yml"), "name: A\n---\nname: B\n");
+      writeFileSync(join(root, ".github", "workflows", "listname.yml"), "name: [a, b]\non: push\njobs: {}\n");
+      writeFileSync(join(root, "package.json"), JSON.stringify({ name: "fixture", version: "0.0.0" }));
+      const warnings = (mergeWorkflow: string) => {
+        config(mergeWorkflow);
+        const actions: string[] = [];
+        createCiWorkflows(root, actions, { force: true });
+        return actions.filter(a => a.startsWith("WARN: board.mergeWorkflow"));
+      };
+      const nameless = warnings(path);
+      expect(nameless).toHaveLength(1);
+      // Only the nameless branch says UNMEASURED and never says "never fires".
+      for (const w of [nameless[0], warnings(".github/workflows/quoted.yml")[0], warnings(`./${path}`)[0]]) {
+        expect(w).toContain("UNMEASURED");
+        expect(w).not.toContain("never fires");
+      }
+      expect(warnings("Approve")).toEqual([]);
+      const approveByPath = warnings(".github/workflows/approve.yml");
+      expect(approveByPath).toHaveLength(1);
+      expect(approveByPath[0]).toContain('Set board.mergeWorkflow to "Approve"');
+      expect(approveByPath[0]).not.toContain("never fires");
+      // A name that is not text is never guessed at: 2024 and 1.0 are read as numbers, so the name GitHub shows is unread.
+      const number = warnings("2024");
+      expect(number).toHaveLength(1);
+      expect(number[0]).toContain(".github/workflows/year.yml (its name: is not text");
+      expect(number[0]).toContain("could not be read, or have a name: that is not text, so whether one of them has it is UNMEASURED.");
+      expect(number[0]).toContain("unless one of the files that could not be read, or whose name: is not text, has it, the trigger never fires");
+      const missing = warnings(".github/workflows/absent.yml");
+      expect(missing).toHaveLength(1);
+      expect(missing[0]).toContain(`${path} (no name:)`);
+      expect(missing[0]).toContain(".github/workflows/blank.yml (no name:)");
+      expect(missing[0]).toContain(".github/workflows/quoted.yml (no name:)");
+      expect(missing[0]).toContain(".github/workflows/listname.yml (its name: is not text");
+      for (const f of ["empty.yml", "multi.yml"]) {
+        expect(missing[0]).toContain(`.github/workflows/${f} (not one workflow mapping)`);
+        expect(missing[0]).not.toContain(`.github/workflows/${f} (no name:)`);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("a changed board.mergeWorkflow is written into an existing adr-accepted.yml by a plain re-scaffold", () => {
     const root = mkdtempSync(join(tmpdir(), "rg-2842-rename-"));
     try {

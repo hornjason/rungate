@@ -4653,16 +4653,33 @@ ${buildAuthDetectStep(vertex)}${buildReviewRunStep(
   if (boardInputs.mergeWorkflow !== null) {
     const names: string[] = [];
     const unreadable: string[] = [];
+    // #2873: a workflow with no name:, or a blank one, is shown by GitHub
+    // under its path, so it is listed by that path, never dropped. A name that
+    // is not text (`name: 1.0` parses to the number 1) is not guessed at: the
+    // name GitHub shows for it is unread, so it is named as unreadable, as is a
+    // file that is not one workflow mapping (empty, several documents, a bare value).
+    const nameless: string[] = [];
+    const named = new Map<string, string>();
     const dir = join(root, ".github", "workflows");
     for (const f of existsSync(dir) ? readdirSorted(dir).filter(n => /\.ya?ml$/.test(n)) : []) {
       try {
-        const name = (Bun.YAML.parse(readFileSync(join(dir, f), "utf-8")) as { name?: unknown } | null)?.name;
-        if (typeof name === "string") names.push(name);
+        const doc = Bun.YAML.parse(readFileSync(join(dir, f), "utf-8"));
+        if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
+          unreadable.push(`.github/workflows/${f} (not one workflow mapping)`);
+          continue;
+        }
+        const name = (doc as { name?: unknown }).name;
+        if (typeof name === "string" && name.trim() !== "") {
+          names.push(name);
+          named.set(`.github/workflows/${f}`, name);
+        }
+        else if (name === undefined || name === null || typeof name === "string") nameless.push(`.github/workflows/${f}`);
+        else unreadable.push(`.github/workflows/${f} (its name: is not text, so the name GitHub shows for it is UNMEASURED)`);
       } catch (e) {
         unreadable.push(`.github/workflows/${f} (${(e as Error).message})`);
       }
     }
-    const warning = mergeWorkflowWarning(boardInputs.mergeWorkflow, names, unreadable);
+    const warning = mergeWorkflowWarning(boardInputs.mergeWorkflow, names, unreadable, nameless, named);
     if (warning !== null) actions.push(warning);
   }
   if (boardInputs.mergeWorkflowIgnored !== null) actions.push(mergeWorkflowIgnoredWarning(boardInputs.mergeWorkflowIgnored));
