@@ -103,6 +103,24 @@ describe("#2932: the brief guard and the gates read brief policies through the r
     expect(both_).not.toContain("from-old");
   });
 
+  // Review round 2 of #2936: a corrupt ship-issue copy read as "no policies"
+  // silenced the guard, and the resolver prefers it over a valid ship copy.
+  // A corrupt config is never a missing one (.claude/rules/config-access.md).
+  test("a corrupt or non-object ship-issue copy is reported unmeasured, and the ship copy does not stand in for it", () => {
+    for (const [label, text] of [["not JSON", "{ \"policies\": {, }"], ["not an object", "[]"]] as const) {
+      const base = tmp();
+      const bad = put(base, "ship-issue", "brief-policies.json", text);
+      put(base, "ship", "brief-policies.json", POLICY("from-old"));
+      const work = join(base, "work");
+      mkdirSync(work, { recursive: true });
+      const outputs = validateAgentBrief(brief as never, work, base).outputs;
+      const unmeasured = outputs.filter(o => o.startsWith("BRIEF CONTENT UNMEASURED"));
+      expect(unmeasured, `${label}: ${outputs.join(" | ")}`).toHaveLength(1);
+      expect(unmeasured[0]).toContain(bad);
+      expect(outputs.join("\n"), `${label}: the old copy stood in`).not.toContain("from-old");
+    }
+  });
+
   test("the gates' brief-policy override is read from ship-issue when it is there", () => {
     const home = tmp();
     put(join(home, ".claude"), "ship-issue", "brief-policies.json", JSON.stringify({ policies: { "rg-2932-agent": { requiredPatterns: [] } } }));

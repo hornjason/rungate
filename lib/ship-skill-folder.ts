@@ -5,8 +5,10 @@
  * can exist on a machine, every read of a file in the skill's folder looks in
  * the new folder first and the old one second. Three readers built this path
  * from parts and each was missed by a hand-kept list in turn, so this module
- * is the only place in source allowed to spell it;
- * `test/ship-skill-folder.test.ts` refuses any other spelling.
+ * is the only place in source allowed to spell it.
+ * `test/ship-skill-folder.test.ts` refuses the path elsewhere in non-test
+ * source whole, in parts, or with a part held in a constant in the same file.
+ * A name carried in from another module is out of its reach.
  */
 import { existsSync } from "fs";
 import { join } from "path";
