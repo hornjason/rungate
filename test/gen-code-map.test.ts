@@ -316,10 +316,12 @@ describe("SC-2813: every router's routes, every page, and what could not be attr
       'app.use("/api", admin);',
     ].join("\n"),
     "src/other.ts": [
-      "declare const cache: Map<string, number>;",
+      "declare const registry: { get(p: string, h: () => void): void };",
       "declare const c: { get(k: string): unknown };",
-      'export const hit = cache.get("/not-a-router");',
+      'registry.get("/not-a-router", () => {});',
       'export const user = c.get("userId");',
+      '// A one-argument call is a lookup, not a route: Map.get, or express app.get("env").',
+      'export const hit = new Map<string, number>().get("/a-map-key");',
     ].join("\n"),
     "dashboard/src/App.tsx": [
       'import { Routes, Route } from "react-router-dom";',
@@ -414,6 +416,71 @@ describe("SC-2813: every router's routes, every page, and what could not be attr
   test("a path with a column or row break stays one cell (security review)", () => {
     const md = codeMap({ "src/api.ts": 'import { Hono } from "hono";\nconst api = new Hono();\napi.get("/a|b\\nc", c => c.text(""));\n' });
     expect(rows(md, /^### GET /)).toEqual(["| /a\\|b c | api | src/api.ts | 0 |"]);
+  });
+
+  test("#2911 review: inline routers, scopes, computed paths, settings reads and source folders named like build output", () => {
+    const md = codeMap({
+      "src/inline.ts": 'import { Hono } from "hono";\nexport const app = new Hono().get("/health", c => c.text("ok"));\n',
+      "src/scoped.ts": [
+        'import { Hono } from "hono";',
+        "const app = new Hono();",
+        'app.get("/a", c => c.text(""));',
+        "export function register(app: Hono) {",
+        '  app.get("/b", c => c.text(""));',
+        "}",
+      ].join("\n"),
+      "server/settings.js": [
+        'const express = require("express");',
+        "const app = express();",
+        'const PATH = "/x";',
+        'app.get("view engine");',
+        "app.get(PATH, (_q, r) => r.send(''));",
+        "app.get('*', (_q, r) => r.send(''));",
+      ].join("\n"),
+      "src/features/build/routes.ts": 'import { Hono } from "hono";\nconst b = new Hono();\nb.get("/api/build/status", c => c.text(""));\n',
+      "build/out.js": 'const { Hono } = require("hono");\nconst o = new Hono();\no.get("/build-output", () => {});\n',
+      "src/commented.ts": 'import { Hono } from "hono";\nconst api = new Hono();\n// api.get("/c") is registered below\napi.get("/c", c => c.text(""));\n',
+    });
+    expect(rows(md, /^### GET /)).toEqual([
+      "| (computed) | app | server/settings.js | 5 |",
+      "| * | app | server/settings.js | 6 |",
+      "| /a | app | src/scoped.ts | 3 |",
+      "| /api/build/status | b | src/features/build/routes.ts | 3 |",
+      "| /b | — | src/scoped.ts | 5 |",
+      "| /c | api | src/commented.ts | 0 |",
+      "| /health | new Hono() | src/inline.ts | 2 |",
+    ]);
+    expect(md).not.toContain("/build-output");
+    expect(md).toContain("1 route-shaped call(s) could not be attributed");
+    expect(md).toContain("1 route or page path(s) are not written literally");
+  });
+
+  test("#2911 review: page trees by name, classic-runtime children, computed parents, and what could not be seen", () => {
+    const md = codeMap({
+      "web/routes.tsx": [
+        'import { createBrowserRouter, Route } from "react-router-dom";',
+        'import { imported } from "./elsewhere";',
+        'const adminRoutes = [{ path: "users", element: <U /> }];',
+        'const routes = [{ path: "/admin", element: <A />, children: adminRoutes }];',
+        "export const router = createBrowserRouter(routes);",
+        "export const other = createBrowserRouter(imported);",
+        "declare const ADMIN: string;",
+        'export const tree = <Route path={ADMIN}><Route path="audit" element={<Au />} /></Route>;',
+      ].join("\n"),
+      "web/classic.js": [
+        'const React = require("react");',
+        'module.exports = React.createElement(Route, { path: "/shop" }, React.createElement(Route, { path: "cart" }));',
+      ].join("\n"),
+    });
+    expect(rows(md, /^## Pages/).map(r => r.split(" | ").slice(0, 2).join(" | "))).toEqual([
+      "| /{computed} | web/routes.tsx",
+      "| /{computed}/audit | web/routes.tsx",
+      "| /admin | web/routes.tsx",
+      "| /admin/users | web/routes.tsx",
+      "| /shop | web/classic.js",
+      "| /shop/cart | web/classic.js",
+    ]);
+    expect(md).toContain("UNMEASURED: 1 part(s) of a page tree could not be seen, so their pages are not listed: web/routes.tsx: imported under /");
   });
 
   test("CONTROL: a project with no routers and no pages renders neither section", () => {

@@ -96,15 +96,35 @@ const ROUTE_METHODS = new Set(["get", "post", "put", "patch", "delete", "head", 
 /** The calls whose route objects are pages: React Router's data routers and `useRoutes`. */
 const PAGE_ROUTERS = new Set(["createBrowserRouter", "createHashRouter", "createMemoryRouter", "createStaticRouter", "useRoutes"]);
 const SOURCE_EXT = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
-const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", "out", "coverage", ".next", ".fallow", "reference", "test", "tests", "__tests__", ".claude"]);
+/** Directories skipped wherever they sit: dependencies, history, tests and agent files. */
+const SKIP_ANY_DEPTH = new Set(["node_modules", ".git", "test", "tests", "__tests__", ".claude"]);
+/** Build output and archives, skipped only at the project root: a source folder of the same name below it is read (#2911 review). */
+const SKIP_AT_ROOT = new Set(["dist", "build", "out", "coverage", ".next", ".fallow", "reference"]);
+/** The path a route or page is listed under when the code does not write it literally. */
+const COMPUTED = "(computed)";
+const COMPUTED_SEGMENT = "{computed}";
 
-/** `router` is null for a route-shaped call on no router the file creates: listed, and counted apart. */
+/**
+ * `router` is null for a route-shaped call on no router the file creates:
+ * listed, and counted apart. `computed` marks a path the code does not write
+ * literally, listed as `(computed)`.
+ */
 interface Route { method: string; path: string; file: string; line: number; router: string | null }
 interface Page { path: string; file: string; line: number }
 /** A value as one markdown table cell: no row break, no column break, no control character. */
 const cell = (v: string) => v.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\|/g, "\\|");
 
-interface RouteScan { routes: Route[]; pages: Page[]; unattributed: number; files: number; unparsed: string[] }
+interface RouteScan {
+  routes: Route[];
+  pages: Page[];
+  unattributed: number;
+  /** Routes on a router, and pages, whose path is not written literally. */
+  computed: number;
+  files: number;
+  unparsed: string[];
+  /** Page-router calls whose routes this reader could not see, such as an imported array. */
+  pageRoutersUnread: string[];
+}
 
 /** Every source file under `root` a route or page could be declared in: no tests, no build output, no declarations. */
 function sourceFiles(root: string, dir = root, out: string[] = []): string[] {
@@ -125,9 +145,8 @@ function sourceFiles(root: string, dir = root, out: string[] = []): string[] {
       continue;
     }
     if (st.isSymbolicLink()) continue;
-    const isDir = st.isDirectory();
-    if (isDir) {
-      if (!SKIP_DIRS.has(name)) sourceFiles(root, full, out);
+    if (st.isDirectory()) {
+      if (!SKIP_ANY_DEPTH.has(name) && !(dir === root && SKIP_AT_ROOT.has(name))) sourceFiles(root, full, out);
     } else if (SOURCE_EXT.has(extname(name)) && !/\.d\.[mc]?ts$|\.(test|spec)\.[^.]+$/.test(name)) {
       out.push(relative(root, full).split("\\").join("/"));
     }
@@ -137,6 +156,7 @@ function sourceFiles(root: string, dir = root, out: string[] = []): string[] {
 
 type Node = { type: string; [k: string]: any };
 const isNode = (v: unknown): v is Node => !!v && typeof (v as Node).type === "string";
+const isFunction = (n: Node) => n.type === "FunctionDeclaration" || n.type === "FunctionExpression" || n.type === "ArrowFunctionExpression";
 
 /** Every node under `n`, depth first. */
 function* walk(n: unknown): Generator<Node> {
@@ -157,37 +177,113 @@ function literal(n: Node | undefined): string | null {
   return null;
 }
 
-/** Whether an expression creates a router, through a chain such as `new Hono().basePath(...)`. */
-function createsRouter(n: Node | undefined): boolean {
+/** The expression at the base of a chain such as `new Hono().basePath(...)` that creates a router, or null. */
+function routerBase(n: Node | undefined): Node | null {
   for (let e = n; e; ) {
-    if (e.type === "NewExpression" && e.callee.type === "Identifier") return ROUTER_NEW.has(e.callee.name);
-    if (e.type === "CallExpression") {
-      const c = e.callee;
-      if (c.type === "Identifier") return ROUTER_CALL.has(c.name);
-      if (c.type === "MemberExpression" && c.object.type === "Identifier" && c.object.name === "express" && c.property.name === "Router") return true;
-      e = c.type === "MemberExpression" ? c.object : undefined;
-      continue;
-    }
-    return false;
+    if (e.type === "NewExpression") return e.callee.type === "Identifier" && ROUTER_NEW.has(e.callee.name) ? e : null;
+    if (e.type !== "CallExpression") return null;
+    const c = e.callee;
+    if (c.type === "Identifier") return ROUTER_CALL.has(c.name) ? e : null;
+    if (c.type === "MemberExpression" && c.object.type === "Identifier" && c.object.name === "express" && c.property.name === "Router") return e;
+    e = c.type === "MemberExpression" ? c.object : undefined;
   }
-  return false;
+  return null;
 }
 
-/** The identifier a call chain such as `router.get(...).post(...)` starts from. */
-function chainRoot(n: Node): string | null {
+/** How a router made inline is named in the code map: `new Hono()`, `express()`, `express.Router()`. */
+function routerLabel(base: Node): string {
+  if (base.type === "NewExpression") return `new ${base.callee.name}()`;
+  return base.callee.type === "Identifier" ? `${base.callee.name}()` : "express.Router()";
+}
+
+/** One binding a scope holds: whether it is a router the file creates, and its initial value. */
+type Binding = { router: boolean; init?: Node };
+type Scope = Map<string, Binding>;
+
+/** The names a pattern binds: `a`, `{ a, b: c }`, `[a, ...b]`, `a = 1`. */
+function patternNames(p: Node | null | undefined, out: string[] = []): string[] {
+  if (!p) return out;
+  if (p.type === "Identifier") out.push(p.name);
+  else if (p.type === "ObjectPattern") for (const q of p.properties) patternNames(q.type === "RestElement" ? q.argument : q.value, out);
+  else if (p.type === "ArrayPattern") for (const q of p.elements) patternNames(q, out);
+  else if (p.type === "RestElement") patternNames(p.argument, out);
+  else if (p.type === "AssignmentPattern") patternNames(p.left, out);
+  return out;
+}
+
+/** Fill `scope` with what `body` declares, not looking into the functions inside it, which have scopes of their own. */
+function declareIn(body: unknown, scope: Scope): void {
+  if (Array.isArray(body)) return body.forEach(b => declareIn(b, scope));
+  if (!isNode(body)) return;
+  if (body.type === "VariableDeclarator") {
+    const simple = body.id.type === "Identifier";
+    for (const name of patternNames(body.id)) scope.set(name, { router: simple && routerBase(body.init) !== null, init: simple ? body.init : undefined });
+    return declareIn(body.init, scope);
+  }
+  if (body.type === "ImportDeclaration") {
+    for (const sp of body.specifiers) scope.set(sp.local.name, { router: false });
+    return;
+  }
+  if (isFunction(body)) {
+    if (body.type === "FunctionDeclaration" && body.id) scope.set(body.id.name, { router: false });
+    return;
+  }
+  if (body.type === "ClassDeclaration" && body.id) scope.set(body.id.name, { router: false });
+  for (const k of Object.keys(body)) if (k !== "type" && typeof body[k] === "object") declareIn(body[k], scope);
+}
+
+/**
+ * Visit every node with the scopes in force at it, so a name resolves to
+ * the declaration that is really in scope there: a parameter named `app`
+ * is not the module's `app` router (#2911 review).
+ */
+function visitScoped(n: unknown, scopes: Scope[], on: (n: Node, resolve: (name: string) => Binding | undefined) => void): void {
+  if (Array.isArray(n)) return n.forEach(c => visitScoped(c, scopes, on));
+  if (!isNode(n)) return;
+  let inner = scopes;
+  if (isFunction(n)) {
+    const s: Scope = new Map();
+    if (n.type === "FunctionExpression" && n.id) s.set(n.id.name, { router: false });
+    for (const p of n.params) for (const name of patternNames(p)) s.set(name, { router: false });
+    declareIn(n.body, s);
+    inner = [...scopes, s];
+  }
+  on(n, name => {
+    for (let i = inner.length - 1; i >= 0; i--) if (inner[i].has(name)) return inner[i].get(name);
+    return undefined;
+  });
+  for (const k of Object.keys(n)) if (k !== "type" && typeof n[k] === "object") visitScoped(n[k], inner, on);
+}
+
+/** The router a call chain such as `router.get(...).post(...)` or `new Hono().get(...)` is made on, by name or by label, or null. */
+function routerOf(n: Node, resolve: (name: string) => Binding | undefined): string | null {
+  const base = routerBase(n);
+  if (base) return routerLabel(base);
   let e: Node = n;
   while (e.type === "CallExpression" || e.type === "MemberExpression") e = e.type === "CallExpression" ? e.callee : e.object;
-  return e.type === "Identifier" ? e.name : null;
+  return e.type === "Identifier" && resolve(e.name)?.router ? e.name : null;
 }
 
 const joinPath = (parent: string, child: string) => (child.startsWith("/") ? child : posix.join(parent, child) || "/");
 
-/** The JSX element a compiled call creates, when it is a `<Route>`: its props object. */
-function routeElementProps(n: Node): Node | null {
-  if (n.type !== "CallExpression") return null;
+/** The name a compiled JSX call is made through: `jsx`, `jsxs`, `jsxDEV` (with Bun's suffix) or `createElement`, or "". */
+function jsxCallee(n: Node): string {
   const c = n.callee;
   const name = c.type === "Identifier" ? c.name : c.type === "MemberExpression" ? c.property.name : "";
-  if (!/^(jsx|jsxs|jsxDEV)(_\w+)?$|^createElement$/.test(name)) return null;
+  return /^(jsx|jsxs|jsxDEV)(_\w+)?$|^createElement$/.test(name) ? name : "";
+}
+const isJsxCall = (n: Node) => jsxCallee(n) !== "";
+
+/**
+ * The children a compiled element passes as arguments. Only the classic
+ * runtime does, `createElement(Route, props, ...children)`; the automatic
+ * runtime's extra arguments are its key, static flag, source and `this`.
+ */
+const childArguments = (n: Node): Node[] => (jsxCallee(n) === "createElement" ? n.arguments.slice(2) : []);
+
+/** The JSX element a compiled call creates, when it is a `<Route>`: its props object. */
+function routeElementProps(n: Node): Node | null {
+  if (n.type !== "CallExpression" || !isJsxCall(n)) return null;
   const [tag, props] = n.arguments;
   return tag?.type === "Identifier" && tag.name === "Route" && props?.type === "ObjectExpression" ? props : null;
 }
@@ -195,26 +291,63 @@ function routeElementProps(n: Node): Node | null {
 const prop = (obj: Node, key: string): Node | undefined =>
   obj.properties.find((p: Node) => p.type === "Property" && !p.computed && (p.key.name ?? p.key.value) === key)?.value;
 
-/** The pages a route tree declares, child paths joined to their parents'. */
-function pagesUnder(n: Node | undefined, parent: string, out: string[]): void {
+/** What a page-tree walk collects: each page, and each part of a tree it could not see. */
+interface PageWalk {
+  pages: Array<{ path: string; raw: string | null }>;
+  unread: string[];
+  resolve: (name: string) => Binding | undefined;
+  file: string;
+}
+
+/**
+ * The pages a route tree declares, child paths joined to their parents'. A
+ * path the code does not write literally is the segment `{computed}`, so
+ * its children keep their place under it. A tree named by a variable is read
+ * from that variable's value in the file; one this reader cannot see, such
+ * as an imported array or a function's result, is recorded, never dropped
+ * (#2911 review).
+ */
+function pagesUnder(n: Node | undefined | null, parent: string, w: PageWalk): void {
   if (!n) return;
+  if (n.type === "Identifier") {
+    const init = w.resolve(n.name)?.init;
+    if (init) pagesUnder(init, parent, w);
+    else w.unread.push(`${w.file}: ${n.name} under ${parent}`);
+    return;
+  }
   if (n.type === "ArrayExpression") {
-    for (const el of n.elements) pagesUnder(el, parent, out);
+    for (const el of n.elements) pagesUnder(el?.type === "SpreadElement" ? el.argument : el, parent, w);
     return;
   }
   const props = n.type === "ObjectExpression" ? n : routeElementProps(n);
-  if (!props) return;
-  const raw = literal(prop(props, "path"));
-  const here = raw === null ? parent : joinPath(parent, raw);
-  if (raw !== null) out.push(here);
-  pagesUnder(prop(props, "children"), here, out);
+  if (!props) {
+    // A JSX child that is not a <Route> (a fragment, text) holds no pages;
+    // anything else that yields routes is a tree this reader cannot see.
+    if (!(n.type === "CallExpression" && isJsxCall(n)) && n.type !== "Literal") w.unread.push(`${w.file}: an expression under ${parent}`);
+    return;
+  }
+  const pathNode = prop(props, "path");
+  const raw = literal(pathNode);
+  let here = parent;
+  if (pathNode !== undefined) {
+    here = joinPath(parent, raw ?? COMPUTED_SEGMENT);
+    w.pages.push({ path: here, raw });
+  }
+  pagesUnder(prop(props, "children"), here, w);
+  // The classic runtime passes children as arguments: createElement(Route, props, ...children).
+  if (n.type === "CallExpression") for (const child of childArguments(n)) pagesUnder(child, here, w);
 }
 
-/** The line the `k`-th occurrence of `pattern` starts on in `text`, or 0 when it is not there. */
-function lineOf(text: string, pattern: RegExp, k: number): number {
-  let i = 0;
-  for (const m of text.matchAll(pattern)) if (i++ === k) return text.slice(0, m.index).split("\n").length;
-  return 0;
+/**
+ * The line the `k`-th occurrence of `pattern` starts on in `text`, or 0 when
+ * it cannot be located for certain: when the source holds more occurrences
+ * than the compiled code, some are in comments and the `k`-th may be one of
+ * them, so no line is guessed (#2911 review).
+ */
+function lineOf(text: string, compiled: string, pattern: RegExp, k: number): number {
+  const inText = [...text.matchAll(pattern)];
+  if (inText.length !== [...compiled.matchAll(pattern)].length || k >= inText.length) return 0;
+  return text.slice(0, inText[k].index).split("\n").length;
 }
 const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 
@@ -226,9 +359,10 @@ const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
  * that does not parse is named in `unparsed`, so a count never hides it.
  */
 function scanRoutesAndPages(root: string): RouteScan {
-  const scan: RouteScan = { routes: [], pages: [], unattributed: 0, files: 0, unparsed: [] };
+  const scan: RouteScan = { routes: [], pages: [], unattributed: 0, computed: 0, files: 0, unparsed: [], pageRoutersUnread: [] };
   for (const file of sourceFiles(root)) {
     let text: string;
+    let js: string;
     let ast: Node;
     try {
       text = readFileSync(join(root, file), "utf-8");
@@ -238,56 +372,71 @@ function scanRoutesAndPages(root: string): RouteScan {
       // "macro" }` while transforming, which would execute the scanned
       // project's code. With them off, such a file is refused and listed as
       // unparsed below.
-      const js = new Bun.Transpiler({ loader, macro: false } as unknown as ConstructorParameters<typeof Bun.Transpiler>[0]).transformSync(text);
+      js = new Bun.Transpiler({ loader, macro: false } as unknown as ConstructorParameters<typeof Bun.Transpiler>[0]).transformSync(text);
       ast = parseJs(js, { ecmaVersion: "latest", sourceType: "module", allowHashBang: true, allowAwaitOutsideFunction: true, allowReturnOutsideFunction: true }) as unknown as Node;
     } catch {
       scan.unparsed.push(file);
       continue;
     }
     scan.files++;
-    const routers = new Set<string>();
-    for (const n of walk(ast)) if (n.type === "VariableDeclarator" && n.id.type === "Identifier" && createsRouter(n.init)) routers.add(n.id.name);
+    const top: Scope = new Map();
+    declareIn(ast.body, top);
     const seen = new Map<string, number>();
     const nth = (key: string) => {
       const k = seen.get(key) ?? 0;
       seen.set(key, k + 1);
       return k;
     };
-    for (const n of walk(ast)) {
-      if (n.type !== "CallExpression" || n.callee.type !== "MemberExpression" || n.callee.computed) continue;
-      const method = n.callee.property.name;
-      const path = literal(n.arguments[0]);
-      if (!ROUTE_METHODS.has(method) || path === null || !path.startsWith("/")) continue;
-      const owner = chainRoot(n.callee.object);
-      const router = owner !== null && routers.has(owner) ? owner : null;
-      if (router === null) scan.unattributed++;
-      const line = lineOf(text, new RegExp(`\\.\\s*${method}\\s*\\(\\s*["'\`]${esc(path)}["'\`]`, "g"), nth(`r ${method} ${path}`));
-      scan.routes.push({ method: method.toUpperCase(), path, file, line, router });
-    }
-    const pages: string[] = [];
-    for (const n of walk(ast)) {
-      if (n.type === "CallExpression" && n.callee.type === "Identifier" && PAGE_ROUTERS.has(n.callee.name)) pagesUnder(n.arguments[0], "/", pages);
-      else if (routeElementProps(n)) {
-        // A top-level <Route>: one whose parent is not itself a <Route>,
-        // which pagesUnder reaches through `children`.
-        if (!isNestedRoute(ast, n)) pagesUnder(n, "/", pages);
+    const pages: Array<{ path: string; raw: string | null }> = [];
+    visitScoped(ast, [top], (n, resolve) => {
+      if (n.type !== "CallExpression") return;
+      const c = n.callee;
+      const walkFrom = (tree: Node | undefined) => pagesUnder(tree, "/", { pages, unread: scan.pageRoutersUnread, resolve, file });
+      if (c.type === "Identifier" && PAGE_ROUTERS.has(c.name)) {
+        if (n.arguments[0]) walkFrom(n.arguments[0]);
+        else scan.pageRoutersUnread.push(`${file}: ${c.name}() with no routes`);
+        return;
       }
-    }
+      if (routeElementProps(n)) {
+        // A top-level <Route>: one whose parent is not itself a <Route>,
+        // which pagesUnder reaches through `children` or child arguments.
+        if (!isNestedRoute(ast, n)) walkFrom(n);
+        return;
+      }
+      // A route is a method call with a path and at least one handler: an
+      // express `app.get("view engine")` with one argument reads a setting.
+      if (c.type !== "MemberExpression" || c.computed || !ROUTE_METHODS.has(c.property.name) || n.arguments.length < 2) return;
+      const method = c.property.name;
+      const lit = literal(n.arguments[0]);
+      const router = routerOf(c.object, resolve);
+      if (router === null && (lit === null || !lit.startsWith("/"))) return;
+      if (router === null) scan.unattributed++;
+      if (lit === null) scan.computed++;
+      const path = lit ?? COMPUTED;
+      // A computed path is located as the call whose first argument is not a string.
+      const pattern = new RegExp(`\\.\\s*${method}\\s*\\(\\s*${lit === null ? "(?![\"'\\`])" : `["'\`]${esc(lit)}["'\`]`}`, "g");
+      scan.routes.push({ method: method.toUpperCase(), path, file, line: lineOf(text, js, pattern, nth(`r ${method} ${path}`)), router });
+    });
     for (const page of pages) {
-      const seg = page.split("/").filter(Boolean).pop() ?? "/";
-      const line = lineOf(text, new RegExp(`path\\s*[=:]\\s*\\{?\\s*["'\`]/?${esc(seg === "/" ? "" : seg)}["'\`]`, "g"), nth(`p ${seg}`));
-      scan.pages.push({ path: page, file, line });
+      if (page.raw === null) {
+        scan.computed++;
+        scan.pages.push({ path: page.path, file, line: 0 });
+        continue;
+      }
+      const seg = page.raw.replace(/^\//, "");
+      const line = lineOf(text, js, new RegExp(`path\\s*[=:]\\s*\\{?\\s*["'\`]/?${esc(seg)}["'\`]`, "g"), nth(`p ${seg}`));
+      scan.pages.push({ path: page.path, file, line });
     }
   }
   return scan;
 }
 
-/** Whether a compiled <Route> call sits in another <Route>'s `children`. */
+/** Whether a compiled <Route> call sits in another <Route>'s children, as a prop or as a classic-runtime argument. */
 function isNestedRoute(ast: Node, target: Node): boolean {
   for (const n of walk(ast)) {
     const props = routeElementProps(n);
     if (!props || n === target) continue;
-    for (const c of walk(prop(props, "children"))) if (c === target) return true;
+    for (const c of walk([prop(props, "children"), ...childArguments(n)])) if (c === target) return true;
   }
   return false;
 }
@@ -475,13 +624,14 @@ ${directoryTable(dirs)}`);
 
 // Routes: every route on every router a file creates, and how many
 // route-shaped calls could not be attributed to one (SC-2813).
-if (routes.length > 0 || routeScan.unattributed > 0 || routeScan.unparsed.length > 0) {
+if (routes.length > 0 || routeScan.unparsed.length > 0 || routeScan.pageRoutersUnread.length > 0) {
   const byMethod: Record<string, Route[]> = {};
   for (const r of routes) {
     (byMethod[r.method] ||= []).push(r);
   }
   let routeTable = "## API Routes\n\n";
-  routeTable += `${routerRoutes} route(s) on the routers ${routeScan.files} parsed file(s) create. ${routeScan.unattributed} route-shaped call(s) could not be attributed to a router a file creates; they are listed with — as their router.\n\n`;
+  routeTable += `${routerRoutes} route(s) on the routers ${routeScan.files} parsed file(s) create. ${routeScan.unattributed} route-shaped call(s) could not be attributed to a router a file creates; they are listed with — as their router. ${routeScan.computed} route or page path(s) are not written literally and are listed as ${COMPUTED} or ${COMPUTED_SEGMENT}. A line of 0 means the line could not be located for certain.\n\n`;
+  if (routeScan.pageRoutersUnread.length) routeTable += `UNMEASURED: ${routeScan.pageRoutersUnread.length} part(s) of a page tree could not be seen, so their pages are not listed: ${routeScan.pageRoutersUnread.map(cell).join(", ")}\n\n`;
   if (routeScan.unparsed.length) routeTable += `UNMEASURED: ${routeScan.unparsed.length} file(s) could not be parsed, so their routes and pages are not counted: ${routeScan.unparsed.map(cell).join(", ")}\n\n`;
   for (const [method, methodRoutes] of Object.entries(byMethod).sort()) {
     routeTable += `### ${method} (${methodRoutes.length})\n\n`;
