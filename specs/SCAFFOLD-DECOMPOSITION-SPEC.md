@@ -1415,8 +1415,9 @@ moves both numbers together, which is the same argument that produced
 - [x] SC-2812: Rungate publishes a feature-manifest schema, and its validator refuses a manifest that names a file, page or route the tree does not hold
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       proved-by: test/feature-manifest.test.ts
-- [ ] SC-2813: The code map lists every route registered on any router a file creates, and every page in the router, and says how many routes it could not attribute to a router
+- [x] SC-2813: The code map lists every route registered on any router a file creates, and every page in the router, and says how many routes it could not attribute to a router
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      proved-by: test/gen-code-map.test.ts "SC-2813: every router's routes, every page, and what could not be attributed"
 - [ ] SC-2814: Rungate derives each feature's proof chain (claims, criteria, tests, mutation records) and its ADRs from ADR criteria tables, keeping the source row and the provenance class of every link
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
 - [ ] SC-2815: rungate feature-map renders one self-contained page, an overview of sources, features and consumers where each node opens a drill-down card, and refuses to render a card whose derived count disagrees with the rows it lists

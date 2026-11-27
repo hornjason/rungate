@@ -2,9 +2,10 @@
  * Generator unit test: code-map
  * AC-4: Tests generators with mock ProjectScan data
  */
-import { test, expect, describe } from "bun:test";
-import { readFileSync } from "fs";
-import { join } from "path";
+import { test, expect, describe, afterAll } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { dirname, join } from "path";
 import { FRESHNESS_NOTICE, generateCodeMap } from "../lib/generators/code-map";
 import { mockProjectScan, type ProjectScan } from "../lib/generators/types";
 
@@ -252,5 +253,142 @@ describe("#1740: the code-map re-run instruction is portable", () => {
         "from whoever last ran the generator. Regenerate after fixing the " +
         "generator rather than hand-editing the line.",
     ).toEqual([]);
+  });
+});
+
+/**
+ * Covers SC-2813 (SCAFFOLD-DECOMPOSITION-SPEC.md): the code map lists every
+ * route registered on any router a file creates, and every page in the
+ * router, and says how many routes it could not attribute to a router
+ * (#2889, ADR-028). It used to match only `app.<method>("…")` in `src/`, so
+ * it listed 62 of a consumer's 375 routes.
+ *
+ * Run as a consumer runs it: the real generator over a planted project, with
+ * the rendered CODE-MAP.md read back.
+ */
+describe("SC-2813: every router's routes, every page, and what could not be attributed", () => {
+  const scratch = mkdtempSync(join(tmpdir(), "rungate-2889-"));
+  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+  const GENERATOR = join(import.meta.dir, "..", "scripts", "generate-code-map.ts");
+  const plant = (root: string, files: Record<string, string>) => {
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(dirname(join(root, rel)), { recursive: true });
+      writeFileSync(join(root, rel), body);
+    }
+  };
+  const codeMap = (files: Record<string, string>) => {
+    const root = mkdtempSync(join(scratch, "proj-"));
+    plant(root, files);
+    const proc = Bun.spawnSync(["bun", GENERATOR, root], { cwd: join(import.meta.dir, "..") });
+    expect(proc.exitCode, proc.stderr.toString()).toBe(0);
+    return readFileSync(join(root, "CODE-MAP.md"), "utf-8");
+  };
+  const rows = (md: string, heading: RegExp) => {
+    const at = md.split("\n").findIndex(l => heading.test(l));
+    if (at < 0) return [];
+    const out: string[] = [];
+    for (const l of md.split("\n").slice(at + 1)) {
+      if (l.startsWith("#")) break;
+      if (l.startsWith("| ") && !l.startsWith("| Path") && !l.startsWith("|--")) out.push(l);
+    }
+    return out;
+  };
+
+  const PROJECT = {
+    "src/cases.ts": [
+      'import { Hono } from "hono";',
+      "type Env = { Bindings: { db: string } };",
+      "const router = new Hono<Env>();",
+      'router.get("/cases", c => c.json({}));',
+      "router.post(",
+      "  `/cases/:id`,",
+      '  c => c.text("ok"),',
+      ");",
+      'router.put("/cases/:id", c => c.text("a")).delete("/cases/:id", c => c.text("b"));',
+      "export default router;",
+    ].join("\n"),
+    "server/app.js": [
+      'const express = require("express");',
+      "const app = express();",
+      "const admin = express.Router();",
+      'app.get("/health", (_q, r) => r.send("ok"));',
+      'admin.patch("/admin/users", (_q, r) => r.send("ok"));',
+      'app.use("/api", admin);',
+    ].join("\n"),
+    "src/other.ts": [
+      "declare const cache: Map<string, number>;",
+      "declare const c: { get(k: string): unknown };",
+      'export const hit = cache.get("/not-a-router");',
+      'export const user = c.get("userId");',
+    ].join("\n"),
+    "dashboard/src/App.tsx": [
+      'import { Routes, Route } from "react-router-dom";',
+      "export const App = () => (",
+      "  <Routes>",
+      '    <Route path="/" element={<Home />}>',
+      '      <Route path="cases" element={<Cases />} />',
+      "    </Route>",
+      '    <Route path="/settings" element={<Settings />} />',
+      "  </Routes>",
+      ");",
+    ].join("\n"),
+    "dashboard/src/router.tsx": [
+      'import { createBrowserRouter } from "react-router-dom";',
+      "export const router = createBrowserRouter([",
+      '  { path: "/admin", element: <Admin />, children: [{ path: "users", element: <Users /> }] },',
+      "]);",
+    ].join("\n"),
+    // One file per exclusion, so each rule has a case only it decides.
+    "test/helpers/fake-api.ts": 'import { Hono } from "hono";\nconst fake = new Hono();\nfake.get("/only-in-a-test-folder", c => c.text(""));\n',
+    "src/cases.test.ts": 'import { Hono } from "hono";\nconst t = new Hono();\nt.get("/only-in-a-test-file", c => c.text(""));\n',
+    "src/broken.ts": "export const x = ;\n",
+  };
+
+  test("each router's routes, with the router, file and line", () => {
+    const md = codeMap(PROJECT);
+    expect(rows(md, /^### GET /)).toEqual([
+      "| /cases | router | src/cases.ts | 4 |",
+      "| /health | app | server/app.js | 4 |",
+      "| /not-a-router | — | src/other.ts | 3 |",
+    ]);
+    expect(rows(md, /^### POST /)).toEqual(["| /cases/:id | router | src/cases.ts | 5 |"]);
+    expect(rows(md, /^### PUT /)).toEqual(["| /cases/:id | router | src/cases.ts | 9 |"]);
+    expect(rows(md, /^### DELETE /)).toEqual(["| /cases/:id | router | src/cases.ts | 9 |"]);
+    expect(rows(md, /^### PATCH /)).toEqual(["| /admin/users | admin | server/app.js | 5 |"]);
+    expect(md, "a route in a test folder is not the project's").not.toContain("/only-in-a-test-folder");
+    expect(md, "a route in a test file is not the project's").not.toContain("/only-in-a-test-file");
+  });
+
+  test("a route-shaped call on no router a file creates is counted, and a file that does not parse is named", () => {
+    const md = codeMap(PROJECT);
+    expect(md).toContain("1 route-shaped call(s) could not be attributed to a router a file creates; they are listed with — as their router.");
+    expect(md).toContain("| API routes | 6 |");
+    expect(md).toContain("| Route calls not attributed to a router | 1 |");
+    expect(md).toContain("UNMEASURED: 1 file(s) could not be parsed, so their routes and pages are not counted: src/broken.ts");
+  });
+
+  test("every page in the router, nested paths joined to their parents'", () => {
+    const md = codeMap(PROJECT);
+    expect(rows(md, /^## Pages/)).toEqual([
+      "| / | dashboard/src/App.tsx | 4 |",
+      "| /admin | dashboard/src/router.tsx | 3 |",
+      "| /admin/users | dashboard/src/router.tsx | 3 |",
+      "| /cases | dashboard/src/App.tsx | 5 |",
+      "| /settings | dashboard/src/App.tsx | 7 |",
+    ]);
+    expect(md).toContain("| Pages | 5 |");
+  });
+
+  test("CRLF line endings, a byte-order mark and a path in any script read the same", () => {
+    const body = ['import { Hono } from "hono";', "const api = new Hono();", "", 'api.get("/café", c => c.text("ok"));'].join("\r\n");
+    const md = codeMap({ "src/api.ts": `\uFEFF${body}` });
+    expect(rows(md, /^### GET /)).toEqual(["| /café | api | src/api.ts | 4 |"]);
+  });
+
+  test("CONTROL: a project with no routers and no pages renders neither section", () => {
+    const md = codeMap({ "src/util.ts": "export const add = (a: number, b: number) => a + b;\n" });
+    expect(md).not.toContain("## API Routes");
+    expect(md).not.toContain("## Pages");
+    expect(md).toContain("| API routes | 0 |");
   });
 });
