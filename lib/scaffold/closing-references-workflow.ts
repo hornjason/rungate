@@ -42,14 +42,16 @@ export const CLOSING_REFERENCES_COMMAND = "audit-closing-references";
 /**
  * ONE query, with each issue body on the `closingIssuesReferences` node GitHub
  * returned (SC-2737). `files` is the diff the session-record exemption is
- * decided from; `totalCount` travels with the issues and the commits so the
- * command can refuse a list that was cut short.
+ * decided from, and the list of ADRs the pull request changes (SC-2820), so
+ * each file carries its `changeType`: a deleted ADR is not read. `totalCount`
+ * travels with the files, the issues and the commits so the command can
+ * refuse a list that was cut short.
  */
 const QUERY_LINES = [
   "query($owner: String!, $name: String!, $number: Int!) {",
   "repository(owner: $owner, name: $name) { pullRequest(number: $number) {",
   "number body",
-  "files(first: 100) { nodes { path } }",
+  "files(first: 100) { totalCount nodes { path changeType } }",
   "closingIssuesReferences(first: 100) { totalCount",
   "nodes { number title body repository { name owner { login } } } }",
   "commits(first: 250) { totalCount nodes { commit { oid message } } }",
@@ -81,7 +83,7 @@ fi
 # whether an issue is linked. --repo because a bare number is not an identity.
 gh api graphql -f query="$QUERY" \\
   -f owner="\${GITHUB_REPOSITORY%/*}" -f name="\${GITHUB_REPOSITORY#*/}" -F number="$number" \\
-  --jq '.data.repository.pullRequest | {number, body, files: .files.nodes, closingIssuesReferences: .closingIssuesReferences.nodes, closingIssuesTotal: .closingIssuesReferences.totalCount, commits: [.commits.nodes[].commit | {sha: .oid, message}], commitsTotal: .commits.totalCount}' \\
+  --jq '.data.repository.pullRequest | {number, body, files: .files.nodes, filesTotal: .files.totalCount, closingIssuesReferences: .closingIssuesReferences.nodes, closingIssuesTotal: .closingIssuesReferences.totalCount, commits: [.commits.nodes[].commit | {sha: .oid, message}], commitsTotal: .commits.totalCount}' \\
   | bunx rungate@${version} ${CLOSING_REFERENCES_COMMAND} --repo "$GITHUB_REPOSITORY"
 `;
 }

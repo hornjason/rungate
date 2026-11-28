@@ -8,15 +8,16 @@
  * stops being indistinguishable from one that is genuinely caught
  * (`.claude/rules/checks-must-be-able-to-fail.md`).
  *
- * The script has one relative import, so the mutant cannot simply be dropped
- * in a temp directory — it would die on module resolution and a non-zero exit
- * would read as the refusal firing. The mutant therefore rewrites that
- * specifier to an absolute path, and the rewrite is asserted to have applied:
- * an unapplied mutation and a working guard produce the same colour.
+ * The script has relative imports, so the mutant cannot simply be dropped in
+ * a temp directory — it would die on module resolution and a non-zero exit
+ * would read as the refusal firing. The mutant therefore rewrites every
+ * `../lib/` specifier to an absolute path, and each rewrite is asserted to
+ * have applied: an unapplied mutation and a working guard produce the same
+ * colour. Since #2921 there are three, not one.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { execFileSync } from "child_process";
+import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -24,7 +25,8 @@ import { specCriteriaIn } from "../lib/board-mirror";
 import { closingCriteria } from "../lib/closing-reference-audit";
 
 const SCRIPT = join(import.meta.dir, "..", "scripts", "audit-closing-references.ts");
-const LIB = join(import.meta.dir, "..", "lib", "closing-reference-audit.ts");
+const LIB_DIR = join(import.meta.dir, "..", "lib");
+const LIB = join(LIB_DIR, "closing-reference-audit.ts");
 const SRC = readFileSync(SCRIPT, "utf-8");
 
 /**
@@ -51,12 +53,16 @@ function buildMutant(): string {
   if (SRC.split(decl).length - 1 !== 1) {
     throw new Error("could not build the mutant: the exit constant is not declared exactly once");
   }
-  const spec = `"../lib/closing-reference-audit"`;
-  if (SRC.split(spec).length - 1 !== 1) {
-    throw new Error("could not build the mutant: the lib specifier is not written exactly once");
+  // Every relative specifier, by pattern: each one left relative would die on
+  // module resolution in the scratch directory and read as a refusal.
+  const relative = /from "\.\.\/lib\/([^"]+)"/g;
+  const specs = [...SRC.matchAll(relative)].map(m => m[1]!);
+  if (specs.length === 0) throw new Error("could not build the mutant: no ../lib/ specifier was found to rewrite");
+  if ((SRC.match(/from "\.\.?\//g) ?? []).length !== specs.length) {
+    throw new Error("could not build the mutant: a relative import outside ../lib/ would not be rewritten");
   }
-  const out = SRC.replace(decl, "export const REFUSE_EXIT = 0;").replace(spec, JSON.stringify(LIB));
-  if (out.includes(decl) || out.includes(spec)) {
+  const out = SRC.replace(decl, "export const REFUSE_EXIT = 0;").replace(relative, (_m, p: string) => `from ${JSON.stringify(join(LIB_DIR, `${p}.ts`))}`);
+  if (out.includes(decl) || relative.test(out)) {
     throw new Error("could not build the mutant: a substitution did not apply");
   }
   const path = join(scratch, "mutant.ts");
@@ -108,6 +114,8 @@ function withTotal(payload: string): string {
       return JSON.stringify({
         closingIssuesTotal: p.closingIssuesReferences.length,
         commitsTotal: commits.length,
+        // #2921: the changed-file total, honest by the same rule.
+        ...(Array.isArray(p.files) ? { filesTotal: p.files.length } : {}),
         ...p,
         commits,
       });
@@ -133,12 +141,11 @@ function run(
   const base = { ...process.env };
   delete base.RUNGATE_REQUIRE_CLOSING_REF;
   delete base.GITHUB_RUN_ID;
-  try {
-    const out = execFileSync(process.execPath, argv, { encoding: "utf-8", env: { ...base, ...env }, cwd });
-    return { code: 0, err: "", out };
-  } catch (e: any) {
-    return { code: e.status ?? -1, err: String(e.stderr ?? ""), out: String(e.stdout ?? "") };
-  }
+  // stderr is kept on a zero exit too (review of #2945): a mutant whose
+  // REFUSE_EXIT is zeroed still prints the refusal it reached, and that print is
+  // the only thing that tells it apart from a check that never fired.
+  const r = spawnSync(process.execPath, argv, { encoding: "utf-8", env: { ...base, ...env }, cwd });
+  return { code: r.status ?? -1, err: String(r.stderr ?? ""), out: String(r.stdout ?? "") };
 }
 
 // PR #1208's real shape: the keyword and the number inside a code span, and
@@ -221,6 +228,9 @@ describe("the refusal is observed, against a mutant that cannot refuse", () => {
       expect(real.err).toContain("CLOSING-REFERENCE REFUSED");
       const mutant = run(buildMutant(), payload, THIS_REPO, ON);
       expect(mutant.code, `mutant should NOT refuse on: ${name}`).toBe(0);
+      // Review of #2945: the mutant prints the refusal it reached, which a
+      // check that never fired does not.
+      expect(mutant.err, `mutant should reach the refusal on: ${name}`).toContain("CLOSING-REFERENCE REFUSED");
     });
   }
 });
@@ -434,7 +444,11 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
     const real = run(SCRIPT, payload, THIS_REPO, ON);
     expect(real.code).toBe(REFUSE_EXIT);
     expect(real.err).toContain("no closingIssuesTotal");
-    expect(run(buildMutant(), payload, THIS_REPO, ON).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), payload, THIS_REPO, ON);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("no --repo is UNMEASURED, not a clean pull request", () => {
@@ -510,7 +524,9 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
   test("the workflow fetches files and issue bodies, re-runs on edit, and reads the switch", () => {
     const yml = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "closing-references.yml"), "utf-8");
     expect(yml).toMatch(/types:\s*\[[^\]]*\bedited\b[^\]]*\]/);
-    expect(yml).toContain("files(first: 100) { nodes { path } }");
+    // #2921: with the total and each change type, for the SC-2820 refusal.
+    expect(yml).toContain("files(first: 100) { totalCount nodes { path changeType } }");
+    expect(yml).toContain("filesTotal: .files.totalCount");
     expect(yml).toMatch(/closingIssuesReferences\(first: \d+\) \{ totalCount\s*nodes \{ number title body /);
     expect(yml).toContain("closingIssuesTotal: .closingIssuesReferences.totalCount");
     expect(yml).toContain("RUNGATE_REQUIRE_CLOSING_REF: ${{ vars.RUNGATE_REQUIRE_CLOSING_REF }}");
@@ -552,7 +568,11 @@ describe("#2061: the closing check and the board answer the criterion question t
     const real = run(SCRIPT, p, THIS_REPO, ON);
     expect(real.code).toBe(REFUSE_EXIT);
     expect(real.err).toContain("#42, whose title and body name neither");
-    expect(run(buildMutant(), p, THIS_REPO, ON).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), p, THIS_REPO, ON);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("the declaration in the TITLE answers it, as it does for the label", () => {
@@ -576,7 +596,11 @@ describe("#2061: the closing check and the board answer the criterion question t
     const real = run(SCRIPT, payload([node]), THIS_REPO, ON);
     expect(real.code).toBe(REFUSE_EXIT);
     expect(real.err).toContain("carries no title");
-    expect(run(buildMutant(), payload([node]), THIS_REPO, ON).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), payload([node]), THIS_REPO, ON);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("a spec sweep that cannot be taken is UNMEASURED, and the mutant does not refuse", () => {
@@ -587,7 +611,11 @@ describe("#2061: the closing check and the board answer the criterion question t
     expect(real.code).toBe(REFUSE_EXIT);
     expect(real.err).toContain("spec sweep");
     expect(real.err).toContain("UNMEASURED");
-    expect(run(buildMutant(), p, THIS_REPO, ON, scratch).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), p, THIS_REPO, ON, scratch);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
     // The control: a session-record-only diff owes no criterion, so the same
     // unreadable tree does not stop it.
     const record = run(SCRIPT, payload([], [{ path: "project-state.json" }]), THIS_REPO, ON, scratch);
@@ -632,7 +660,11 @@ describe("#2005: closing a criterion's issue ticks the criterion, or says it doe
     expect(real.err).toContain("#77");
     expect(real.err).toContain("SC-9101");
     expect(real.err, "the refusal must print the exact words that excuse it").toContain("does not complete SC-9101");
-    expect(run(buildMutant(), payload("Fixes #77\n"), THIS_REPO, ON, root).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), payload("Fixes #77\n"), THIS_REPO, ON, root);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("the same pull request with the criterion ticked passes", () => {
@@ -706,7 +738,11 @@ describe("#1979: a closing keyword in a commit message is checked, backticks or 
     expect(real.code, real.out).toBe(REFUSE_EXIT);
     expect(real.err).toContain("#1717");
     expect(real.err).toContain("070052b5");
-    expect(run(buildMutant(), p, THIS_REPO, ON).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), p, THIS_REPO, ON);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("it refuses with the switch OFF too: closing live work is not a warning", () => {
@@ -771,7 +807,11 @@ describe("#1979: a closing keyword in a commit message is checked, backticks or 
     const real = run(SCRIPT, payload, THIS_REPO, ON);
     expect(real.code).toBe(REFUSE_EXIT);
     expect(real.err).toContain("no commits array");
-    expect(run(buildMutant(), payload, THIS_REPO, ON).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), payload, THIS_REPO, ON);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("a commit list GitHub cut short is UNMEASURED", () => {
@@ -787,5 +827,150 @@ describe("#1979: a closing keyword in a commit message is checked, backticks or 
     const yml = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "closing-references.yml"), "utf-8");
     expect(yml).toMatch(/commits\(first: \d+\) \{ totalCount\s*nodes \{ commit \{ oid message \} \} \}/);
     expect(yml).toContain("commitsTotal: .commits.totalCount");
+  });
+});
+
+/**
+ * Covers SC-2820 (SPEC-TO-BOARD-PIPELINE-SPEC.md), #2921, ADR-030 decision 1.
+ *
+ * A pull request that changes an ADR carrying a Decomposition table is refused
+ * while that ADR still says `status: proposed`, whatever the switch says. Any
+ * other status, an ADR with no table, the template, and an ADR the pull
+ * request does not change are not refused. The checkout is a scratch tree,
+ * as the job's is the pull request's.
+ */
+describe("SC-2820: a pull request carrying a proposed ADR with a plan is refused", () => {
+  const TABLE = "| Criterion | Outcome | Files | Milestone | Blocked by |\n|---|---|---|---|---|\n| SC-2737 | A row | lib/x.ts | — | — |\n";
+  const adr = (status: string | null, table = true) =>
+    [
+      "---",
+      "doc-type: adr",
+      ...(status === null ? [] : [`status: ${status}`]),
+      "---",
+      "",
+      "# ADR-901 — a fixture",
+      "",
+      "## Decomposition",
+      "",
+      table ? TABLE : "No plan.",
+    ].join("\n");
+
+  /** A checkout: one ticked spec, so the criteria sweep reads, and the ADRs given. */
+  function checkout(adrs: Record<string, string>): string {
+    const root = mkdtempSync(join(scratch, "sc2820-"));
+    mkdirSync(join(root, "specs"), { recursive: true });
+    writeFileSync(join(root, "specs", "S-SPEC.md"), "# S\n\n## Success Criteria\n\n- [x] SC-2737: a criterion\n  proved-by: test/x.test.ts\n");
+    mkdirSync(join(root, "docs", "adr"), { recursive: true });
+    for (const [name, text] of Object.entries(adrs)) writeFileSync(join(root, "docs", "adr", name), text);
+    return root;
+  }
+  const payload = (files: Array<{ path: string; changeType?: string }>, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ number: 42, body: "Fixes #7", files, closingIssuesReferences: [closes(7)], ...extra });
+  const ADR = "docs/adr/ADR-901-a-fixture.md";
+
+  test("a proposed ADR with a plan is refused by name, and the mutant does not refuse", () => {
+    const root = checkout({ "ADR-901-a-fixture.md": adr("proposed") });
+    const real = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+    expect(real.code, real.err + real.out).toBe(REFUSE_EXIT);
+    expect(real.err).toContain(ADR);
+    expect(real.err).toContain("status: accepted");
+    const mutant = run(buildMutant(), payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+    expect(mutant.code, "the mutant should not refuse").toBe(0);
+    expect(mutant.err, "the mutant reached the refusal and printed it").toContain(`${ADR}\`, an ADR that carries a Decomposition`);
+  });
+
+  test("a status with a trailing YAML comment is still read as proposed", () => {
+    const root = checkout({ "ADR-901-a-fixture.md": adr("proposed  # awaiting the owner") });
+    const r = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+    expect(r.code, r.err).toBe(REFUSE_EXIT);
+    expect(r.err).toContain(ADR);
+  });
+
+  test("a table whose header the parser does not read as a plan is not refused", () => {
+    const root = checkout({ "ADR-901-a-fixture.md": adr("proposed").replace(TABLE, "| Criterion | Outcome | Notes |\n|---|---|---|\n| x | y | z |\n") });
+    const r = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+    expect(r.code, r.err).toBe(0);
+  });
+
+  test("it is refused with the switch off too, and when the status is quoted or capitalised", () => {
+    for (const status of ["proposed", '"Proposed"', "PROPOSED"]) {
+      const root = checkout({ "ADR-901-a-fixture.md": adr(status) });
+      const r = run(SCRIPT, payload([{ path: ADR, changeType: "ADDED" }]), THIS_REPO, {}, root);
+      expect(r.code, `${status}: ${r.err}`).toBe(REFUSE_EXIT);
+      expect(r.err).toContain(ADR);
+    }
+  });
+
+  test("an accepted or superseded ADR with a plan, a proposed one with none, and one with no status are not refused", () => {
+    for (const [label, text] of [
+      ["accepted", adr("accepted")],
+      ["superseded", adr("superseded")],
+      ["proposed, no table", adr("proposed", false)],
+      ["no status", adr(null)],
+    ] as const) {
+      const root = checkout({ "ADR-901-a-fixture.md": text });
+      const r = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+      expect(r.code, `${label}: ${r.err}`).toBe(0);
+      expect(r.out).toContain("closing references OK");
+    }
+  });
+
+  test("the ADR template is not an ADR, so editing it is not refused", () => {
+    const root = checkout({ "TEMPLATE.md": adr("proposed") });
+    const r = run(SCRIPT, payload([{ path: "docs/adr/TEMPLATE.md", changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+    expect(r.code, r.err).toBe(0);
+  });
+
+  test("a proposed ADR the pull request does not change is not refused", () => {
+    const root = checkout({ "ADR-901-a-fixture.md": adr("proposed") });
+    const r = run(SCRIPT, payload([{ path: "lib/x.ts", changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+    expect(r.code, r.err).toBe(0);
+  });
+
+  test("an ADR the pull request deletes is not refused; one missing from the checkout without being deleted is UNMEASURED", () => {
+    const root = checkout({});
+    const deleted = run(SCRIPT, payload([{ path: ADR, changeType: "DELETED" }]), THIS_REPO, ON, root);
+    expect(deleted.code, deleted.err).toBe(0);
+    const missing = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+    expect(missing.code).toBe(REFUSE_EXIT);
+    expect(missing.err).toContain("UNMEASURED");
+    expect(missing.err).toContain(ADR);
+    const mutant = run(buildMutant(), payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+    expect(mutant.code).toBe(0);
+    expect(mutant.err, "the mutant reached the refusal and printed it").toContain(`${ADR} is changed by this pull request and is not in the checkout`);
+  });
+
+  // Review of #2945: only an ADR in the checkout that is proposed with a plan
+  // can be refused, so a list cut short at 100 matters only when one of those
+  // sits outside it. A large pull request with none is not held up.
+  const base = (files: Array<{ path: string; changeType?: string }>) =>
+    ({ number: 42, body: "Fixes #7", files, closingIssuesReferences: [closes(7)], closingIssuesTotal: 1, commits: [], commitsTotal: 0 });
+  const CODE_ONLY = [{ path: "lib/x.ts", changeType: "MODIFIED" }];
+
+  test("a list cut short, or with no total, is not refused when no ADR in the checkout is proposed with a plan", () => {
+    const root = checkout({ "ADR-902-accepted.md": adr("accepted") });
+    for (const extra of [{}, { filesTotal: 101 }]) {
+      const r = run(SCRIPT, { [RAW]: JSON.stringify({ ...base(CODE_ONLY), ...extra }) }, THIS_REPO, ON, root);
+      expect(r.code, `${JSON.stringify(extra)}: ${r.err}`).toBe(0);
+    }
+  });
+
+  test("a list cut short, or with no total, is UNMEASURED when a proposed ADR with a plan is outside it", () => {
+    const root = checkout({ "ADR-901-a-fixture.md": adr("proposed") });
+    for (const extra of [{}, { filesTotal: 101 }]) {
+      const r = run(SCRIPT, { [RAW]: JSON.stringify({ ...base(CODE_ONLY), ...extra }) }, THIS_REPO, ON, root);
+      expect(r.code, JSON.stringify(extra)).toBe(REFUSE_EXIT);
+      expect(r.err).toContain("UNMEASURED");
+      expect(r.err).toContain(ADR);
+      const mutant = run(buildMutant(), { [RAW]: JSON.stringify({ ...base(CODE_ONLY), ...extra }) }, THIS_REPO, ON, root);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain(`whether it changes \`${ADR}\``);
+    }
+  });
+
+  test("a complete list that does not hold the proposed ADR is not refused", () => {
+    const root = checkout({ "ADR-901-a-fixture.md": adr("proposed") });
+    const r = run(SCRIPT, { [RAW]: JSON.stringify({ ...base(CODE_ONLY), filesTotal: 1 }) }, THIS_REPO, ON, root);
+    expect(r.code, r.err).toBe(0);
   });
 });

@@ -1,4 +1,4 @@
-# generated-sha: 4b2c377a83516ca2
+# generated-sha: 6aa95e9a6a5f896c
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 #
 # A closing keyword GitHub cannot see, and a pull request that closes no issue
@@ -52,7 +52,7 @@ jobs:
             query($owner: String!, $name: String!, $number: Int!) {
             repository(owner: $owner, name: $name) { pullRequest(number: $number) {
             number body
-            files(first: 100) { nodes { path } }
+            files(first: 100) { totalCount nodes { path changeType } }
             closingIssuesReferences(first: 100) { totalCount
             nodes { number title body repository { name owner { login } } } }
             commits(first: 250) { totalCount nodes { commit { oid message } } }
@@ -73,5 +73,5 @@ jobs:
           # whether an issue is linked. --repo because a bare number is not an identity.
           gh api graphql -f query="$QUERY" \
             -f owner="${GITHUB_REPOSITORY%/*}" -f name="${GITHUB_REPOSITORY#*/}" -F number="$number" \
-            --jq '.data.repository.pullRequest | {number, body, files: .files.nodes, closingIssuesReferences: .closingIssuesReferences.nodes, closingIssuesTotal: .closingIssuesReferences.totalCount, commits: [.commits.nodes[].commit | {sha: .oid, message}], commitsTotal: .commits.totalCount}' \
+            --jq '.data.repository.pullRequest | {number, body, files: .files.nodes, filesTotal: .files.totalCount, closingIssuesReferences: .closingIssuesReferences.nodes, closingIssuesTotal: .closingIssuesReferences.totalCount, commits: [.commits.nodes[].commit | {sha: .oid, message}], commitsTotal: .commits.totalCount}' \
             | bunx rungate@0.8.49 audit-closing-references --repo "$GITHUB_REPOSITORY"

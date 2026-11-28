@@ -76,6 +76,15 @@ describe("SC-2743: scaffold emits closing-references.yml as an owned workflow", 
     expect(uses.filter(u => u !== actionRef(u.split("@")[0]!).split(" #")[0])).toEqual([]);
   });
 
+  // #2921 (SC-2820): the audit reads which ADRs a pull request changes from
+  // this list, so it needs the total beside the nodes (a list cut at 100 could
+  // hide the ADR) and each file's change type (a deleted ADR is not read).
+  test("#2921: the query sends the changed files' total and change types, and the step forwards the total", () => {
+    const step = (doc.jobs[CLOSING_REFERENCES_JOB].steps as any[]).find(s => s.env?.QUERY);
+    expect(String(step?.env?.QUERY)).toContain("files(first: 100) { totalCount nodes { path changeType } }");
+    expect(String(step?.run)).toContain("filesTotal: .files.totalCount");
+  });
+
   test("this repository's copy is the generated one, untouched", () => {
     const row = workflowCensus(ROOT).files.find(f => f.name === CLOSING_REFERENCES_WORKFLOW_FILE);
     expect(row?.status, row?.detail).toBe("generated-and-unchanged");

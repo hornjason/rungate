@@ -21,7 +21,7 @@
  *
  * ## What it refuses, and what it deliberately does not
  *
- * Four refusals, in the order the script reaches them. The first two refuse
+ * Five refusals, in the order the script reaches them. The first three refuse
  * whatever `RUNGATE_REQUIRE_CLOSING_REF` says; the last two only when it is
  * the string `true`, and are an annotation otherwise.
  *
@@ -32,9 +32,12 @@
  *  2. **A commit message that closes an undeclared issue (#1979):** GitHub
  *     acts on a keyword in a commit message wherever it sits, and this
  *     repository squashes with the messages as the body.
- *  3. **No issue closed, or one that has not answered the criterion question**
+ *  3. **An ADR with a plan that still says `status: proposed`** (SC-2820,
+ *     ADR-030 decision 1). Merged, its plan is never placed. The template is
+ *     not an ADR, and an ADR the pull request deletes is not refused.
+ *  4. **No issue closed, or one that has not answered the criterion question**
  *     (ADR-013 step 4, #2061).
- *  4. **A closed issue naming a criterion this tree leaves unticked**, unless
+ *  5. **A closed issue naming a criterion this tree leaves unticked**, unless
  *     the description says `does not complete <id>` (#2005).
  *
  * A payload missing a field any of these reads is UNMEASURED and refused.
@@ -50,7 +53,8 @@
  * through REFUSE_EXIT, declared exactly once.
  */
 
-import { readFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
+import { join } from "path";
 import {
   type ClosedIssue,
   type ClosingCriteria,
@@ -64,9 +68,14 @@ import {
   isSessionRecordOnly,
   linkedIssuesInThisRepo,
 } from "../lib/closing-reference-audit";
+import { proposedWithPlan } from "../lib/issue-decomposition";
+import { ADR_TEMPLATE_PATH } from "../lib/scaffold/process-files";
 
 /** The one exit code every refusal travels through. */
 export const REFUSE_EXIT = 1;
+
+/** An ADR's path: a markdown file directly under `docs/adr/`. */
+const ADR_PATH = /^docs\/adr\/[^/]+\.md$/;
 
 function arg(name: string): string | null {
   const i = process.argv.indexOf(`--${name}`);
@@ -239,6 +248,62 @@ async function main(): Promise<void> {
   });
   const undeclared = commitClosingReferences(commits, repoNameWithOwner).filter(r => !linkedIssues.has(r.issue));
   if (undeclared.length > 0) refuse(commitClosingMessage(undeclared, prNumber));
+
+  // SC-2820, ADR-030 decision 1: an ADR with a plan that still says
+  // `proposed` cannot be merged, so the owner's merge is never the step that
+  // accepts a plan, and neither is a bot's. Refused whatever the switch says,
+  // like the two readings above.
+  //
+  // Read from the checkout, which is the pull request's merge commit. A file
+  // GitHub says was deleted is not read; one it says is there and the
+  // checkout lacks is a checkout that is not this pull request's.
+  const changedAdrs = new Set<string>();
+  for (const file of pr.files as Array<{ path: string; changeType?: unknown }>) {
+    // The template too: a changed file the checkout lacks is a checkout that is
+    // not this pull request's, whatever the file is. Whether it can be refused
+    // is decided once, by the candidate list below.
+    if (!ADR_PATH.test(file.path) || file.changeType === "DELETED") continue;
+    if (!existsSync(join(process.cwd(), file.path))) {
+      refuse(
+        `${file.path} is changed by this pull request and is not in the checkout at ${process.cwd()}, so ` +
+          `whether it is a proposed ADR with a plan was never read. UNMEASURED, not clean.`,
+      );
+    }
+    changedAdrs.add(file.path);
+  }
+  // Only an ADR in the checkout that is proposed with a plan can be refused,
+  // so those are read first, and the file list is asked only about them
+  // (review of #2945: a pull request of 101 files with no such ADR was held up).
+  const adrDir = join(process.cwd(), "docs", "adr");
+  const candidates = (existsSync(adrDir) ? readdirSync(adrDir) : [])
+    .map(name => `docs/adr/${name}`)
+    .filter(p => ADR_PATH.test(p) && p !== ADR_TEMPLATE_PATH)
+    .filter(p => proposedWithPlan(readFileSync(join(process.cwd(), p), "utf-8")))
+    .sort();
+  const proposed = candidates.filter(p => changedAdrs.has(p));
+  // GitHub's file list is cut at 100. A candidate outside a list that was cut,
+  // or whose total was never sent, may be one this pull request changes:
+  // UNMEASURED, as for issues and commits.
+  const filesTotal = (pr as { filesTotal?: unknown }).filesTotal;
+  const unread = candidates.filter(p => !changedAdrs.has(p));
+  if (proposed.length === 0 && unread.length > 0 && (typeof filesTotal !== "number" || filesTotal > changedPaths.length)) {
+    refuse(
+      (typeof filesTotal !== "number"
+        ? "the payload carries no filesTotal number, so whether the changed-file list was cut short was never read"
+        : `this pull request changes ${filesTotal} file(s) and only ${changedPaths.length} were fetched`) +
+        `, so whether it changes ${unread.map(p => `\`${p}\``).join(", ")}, an ADR that carries a plan and still says ` +
+        `\`status: proposed\`, was never read. UNMEASURED, not clean.`,
+    );
+  }
+  if (proposed.length > 0) {
+    refuse(
+      `PR #${prNumber} changes ${proposed.map(p => `\`${p}\``).join(", ")}, an ADR that carries a Decomposition ` +
+        `table and still says \`status: proposed\`. Merged like that, its plan is never placed: ` +
+        `adr-accepted.yml places a plan only when the status becomes accepted. Once the owner agrees, ` +
+        `set \`status: accepted\` in this pull request, and the owner merges it (ADR-030 decision 1). ` +
+        `Any other status is not refused.`,
+    );
+  }
 
   // The body of every issue this pull request closes HERE, read off the same
   // nodes `closingIssuesReferences` returned. The workflow asks GitHub for the
