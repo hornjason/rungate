@@ -53,7 +53,7 @@
  * through REFUSE_EXIT, declared exactly once.
  */
 
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 import {
   type ClosedIssue,
@@ -254,35 +254,43 @@ async function main(): Promise<void> {
   // accepts a plan, and neither is a bot's. Refused whatever the switch says,
   // like the two readings above.
   //
-  // GitHub's file list is cut at 100, and the ADR could sit in the part never
-  // fetched: an absent or short total is UNMEASURED, as for issues and commits.
-  const filesTotal = (pr as { filesTotal?: unknown }).filesTotal;
-  if (typeof filesTotal !== "number") {
-    refuse(
-      "the payload carries no filesTotal number, so whether the changed-file list was cut short " +
-        "was never read. Add `totalCount` to the files query. UNMEASURED, not clean.",
-    );
-  }
-  if (filesTotal > changedPaths.length) {
-    refuse(
-      `this pull request changes ${filesTotal} file(s) and only ${changedPaths.length} were fetched, so ` +
-        `whether one is a proposed ADR with a plan was never read. UNMEASURED, not clean.`,
-    );
-  }
   // Read from the checkout, which is the pull request's merge commit. A file
   // GitHub says was deleted is not read; one it says is there and the
   // checkout lacks is a checkout that is not this pull request's.
-  const proposed: string[] = [];
+  const changedAdrs = new Set<string>();
   for (const file of pr.files as Array<{ path: string; changeType?: unknown }>) {
     if (!ADR_PATH.test(file.path) || file.path === ADR_TEMPLATE_PATH || file.changeType === "DELETED") continue;
-    const at = join(process.cwd(), file.path);
-    if (!existsSync(at)) {
+    if (!existsSync(join(process.cwd(), file.path))) {
       refuse(
         `${file.path} is changed by this pull request and is not in the checkout at ${process.cwd()}, so ` +
           `whether it is a proposed ADR with a plan was never read. UNMEASURED, not clean.`,
       );
     }
-    if (proposedWithPlan(readFileSync(at, "utf-8"))) proposed.push(file.path);
+    changedAdrs.add(file.path);
+  }
+  // Only an ADR in the checkout that is proposed with a plan can be refused,
+  // so those are read first, and the file list is asked only about them
+  // (review of #2945: a pull request of 101 files with no such ADR was held up).
+  const adrDir = join(process.cwd(), "docs", "adr");
+  const candidates = (existsSync(adrDir) ? readdirSync(adrDir) : [])
+    .map(name => `docs/adr/${name}`)
+    .filter(p => ADR_PATH.test(p) && p !== ADR_TEMPLATE_PATH)
+    .filter(p => proposedWithPlan(readFileSync(join(process.cwd(), p), "utf-8")))
+    .sort();
+  const proposed = candidates.filter(p => changedAdrs.has(p));
+  // GitHub's file list is cut at 100. A candidate outside a list that was cut,
+  // or whose total was never sent, may be one this pull request changes:
+  // UNMEASURED, as for issues and commits.
+  const filesTotal = (pr as { filesTotal?: unknown }).filesTotal;
+  const unread = candidates.filter(p => !changedAdrs.has(p));
+  if (proposed.length === 0 && unread.length > 0 && (typeof filesTotal !== "number" || filesTotal > changedPaths.length)) {
+    refuse(
+      (typeof filesTotal !== "number"
+        ? "the payload carries no filesTotal number, so whether the changed-file list was cut short was never read"
+        : `this pull request changes ${filesTotal} file(s) and only ${changedPaths.length} were fetched`) +
+        `, so whether it changes ${unread.map(p => `\`${p}\``).join(", ")}, an ADR that carries a plan and still says ` +
+        `\`status: proposed\`, was never read. UNMEASURED, not clean.`,
+    );
   }
   if (proposed.length > 0) {
     refuse(

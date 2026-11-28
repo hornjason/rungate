@@ -1756,6 +1756,16 @@ describe("#2921: an ADR is refused for merge only while it says proposed and car
     }
   });
 
+  test("a trailing YAML comment is not part of the status, inside quotes it is", () => {
+    expect(proposedWithPlan(doc("status: proposed  # awaiting the owner", TABLE))).toBe(true);
+    expect(proposedWithPlan(doc('status: "proposed" # quoted, then a comment', TABLE))).toBe(true);
+    expect(proposedWithPlan(doc('status: "proposed # not a comment"', TABLE))).toBe(false);
+  });
+
+  test("a header the parser does not read as a plan is not a plan", () => {
+    expect(proposedWithPlan(doc("status: proposed", "| Criterion | Outcome | Notes |\n|---|---|---|\n"))).toBe(false);
+  });
+
   test("any other status, no table, or a status only the body states, is not refused", () => {
     expect(proposedWithPlan(doc("status: accepted", TABLE))).toBe(false);
     expect(proposedWithPlan(doc("status: superseded", TABLE))).toBe(false);

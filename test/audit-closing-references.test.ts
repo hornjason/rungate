@@ -17,7 +17,7 @@
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { execFileSync } from "child_process";
+import { spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -141,12 +141,11 @@ function run(
   const base = { ...process.env };
   delete base.RUNGATE_REQUIRE_CLOSING_REF;
   delete base.GITHUB_RUN_ID;
-  try {
-    const out = execFileSync(process.execPath, argv, { encoding: "utf-8", env: { ...base, ...env }, cwd });
-    return { code: 0, err: "", out };
-  } catch (e: any) {
-    return { code: e.status ?? -1, err: String(e.stderr ?? ""), out: String(e.stdout ?? "") };
-  }
+  // stderr is kept on a zero exit too (review of #2945): a mutant whose
+  // REFUSE_EXIT is zeroed still prints the refusal it reached, and that print is
+  // the only thing that tells it apart from a check that never fired.
+  const r = spawnSync(process.execPath, argv, { encoding: "utf-8", env: { ...base, ...env }, cwd });
+  return { code: r.status ?? -1, err: String(r.stderr ?? ""), out: String(r.stdout ?? "") };
 }
 
 // PR #1208's real shape: the keyword and the number inside a code span, and
@@ -846,6 +845,20 @@ describe("SC-2820: a pull request carrying a proposed ADR with a plan is refused
     expect(real.err).toContain("status: accepted");
     const mutant = run(buildMutant(), payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
     expect(mutant.code, "the mutant should not refuse").toBe(0);
+    expect(mutant.err, "the mutant reached the refusal and printed it").toContain(`${ADR}\`, an ADR that carries a Decomposition`);
+  });
+
+  test("a status with a trailing YAML comment is still read as proposed", () => {
+    const root = checkout({ "ADR-901-a-fixture.md": adr("proposed  # awaiting the owner") });
+    const r = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+    expect(r.code, r.err).toBe(REFUSE_EXIT);
+    expect(r.err).toContain(ADR);
+  });
+
+  test("a table whose header the parser does not read as a plan is not refused", () => {
+    const root = checkout({ "ADR-901-a-fixture.md": adr("proposed").replace(TABLE, "| Criterion | Outcome | Notes |\n|---|---|---|\n| x | y | z |\n") });
+    const r = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+    expect(r.code, r.err).toBe(0);
   });
 
   test("it is refused with the switch off too, and when the status is quoted or capitalised", () => {
@@ -891,19 +904,42 @@ describe("SC-2820: a pull request carrying a proposed ADR with a plan is refused
     expect(missing.code).toBe(REFUSE_EXIT);
     expect(missing.err).toContain("UNMEASURED");
     expect(missing.err).toContain(ADR);
-    expect(run(buildMutant(), payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root).code).toBe(0);
+    const mutant = run(buildMutant(), payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+    expect(mutant.code).toBe(0);
+    expect(mutant.err, "the mutant reached the refusal and printed it").toContain(`${ADR} is changed by this pull request and is not in the checkout`);
   });
 
-  test("a changed-file list with no total, or cut short, is UNMEASURED", () => {
-    const root = checkout({});
-    const files = [{ path: "lib/x.ts", changeType: "MODIFIED" }];
-    const base = { number: 42, body: "Fixes #7", files, closingIssuesReferences: [closes(7)], closingIssuesTotal: 1, commits: [], commitsTotal: 0 };
-    const absent = run(SCRIPT, { [RAW]: JSON.stringify(base) }, THIS_REPO, ON, root);
-    expect(absent.code).toBe(REFUSE_EXIT);
-    expect(absent.err).toContain("filesTotal");
-    const short = run(SCRIPT, { [RAW]: JSON.stringify({ ...base, filesTotal: 101 }) }, THIS_REPO, ON, root);
-    expect(short.code).toBe(REFUSE_EXIT);
-    expect(short.err).toContain("UNMEASURED");
-    expect(run(buildMutant(), { [RAW]: JSON.stringify({ ...base, filesTotal: 101 }) }, THIS_REPO, ON, root).code).toBe(0);
+  // Review of #2945: only an ADR in the checkout that is proposed with a plan
+  // can be refused, so a list cut short at 100 matters only when one of those
+  // sits outside it. A large pull request with none is not held up.
+  const base = (files: Array<{ path: string; changeType?: string }>) =>
+    ({ number: 42, body: "Fixes #7", files, closingIssuesReferences: [closes(7)], closingIssuesTotal: 1, commits: [], commitsTotal: 0 });
+  const CODE_ONLY = [{ path: "lib/x.ts", changeType: "MODIFIED" }];
+
+  test("a list cut short, or with no total, is not refused when no ADR in the checkout is proposed with a plan", () => {
+    const root = checkout({ "ADR-902-accepted.md": adr("accepted") });
+    for (const extra of [{}, { filesTotal: 101 }]) {
+      const r = run(SCRIPT, { [RAW]: JSON.stringify({ ...base(CODE_ONLY), ...extra }) }, THIS_REPO, ON, root);
+      expect(r.code, `${JSON.stringify(extra)}: ${r.err}`).toBe(0);
+    }
+  });
+
+  test("a list cut short, or with no total, is UNMEASURED when a proposed ADR with a plan is outside it", () => {
+    const root = checkout({ "ADR-901-a-fixture.md": adr("proposed") });
+    for (const extra of [{}, { filesTotal: 101 }]) {
+      const r = run(SCRIPT, { [RAW]: JSON.stringify({ ...base(CODE_ONLY), ...extra }) }, THIS_REPO, ON, root);
+      expect(r.code, JSON.stringify(extra)).toBe(REFUSE_EXIT);
+      expect(r.err).toContain("UNMEASURED");
+      expect(r.err).toContain(ADR);
+      const mutant = run(buildMutant(), { [RAW]: JSON.stringify({ ...base(CODE_ONLY), ...extra }) }, THIS_REPO, ON, root);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain(`whether it changes \`${ADR}\``);
+    }
+  });
+
+  test("a complete list that does not hold the proposed ADR is not refused", () => {
+    const root = checkout({ "ADR-901-a-fixture.md": adr("proposed") });
+    const r = run(SCRIPT, { [RAW]: JSON.stringify({ ...base(CODE_ONLY), filesTotal: 1 }) }, THIS_REPO, ON, root);
+    expect(r.code, r.err).toBe(0);
   });
 });

@@ -722,7 +722,13 @@ export function adrStatus(text: string): string | null {
     // and `Accepted` were read as not-accepted and the plan was silently
     // never placed (security review of #2009).
     const m = /^status:\s*(.*?)\s*$/.exec(line);
-    if (m) return m[1]!.replace(/^(["'])(.*)\1$/, "$2").trim().toLowerCase();
+    if (m) {
+      // A quoted value is read to its closing quote, so a `#` inside it is
+      // text. Unquoted, ` #…` is a YAML comment and not part of the status
+      // (review of #2945): `status: proposed  # awaiting the owner` is proposed.
+      const quoted = /^(["'])(.*?)\1/.exec(m[1]!);
+      return (quoted ? quoted[2]! : m[1]!.replace(/\s+#.*$/, "")).trim().toLowerCase();
+    }
   }
   return null;
 }
@@ -825,5 +831,8 @@ export function hasDecompositionTable(text: string): boolean {
  * a superseded ADR that carries a plan can still be edited.
  */
 export function proposedWithPlan(text: string): boolean {
-  return adrStatus(text) === "proposed" && hasDecompositionTable(text);
+  // The parser's own header, not the looser `hasDecompositionTable`: a table
+  // `--decompose` would not read is not a plan it could fail to place
+  // (review of #2945).
+  return adrStatus(text) === "proposed" && text.split("\n").some(l => HEADER.test(l));
 }
