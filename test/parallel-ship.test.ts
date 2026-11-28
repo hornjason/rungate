@@ -8,7 +8,9 @@ import {
   allocatePort,
   generateContainerName,
   cleanupShipWorktree,
+  shipLaunchArgs,
 } from "../scripts/parallel-ship";
+import { SHIP_SKILL_FOLDERS } from "../lib/ship-skill-folder";
 import { initFixtureRepo, commitFixture } from "./helpers/git-fixture";
 
 describe("parallel-ship", () => {
@@ -127,5 +129,23 @@ describe("parallel-ship", () => {
       // Ports should be sequential
       expect(ports).toEqual([7776, 7777, 7778]);
     });
+  });
+});
+
+// #2949 (ADR-029): a parallel ship launches the harness skill by its new name.
+// The old slash command is Claude Code's built-in, so a session launched with
+// it ran the built-in and never the harness.
+describe("#2949: parallel-ship launches the ship skill by its new name", () => {
+  const job = { issue: 42, worktreePath: "/tmp/ship-42", port: 7776, containerName: "x-42", status: "pending" as const };
+
+  test("the prompt it hands claude is the skill's name and the issue, after the project flag", () => {
+    expect(SHIP_SKILL_FOLDERS[0]).toBe("ship-issue");
+    expect(shipLaunchArgs(job)).toEqual(["--bg", "--project", "/tmp/ship-42", "/ship-issue 42"]);
+  });
+
+  test("the dry run prints the same arguments the launch uses, so the two cannot disagree", () => {
+    const src = require("fs").readFileSync(join(import.meta.dir, "..", "scripts", "parallel-ship.ts"), "utf-8") as string;
+    expect(src.match(/shipLaunchArgs\(job\)/g)?.length, "the launch and the dry run both build their arguments here").toBe(2);
+    expect(src).not.toMatch(/`\/ship /);
   });
 });

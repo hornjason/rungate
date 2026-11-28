@@ -3,9 +3,12 @@
  * tell an agent to invoke the ship skill as `Skill("ship-issue")`, and every
  * test that reads the skill's folder reads it through `shipSkillPath`.
  *
- * ADR-029's criterion is not claimed here. It also covers the skill's slash
- * form, which live files outside this row still use; #2949 removes those,
- * widens the first scan below to that form, and claims the criterion there.
+ * #2949: the scan below also refuses the skill's old name typed as a slash
+ * command, which since ADR-029 is Claude Code's built-in, and the old name
+ * followed by arguments (review of #2952). This file spells neither in its
+ * own text, because the scan reads it too.
+ *
+ * Covers SC-2819 (HARNESS-STANDARD.md).
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "child_process";
@@ -20,9 +23,16 @@ const REPO = join(import.meta.dir, "..");
 const OLD = "ship";
 const NEW = "ship-issue";
 
-/** An instruction to invoke the skill by its old name, in any one quote. */
-const OLD_INVOCATION = /Skill\(\s*\\?(["'`])ship\\?\1\s*\)/g;
-const oldInvocations = (text: string): number => [...text.matchAll(OLD_INVOCATION)].length;
+/** An instruction to invoke the skill by its old name, in any one quote, with or without arguments. */
+const OLD_INVOCATION = /Skill\(\s*\\?(["'`])ship\\?\1\s*[,)]/g;
+/**
+ * The old name as a slash command (#2949), standing alone as a command is
+ * typed. Not a path segment, not an escaped slash or a regex literal, and not
+ * the new name. The planted rows below name each case.
+ */
+const OLD_SLASH = /(?<![\w./~\\-])\/ship(?![\w\\-]|\.\w)/g;
+const oldInvocations = (text: string): number =>
+  [...text.matchAll(OLD_INVOCATION)].length + [...text.matchAll(OLD_SLASH)].length;
 
 /** Dated records keep the old name: ADR-029 decision 5. */
 const DATED = ["docs/adr/", "docs/research/", "reference/"];
@@ -32,7 +42,12 @@ const DATED = ["docs/adr/", "docs/research/", "reference/"];
  * are the pre-#2930 generated ship rule, kept as the input whose rewrite that
  * file tests. Exact, so a new copy there and a removed one both fail.
  */
-const FIXTURES = new Map<string, number>([["test/ship-mode.test.ts", 5]]);
+const FIXTURES = new Map<string, number>([
+  ["test/ship-mode.test.ts", 5],
+  // The one sentence that names Claude Code's built-in slash command on
+  // purpose, to say why the skill was renamed (#2949).
+  ["specs/HARNESS-STANDARD.md", 1],
+]);
 
 const scratch: string[] = [];
 afterAll(() => {
@@ -79,6 +94,34 @@ describe("#2933: rungate tells an agent to invoke the ship skill by its new name
       expect(oldInvocations(s), s).toBe(1);
     }
     for (const s of [`Skill("${NEW}")`, `Skill("${OLD}ping")`, `Skill("${OLD}-local")`, `Skill("${OLD}')`]) {
+      expect(oldInvocations(s), s).toBe(0);
+    }
+  });
+
+  test("#2949: the scan finds the old name with arguments and the old slash form, and no path, regex or new name", () => {
+    // Review of #2952: arguments after the name.
+    for (const s of [`Skill("${OLD}", "42")`, `Skill( '${OLD}' , { issue: 42 })`]) expect(oldInvocations(s), s).toBe(1);
+    // The slash form, as the live files spelled it before this change.
+    for (const s of [
+      `claude --bg --project /tmp/x "/${OLD} 42"`,
+      "const args = [\"--bg\", `/" + OLD + " ${job.issue}`];",
+      `Run /${OLD} first.`,
+      `After /${OLD} to prove the fix works`,
+      `| /${OLD} | Yes | After /goal |`,
+      `Claude Code ships a built-in \`/${OLD}\`.`,
+    ]) {
+      expect(oldInvocations(s), s).toBe(1);
+    }
+    for (const s of [
+      `/${NEW} 42`,
+      `workflows/${OLD}.js`,
+      `some/dir/${OLD}/file.md`,
+      `prove/${OLD} gates`,
+      `/${OLD}ping`,
+      `/${OLD}.js`,
+      `/\\/${OLD}(?:-issue)?/`,
+      `toMatch(/${OLD}\\.js:\\d+/)`,
+    ]) {
       expect(oldInvocations(s), s).toBe(0);
     }
   });

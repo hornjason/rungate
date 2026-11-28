@@ -5,6 +5,7 @@ import { rmSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 
 import { readProjectSlug } from "../lib/config-readers.js";
+import { SHIP_SKILL_FOLDERS } from "../lib/ship-skill-folder";
 
 export interface ShipJob {
   issue: number;
@@ -56,9 +57,19 @@ export function getProjectSlug(projectRoot: string): string {
   return readProjectSlug(projectRoot) ?? "project";
 }
 
+/**
+ * What `claude` is launched with for one issue (#2949): the harness skill by
+ * its name, which is its folder's new name (ADR-029). The old name is Claude
+ * Code's built-in slash command, so a session launched with it ran the
+ * built-in and never the harness. The launch and the dry run both read this.
+ */
+export function shipLaunchArgs(job: ShipJob): string[] {
+  return ["--bg", "--project", job.worktreePath, `/${SHIP_SKILL_FOLDERS[0]} ${job.issue}`];
+}
+
 function launchShipSession(job: ShipJob): void {
   const cmd = "claude";
-  const args = ["--bg", "--project", job.worktreePath, `/ship ${job.issue}`];
+  const args = shipLaunchArgs(job);
 
   console.log(`  Launching: ${cmd} ${args.join(" ")}`);
 
@@ -134,7 +145,7 @@ async function main() {
     console.log(`  Container: ${job.containerName}`);
 
     if (dryRun) {
-      console.log(`  [dry-run] Would launch: claude --bg --project ${job.worktreePath} "/ship ${job.issue}"`);
+      console.log(`  [dry-run] Would launch: claude ${shipLaunchArgs(job).map(a => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ")}`);
     } else {
       launchShipSession(job);
     }

@@ -580,7 +580,12 @@ const UNCLAIMED_RATCHET = 150;
 // read "no stages written" when it holds no ladder, a reading of two reports
 // that no registered pattern expresses; the SC-2822 describes in
 // test/work-status.test.ts and test/status-view.test.ts name it (2026-11-27).
-const CLAIMED_UNBINDABLE = 222;
+// 223: SC-2819 (#2949) ticked by `sync-sc-status --only SC-2819` — no live
+// file of rungate's, and no file the scaffold writes, invokes the ship skill
+// by its old name in either form, a reading of the whole tree that no
+// registered pattern expresses; test/ship-skill-name.test.ts names it
+// (2026-11-28).
+const CLAIMED_UNBINDABLE = 223;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

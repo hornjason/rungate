@@ -1,7 +1,7 @@
 export const meta = {
   name: 'prove',
   description: 'Standalone verification: prove a fix solves the user problem. GOAL → VERIFY-DEPLOYED → VALIDATE → VERDICT → OUTPUT',
-  whenToUse: 'After /ship to prove the fix works. Standalone on any issue. Replaces reading prove SKILL.md manually.',
+  whenToUse: 'After /ship-issue to prove the fix works. Standalone on any issue. Replaces reading prove SKILL.md manually.',
   phases: [
     { title: 'Goal', detail: 'Read issue, extract what was fixed, load chain context' },
     { title: 'Verify-Deployed', detail: 'Confirm fix commit is on main' },
