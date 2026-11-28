@@ -25,7 +25,7 @@ STOP. Do NOT read source code, edit files, or write code until all 4 steps are d
    targeted paths — do NOT treat a blocked run as a satisfied gate (#67).
 2. Find the governing spec in the Specs table in `.claude/rules/specs-routing.md`. Read it.
 3. Use `Skill("ship-issue")` with the issue number — it runs the full pipeline via `workflows/ship.run.js`, generated from `workflows/ship.js`. **NEVER spawn Marcus, Quinn, or Rook directly with the Agent tool** — direct spawns bypass compliance grading, gates, and transcript capture.
-4. If `Skill("ship-issue")` is unavailable, invoke `Workflow({ scriptPath: "~/Projects/rungate/workflows/ship.run.js" })` with issue args. See `.claude/rules/ship-workflow.md` for details.
+4. If `Skill("ship-issue")` is unavailable, invoke `Workflow({ scriptPath: "~/Projects/rungate/workflows/ship.run.js" })` with issue args. See `.claude/rules/ship-workflow.md`.
 
 If you skip any step, the session is invalid.
 
