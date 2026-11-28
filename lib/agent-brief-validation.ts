@@ -18,6 +18,7 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { shipSkillPath } from './ship-skill-folder';
+import { compileBriefPattern } from './brief-policy-pattern';
 
 // --- Interfaces ---
 
@@ -245,18 +246,16 @@ function validateBriefPolicies(
   if (policies === null || typeof policies !== 'object' || Array.isArray(policies)) {
     return { unreadable: `${policyPath} is not a JSON object` };
   }
-  const policy = (policies as { policies?: Record<string, { requiredPatterns?: { name: string; pattern: string }[] }> })
+  const policy = (policies as { policies?: Record<string, { requiredPatterns?: { name: string; pattern: unknown }[] }> })
     .policies?.[agent.label.toLowerCase()];
   if (!policy?.requiredPatterns) return { missing: [] };
   const missing: string[] = [];
   for (const req of policy.requiredPatterns) {
-    let re: RegExp;
-    try {
-      re = new RegExp(req.pattern, 'i');
-    } catch (e) {
-      return { unreadable: `${policyPath}: the pattern for "${req.name}" is not a regular expression (${(e as Error).message})` };
-    }
-    if (!re.test(prompt)) missing.push(req.name);
+    // #2946: the gates' compiler, so the shipped `(?i)` form reads here too,
+    // and an entry with no pattern is unreadable rather than an empty regex.
+    const compiled = compileBriefPattern(req);
+    if (!compiled.ok) return { unreadable: `${policyPath}: ${compiled.why}` };
+    if (!compiled.re.test(prompt)) missing.push(req.name);
   }
   return { missing };
 }

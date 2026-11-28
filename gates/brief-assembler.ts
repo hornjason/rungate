@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { plantCanaries, getDefaultCanaries } from "../lib/canary.js";
 import { tryLoadRungateConfig } from "../lib/config-loader";
 import { shipSkillPath } from "../lib/ship-skill-folder";
+import { compileBriefPattern } from "../lib/brief-policy-pattern";
 import {
   classifyContextDoc, classifyContextDocs, contextDocLines, contextDocNotes, hasBriefUnsafeChars,
   type ContextDocVerdict,
@@ -416,15 +417,14 @@ export function validateBriefAgainst(brief: string, policies: any): boolean {
     );
   }
 
-  for (const pattern of required) {
-    let p = pattern.pattern as string;
-    let flags = "";
-    if (p.startsWith("(?i)")) {
-      p = p.slice(4);
-      flags = "i";
+  // #2946: the one compiler the brief guard uses too. An entry it cannot read
+  // refuses, naming it, as the empty policy set above does.
+  for (const entry of required) {
+    const compiled = compileBriefPattern(entry);
+    if (!compiled.ok) {
+      throw new Error(`brief policies for "marcus": ${compiled.why}. An unreadable policy cannot validate a brief, so this refuses.`);
     }
-    const re = new RegExp(p, flags);
-    if (!re.test(brief)) return false;
+    if (!compiled.re.test(brief)) return false;
   }
 
   return true;
