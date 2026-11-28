@@ -507,8 +507,19 @@ describe("CRC-B16: a review model pin that differs from the default is named, an
     expect(seen.filter(s => !s.endsWith(`=${AI_REVIEW_MODEL}`))).toEqual([`a pin=${PIN}`]);
   });
 
-  test("the scaffold CLI prints the note for a pinned project and not for one that follows the default", () => {
-    const run = (ci: unknown): string => {
+  test("a model or region that is present and not a string refuses the block, so no default stands in for it", () => {
+    const rows: Array<["model" | "region", unknown]> = [["model", 5], ["model", null], ["model", true], ["model", [PIN]], ["region", 5]];
+    for (const [k, v] of rows) {
+      const d = vertexCiConfig({ ...VERTEX_CI, vertex: { ...VERTEX_CI.vertex, [k]: v } });
+      expect(d.config, `${k}: ${JSON.stringify(v)}`).toBeNull();
+      expect(d.reason).toContain(`ci.vertex.${k} is ${JSON.stringify(v)}, not a string`);
+    }
+    // The control: the same block with a string in the same key is accepted.
+    expect(vertexCiConfig(withModel(PIN)).config?.model).toBe(PIN);
+  });
+
+  /** Run the scaffold CLI (an audit, so nothing is applied) on a temp project with `ci`. */
+  const runCli = (ci: unknown, args: string[] = []): string => {
       const root = mkdtempSync(join(tmpdir(), "rungate-crc-b16-"));
       try {
         writeFileSync(join(root, "package.json"), JSON.stringify({ name: "crc-b16-fixture", private: true }) + "\n");
@@ -517,7 +528,7 @@ describe("CRC-B16: a review model pin that differs from the default is named, an
           join(root, ".claude", "rungate", "config.json"),
           JSON.stringify({ project: "crc-b16-fixture", ci }, null, 2) + "\n",
         );
-        const r = spawnSync("bun", [join(import.meta.dir, "..", "scripts", "scaffold-project.ts"), root], {
+        const r = spawnSync("bun", [join(import.meta.dir, "..", "scripts", "scaffold-project.ts"), root, ...args], {
           cwd: join(import.meta.dir, ".."), encoding: "utf-8", timeout: 300_000,
           env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
         });
@@ -527,9 +538,17 @@ describe("CRC-B16: a review model pin that differs from the default is named, an
         return out;
       } finally { rmSync(root, { recursive: true, force: true }); }
     };
-    const pinned = run(withModel(PIN));
+
+  test("the scaffold CLI prints the note for a pinned project and not for one that follows the default", () => {
+    const pinned = runCli(withModel(PIN));
     expect(pinned).toContain(reviewModelPinNote(withModel(PIN))!);
-    const following = run(VERTEX_CI);
+    const following = runCli(VERTEX_CI);
     expect(following).not.toContain("Remove ci.vertex.model");
+  }, 600_000);
+
+  test("under --profile=minimal, which writes no review job, the CLI prints no note, and a ci that is not an object does not stop the run", () => {
+    // runCli itself asserts each run reached "Human steps owed on GitHub:".
+    expect(runCli(withModel(PIN), ["--profile=minimal"])).not.toContain("Remove ci.vertex.model");
+    expect(runCli(null, ["--profile=minimal"])).not.toContain("must be an object");
   }, 600_000);
 });

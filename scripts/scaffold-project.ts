@@ -17,7 +17,7 @@ import { reviewModelPinNote } from "../lib/scaffold/ai-review-step";
 import { tryLoadRungateConfig } from "../lib/config-loader";
 import { cloneForRehearsal, discardRehearsal, rehearsalNotice } from "../lib/scaffold/rehearsal";
 import type { ProjectType } from "../lib/generators/types";
-import { parseProfile, STEPS_NOT_MINIMAL, type ScaffoldProfile } from "../lib/scaffold/profiles";
+import { isStepIncluded, parseProfile, STEPS_NOT_MINIMAL, type ScaffoldProfile } from "../lib/scaffold/profiles";
 
 // ── CLI argument parsing ───────────────────────────────────────
 
@@ -156,10 +156,14 @@ for (const line of docRules) console.log(`  ${line}`);
 
 // #2926, CRC-B16: a review model pin other than the default is named, with the
 // default and how to follow it. Printed, never written: the pin is kept. Read
-// from the real project, as the doc rules are, after the write steps would
-// already have refused a config they could not read.
-const modelPinNote = reviewModelPinNote(tryLoadRungateConfig(projectPath)?.ci);
-if (modelPinNote) console.log(`\n${modelPinNote}`);
+// from the real project, as the doc rules are. Only on a profile that writes
+// the review job (review of #2947): `minimal` writes none, so a note would
+// name a job this run did not write, and `ci` is read here only where the
+// workflow step has already read it.
+if (isStepIncluded("createCiWorkflows", profile)) {
+  const modelPinNote = reviewModelPinNote(tryLoadRungateConfig(projectPath)?.ci);
+  if (modelPinNote) console.log(`\n${modelPinNote}`);
+}
 
 // #2051, SC-2749: what the scaffold cannot do. Read, never written, and
 // printed after the report so it is the last thing a reader sees. Each line is

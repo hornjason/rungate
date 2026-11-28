@@ -1615,6 +1615,12 @@ export function vertexCiConfig(ci: unknown): VertexCiDecision {
         `(projects/N/locations/L/workloadIdentityPools/P/providers/R)`,
     );
   }
+  // Review of #2947: a region or model that is present and not a string is
+  // refused, never read as absent. Read as absent, the default replaced the
+  // consumer's value with no line saying so, which is what CRC-B16 exists to stop.
+  for (const k of ["region", "model"] as const) {
+    if (k in block && typeof block[k] !== "string") return refuse(`ci.vertex.${k} is ${JSON.stringify(block[k])}, not a string`);
+  }
   if (!VERTEX_REGION.test(region)) return refuse(`ci.vertex.region is not a Vertex location`);
   if (!EXACT_MODEL_PATTERN.test(model)) {
     return refuse(
