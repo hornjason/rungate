@@ -21,7 +21,7 @@ const OLD = "ship";
 const NEW = "ship-issue";
 
 /** An instruction to invoke the skill by its old name, in any one quote. */
-const OLD_INVOCATION = /Skill\(\s*(["'`])ship\1\s*\)/g;
+const OLD_INVOCATION = /Skill\(\s*\\?(["'`])ship\\?\1\s*\)/g;
 const oldInvocations = (text: string): number => [...text.matchAll(OLD_INVOCATION)].length;
 
 /** Dated records keep the old name: ADR-029 decision 5. */
@@ -52,7 +52,7 @@ function walk(root: string, rel = ""): string[] {
 }
 
 describe("#2933: rungate tells an agent to invoke the ship skill by its new name", () => {
-  test("no live file of rungate's spells Skill(\"ship\"), outside the dated records and one counted fixture", () => {
+  test("no live file of rungate's invokes the skill by its old name, outside the dated records and one counted fixture", () => {
     // late-env-ok: git ls-files reads the index of REPO, and this file writes no environment variable at all.
     const files = execFileSync("git", ["ls-files", "-z"], { cwd: REPO, encoding: "utf-8" })
       .split("\0")
@@ -74,7 +74,8 @@ describe("#2933: rungate tells an agent to invoke the ship skill by its new name
   test("the scan finds the old name where it is kept and in every quote, and not in the new name", () => {
     expect(oldInvocations(readFileSync(join(REPO, "docs/adr/ADR-029-rename-the-ship-skill.md"), "utf-8")))
       .toBeGreaterThan(0);
-    for (const s of [`Skill("${OLD}")`, `Skill('${OLD}')`, "Skill(`" + OLD + "`)", `Skill( "${OLD}" )`]) {
+    // Review of #2952: a quote escaped inside a string literal, as source spells it.
+    for (const s of [`Skill("${OLD}")`, `Skill('${OLD}')`, "Skill(`" + OLD + "`)", `Skill( "${OLD}" )`, `Skill(\\"${OLD}\\")`]) {
       expect(oldInvocations(s), s).toBe(1);
     }
     for (const s of [`Skill("${NEW}")`, `Skill("${OLD}ping")`, `Skill("${OLD}-local")`, `Skill("${OLD}')`]) {
@@ -101,9 +102,9 @@ describe("#2933: rungate tells an agent to invoke the ship skill by its new name
 describe("#2933: every test that reads the ship skill's folder reads it through the resolver", () => {
   // The same three patterns #2932's scan of non-test source uses, read out of
   // test/ship-skill-folder.test.ts below, so the two scans cannot drift apart.
-  const SPELLING = /["'`]skills["'`]\s*,\s*["'`]ship(?:-issue)?["'`]|skills\/ship(?:-issue)?(?=[\/"'`])/g;
-  const SKILLS_PART = /["'`]skills["'`]|skills\//;
-  const SHIP_PART = /["'`]ship(?:-issue)?["'`]|\/ship(?:-issue)?(?=[\/"'`])/;
+  const SPELLING = /(?:["'`]|\/)skills["'`]\s*,\s*["'`]ship(?:-issue)?(?:["'`]|\/)|skills\/ship(?:-issue)?(?=[\/"'`])/g;
+  const SKILLS_PART = /(?:["'`]|\/)skills["'`]|skills\//;
+  const SHIP_PART = /["'`]ship(?:-issue)?(?:["'`]|\/)|\/ship(?:-issue)?(?=[\/"'`])/;
   const FOLDER_TEST = "test/ship-skill-folder.test.ts";
   type TranspilerOptions = ConstructorParameters<typeof Bun.Transpiler>[0];
   const transpiler = new Bun.Transpiler({ loader: "ts", macro: false } as unknown as TranspilerOptions);
@@ -195,5 +196,20 @@ describe("#2933: the .sh sweep reads both of the skill's folders, and can fail",
     const clean = run(claudeWith({ [NEW]: ["SKILL.md"], [OLD]: ["SKILL.md"] }));
     expect(clean, clean.slice(-1500)).toMatch(/\b1 pass\b/);
     expect(clean).toMatch(/\b0 fail\b/);
+  }, 300_000);
+
+  test("with HOME unset, the sweep reads the real home and never a .claude under the working directory", () => {
+    // Review of #2952: `process.env.HOME || ""` read `.claude` relative to the
+    // working directory when HOME was unset. A .sh planted there must not be
+    // read. The run itself may pass or fail on the real home; it must run.
+    const cwd = dirname(claudeWith({ [OLD]: ["planted.sh"] }));
+    const env: Record<string, string | undefined> = { ...process.env };
+    delete env.HOME;
+    const r = spawnSync("bun", ["test", join(REPO, "gates", "e2e-smoke.test.ts"), "-t", "stop-the-bleeding"], {
+      cwd, env, encoding: "utf-8", timeout: 120_000,
+    });
+    const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    expect(out, out.slice(-1500)).toMatch(/\b1 (pass|fail)\b/);
+    expect(out).not.toContain("planted.sh");
   }, 300_000);
 });

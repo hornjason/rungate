@@ -1,5 +1,6 @@
 import { test, expect, describe } from "bun:test";
 import { readFileSync, existsSync, readdirSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 import { WorkflowStateSchema } from "./schema";
 import { SIGNAL_PHRASE_PATTERNS } from "../lib/conformity";
@@ -206,13 +207,13 @@ describe("E2E: Marcus brief cites governing spec", () => {
 
 describe("E2E: ADR-008 migration", () => {
   test("ADR-008 'What to delete' files are actually deleted", () => {
-    const adrPath = join(process.env.HOME || "", ".claude", "PAI", "ADR", "ADR-008-harness-v3-bun-tests-migration.md");
+    const adrPath = join(homedir(), ".claude", "PAI", "ADR", "ADR-008-harness-v3-bun-tests-migration.md");
     if (!existsSync(adrPath)) return;
     const adr = readFileSync(adrPath, "utf-8");
 
     // #2933: in whichever of the skill's two folders the resolver finds them.
     const deletionTargets = ["gate-runner.sh", "gate-checks.sh"];
-    const claudeDir = join(process.env.HOME || "", ".claude");
+    const claudeDir = join(homedir(), ".claude");
 
     const existing = deletionTargets.filter(f => existsSync(shipSkillPath(claudeDir, f)));
     expect(existing).toEqual([]);
@@ -222,7 +223,7 @@ describe("E2E: ADR-008 migration", () => {
     // Review of #2952: every folder of the skill that exists, both names, and
     // the assertion outside any catch. The `find` this replaced sat in a
     // `catch {}` that swallowed the assertion too, so a .sh file passed.
-    const files = shipSkillFolders(join(process.env.HOME || "", ".claude")).flatMap(dir =>
+    const files = shipSkillFolders(join(homedir(), ".claude")).flatMap(dir =>
       (readdirSync(dir, { recursive: true }) as string[]).filter(f => f.endsWith(".sh")).map(f => join(dir, f)),
     );
     expect(files).toEqual([]);
