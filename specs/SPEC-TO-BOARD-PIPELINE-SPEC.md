@@ -661,7 +661,9 @@ acceptance test, so it is also the honest answer to *when is the engine done*
       placement: Phase 7
       proved-by: test/audit-closing-references.test.ts "SC-2820: a pull request carrying a proposed ADR with a plan is refused"
       fingerprint: 15234959
-- [ ] SC-2822: when `project-state.json` has no `goal`, `work-status` and the status view show the goal from SUCCESS.md's `## The thing` and say that is where it came from, and a project with no stages reads "no stages written" instead of UNMEASURED for the whole plan; rungate's own ladder is read as before (ADR-030)
+- [x] SC-2822: when `project-state.json` has no `goal`, `work-status` and the status view show the goal from SUCCESS.md's `## The thing` and say that is where it came from, and a project with no stages reads "no stages written" instead of UNMEASURED for the whole plan; rungate's own ladder is read as before (ADR-030)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
       needs: test
       placement: Phase 8
+      proved-by: test/status-view.test.ts "SC-2822: the status view shows SUCCESS.md's goal and no stages written for a scaffolded plan"
+      fingerprint: b7625539
