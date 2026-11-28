@@ -131,6 +131,6 @@ describe("#2070: board.filingsPerRun sets the cap whatever the ship mode", () =>
       resolveShipPolicy({ ship: { mode: "harness" }, board: { filingsPerRun: 12 } }),
     );
     expect(raised).toBe(plain);
-    expect(raised, "a harness project's rule stopped requiring the harness").toContain("Skill(\"ship\")");
+    expect(raised, "a harness project's rule stopped requiring the harness").toContain("Skill(\"ship-issue\")");
   });
 });

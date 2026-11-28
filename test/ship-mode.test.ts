@@ -78,6 +78,7 @@ import { generateScopedRules } from "../lib/generators/agents-md";
 import { mockProjectScan } from "../lib/generators/types";
 import { bodySha, declaredSha, ruleBody } from "../lib/rule-provenance";
 import { generateAgentsMdContent } from "../lib/scaffold/steps";
+import { RULES_NOT_MINIMAL } from "../lib/scaffold/profiles";
 import { tryLoadRungateConfig } from "../lib/config-loader";
 
 const REPO = join(import.meta.dir, "..");
@@ -107,6 +108,23 @@ const DIRECT = {
   ship: { mode: "direct", since: "2026-10-19", reason: "stabilising RunGate and clearing backlogs" },
 };
 
+/** The line #2930 adds: what to do on a machine where the renamed skill is not installed. */
+const MISSING_SKILL_LINE = `If Skill("ship-issue") is not available, invoke Workflow({ scriptPath: "${SHIP_LAUNCH_SCRIPT}" }) directly with the issue number.`;
+
+/**
+ * Every change made to the pre-#911 harness body since, and nothing else:
+ * the launch path (#2288), then the skill's new name and the line for a
+ * machine without it (#2930, ADR-029). Any other drift is still caught,
+ * because both callers compare whole bodies.
+ */
+function currentHarnessBody(pre911Body: string): string {
+  const launched = pre911Body.replace('scriptPath: "workflows/ship.js"', `scriptPath: "${SHIP_LAUNCH_SCRIPT}"`);
+  return launched.replaceAll('Skill("ship")', 'Skill("ship-issue")') + MISSING_SKILL_LINE + "\n";
+}
+
+/** The old skill name as a call, exactly. `Skill("ship-issue")` does not match it. */
+const OLD_CALL = /Skill\("ship"\)/;
+
 /**
  * Phrases that FORBID direct shipping. The direct-mode rule must contain none
  * of them; the harness-mode rule must contain all of them. Asserted against
@@ -126,21 +144,19 @@ function ruleFor(config: Record<string, unknown> | null): string {
 }
 
 describe("#911 AC-1: an absent ship block is byte-identical to the pre-#911 generator", () => {
-  // #2288 changed one thing in the harness body: the launch path, because
-  // `workflows/ship.js` is over the Workflow tool's script cap. These two
-  // cases pin "the pre-#911 body with only that path changed", so any other
-  // drift is still caught.
-  const currentHarnessBody = () => PRE_911_BODY.replace('scriptPath: "workflows/ship.js"', `scriptPath: "${SHIP_LAUNCH_SCRIPT}"`);
-
-  test("the harness body is the pre-#911 one with only the launch path changed (#2288)", () => {
+  // Two changes since: the launch path (#2288), because `workflows/ship.js`
+  // is over the Workflow tool's script cap, and the skill's name with its
+  // fallback (#2930). These two cases pin "the pre-#911 body with only those
+  // changed", so any other drift is still caught.
+  test("the harness body is the pre-#911 one with only the launch path (#2288) and the skill's name and fallback (#2930) changed", () => {
     expect(bodySha(PRE_911_BODY)).toBe(PRE_911_BODY_SHA);
-    expect(currentHarnessBody()).not.toBe(PRE_911_BODY);
-    expect(shipWorkflowRule({ mode: "harness" })).toBe(currentHarnessBody());
+    expect(currentHarnessBody(PRE_911_BODY)).not.toBe(PRE_911_BODY);
+    expect(shipWorkflowRule({ mode: "harness" })).toBe(currentHarnessBody(PRE_911_BODY));
   });
 
   test("absent config, absent ship block and an explicit harness mode all render that same body", () => {
     for (const config of [null, {}, { project: "x" }, { ship: { mode: "harness" } }]) {
-      expect(bodySha(ruleFor(config))).toBe(bodySha(currentHarnessBody()));
+      expect(bodySha(ruleFor(config))).toBe(bodySha(currentHarnessBody(PRE_911_BODY)));
     }
   });
 
@@ -419,13 +435,13 @@ If Skill("harness") or Skill("goal") fails, fall back to Skill("ship") with the 
     }
   });
 
-  test("the same existing consumer with no ship block gets the launch path and nothing else (#2288)", () => {
+  test("the same existing consumer with no ship block gets the launch path (#2288), the skill's name and fallback (#2930), and nothing else", () => {
     const { root, rulePath } = existingConsumer(undefined);
     try {
       const before = readFileSync(rulePath, "utf-8");
       generateAgentsMdContent(root, "code", []);
       const after = readFileSync(rulePath, "utf-8");
-      expect(ruleBody(after)).toBe(ruleBody(before).replace('scriptPath: "workflows/ship.js"', `scriptPath: "${SHIP_LAUNCH_SCRIPT}"`));
+      expect(ruleBody(after)).toBe(currentHarnessBody(ruleBody(before)));
       expect(declaredSha(after)).toBe(bodySha(after));
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -441,5 +457,40 @@ If Skill("harness") or Skill("goal") fails, fall back to Skill("ship") with the 
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("#2930: the generated ship rule names the ship-issue skill, and says what to do without it", () => {
+  const harness = ruleFor(null);
+  const direct = ruleFor(DIRECT);
+
+  test("the harness rule calls the ship-issue skill, and never the old name", () => {
+    expect(harness).toContain('Skill("ship-issue")  →  Workflow');
+    expect(harness).not.toMatch(OLD_CALL);
+  });
+
+  test("on a machine without the skill, the harness rule says to launch the workflow directly, with the issue number", () => {
+    const line = harness.split("\n").find(l => l.includes('Skill("ship-issue") is not available'));
+    expect(line, "no line says what to do when the skill is missing").toBeDefined();
+    expect(line).toContain(`Workflow({ scriptPath: "${SHIP_LAUNCH_SCRIPT}" })`);
+    expect(line).toContain("issue number");
+  });
+
+  test("the direct rule names the ship-issue skill where it says not to call it, and never the old name", () => {
+    expect(direct).toContain('Do not call `Skill("ship-issue")`');
+    expect(direct).not.toMatch(OLD_CALL);
+  });
+
+  // Review round 1 of #2937: until ADR-029 step 1 the skill is installed on
+  // one machine, so the direct rule must not say it works everywhere.
+  test("the direct rule says the skill launches the workflow where it is installed, not that it works everywhere", () => {
+    expect(direct).toContain("where that skill is installed");
+    expect(direct).not.toMatch(/Skill\("ship-issue"\)`? and\s+`?workflows\/ship\.js`? are unchanged and still work/);
+  });
+
+  test("the minimal profile's reason for leaving the rule out names the ship-issue skill", () => {
+    const reason = RULES_NOT_MINIMAL.get("ship-workflow.md");
+    expect(reason).toContain('Skill("ship-issue")');
+    expect(reason).not.toMatch(OLD_CALL);
   });
 });

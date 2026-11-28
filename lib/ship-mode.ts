@@ -159,10 +159,12 @@ export const SHIP_LAUNCH_SCRIPT = "workflows/ship.run.js";
  *
  * One binding, so there is one thing to mutate and the two modes cannot drift
  * into two renderers. The `"harness"` arm is byte-identical to what the
- * generator emitted before #911 except for the launch path #2288 changed —
- * `test/ship-mode.test.ts` asserts that
- * against the file in this repository rather than against a copy of the
- * string, so a reformat here is caught.
+ * generator emitted before #911 except for the launch path #2288 changed and
+ * the skill's new name, with a line for a machine without it, from #2930
+ * (ADR-029). `test/ship-mode.test.ts` pins it to that pre-#911 body by the
+ * body's recorded sha, applying only those changes, so a reformat here is
+ * caught. This repository's own rule file is compared with whichever mode
+ * it declares, which is direct today.
  */
 export function shipWorkflowRule(policy: ShipPolicy): string {
   if (policy.mode === "harness") {
@@ -175,12 +177,13 @@ description: All implementation work must go through the ship workflow — never
 When shipping an issue or implementing code changes, use the ship workflow:
 
 \`\`\`
-Skill("ship")  →  Workflow({ scriptPath: "${SHIP_LAUNCH_SCRIPT}" })
+Skill("ship-issue")  →  Workflow({ scriptPath: "${SHIP_LAUNCH_SCRIPT}" })
 \`\`\`
 
 **NEVER spawn Marcus, Quinn, or Rook directly with the Agent tool.** The ship workflow captures transcripts, runs compliance grading, and enforces gates. Spawning agents directly bypasses all measurement.
 
-If Skill("harness") or Skill("goal") fails, fall back to Skill("ship") with the issue number.
+If Skill("harness") or Skill("goal") fails, fall back to Skill("ship-issue") with the issue number.
+If Skill("ship-issue") is not available, invoke Workflow({ scriptPath: "${SHIP_LAUNCH_SCRIPT}" }) directly with the issue number.
 `;
   }
 
@@ -193,7 +196,7 @@ description: This project ships DIRECTLY as of ${policy.since} — do not route 
 **This project is in direct-ship mode as of ${policy.since}: ${policy.reason}.**
 
 Shipping an issue without the ship workflow is the current, declared policy of
-this project. Do not call \`Skill("ship")\` and do not invoke
+this project. Do not call \`Skill("ship-issue")\` and do not invoke
 \`Workflow({ scriptPath: "${SHIP_LAUNCH_SCRIPT}" })\`. If another document tells you
 to, that document is out of date and this one is not: the mode is declared in
 \`${CONFIG_PATH}\` under \`ship\`, and this file is generated from it, so a
@@ -225,7 +228,7 @@ and the reason above are the answer.
 ## This is temporary, and reversible in one line
 
 Set \`ship.mode\` back to \`"harness"\` in \`${CONFIG_PATH}\` and re-scaffold.
-Nothing about the harness has been removed — \`Skill("ship")\` and
-\`workflows/ship.js\` are unchanged and still work.
+Nothing about the harness has been removed: \`workflows/ship.js\` still works,
+and \`Skill("ship-issue")\` launches it where that skill is installed.
 `;
 }
