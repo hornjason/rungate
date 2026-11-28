@@ -1096,9 +1096,18 @@ export function testPopulationCensusSuites(root: string): string[] {
  * one \u2014 blanking them removes the signal. A quoted fixture therefore counts,
  * and that is the acknowledged false positive: it costs one test file in a
  * local run, against a miss that costs a CI round.
+ *
+ * #2966: an emitter is read by its SHAPE, `build…Workflow`, `build…Step` or
+ * `build…Job`, which is how every one `lib/scaffold/` exports is named (13
+ * today). The list it replaces named one of them, so a suite that builds the
+ * review job with `buildReviewRunStep` and names nothing else was never
+ * routed, and PR #2963 broke two of its cases unseen. Measured on this tree:
+ * 124 suites before, 126 after, none lost. A builder of one script
+ * (`buildDriftScript`) is not an emitter of a workflow and stays out: its
+ * suites are the targeted paths of a change to it.
  */
 const NAMES_GENERATED_WORKFLOWS =
-  /\.github[\/"'`,\s]+[ \t]*["'`]?workflows|\bcreateCiWorkflows\b|\bbuildAiReviewUnmeasuredWorkflow\b/;
+  /\.github[\/"'`,\s]+[ \t]*["'`]?workflows|\bcreateCiWorkflows\b|\bbuild\w*(?:Workflow|Step|Job)\b/;
 
 /**
  * #1927 — the suites with an opinion about a generated workflow, read from
