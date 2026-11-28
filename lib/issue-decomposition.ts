@@ -727,7 +727,10 @@ export function adrStatus(text: string): string | null {
       // text. Unquoted, ` #…` is a YAML comment and not part of the status
       // (review of #2945): `status: proposed  # awaiting the owner` is proposed.
       const quoted = /^(["'])(.*?)\1/.exec(m[1]!);
-      return (quoted ? quoted[2]! : m[1]!.replace(/\s+#.*$/, "")).trim().toLowerCase();
+      // An opening quote with no closing one is malformed YAML. Its value is
+      // read past the quote, so `status: 'proposed` is still proposed and still
+      // refused, rather than read as some other status (review of #2945).
+      return (quoted ? quoted[2]! : m[1]!.replace(/^["']/, "").replace(/\s+#.*$/, "")).trim().toLowerCase();
     }
   }
   return null;

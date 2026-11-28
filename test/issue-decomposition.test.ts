@@ -1760,6 +1760,9 @@ describe("#2921: an ADR is refused for merge only while it says proposed and car
     expect(proposedWithPlan(doc("status: proposed  # awaiting the owner", TABLE))).toBe(true);
     expect(proposedWithPlan(doc('status: "proposed" # quoted, then a comment', TABLE))).toBe(true);
     expect(proposedWithPlan(doc('status: "proposed # not a comment"', TABLE))).toBe(false);
+    // Review of #2945: an unclosed quote is malformed, and it is still refused.
+    expect(proposedWithPlan(doc("status: 'proposed", TABLE))).toBe(true);
+    expect(proposedWithPlan(doc('status: "proposed', TABLE))).toBe(true);
   });
 
   test("a header the parser does not read as a plan is not a plan", () => {
