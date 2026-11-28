@@ -330,7 +330,21 @@ describe("#911 AC-3: an unreadable ship block REFUSES rather than defaulting", (
     ["direct with a prose date", { mode: "direct", since: "October 19", reason: "because" }],
     ["direct with no reason", { mode: "direct", since: "2026-10-19" }],
     ["direct with a blank reason", { mode: "direct", since: "2026-10-19", reason: "   " }],
+    // #2944: the shape of a date is not a date.
+    ["direct on a day that does not exist", { mode: "direct", since: "2026-02-31", reason: "because" }],
+    ["direct in a month that does not exist", { mode: "direct", since: "2026-13-01", reason: "because" }],
+    ["direct on 29 February of a year that is not a leap year", { mode: "direct", since: "2026-02-29", reason: "because" }],
   ];
+
+  test("#2944: a real leap day resolves, so the calendar check is not refusing every 29 February", () => {
+    expect(resolveShipPolicy({ ship: { mode: "direct", since: "2028-02-29", reason: "because" } })).toEqual({
+      mode: "direct", since: "2028-02-29", reason: "because",
+    });
+  });
+
+  test("#2944: the refusal names the impossible date", () => {
+    expect(() => resolveShipPolicy({ ship: { mode: "direct", since: "2026-02-31", reason: "because" } })).toThrow(/2026-02-31.*calendar/);
+  });
 
   for (const [label, ship] of unusable) {
     test(`${label} throws, and does NOT resolve to "${DEFAULT_SHIP_MODE}"`, () => {
