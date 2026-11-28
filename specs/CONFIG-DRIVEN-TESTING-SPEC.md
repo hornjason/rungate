@@ -1265,5 +1265,6 @@ reserved block of 200 to 210 was handed an id above rungate's own highest.
 `sync-sc-status` had the same defect and takes `--project-root` since #2360.
 `docs/adr/ADR-030-a-consumer-sets-nothing-by-hand.md` orders the fix.
 
-- [ ] SC-2821: `rungate create-sc` takes `--project-root` as `sync-sc-status` does, and run from a consumer it allocates the id, reads the reservation store and moves the deferral bank in the consumer's tree, never in rungate's own packaged files (ADR-030)
+- [x] SC-2821: `rungate create-sc` takes `--project-root` as `sync-sc-status` does, and run from a consumer it allocates the id, reads the reservation store and moves the deferral bank in the consumer's tree, never in rungate's own packaged files (ADR-030)
 <!-- REVIEW: unmatched (no registry pattern was close enough) -->
+      proved-by: test/create-sc.test.ts "SC-2821: create-sc allocates, reads the reservation store and moves the deferral bank in the project it runs in"

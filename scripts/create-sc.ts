@@ -8,11 +8,17 @@
  *   bun scripts/create-sc.ts --pattern file-exists --params '{...}' --spec specs/X.md --owner '#725'
  *   bun scripts/create-sc.ts --behavioral "<the owner's sentence>" --spec specs/MY-SPEC.md
  *   bun scripts/create-sc.ts --list
+ *   bun scripts/create-sc.ts --behavioral "<sentence>" --spec specs/X.md --project-root <dir>
  *
  * `--spec` places the line straight after the spec's last criterion (#2845).
  * `--behavioral` writes the sentence as stated, with `(behavioral)`, through
  * the same allocator and the same bank write as a pattern; it takes no
  * `--pattern`.
+ *
+ * `--project-root` names the tree whose specs, reservation store and deferral
+ * bank are read and written, and a relative `--spec` resolves against it
+ * (#2922, ADR-030). `rungate create-sc` passes the caller's directory.
+ * Absent, it is this package's own tree, as before.
  *
  * `--owner` names the entry in `specs/sc-reservations.json` to allocate from.
  * It defaults to this checkout's branch. An owner holding no block allocates
@@ -29,7 +35,7 @@ import {
   formatSCLine,
   placeScLine,
 } from "../lib/create-sc";
-import { readScRegistry } from "./sync-sc-status";
+import { readScRegistry, resolveSyncRoot } from "./sync-sc-status";
 import { describeReading } from "../lib/sc-id-cross-tree";
 import { currentScOwner } from "../lib/sc-reservations";
 import { skipLine } from "../lib/derived-spec";
@@ -37,12 +43,22 @@ import { maySpecBeWritten, writeSpec } from "../lib/write-spec";
 import { join, relative, resolve, sep } from "path";
 import { bankAfterAppend, writeDeferralBank, writeSpecWithBank } from "../lib/finding-promotion";
 
-/** Same resolution sync-sc-status uses, so both halves read one tree. */
-const ROOT = join(import.meta.dir, "..");
-
 // ── Argument parsing ──────────────────────────────────────────
 
 const args = process.argv.slice(2);
+
+/**
+ * The tree this run allocates in and writes to, read exactly as
+ * sync-sc-status reads it, so both halves read one tree (#2922). Run from a
+ * consumer this was the package's own directory: the id came from rungate's
+ * specs and reservation store, and a deferred spec moved rungate's bank.
+ */
+const rootReading = resolveSyncRoot(args);
+if ("refusal" in rootReading) {
+  console.error(`ERROR: ${rootReading.refusal}`);
+  process.exit(1);
+}
+const ROOT = rootReading.root;
 
 /**
  * The value after `--name`, or undefined when there is none. A next token
@@ -100,7 +116,12 @@ try {
   // The only thing --behavioral changes: everything below, the allocation and
   // the bank write included, is one path for both (#2845).
   const statement = behavioral !== undefined ? behavioralStatement(behavioral) : generateSCText(patternName!, params);
-  const specPath = getFlag("spec");
+  const specArg = getFlag("spec");
+  // The project's spec: a relative path is read against the root, not the
+  // directory the command happened to start in.
+  // An empty value (an unset variable) is no spec, as it was before #2922:
+  // resolved, it would name the root itself (review of #2938).
+  const specPath = specArg ? resolve(ROOT, specArg) : undefined;
 
   if (specPath) {
     // Append to spec file
@@ -138,7 +159,7 @@ try {
     // rather than by branch. An owner matching no block is not an error: it
     // is the no-block path, which is the safe one.
     const owner = getFlag("owner") ?? currentScOwner(ROOT);
-    const { number: scNumber, namespace } = allocateScNumber(ROOT, content, readScRegistry(), { owner });
+    const { number: scNumber, namespace } = allocateScNumber(ROOT, content, readScRegistry(join(ROOT, "specs")), { owner });
     const scLine = formatSCLine(scNumber, statement);
 
     // #1286: appending to a spec a generator owns writes a criterion that
@@ -158,7 +179,7 @@ try {
     // writes neither file. The path is a literal so the spec-write sweep
     // (#1584) can see this write targets the bank and not a spec.
     const bankPath = join(ROOT, ".claude/spec-deferral-ratchet.json");
-    const specKey = relative(ROOT, resolve(specPath)).split(sep).join("/");
+    const specKey = relative(ROOT, specPath).split(sep).join("/");
     const bankRead = existsSync(bankPath) ? readFileSync(bankPath, "utf-8") : null;
     const banked = bankAfterAppend(bankRead, specKey, content, newContent);
     if (!banked.ok) {
@@ -186,7 +207,7 @@ try {
       );
       process.exit(1);
     }
-    console.log(`Appended to ${specPath}: ${scLine}`);
+    console.log(`Appended to ${specKey}: ${scLine}`);
     if (banked.text !== null) console.log(`  deferral bank: ${specKey} moved with it (.claude/spec-deferral-ratchet.json)`);
     // What the number is a floor over, stated rather than implied. A clone on
     // another machine is outside anything this process can reach, and an

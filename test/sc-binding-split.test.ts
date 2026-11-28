@@ -560,7 +560,12 @@ const UNCLAIMED_RATCHET = 150;
 // or checks, and hand-typed totals that disagree with the registry, a reading
 // of a repository that no registered pattern expresses; the SC-2818 describes
 // in test/hand-typed-scan.test.ts name it (2026-11-26).
-const CLAIMED_UNBINDABLE = 218;
+// 219: SC-2821 (#2922) ticked by `sync-sc-status --only SC-2821` — create-sc
+// allocates, reads the reservation store and moves the deferral bank in the
+// project it runs in, a reading of the CLI against a consumer tree that no
+// registered pattern expresses; the SC-2821 describe in test/create-sc.test.ts
+// names it (2026-11-27).
+const CLAIMED_UNBINDABLE = 219;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

@@ -129,10 +129,14 @@ export const CLI_COMMANDS: Record<string, CliCommand> = {
     usage: "rungate prompt-audit [--out <dir>] [--user]",
     projectRootFlag: true,
   },
+  // #2922, ADR-030: `projectRootFlag` is load-bearing, as on `sync-sc-status`.
+  // Without it a consumer's id came from rungate's packaged specs and
+  // reservation store, and a deferred spec moved rungate's bank.
   "create-sc": {
     script: "scripts/create-sc.ts",
     summary: "Write a success-criterion line from a registered pattern, or a behavioural one as stated",
-    usage: "rungate create-sc (--pattern <name> --params '<json>' | --behavioral <sentence>) [--spec <file>]",
+    usage: "rungate create-sc (--pattern <name> --params '<json>' | --behavioral <sentence>) [--spec <file>] [--owner <name>] [--project-root <dir>]",
+    projectRootFlag: true,
   },
   "convert-spec": {
     script: "scripts/convert-spec.ts",
