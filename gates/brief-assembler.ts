@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import { plantCanaries, getDefaultCanaries } from "../lib/canary.js";
 import { tryLoadRungateConfig } from "../lib/config-loader";
 import { shipSkillPath } from "../lib/ship-skill-folder";
+import { briefPolicyMap, compileBriefPolicy } from "../lib/brief-policy-pattern";
 import {
   classifyContextDoc, classifyContextDocs, contextDocLines, contextDocNotes, hasBriefUnsafeChars,
   type ContextDocVerdict,
@@ -388,10 +389,17 @@ export function loadBriefPolicies(): any {
   // Per agent type, so an override naming only `marcus` does not delete the
   // shipped `quinn` and `rook` entries.
   const override = JSON.parse(readFileSync(overridePath, "utf-8"));
+  // Review of #2960: an override whose `policies` is not an object was spread
+  // in silently (a string spreads its characters, null spreads nothing), so a
+  // corrupt override read as an absent one. It refuses, as the guard does.
+  const map = briefPolicyMap(override);
+  if (!map.ok) {
+    throw new Error(`brief policies override ${overridePath} ${map.why}. An unreadable override cannot validate a brief, so this refuses.`);
+  }
   return {
     ...shipped,
     ...override,
-    policies: { ...shipped.policies, ...override.policies },
+    policies: { ...shipped.policies, ...map.policies },
   };
 }
 
@@ -405,29 +413,19 @@ function validateBrief(brief: string): boolean {
  * `.claude/rules/checks-must-be-able-to-fail.md`.
  */
 export function validateBriefAgainst(brief: string, policies: any): boolean {
-  const required = policies?.policies?.marcus?.requiredPatterns;
-
-  // An empty policy set validates every brief, which is indistinguishable
-  // from not validating at all — the exact state the issue asks be refused.
-  if (!Array.isArray(required) || required.length === 0) {
-    throw new Error(
-      `brief policies declare no requiredPatterns for "marcus". An empty policy set passes ` +
-        `every brief and cannot be told apart from no validation at all, so this refuses.`,
-    );
+  // #2946: the one reader the brief guard uses too. Every entry is compiled
+  // before any is tested (review of #2960), so an unreadable entry after one
+  // the brief misses is still named. An empty or absent list refuses: it
+  // validates every brief, which is indistinguishable from not validating.
+  const map = briefPolicyMap(policies);
+  if (!map.ok) {
+    throw new Error(`brief policies ${map.why}. An unreadable policy file cannot validate a brief, so this refuses.`);
   }
-
-  for (const pattern of required) {
-    let p = pattern.pattern as string;
-    let flags = "";
-    if (p.startsWith("(?i)")) {
-      p = p.slice(4);
-      flags = "i";
-    }
-    const re = new RegExp(p, flags);
-    if (!re.test(brief)) return false;
+  const compiled = compileBriefPolicy((map.policies.marcus as { requiredPatterns?: unknown } | null | undefined)?.requiredPatterns);
+  if (!compiled.ok) {
+    throw new Error(`brief policies for "marcus": ${compiled.why}. An unreadable policy cannot validate a brief, so this refuses.`);
   }
-
-  return true;
+  return compiled.patterns.every(p => p.re.test(brief));
 }
 
 // CLI entry point
