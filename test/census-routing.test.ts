@@ -637,6 +637,43 @@ describe("#1368: a generated workflow routes to the suites that read it", () => 
       ).toContain(path);
     });
 
+    // #2966: a suite that builds a workflow, a job or a step with a scaffold
+    // emitter is in the population, even when it names neither the directory
+    // nor `createCiWorkflows`. `test/ai-review-three-runs.test.ts` builds the
+    // review job with `buildReviewRunStep` and was not routed for a change to
+    // that job's steps: two of its cases broke on PR #2963, and only the full
+    // suite saw it.
+    test.each(["test/ai-review-three-runs.test.ts", "test/ai-review-scaffold.test.ts"])(
+      "#2966: the walk finds %s, which builds part of a workflow with an emitter",
+      path => {
+        expect(derived, `${path} calls a scaffold emitter and is not in the population`).toContain(path);
+        expect(
+          censusTestsFor([change({ path: "lib/scaffold/ai-review-step.ts" })]).tests,
+          `${path} is not routed for a change to the emitter it calls`,
+        ).toContain(path);
+      },
+    );
+
+    test("#2966: an emitter call is read by its shape, so the next emitter is in too; a script builder or a comment is not", () => {
+      const dir = mkdtempSync(join(tmpdir(), "rg-census-2966-"));
+      try {
+        mkdirSync(join(dir, "test"));
+        const planted: Record<string, string> = {
+          job: "const job = buildReviewRunStep(x);\n",
+          // Review of #2967: a plural emitter, as `buildShardMarkerSteps` is named.
+          plural: "const steps = buildShardMarkerSteps(indent);\n",
+          future: "const wf = buildSomeNewWorkflow(cfg);\n",
+          script: "const s = buildDriftScript();\n",
+          comment: "// buildReviewRunStep(x) is not called here\nconst z = 1;\n",
+        };
+        for (const [name, src] of Object.entries(planted)) writeFileSync(join(dir, `test/${name}.test.ts`), src);
+        expect(generatedWorkflowCensusSuites(dir)).toEqual(["test/future.test.ts", "test/job.test.ts", "test/plural.test.ts"]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+
     // Non-vacuity, both ends. A walk returning everything is a router nobody
     // runs — the state the row's own comment measured at 138 of 588 and
     // rejected — and a walk returning nothing goes green having witnessed
