@@ -134,8 +134,15 @@ export interface CensusTrigger {
  * Three unguarded paths is the honest remaining cost: deleting one is
  * silent. Twenty-one would not have been acceptable; three is small enough
  * to read.
+ *
+ * #2966 adds a fourth, and it can never be derived: `census-emitter-shapes`
+ * checks that every emitter `lib/scaffold/` exports is one the walk reads. It
+ * names no emitter itself (it plants callers in a scratch tree), and a
+ * `lib/scaffold/` change is exactly when it can go red. That suite asserts
+ * it is routed for one.
  */
 export const WORKFLOW_SUITES_THE_WALK_CANNOT_SEE = [
+  "test/census-emitter-shapes.test.ts",
   "test/failure-intake-promotion.test.ts",
   "test/no-fixed-window-slices.test.ts",
   "test/test-command-agreement.test.ts",
@@ -1099,20 +1106,27 @@ export function testPopulationCensusSuites(root: string): string[] {
  *
  * #2966: an emitter is read by its SHAPE, `build…Workflow`, `build…Step` or
  * `build…Job`, singular or plural (`buildShardMarkerSteps`, review of PR
- * #2967). That is how 14 of the emitters `lib/scaffold/` exports are named.
- * The two named otherwise, `globalToolInstallStep` and `mergeManagedWorkflow`,
- * are read by name. The list this replaces named one emitter, so a suite that
- * builds the review job with `buildReviewRunStep` and names nothing else was
- * never routed, and PR #2963 broke two of its cases unseen. Measured on this
- * tree: 124 suites before, 126 after, none lost. A builder of one script
- * (`buildDriftScript`) is not an emitter of a workflow and stays out: its
- * suites are the targeted paths of a change to it.
- * `test/census-routing.test.ts` asserts that every `lib/scaffold/` export
- * named `…Workflow`, `…Step` or `…Job` is read here, or is one of the
- * scaffold's own steps, which emit no workflow.
+ * #2967). That is how 14 of the 19 emitters `lib/scaffold/` exports are
+ * named. The other five are read by name: `createCiWorkflows`,
+ * `globalToolInstallStep`, `mergeManagedWorkflow`, `mergeManagedWorkflowRecording`
+ * and `stampWorkflow`. The list this replaces named one emitter, so a suite
+ * that builds the review job with `buildReviewRunStep` and names nothing else
+ * was never routed, and PR #2963 broke two of its cases unseen.
+ *
+ * Measured on this tree: 124 suites before, 127 after, none lost. The third
+ * added, `test/brief-context-parser.test.ts`, is a false positive: it calls
+ * `buildReadSteps`, which builds a brief, not a workflow. A builder of one
+ * script (`buildDriftScript`) is not an emitter of a workflow and stays out:
+ * its suites are the targeted paths of a change to it. A shape on any name
+ * containing `Workflow` was measured and rejected: 151 suites, because the
+ * word also names the ship workflow and its state file.
+ *
+ * `test/census-emitter-shapes.test.ts` asserts that every `lib/scaffold/`
+ * export whose name contains `Workflow`, `Step` or `Job`, in function or const
+ * form, is read here, or is excused there by name with its reason.
  */
 const NAMES_GENERATED_WORKFLOWS =
-  /\.github[\/"'`,\s]+[ \t]*["'`]?workflows|\bcreateCiWorkflows\b|\bbuild\w*(?:Workflow|Step|Job)s?\b|\bglobalToolInstallStep\b|\bmergeManagedWorkflow\b/;
+  /\.github[\/"'`,\s]+[ \t]*["'`]?workflows|\bcreateCiWorkflows\b|\bbuild\w*(?:Workflow|Step|Job)s?\b|\bglobalToolInstallStep\b|\bmergeManagedWorkflow(?:Recording)?\b|\bstampWorkflow\b/;
 
 /**
  * #1927 — the suites with an opinion about a generated workflow, read from
