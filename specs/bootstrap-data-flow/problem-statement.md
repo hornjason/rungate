@@ -403,7 +403,7 @@ No preconditions — scaffold handles everything.
 | 2.2 | Agent briefs generated — Bun/TS defaults, null ports | Agents know runtime, not app |
 | Post-scaffold | `git add . && git commit -m "scaffold: initialize project with rungate"` | Clean initial commit |
 
-After first /ship cycle: Marcus creates real code → re-run scaffold → CODE-MAP and rungate.json populate with detected ports, routes, consumers → AGENTS.md and agent briefs update with real data.
+After first /ship-issue cycle: Marcus creates real code → re-run scaffold → CODE-MAP and rungate.json populate with detected ports, routes, consumers → AGENTS.md and agent briefs update with real data.
 
 ### Existing project (files already there)
 

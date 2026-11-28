@@ -2,9 +2,11 @@
 
 import { execSync, spawn } from "child_process";
 import { rmSync, existsSync, readFileSync } from "fs";
-import { join } from "path";
+import { homedir } from "os";
+import { basename, join } from "path";
 
 import { readProjectSlug } from "../lib/config-readers.js";
+import { SHIP_SKILL_FOLDERS, shipSkillFolders } from "../lib/ship-skill-folder";
 
 export interface ShipJob {
   issue: number;
@@ -56,9 +58,42 @@ export function getProjectSlug(projectRoot: string): string {
   return readProjectSlug(projectRoot) ?? "project";
 }
 
+/**
+ * What `claude` is launched with for one issue (#2949): the harness skill by
+ * its name, which is its folder's new name (ADR-029). The old name is Claude
+ * Code's built-in slash command, so a session launched with it ran the
+ * built-in and never the harness. The launch and the dry run both read this.
+ */
+export function shipLaunchArgs(job: ShipJob): string[] {
+  return ["--bg", "--project", job.worktreePath, `/${SHIP_SKILL_FOLDERS[0]} ${job.issue}`];
+}
+
+/**
+ * Why no session may be launched from this machine, or `null` (review of
+ * #2962). The launch names the skill by its new folder name, so where only
+ * the old folder is installed, the command names no skill; and the old name
+ * is Claude Code's built-in. Sessions are detached with their output
+ * discarded, so either way nothing would report it. Asked once, before any
+ * worktree is made.
+ */
+export function shipLaunchRefusal(claudeDir: string): string | null {
+  const installed = shipSkillFolders(claudeDir);
+  if (installed.length > 0 && basename(installed[0]!) === SHIP_SKILL_FOLDERS[0]) {
+    // Review round 2 of #2962: a folder is not a skill. An empty one, from a
+    // copy that stopped halfway or a stray mkdir, names nothing either.
+    if (existsSync(join(installed[0]!, "SKILL.md"))) return null;
+    return `${installed[0]} holds no SKILL.md, so /${SHIP_SKILL_FOLDERS[0]} would name no skill. Finish copying the folder (ADR-029 step 1), then run this again`;
+  }
+  return installed.length === 0
+    ? `no ship skill is installed under ${claudeDir}, so /${SHIP_SKILL_FOLDERS[0]} would name no skill`
+    : `the ship skill is installed only under its old name (${installed[0]}), so /${SHIP_SKILL_FOLDERS[0]} would ` +
+        `name no skill, and the old name is Claude Code's built-in. Copy the folder to its new name ` +
+        `(ADR-029 step 1), then run this again`;
+}
+
 function launchShipSession(job: ShipJob): void {
   const cmd = "claude";
-  const args = ["--bg", "--project", job.worktreePath, `/ship ${job.issue}`];
+  const args = shipLaunchArgs(job);
 
   console.log(`  Launching: ${cmd} ${args.join(" ")}`);
 
@@ -117,6 +152,14 @@ async function main() {
     process.exit(1);
   }
 
+  // Review of #2962: before any worktree is made, and for a dry run too, since
+  // a dry run that shows a launch which would run nothing is a false preview.
+  const refusal = shipLaunchRefusal(join(homedir(), ".claude"));
+  if (refusal !== null) {
+    console.error(`parallel-ship: REFUSED — ${refusal}.`);
+    process.exit(1);
+  }
+
   const jobs: ShipJob[] = issues.map((issue, index) => ({
     issue,
     worktreePath: createShipWorktree(projectRoot, issue),
@@ -134,7 +177,7 @@ async function main() {
     console.log(`  Container: ${job.containerName}`);
 
     if (dryRun) {
-      console.log(`  [dry-run] Would launch: claude --bg --project ${job.worktreePath} "/ship ${job.issue}"`);
+      console.log(`  [dry-run] Would launch: claude ${shipLaunchArgs(job).map(a => (a.includes(" ") ? JSON.stringify(a) : a)).join(" ")}`);
     } else {
       launchShipSession(job);
     }

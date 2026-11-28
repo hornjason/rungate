@@ -67,9 +67,9 @@ Each skill's gateOut must satisfy the next skill's gateIn:
 
 ```
 /goal gateOut: "GitHub issue exists with ACs + beforeState"
-  -> /ship gateIn: "Issue exists with ACs"
+  -> /ship-issue gateIn: "Issue exists with ACs"
 
-/ship gateOut: "verify-gate PASS, code on main, mergeCommitSha set"
+/ship-issue gateOut: "verify-gate PASS, code on main, mergeCommitSha set"
   -> /prove gateIn: "Code merged to main (mergeCommitSha exists)"
 
 /prove gateOut: "prove-evidence.json with verdict (Quinn uses Playwright MCP for UI validation)"
@@ -92,7 +92,7 @@ Run `bash scripts/harness-skill-check.sh skills/{name}/SKILL.md` to validate any
 | Skill | Contract? | Chain position |
 |-------|-----------|---------------|
 | /goal | Yes | Start |
-| /ship | Yes | After /goal |
-| /prove | Yes | After /ship |
+| /ship-issue | Yes | After /goal |
+| /prove | Yes | After /ship-issue |
 | /release | Yes | After /prove (end) |
 | /council | Yes | Lateral (any point) |

@@ -24,10 +24,10 @@ Living document tracking every step in the ship cycle — what's mechanical, wha
 
 | Step | Current | Issue | Status |
 |---|---|---|---|
-| Auto-chain: goal artifact → invoke /ship | Orchestrator-driven (see D-018) | #352 | **DONE** |
+| Auto-chain: goal artifact → invoke /ship-issue | Orchestrator-driven (see D-018) | #352 | **DONE** |
 | Auto-chain: ship artifact → invoke /prove | Orchestrator-driven (see D-018) | #352 | **DONE** |
-| Block /ship without goal-record | skill-runner.sh SUGGEST WARN | #350 | **DONE** |
-| Block Marcus spawn without /ship | AgentBriefGuard Bypass 3 fix | #328 | **DONE** |
+| Block /ship-issue without goal-record | skill-runner.sh SUGGEST WARN | #350 | **DONE** |
+| Block Marcus spawn without /ship-issue | AgentBriefGuard Bypass 3 fix | #328 | **DONE** |
 | Batch chain: /goal on umbrella cascades to children | skill-runner.sh goal pre-phase | #362 | **DONE** |
 
 ### Ship SCOPE Phase
