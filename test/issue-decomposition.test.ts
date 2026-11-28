@@ -1777,6 +1777,8 @@ describe("#2921: an ADR is refused for merge only while it says proposed and car
     expect(proposedWithPlan(doc("status: superseded", TABLE))).toBe(false);
     expect(proposedWithPlan(doc("status: proposed", "No plan here."))).toBe(false);
     expect(proposedWithPlan(`# ADR\n\nstatus: proposed\n\n${TABLE}`), "a body line is not frontmatter").toBe(false);
+  });
+});
 
 /**
  * #2953: a closed issue the plan itself filed is finished work. The plan files
