@@ -739,18 +739,21 @@ describe("AC-7: the committed workflow came out of the generator", () => {
   });
 });
 
-// ── #2950: a run whose action failed before the reviewer started ─────────
+// ── #2950: a run whose action failed and left no execution file ──────────
 
 /**
  * Seen on a consumer at 0.8.48 (asaCommandCenter run 46078589854, attempt 2):
  * `anthropics/claude-code-action` moved the untrusted paths aside for its own
  * restore, lost the network on its `git fetch`, and stopped with the restore
  * half done. The reviewer never ran. The drift step after that run then failed
- * the job with "The reviewer modified the tree it was reviewing". The run's
- * outcome and its execution file say which happened: the action sets
- * `execution_file` only once the reviewer has written one.
+ * the job with "The reviewer modified the tree it was reviewing".
+ *
+ * The step cannot tell that case from a reviewer that ran and an action that
+ * stopped before writing its record: both leave outcome `failure` and an empty
+ * `execution_file`. So it blames nobody. It refuses UNMEASURED, and says
+ * whether the reviewer ran is unmeasured too (review of #2963).
  */
-describe("#2950: a run that failed before the reviewer started is UNMEASURED, never a reviewer write", () => {
+describe("#2950: a run that failed and left no execution file is UNMEASURED, never a reviewer write", () => {
   const FAILED_FIRST = { [AI_REVIEW_DRIFT_RUN_OUTCOME_VAR]: "failure", [AI_REVIEW_DRIFT_RUN_EXECUTION_VAR]: "" };
 
   /** A restored tree with its restored file gone after the baseline: the half-done restore. */
@@ -767,7 +770,9 @@ describe("#2950: a run that failed before the reviewer started is UNMEASURED, ne
     const { work, path } = halfRestored();
     const drift = runDrift(work, path, undefined, FAILED_FIRST);
     expect(drift.code, "the job carried on over a tree nobody can attribute").not.toBe(0);
-    expect(drift.stderr).toContain("the review action failed before the reviewer started");
+    expect(drift.stderr).toContain("the review action failed and left no execution file");
+    expect(drift.stderr).toContain("Whether the reviewer ran at all is UNMEASURED");
+    expect(drift.stderr, "an empty execution file was read as proof the reviewer never ran").not.toContain("before the reviewer started");
     expect(drift.stderr).toContain("UNMEASURED");
     expect(drift.stderr).toContain(RESTORED_FILE);
     expect(drift.stderr, "a reviewer that never ran was blamed").not.toContain("The reviewer modified the tree it was reviewing");
