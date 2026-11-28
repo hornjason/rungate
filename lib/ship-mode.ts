@@ -69,6 +69,18 @@ export class ShipModeError extends Error {
 const CONFIG_PATH = RUNGATE_CONFIG_RELATIVE_PATH;
 const SINCE_FORMAT = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * A real calendar date, not only the shape of one (#2944): `2026-02-31` has
+ * the shape and names no day. Read back through UTC, a day that does not
+ * exist rolls over into another month and no longer matches what was written.
+ */
+function isCalendarDate(value: string): boolean {
+  if (!SINCE_FORMAT.test(value)) return false;
+  const [y, m, d] = value.split("-").map(Number) as [number, number, number];
+  const t = new Date(Date.UTC(y, m - 1, d));
+  return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
+}
+
 function refuse(detail: string): never {
   throw new ShipModeError(`REFUSED: ${CONFIG_PATH} declares an unusable \`ship\` block — ${detail}`);
 }
@@ -131,6 +143,9 @@ export function resolveShipPolicy(harnessConfig: Record<string, unknown> | null 
   }
   if (!SINCE_FORMAT.test(since)) {
     refuse(`\`ship.since\` is ${JSON.stringify(since)}, which is not a "YYYY-MM-DD" date`);
+  }
+  if (!isCalendarDate(since)) {
+    refuse(`\`ship.since\` is ${JSON.stringify(since)}, which has the "YYYY-MM-DD" shape but is not a calendar date`);
   }
   if (!nonEmptyString(reason)) {
     refuse(
