@@ -12,6 +12,7 @@ import type { LaneReading } from "./board-lane-health";
 import type { NetGrowthBasis } from "./issue-filing-gate";
 import { readyOccupancy, undispatchableRemedy } from "./board-ready-rule";
 import { ladderViolations, nextStage, retrosOwed, type ItemScope, type Stage } from "./stage-ladder";
+import { UNREADABLE, successThing } from "./success-doc";
 
 /**
  * Is this issue something anybody may pick up right now?
@@ -369,6 +370,8 @@ export interface LadderRow {
 
 export type LadderReport =
   | { readonly kind: "UNMEASURED"; readonly why: string }
+  /** #2925, SC-2822: the document holds no `stages`, so there is no ladder to read. */
+  | { readonly kind: "UNWRITTEN"; readonly why: string }
   | {
       readonly kind: "READ";
       /** The stage id `nextStage` names, or `null` when every stage is complete. */
@@ -416,6 +419,13 @@ export function ladderReport(source: string | null, where: string): LadderReport
       why: `${where} is not valid JSON (${e instanceof Error ? e.message : String(e)})`,
     };
   }
+  // #2925, SC-2822: a project-state.json with no `stages` key has no ladder
+  // written, which is a reading, not a failure to take one. The scaffold
+  // writes a consumer's file without one, and that read as UNMEASURED for the
+  // whole plan. A `stages` key that is present still goes to the validator.
+  if (doc !== null && typeof doc === "object" && !Array.isArray(doc) && !("stages" in doc)) {
+    return { kind: "UNWRITTEN", why: `${where} holds no "stages", so there is no ladder to read` };
+  }
   const violations = ladderViolations(doc);
   if (violations.length > 0) {
     return {
@@ -451,6 +461,74 @@ export function ladderReport(source: string | null, where: string): LadderReport
   };
 }
 
+/** #2925, SC-2822: how both plan views say a project has no ladder written. */
+export const NO_STAGES_WRITTEN = "no stages written";
+
+/**
+ * The goal the plan views show, and where it came from (#2925, SC-2822).
+ *
+ * `project-state.json`'s `goal.statement` when the document has a `goal`.
+ * When it has none, SUCCESS.md's `## The thing` (`successThing`), which every
+ * consumer already writes with `create-success`: ADR-030 decision 6, one goal
+ * source per project. A goal key that is present is never replaced by
+ * SUCCESS.md, so a malformed one stays UNMEASURED, and a plan the ladder
+ * refuses gives the ladder's reason, as it did before.
+ */
+export type GoalReading =
+  | { readonly kind: "READ"; readonly statement: string; readonly from: "project-state.json" | "SUCCESS.md" }
+  | { readonly kind: "UNMEASURED"; readonly why: string };
+
+export function goalReading(source: string | null, where: string, success: string | null): GoalReading {
+  const ladder = ladderReport(source, where);
+  let doc: unknown = null;
+  if (source !== null) {
+    try {
+      doc = JSON.parse(source);
+    } catch {
+      doc = null; // the ladder's reason names the parse failure
+    }
+  }
+  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
+    return { kind: "UNMEASURED", why: ladder.kind === "UNMEASURED" ? ladder.why : `${where} is not an object` };
+  }
+  if (!("goal" in doc)) {
+    const lead = `${where} has no goal, so it is read from SUCCESS.md's "## The thing"`;
+    if (success === null) return { kind: "UNMEASURED", why: `${lead}, and there is no SUCCESS.md` };
+    if (success === UNREADABLE) return { kind: "UNMEASURED", why: `${lead}, and SUCCESS.md could not be read` };
+    const thing = successThing(success);
+    if (thing === null) {
+      return { kind: "UNMEASURED", why: `${lead}, and that section is absent or still the template's placeholder` };
+    }
+    return { kind: "READ", statement: thing, from: "SUCCESS.md" };
+  }
+  if (ladder.kind === "UNMEASURED") return { kind: "UNMEASURED", why: ladder.why };
+  // Read on a READ ladder, which `ladderViolations` checked, and on an
+  // UNWRITTEN one, which nothing else checked.
+  const goal = (doc as { goal: unknown }).goal;
+  const statement =
+    goal !== null && typeof goal === "object" && typeof (goal as { statement?: unknown }).statement === "string"
+      ? ((goal as { statement: string }).statement).trim()
+      : "";
+  if (statement === "") return { kind: "UNMEASURED", why: `${where}'s goal has no statement` };
+  return { kind: "READ", statement, from: "project-state.json" };
+}
+
+/**
+ * The goal as one string: the statement, and where it came from when that was
+ * SUCCESS.md. A goal from project-state.json prints as it always did.
+ */
+export function goalText(r: Extract<GoalReading, { kind: "READ" }>): string {
+  return r.from === "SUCCESS.md"
+    ? `${r.statement} (from SUCCESS.md's "## The thing": project-state.json has no goal)`
+    : r.statement;
+}
+
+/** The goal line of `work-status`'s plan section. A printer; `goalReading` decides. */
+export function goalLines(r: GoalReading): string[] {
+  const clean = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  return r.kind === "UNMEASURED" ? [`  Goal: UNMEASURED — ${clean(r.why)}`] : [`  Goal: ${clean(goalText(r))}`];
+}
+
 /**
  * The plan section of the report, as lines — #1984.
  *
@@ -467,6 +545,7 @@ export function ladderLines(r: LadderReport): string[] {
   // an item could otherwise redraw the rows above it (security review, #2014).
   const clean = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
   if (r.kind === "UNMEASURED") return [`  UNMEASURED — ${clean(r.why)}`];
+  if (r.kind === "UNWRITTEN") return [`  ${NO_STAGES_WRITTEN} — ${clean(r.why)}`];
   const out: string[] = [];
   out.push(`  Next stage: ${r.next ?? "none — every stage is complete"}`);
   if (r.blocked !== null) out.push(`  Blocked: ${clean(r.blocked)}`);

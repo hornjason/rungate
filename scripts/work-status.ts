@@ -20,6 +20,8 @@ import {
   isPickable,
   milestoneOf,
   milestoneRollup,
+  goalLines,
+  goalReading,
   ladderLines,
   ladderReport,
   netGrowthLine,
@@ -34,6 +36,7 @@ import {
   readNetGrowth,
 } from "../lib/issue-filing-gate";
 import { gitCommittedFiles, readCommittedConfig } from "../lib/config-loader";
+import { readSuccessDoc } from "../lib/success-doc";
 import {
   handPlacedInReview,
   handPlacedInReviewLine,
@@ -421,6 +424,9 @@ try {
 } catch {
   planSource = null;
 }
+// #2925, SC-2822: the goal, and where it came from. With no goal in the plan
+// it is SUCCESS.md's `## The thing`, read from the same project root.
+for (const line of goalLines(goalReading(planSource, "project-state.json", readSuccessDoc(ROOT)))) console.log(line);
 for (const line of ladderLines(ladderReport(planSource, "project-state.json"))) console.log(line);
 
 // ── every milestone, and the lane that is not one ───────────────────────────
