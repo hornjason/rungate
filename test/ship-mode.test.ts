@@ -29,7 +29,11 @@
  * returned policy is not a harness policy, so a fallback turns them red
  * rather than green.
  *
- * ## What was broken to prove it, over this file (28 tests)
+ * ## What was broken to prove it, over this file as it stood then (28 tests)
+ *
+ * The counts below are #911's, measured before #2944 added three unusable
+ * dates and three cases of its own; the file now holds 44 tests, and #2944's
+ * battery is recorded in its pull request, not here.
  *
  * Every count predicted before the battery ran, and **the baseline row was
  * read before any mutation row** — the first attempt at this battery had a
@@ -330,7 +334,28 @@ describe("#911 AC-3: an unreadable ship block REFUSES rather than defaulting", (
     ["direct with a prose date", { mode: "direct", since: "October 19", reason: "because" }],
     ["direct with no reason", { mode: "direct", since: "2026-10-19" }],
     ["direct with a blank reason", { mode: "direct", since: "2026-10-19", reason: "   " }],
+    // #2944: the shape of a date is not a date.
+    ["direct on a day that does not exist", { mode: "direct", since: "2026-02-31", reason: "because" }],
+    ["direct in a month that does not exist", { mode: "direct", since: "2026-13-01", reason: "because" }],
+    ["direct on 29 February of a year that is not a leap year", { mode: "direct", since: "2026-02-29", reason: "because" }],
   ];
+
+  test("#2944 review: a real date in years 0000 to 0099 resolves, so no century offset is applied", () => {
+    // `Date.UTC` reads years 0 to 99 as 1900 to 1999, and the read-back then refused a real day.
+    for (const since of ["0050-06-01", "0099-06-15", "0004-02-29"]) {
+      expect(resolveShipPolicy({ ship: { mode: "direct", since, reason: "because" } }), since).toEqual({ mode: "direct", since, reason: "because" });
+    }
+  });
+
+  test("#2944: a real leap day resolves, so the calendar check is not refusing every 29 February", () => {
+    expect(resolveShipPolicy({ ship: { mode: "direct", since: "2028-02-29", reason: "because" } })).toEqual({
+      mode: "direct", since: "2028-02-29", reason: "because",
+    });
+  });
+
+  test("#2944: the refusal names the impossible date", () => {
+    expect(() => resolveShipPolicy({ ship: { mode: "direct", since: "2026-02-31", reason: "because" } })).toThrow(/2026-02-31.*calendar/);
+  });
 
   for (const [label, ship] of unusable) {
     test(`${label} throws, and does NOT resolve to "${DEFAULT_SHIP_MODE}"`, () => {
