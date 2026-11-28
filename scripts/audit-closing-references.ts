@@ -259,7 +259,10 @@ async function main(): Promise<void> {
   // checkout lacks is a checkout that is not this pull request's.
   const changedAdrs = new Set<string>();
   for (const file of pr.files as Array<{ path: string; changeType?: unknown }>) {
-    if (!ADR_PATH.test(file.path) || file.path === ADR_TEMPLATE_PATH || file.changeType === "DELETED") continue;
+    // The template too: a changed file the checkout lacks is a checkout that is
+    // not this pull request's, whatever the file is. Whether it can be refused
+    // is decided once, by the candidate list below.
+    if (!ADR_PATH.test(file.path) || file.changeType === "DELETED") continue;
     if (!existsSync(join(process.cwd(), file.path))) {
       refuse(
         `${file.path} is changed by this pull request and is not in the checkout at ${process.cwd()}, so ` +
