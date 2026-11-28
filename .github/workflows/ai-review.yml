@@ -1,4 +1,4 @@
-# generated-sha: 52aebc30a839178e
+# generated-sha: 031e1fcdf97f5008
 # Managed by rungate — do not edit. Customize the ci section of .claude/rungate/config.json.
 # The trigger types under on.pull_request are the harness's and are rewritten
 # on every scaffold; add your own triggers or jobs alongside (#2292).
@@ -2715,6 +2715,8 @@ jobs:
         id: ai-review-tree-check-after-run-1
         env:
           AI_REVIEW_MODE: ${{ steps.ai-review-auth.outputs.mode }}
+          AI_REVIEW_DRIFT_RUN_OUTCOME: ${{ steps.ai-review-action.outcome }}
+          AI_REVIEW_DRIFT_RUN_EXECUTION: ${{ steps.ai-review-action.outputs.execution_file }}
           AI_REVIEW_TREE_BEFORE: ${{ steps.ai-review-baseline.outputs.path }}
           AI_REVIEW_TREE_BEFORE_SHA: ${{ steps.ai-review-baseline.outputs.sha256 }}
           AI_REVIEW_BASE_REMOTE: ${{ steps.ai-review-restore-untrusted.outputs.base_remote }}
@@ -3287,6 +3289,17 @@ jobs:
           # encoder as git's error output above, for the same reason and on the same
           # line as its capture — the first draft encoded only the second use, and a
           # value that is safe at one of its two uses is not encoded, it is lucky.
+          #
+          # #2950: a run whose action failed and left no execution file cannot say
+          # whether the reviewer ran, so what is left here is UNMEASURED, not counted
+          # as a reviewer write (review of #2963). Asked only now,
+          # after the moved-base acquittal above, so a run that failed AFTER a clean
+          # restore is still acquitted, and a run that reached the reviewer is refused
+          # as before. An empty outcome is not a failure and falls through.
+          if [ "${AI_REVIEW_DRIFT_RUN_OUTCOME:-}" = failure ] && [ -z "${AI_REVIEW_DRIFT_RUN_EXECUTION:-}" ]; then
+            echo "::error title=AI review UNMEASURED::the review action failed and left no execution file: the run's outcome is failure and its execution_file output is empty. The action writes that file once the reviewer has run, so an empty one shows only that the action stopped before writing it. Whether the reviewer ran at all is UNMEASURED: the action may have failed before starting it, or the reviewer may have run and the action stopped before the write. The tree still differs from the baseline, and the action's own restore of the untrusted paths can stop halfway, as it did on a lost network (#2950). So these paths are not counted as a reviewer write; who changed them is UNMEASURED, and the job stops here rather than review a tree nobody can attribute. Paths: $(escape_annotation "${added}")" >&2
+            exit 1
+          fi
           echo "::error title=AI review modified the tree::The reviewer modified the tree it was reviewing: $(escape_annotation "${added}"). A review that edits the code under review is not a result." >&2
           exit 1
       - name: Run the AI review (run 2 of 3)
@@ -3727,6 +3740,8 @@ jobs:
         id: ai-review-tree-check-after-run-2
         env:
           AI_REVIEW_MODE: ${{ steps.ai-review-auth.outputs.mode }}
+          AI_REVIEW_DRIFT_RUN_OUTCOME: ${{ steps.ai-review-action-2.outcome }}
+          AI_REVIEW_DRIFT_RUN_EXECUTION: ${{ steps.ai-review-action-2.outputs.execution_file }}
           AI_REVIEW_TREE_BEFORE: ${{ steps.ai-review-baseline.outputs.path }}
           AI_REVIEW_TREE_BEFORE_SHA: ${{ steps.ai-review-baseline.outputs.sha256 }}
           AI_REVIEW_BASE_REMOTE: ${{ steps.ai-review-restore-untrusted.outputs.base_remote }}
@@ -4299,6 +4314,17 @@ jobs:
           # encoder as git's error output above, for the same reason and on the same
           # line as its capture — the first draft encoded only the second use, and a
           # value that is safe at one of its two uses is not encoded, it is lucky.
+          #
+          # #2950: a run whose action failed and left no execution file cannot say
+          # whether the reviewer ran, so what is left here is UNMEASURED, not counted
+          # as a reviewer write (review of #2963). Asked only now,
+          # after the moved-base acquittal above, so a run that failed AFTER a clean
+          # restore is still acquitted, and a run that reached the reviewer is refused
+          # as before. An empty outcome is not a failure and falls through.
+          if [ "${AI_REVIEW_DRIFT_RUN_OUTCOME:-}" = failure ] && [ -z "${AI_REVIEW_DRIFT_RUN_EXECUTION:-}" ]; then
+            echo "::error title=AI review UNMEASURED::the review action failed and left no execution file: the run's outcome is failure and its execution_file output is empty. The action writes that file once the reviewer has run, so an empty one shows only that the action stopped before writing it. Whether the reviewer ran at all is UNMEASURED: the action may have failed before starting it, or the reviewer may have run and the action stopped before the write. The tree still differs from the baseline, and the action's own restore of the untrusted paths can stop halfway, as it did on a lost network (#2950). So these paths are not counted as a reviewer write; who changed them is UNMEASURED, and the job stops here rather than review a tree nobody can attribute. Paths: $(escape_annotation "${added}")" >&2
+            exit 1
+          fi
           echo "::error title=AI review modified the tree::The reviewer modified the tree it was reviewing: $(escape_annotation "${added}"). A review that edits the code under review is not a result." >&2
           exit 1
       - name: Run the AI review (run 3 of 3)
@@ -4825,6 +4851,8 @@ jobs:
         id: ai-review-drift
         env:
           AI_REVIEW_MODE: ${{ steps.ai-review-auth.outputs.mode }}
+          AI_REVIEW_DRIFT_RUN_OUTCOME: ${{ steps.ai-review-action-3.outcome }}
+          AI_REVIEW_DRIFT_RUN_EXECUTION: ${{ steps.ai-review-action-3.outputs.execution_file }}
           AI_REVIEW_TREE_BEFORE: ${{ steps.ai-review-baseline.outputs.path }}
           AI_REVIEW_TREE_BEFORE_SHA: ${{ steps.ai-review-baseline.outputs.sha256 }}
           AI_REVIEW_BASE_REMOTE: ${{ steps.ai-review-restore-untrusted.outputs.base_remote }}
@@ -5397,6 +5425,17 @@ jobs:
           # encoder as git's error output above, for the same reason and on the same
           # line as its capture — the first draft encoded only the second use, and a
           # value that is safe at one of its two uses is not encoded, it is lucky.
+          #
+          # #2950: a run whose action failed and left no execution file cannot say
+          # whether the reviewer ran, so what is left here is UNMEASURED, not counted
+          # as a reviewer write (review of #2963). Asked only now,
+          # after the moved-base acquittal above, so a run that failed AFTER a clean
+          # restore is still acquitted, and a run that reached the reviewer is refused
+          # as before. An empty outcome is not a failure and falls through.
+          if [ "${AI_REVIEW_DRIFT_RUN_OUTCOME:-}" = failure ] && [ -z "${AI_REVIEW_DRIFT_RUN_EXECUTION:-}" ]; then
+            echo "::error title=AI review UNMEASURED::the review action failed and left no execution file: the run's outcome is failure and its execution_file output is empty. The action writes that file once the reviewer has run, so an empty one shows only that the action stopped before writing it. Whether the reviewer ran at all is UNMEASURED: the action may have failed before starting it, or the reviewer may have run and the action stopped before the write. The tree still differs from the baseline, and the action's own restore of the untrusted paths can stop halfway, as it did on a lost network (#2950). So these paths are not counted as a reviewer write; who changed them is UNMEASURED, and the job stops here rather than review a tree nobody can attribute. Paths: $(escape_annotation "${added}")" >&2
+            exit 1
+          fi
           echo "::error title=AI review modified the tree::The reviewer modified the tree it was reviewing: $(escape_annotation "${added}"). A review that edits the code under review is not a result." >&2
           exit 1
       - name: Persist this round's findings to the pull request

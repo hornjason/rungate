@@ -39,6 +39,8 @@ import { GOOGLE_AUTH_ACTION } from "../lib/google-auth-action";
 import {
   AI_REVIEW_ACTION_STEP_IDS,
   AI_REVIEW_DRIFT_STEP_ID,
+  AI_REVIEW_DRIFT_RUN_EXECUTION_VAR,
+  AI_REVIEW_DRIFT_RUN_OUTCOME_VAR,
   AI_REVIEW_BASELINE_STEP_ID,
   AI_REVIEW_KEPT_DIR_SUFFIX,
   AI_REVIEW_JOB,
@@ -172,9 +174,26 @@ describe("CRC-B11: three reviewer invocations, then one merge, in the generated 
   test("after the merge, nothing reads a run's outcome or execution file — only the merge's", () => {
     const merge = `steps.${AI_REVIEW_MERGE_STEP_ID}.outputs`;
     const owners = new Set([AI_REVIEW_MERGE_STEP_ID, ...AI_REVIEW_KEEP_EXECUTION_STEP_IDS]);
+    // #2950: a drift step reads the outcome and execution file of the ONE run
+    // it checks, through its two named variables, to tell an action that
+    // failed before writing its record from a reviewer write. It describes
+    // no round, so it is not the failure above. Each must name exactly its own
+    // run, and nothing else in its env may read any run.
+    const checks = new Map<string, string>([
+      ...Array.from({ length: AI_REVIEW_RUNS - 1 }, (_, i) => [aiReviewRunDriftStepId(i + 1), AI_REVIEW_ACTION_STEP_IDS[i]!] as [string, string]),
+      [AI_REVIEW_DRIFT_STEP_ID, AI_REVIEW_ACTION_STEP_IDS[AI_REVIEW_RUNS - 1]!],
+    ]);
     const readers = STEPS.filter(s => !owners.has(String(s?.id)));
     for (const s of readers) {
-      const env = JSON.stringify(s.env ?? {});
+      const own: Record<string, unknown> = { ...(s.env ?? {}) };
+      const run = checks.get(String(s.id));
+      if (run !== undefined) {
+        expect(own[AI_REVIEW_DRIFT_RUN_OUTCOME_VAR], `${s.id} checks another run`).toBe(`\${{ steps.${run}.outcome }}`);
+        expect(own[AI_REVIEW_DRIFT_RUN_EXECUTION_VAR], `${s.id} checks another run`).toBe(`\${{ steps.${run}.outputs.execution_file }}`);
+        delete own[AI_REVIEW_DRIFT_RUN_OUTCOME_VAR];
+        delete own[AI_REVIEW_DRIFT_RUN_EXECUTION_VAR];
+      }
+      const env = JSON.stringify(own);
       for (const run of AI_REVIEW_ACTION_STEP_IDS) {
         expect(env, `${s.id} reads ${run}'s outcome`).not.toContain(`steps.${run}.outcome`);
         expect(env, `${s.id} reads ${run}'s execution file`).not.toContain(`steps.${run}.outputs.execution_file`);
@@ -186,9 +205,11 @@ describe("CRC-B11: three reviewer invocations, then one merge, in the generated 
   });
 
   test("#2674: the drift check after a run is the drift step itself, against the same baseline", () => {
-    // Same script, same seal, same base ref: only the id and name differ, so
-    // there is one drift rule and no second copy of it to fall behind.
-    const shape = (st: Record<string, any>) => JSON.stringify({ ...st, id: undefined, name: undefined });
+    // Same script, same seal, same base ref: only the id, the name and the run
+    // each checks differ (#2950; the case above asserts that run), so there is
+    // one drift rule and no second copy of it to fall behind.
+    const shape = (st: Record<string, any>) =>
+      JSON.stringify({ ...st, id: undefined, name: undefined, env: { ...st.env, [AI_REVIEW_DRIFT_RUN_OUTCOME_VAR]: undefined, [AI_REVIEW_DRIFT_RUN_EXECUTION_VAR]: undefined } });
     const last = step(AI_REVIEW_DRIFT_STEP_ID);
     for (let k = 1; k < AI_REVIEW_RUNS; k++) {
       expect(shape(step(aiReviewRunDriftStepId(k))), `the drift check after run ${k} is not the drift step`).toBe(shape(last));

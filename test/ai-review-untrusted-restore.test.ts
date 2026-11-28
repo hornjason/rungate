@@ -119,8 +119,13 @@ import { dirname, join } from "path";
 import {
   AI_REVIEW_BASELINE_STEP_ID,
   AI_REVIEW_BASE_REF_VAR,
+  AI_REVIEW_ACTION_STEP_IDS,
+  AI_REVIEW_DRIFT_RUN_EXECUTION_VAR,
+  AI_REVIEW_DRIFT_RUN_OUTCOME_VAR,
   AI_REVIEW_DRIFT_STEP_ID,
   AI_REVIEW_JOB,
+  AI_REVIEW_RUNS,
+  aiReviewRunDriftStepId,
   AI_REVIEW_RESTORE_STEP_ID,
   AI_REVIEW_SETUP_BUN_STEP_ID,
   AI_REVIEW_RESTORE_STEP_NAME,
@@ -424,11 +429,12 @@ function runBaseline(work: string): { run: Run; path: string } {
  * nothing, so a fixture that omitted it would be exercising that refusal and
  * not the comparison.
  */
-function runDrift(work: string, before: string, baseRemote = "refs/remotes/origin/main"): Run {
+function runDrift(work: string, before: string, baseRemote = "refs/remotes/origin/main", run: Record<string, string> = {}): Run {
   return sh(buildDriftScript(), work, {
     AI_REVIEW_MODE: "vertex",
     AI_REVIEW_TREE_BEFORE: before,
     AI_REVIEW_BASE_REMOTE: baseRemote,
+    ...run,
   });
 }
 
@@ -730,5 +736,84 @@ describe("AC-7: the committed workflow came out of the generator", () => {
     // against a predicted 3 until this line existed.
     expect(ids.length, "the step-id reader returned nothing, so uniqueness is vacuous").toBeGreaterThan(4);
     expect(new Set(ids).size, `duplicate step ids: ${ids.join(", ")}`).toBe(ids.length);
+  });
+});
+
+// ── #2950: a run whose action failed and left no execution file ──────────
+
+/**
+ * Seen on a consumer at 0.8.48 (asaCommandCenter run 46078589854, attempt 2):
+ * `anthropics/claude-code-action` moved the untrusted paths aside for its own
+ * restore, lost the network on its `git fetch`, and stopped with the restore
+ * half done. The reviewer never ran. The drift step after that run then failed
+ * the job with "The reviewer modified the tree it was reviewing".
+ *
+ * The step cannot tell that case from a reviewer that ran and an action that
+ * stopped before writing its record: both leave outcome `failure` and an empty
+ * `execution_file`. So it blames nobody. It refuses UNMEASURED, and says
+ * whether the reviewer ran is unmeasured too (review of #2963).
+ */
+describe("#2950: a run that failed and left no execution file is UNMEASURED, never a reviewer write", () => {
+  const FAILED_FIRST = { [AI_REVIEW_DRIFT_RUN_OUTCOME_VAR]: "failure", [AI_REVIEW_DRIFT_RUN_EXECUTION_VAR]: "" };
+
+  /** A restored tree with its restored file gone after the baseline: the half-done restore. */
+  function halfRestored(): { work: string; path: string } {
+    const { work } = checkout();
+    expect(runRestore(work).code).toBe(0);
+    const { run: baseline, path } = runBaseline(work);
+    expect(baseline.code, `the baseline step refused:\n${baseline.stderr}`).toBe(0);
+    rmSync(join(work, RESTORED_FILE));
+    return { work, path };
+  }
+
+  test("an absence after a run that failed with no execution file names the action's failure and refuses UNMEASURED", () => {
+    const { work, path } = halfRestored();
+    const drift = runDrift(work, path, undefined, FAILED_FIRST);
+    expect(drift.code, "the job carried on over a tree nobody can attribute").not.toBe(0);
+    expect(drift.stderr).toContain("the review action failed and left no execution file");
+    expect(drift.stderr).toContain("Whether the reviewer ran at all is UNMEASURED");
+    expect(drift.stderr, "an empty execution file was read as proof the reviewer never ran").not.toContain("before the reviewer started");
+    expect(drift.stderr).toContain("UNMEASURED");
+    expect(drift.stderr).toContain(RESTORED_FILE);
+    expect(drift.stderr, "a reviewer that never ran was blamed").not.toContain("The reviewer modified the tree it was reviewing");
+  });
+
+  test("the same absence after a run that reached the reviewer is still the reviewer's write", () => {
+    const runs: Record<string, string>[] = [
+      { [AI_REVIEW_DRIFT_RUN_OUTCOME_VAR]: "failure", [AI_REVIEW_DRIFT_RUN_EXECUTION_VAR]: "/tmp/claude-execution-output.json" },
+      { [AI_REVIEW_DRIFT_RUN_OUTCOME_VAR]: "success", [AI_REVIEW_DRIFT_RUN_EXECUTION_VAR]: "" },
+      {},
+    ];
+    for (const run of runs) {
+      const { work, path } = halfRestored();
+      const drift = runDrift(work, path, undefined, run);
+      expect(drift.code, JSON.stringify(run)).not.toBe(0);
+      expect(drift.stderr, JSON.stringify(run)).toContain("The reviewer modified the tree it was reviewing");
+      expect(drift.stderr, JSON.stringify(run)).toContain(RESTORED_FILE);
+    }
+  });
+
+  test("a clean tree after a failed run still passes: the failure alone refuses nothing here", () => {
+    const { work } = checkout();
+    expect(runRestore(work).code).toBe(0);
+    const { path } = runBaseline(work);
+    const drift = runDrift(work, path, undefined, FAILED_FIRST);
+    expect(drift.code, drift.stderr).toBe(0);
+  });
+
+  test("each drift step is told the outcome and execution file of the run it checks, in the generated and the committed workflow", () => {
+    for (const [label, yaml] of [["generated", generatedJob()], ["committed", COMMITTED]] as const) {
+      const steps = (Bun.YAML.parse(yaml) as any).jobs[AI_REVIEW_JOB].steps as any[];
+      const checks = [
+        ...Array.from({ length: AI_REVIEW_RUNS - 1 }, (_, i) => [aiReviewRunDriftStepId(i + 1), AI_REVIEW_ACTION_STEP_IDS[i]!] as const),
+        [AI_REVIEW_DRIFT_STEP_ID, AI_REVIEW_ACTION_STEP_IDS[AI_REVIEW_RUNS - 1]!] as const,
+      ];
+      expect(checks.length, `${label}: one drift step per run`).toBe(AI_REVIEW_RUNS);
+      for (const [drift, run] of checks) {
+        const env = steps.find(s => s?.id === drift)?.env ?? {};
+        expect(env[AI_REVIEW_DRIFT_RUN_OUTCOME_VAR], `${label} ${drift}`).toBe(`\${{ steps.${run}.outcome }}`);
+        expect(env[AI_REVIEW_DRIFT_RUN_EXECUTION_VAR], `${label} ${drift}`).toBe(`\${{ steps.${run}.outputs.execution_file }}`);
+      }
+    }
   });
 });
