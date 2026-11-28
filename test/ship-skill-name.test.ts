@@ -8,12 +8,13 @@
  * widens the first scan below to that form, and claims the criterion there.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { execFileSync } from "child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "fs";
+import { execFileSync, spawnSync } from "child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 
 import { runScaffoldWriteSteps } from "../lib/scaffold/write-steps";
+import { shipSkillFolders, shipSkillPath } from "../lib/ship-skill-folder";
 
 const REPO = join(import.meta.dir, "..");
 const OLD = "ship";
@@ -149,4 +150,50 @@ describe("#2933: every test that reads the ship skill's folder reads it through 
     expect(spellings([FOLDER_TEST]).length, `${FOLDER_TEST} no longer plants the path; drop its exemption`).toBeGreaterThan(0);
     expect(spellings(tests.filter(f => f !== FOLDER_TEST))).toEqual([]);
   });
+});
+
+describe("#2933: the .sh sweep reads both of the skill's folders, and can fail", () => {
+  /**
+   * A `.claude` directory with the named skill folders, each holding the given
+   * files. The skills directory is derived through the resolver, so this file
+   * never quotes it.
+   */
+  function claudeWith(folders: Record<string, string[]>): string {
+    const claude = join(mkdtempSync(join(tmpdir(), "rg-2933-home-")), ".claude");
+    scratch.push(dirname(claude));
+    const skills = dirname(dirname(shipSkillPath(claude, "probe")));
+    for (const [folder, files] of Object.entries(folders)) {
+      mkdirSync(join(skills, folder), { recursive: true });
+      for (const f of files) writeFileSync(join(skills, folder, f), "x");
+    }
+    return claude;
+  }
+
+  test("shipSkillFolders names every folder that exists, the new name first", () => {
+    const skills = (claude: string) => dirname(dirname(shipSkillPath(claude, "probe")));
+    const none = claudeWith({});
+    expect(shipSkillFolders(none)).toEqual([]);
+    const old = claudeWith({ [OLD]: ["SKILL.md"] });
+    expect(shipSkillFolders(old)).toEqual([join(skills(old), OLD)]);
+    const both = claudeWith({ [NEW]: ["SKILL.md"], [OLD]: ["SKILL.md"] });
+    expect(shipSkillFolders(both)).toEqual([join(skills(both), NEW), join(skills(both), OLD)]);
+  });
+
+  test("the e2e sweep goes red for a .sh left in the old folder while the new one exists, and green for a clean pair", () => {
+    // Review of #2952: the sweep's assertion sat inside a `catch {}`, and it read
+    // one folder. Both are observed here by running the real test against a planted home.
+    const run = (claude: string) => {
+      const r = spawnSync("bun", ["test", join(REPO, "gates", "e2e-smoke.test.ts"), "-t", "stop-the-bleeding"], {
+        cwd: REPO, encoding: "utf-8", timeout: 120_000,
+        env: { ...process.env, HOME: dirname(claude) },
+      });
+      return `${r.stdout ?? ""}${r.stderr ?? ""}`;
+    };
+    const dirty = run(claudeWith({ [NEW]: ["SKILL.md"], [OLD]: ["gate-runner.sh"] }));
+    expect(dirty, dirty.slice(-1500)).toMatch(/\b1 fail\b/);
+    expect(dirty).toContain("gate-runner.sh");
+    const clean = run(claudeWith({ [NEW]: ["SKILL.md"], [OLD]: ["SKILL.md"] }));
+    expect(clean, clean.slice(-1500)).toMatch(/\b1 pass\b/);
+    expect(clean).toMatch(/\b0 fail\b/);
+  }, 300_000);
 });

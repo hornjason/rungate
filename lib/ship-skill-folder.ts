@@ -29,3 +29,13 @@ export function shipSkillPath(claudeDir: string, file: string): string {
   }
   return join(claudeDir, "skills", SHIP_SKILL_FOLDERS[0], file);
 }
+
+/**
+ * Every folder of the ship skill that exists under `claudeDir`, the new name
+ * first. For a sweep of the whole skill: `shipSkillPath` gives one answer,
+ * and while both names exist that answer would leave the other folder unread
+ * (review of #2952).
+ */
+export function shipSkillFolders(claudeDir: string): string[] {
+  return SHIP_SKILL_FOLDERS.map(folder => join(claudeDir, "skills", folder)).filter(dir => existsSync(dir));
+}

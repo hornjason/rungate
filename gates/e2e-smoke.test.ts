@@ -1,9 +1,9 @@
 import { test, expect, describe } from "bun:test";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
 import { WorkflowStateSchema } from "./schema";
 import { SIGNAL_PHRASE_PATTERNS } from "../lib/conformity";
-import { shipSkillPath } from "../lib/ship-skill-folder";
+import { shipSkillFolders, shipSkillPath } from "../lib/ship-skill-folder";
 
 const STANDALONE = !process.env.TEST_WORK_DIR;
 const TEST_DIR = process.env.TEST_WORK_DIR || "/tmp/gate-e2e-smoke";
@@ -218,16 +218,13 @@ describe("E2E: ADR-008 migration", () => {
     expect(existing).toEqual([]);
   });
 
-  test("stop-the-bleeding: no .sh files in the ship skill's folder", () => {
-    const { execSync } = require("child_process");
-    // #2933: the folder the resolver finds, the new name first.
-    const shipDir = shipSkillPath(join(process.env.HOME || "", ".claude"), ".");
-    try {
-      const result = execSync(`find "${shipDir}" -name '*.sh'`, { encoding: "utf-8", timeout: 5000 }).trim();
-      const files = result ? result.split("\n").filter(Boolean) : [];
-      expect(files).toEqual([]);
-    } catch {
-      // find command failed — skip
-    }
+  test("stop-the-bleeding: no .sh files in either of the ship skill's folders", () => {
+    // Review of #2952: every folder of the skill that exists, both names, and
+    // the assertion outside any catch. The `find` this replaced sat in a
+    // `catch {}` that swallowed the assertion too, so a .sh file passed.
+    const files = shipSkillFolders(join(process.env.HOME || "", ".claude")).flatMap(dir =>
+      (readdirSync(dir, { recursive: true }) as string[]).filter(f => f.endsWith(".sh")).map(f => join(dir, f)),
+    );
+    expect(files).toEqual([]);
   });
 });
