@@ -28,9 +28,12 @@ const OLD_INVOCATION = /Skill\(\s*\\?(["'`])ship\\?\1\s*[,)]/g;
 /**
  * The old name as a slash command (#2949), standing alone as a command is
  * typed. Not a path segment, not an escaped slash or a regex literal, and not
- * the new name. The planted rows below name each case.
+ * the new name. A backslash after the name is a regex escape (`\.`, `\d`),
+ * except an escaped quote or a string escape `\n`, `\r`, `\t`, which a string
+ * holding the command spells (reviews of #2962). The planted rows below name
+ * each case.
  */
-const OLD_SLASH = /(?<![\w./~\\-])\/ship(?![\w-]|\.\w|\\[^"'`])/g;
+const OLD_SLASH = /(?<![\w./~\\-])\/ship(?![\w-]|\.\w|\\[^nrt"'`])/g;
 const oldInvocations = (text: string): number =>
   [...text.matchAll(OLD_INVOCATION)].length + [...text.matchAll(OLD_SLASH)].length;
 
@@ -111,6 +114,9 @@ describe("#2933: rungate tells an agent to invoke the ship skill by its new name
       `Claude Code ships a built-in \`/${OLD}\`.`,
       // Review of #2962: inside a string with escaped quotes.
       `const s = "\\"/${OLD}\\"";`,
+      // Review round 2 of #2962: followed by a string escape.
+      `const s = "Run /${OLD}\\nNext";`,
+      `const s = "Run /${OLD}\\tfirst";`,
     ]) {
       expect(oldInvocations(s), s).toBe(1);
     }
@@ -123,6 +129,7 @@ describe("#2933: rungate tells an agent to invoke the ship skill by its new name
       `/${OLD}.js`,
       `/\\/${OLD}(?:-issue)?/`,
       `toMatch(/${OLD}\\.js:\\d+/)`,
+      `toMatch(/${OLD}\\d+/)`,
     ]) {
       expect(oldInvocations(s), s).toBe(0);
     }

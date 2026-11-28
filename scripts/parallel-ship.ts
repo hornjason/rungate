@@ -78,7 +78,12 @@ export function shipLaunchArgs(job: ShipJob): string[] {
  */
 export function shipLaunchRefusal(claudeDir: string): string | null {
   const installed = shipSkillFolders(claudeDir);
-  if (installed.length > 0 && basename(installed[0]!) === SHIP_SKILL_FOLDERS[0]) return null;
+  if (installed.length > 0 && basename(installed[0]!) === SHIP_SKILL_FOLDERS[0]) {
+    // Review round 2 of #2962: a folder is not a skill. An empty one, from a
+    // copy that stopped halfway or a stray mkdir, names nothing either.
+    if (existsSync(join(installed[0]!, "SKILL.md"))) return null;
+    return `${installed[0]} holds no SKILL.md, so /${SHIP_SKILL_FOLDERS[0]} would name no skill. Finish copying the folder (ADR-029 step 1), then run this again`;
+  }
   return installed.length === 0
     ? `no ship skill is installed under ${claudeDir}, so /${SHIP_SKILL_FOLDERS[0]} would name no skill`
     : `the ship skill is installed only under its old name (${installed[0]}), so /${SHIP_SKILL_FOLDERS[0]} would ` +

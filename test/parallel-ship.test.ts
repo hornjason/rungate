@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { execSync } from "child_process";
 import { tmpdir } from "os";
@@ -158,13 +158,16 @@ describe("#2949: parallel-ship refuses to launch where the skill is not installe
   afterEach(() => {
     for (const h of homes.splice(0)) rmSync(h, { recursive: true, force: true });
   });
-  /** A `.claude` holding the named skill folders, the skills directory derived through the resolver. */
-  function claudeWith(folders: string[]): string {
+  /** A `.claude` holding the named skill folders, each with a SKILL.md unless `bare`, the skills directory derived through the resolver. */
+  function claudeWith(folders: string[], bare = false): string {
     const home = mkdtempSync(join(tmpdir(), "rg-2962-home-"));
     homes.push(home);
     const claude = join(home, ".claude");
     const skills = dirname(dirname(shipSkillPath(claude, "probe")));
-    for (const f of folders) mkdirSync(join(skills, f), { recursive: true });
+    for (const f of folders) {
+      mkdirSync(join(skills, f), { recursive: true });
+      if (!bare) writeFileSync(join(skills, f, "SKILL.md"), "---\nname: probe\n---\n");
+    }
     return claude;
   }
   const [NEW_NAME, OLD_NAME] = SHIP_SKILL_FOLDERS as readonly [string, string];
@@ -175,6 +178,14 @@ describe("#2949: parallel-ship refuses to launch where the skill is not installe
     expect(shipLaunchRefusal(claudeWith([])) ?? "").toContain("no ship skill is installed");
     expect(shipLaunchRefusal(claudeWith([NEW_NAME]))).toBeNull();
     expect(shipLaunchRefusal(claudeWith([NEW_NAME, OLD_NAME]))).toBeNull();
+  });
+
+  test("a new folder with no SKILL.md is refused, naming the missing file", () => {
+    for (const folders of [[NEW_NAME], [NEW_NAME, OLD_NAME]]) {
+      const why = shipLaunchRefusal(claudeWith(folders, true)) ?? "";
+      expect(why, folders.join(",")).toContain("holds no SKILL.md");
+      expect(why, folders.join(",")).toContain("ADR-029 step 1");
+    }
   });
 
   test("the script refuses before it makes any worktree, dry run included", () => {
