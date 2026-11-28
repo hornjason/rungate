@@ -819,11 +819,14 @@ export const TRUSTED_AUTHORS: readonly string[] = ["OWNER", "MEMBER", "COLLABORA
 /**
  * May this CLOSED issue stand for a plan row with the same title? (SC-2738)
  *
- * Only finished work by somebody who can merge. Security review of #2009: on a
- * public repository anyone can open an issue titled with a row's outcome
- * (copied from the open ADR pull request) and close it themselves; read as
- * done, the row is never filed and its dependents point at the stranger's
- * issue. A close as "not planned" or "duplicate" is not finished work either.
+ * Only finished work, opened by somebody who can merge or by the plan itself.
+ * Security review of #2009: on a public repository anyone can open an issue
+ * titled with a row's outcome (copied from the open ADR pull request) and
+ * close it themselves; read as done, the row is never filed and its
+ * dependents point at the stranger's issue. The plan's own issues are the one
+ * other author (#2953): opened as this repository's workflow bot, which no
+ * stranger can author as, and carrying the planned-issue footer. A close as
+ * "not planned" or "duplicate" is not finished work either.
  */
 export function closedIssueCounts(issue: {
   state_reason: string | null;
