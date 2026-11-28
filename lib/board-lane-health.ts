@@ -262,6 +262,29 @@ export interface LaneCensus {
   readonly complete: boolean;
 }
 
+/**
+ * Whether the board was read in full (#2940).
+ *
+ * `boardStatus()` in `scripts/work-status.ts` throws on a page it could not
+ * read, so the one partial reading it can return is an item whose field page
+ * truncated, which it marks `(UNMEASURED …)`. A board holding no issue cards
+ * was read in full, and its lanes are measured zeros. This was
+ * `!truncated && status.size > 0` in the script, which reported DDB's new,
+ * empty board as one that "could not be paged in full".
+ */
+export function boardReadInFull(statuses: ReadonlyMap<number, string>): boolean {
+  for (const s of statuses.values()) if (s.startsWith("(UNMEASURED")) return false;
+  return true;
+}
+
+/** The line that says a board holds no issue cards, or `null` when it holds some. */
+export function emptyBoardLine(statuses: ReadonlyMap<number, string>): string | null {
+  return statuses.size === 0
+    ? "  The board holds no issue cards, so every lane's count below is a measured 0, not an unread one. " +
+      "A lane whose target could not be read still says UNMEASURED."
+    : null;
+}
+
 export interface LaneReading {
   readonly lane: string;
   readonly count: number;

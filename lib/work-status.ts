@@ -212,6 +212,28 @@ export interface ReadyRefusal {
 }
 
 /**
+ * #2940, review of #2961: a board read in full that holds no issue cards,
+ * while open issues sit off it. Ready's denominator is the board's own
+ * pickable work, so that board reads "0 of 0" and `readyRefusal` would pass a
+ * dry lane with startable work elsewhere. Before #2940 the same board read as
+ * unpaged and the gate refused UNMEASURED; this keeps that verdict, now for
+ * the true reason. Asked before `readyRefusal`; `null` leaves the board to it.
+ * How those issues reach the board is #2941.
+ */
+export function emptyBoardReadyRefusal(statuses: ReadonlyMap<number, string>, offBoard: number): ReadyRefusal | null {
+  if (statuses.size > 0 || offBoard === 0) return null;
+  return {
+    verdict: "UNMEASURED",
+    count: 0,
+    against: null,
+    why:
+      `the board holds no issue cards while ${offBoard} open issue(s) are off it, and Ready is judged against ` +
+      `the board's own pickable work, so "0 of 0" says nothing about the work there is to start. ` +
+      `Putting those issues on the board is #2941`,
+  };
+}
+
+/**
  * Whether the Ready lane's reading lets this run exit 0 — #1842.
  *
  * The ONE decider. The script restates its answer and spells no condition of

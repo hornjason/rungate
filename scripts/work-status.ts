@@ -25,6 +25,7 @@ import {
   ladderLines,
   ladderReport,
   netGrowthLine,
+  emptyBoardReadyRefusal,
   readyRefusal,
   resolveFocus,
 } from "../lib/work-status";
@@ -38,6 +39,8 @@ import {
 import { gitCommittedFiles, readCommittedConfig } from "../lib/config-loader";
 import { readSuccessDoc } from "../lib/success-doc";
 import {
+  boardReadInFull,
+  emptyBoardLine,
   handPlacedInReview,
   handPlacedInReviewLine,
   laneHealth,
@@ -935,11 +938,10 @@ console.log(
 
 bar("BOARD LANE HEALTH — issues only, each lane against what should be in it");
 const laneCounts = new Map<string, number>();
-let truncated = false;
-for (const s of status.values()) {
-  if (s.startsWith("(UNMEASURED")) truncated = true;
-  laneCounts.set(s, (laneCounts.get(s) ?? 0) + 1);
-}
+for (const s of status.values()) laneCounts.set(s, (laneCounts.get(s) ?? 0) + 1);
+// #2940: an empty board is a reading. Said once, above the lanes it explains.
+const emptyLine = emptyBoardLine(status);
+if (emptyLine !== null) console.log(emptyLine);
 // **Cancelled is `not_planned` OR `duplicate`**, and Ready's depth is the
 // delivery rate — both decided in `lib/board-throughput.ts`, which is the
 // one place either is spelled. The condition is the spec's own and
@@ -996,7 +998,7 @@ const laneReadings = laneHealth({
   ).length,
   cancelledClosed,
   throughput,
-  complete: !truncated && status.size > 0,
+  complete: boardReadInFull(status),
 });
 for (const line of laneHealthLines(laneReadings, offBoardCount)) console.log(line);
 // #1921, SC-2759. In review has no denominator, but an issue card there that
@@ -1009,7 +1011,7 @@ const handPlaced = handPlacedInReview({
     .map((i: any) => i.number as number),
   declaredClosing,
   closingTruncated,
-  complete: !truncated && status.size > 0,
+  complete: boardReadInFull(status),
 });
 console.log(handPlacedInReviewLine(handPlaced));
 
@@ -1053,7 +1055,8 @@ export const EXIT_READY_UNMEASURED = 4;
 // `laneCounts` drops by design (the header says "issues only"). Without it the
 // gate judged a population one card smaller than the writer's and the two
 // disagreed again — inside the change that exists to stop them.
-const refusal = readyRefusal(laneReadings, readyNow.length, readyUnseen);
+// #2940, review of #2961: an empty board with work off it is asked first.
+const refusal = emptyBoardReadyRefusal(status, offBoardCount) ?? readyRefusal(laneReadings, readyNow.length, readyUnseen);
 if (refusal?.verdict === "REFUSE") {
   console.log(
     `\n  REFUSING: Ready is ${refusal.count} of ${refusal.against} — ${refusal.why}\n` +
