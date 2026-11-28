@@ -33,7 +33,8 @@ import {
 } from "../lib/issue-repair";
 import type { PlacingFamily } from "../lib/issue-repair";
 import { REFUSAL_EXIT, issueTitleMap, main as planIssuesMain } from "../scripts/plan-issues";
-import { PLANNED_ISSUE_FOOTER } from "../lib/issue-decomposition";
+import { PLAN_BOT_LOGIN, PLANNED_ISSUE_FOOTER } from "../lib/issue-decomposition";
+import { WORKFLOW_BOT_LOGIN } from "../lib/github";
 import type { IssueState, PlaceGitHub, PlanIssuesGitHub } from "../scripts/plan-issues";
 
 /** A plan document: a header, then the rows given. */
@@ -935,6 +936,10 @@ describe("#2953: the closed-titles read keeps a closed issue the plan filed", ()
       ["row three", 2932],
       ["the owner's", 9003],
     ]);
+  });
+
+  test("the plan's bot login is the one lib/github.ts names, so #2901's rule and this one cannot drift apart", () => {
+    expect(PLAN_BOT_LOGIN).toBe(WORKFLOW_BOT_LOGIN);
   });
 
   test("open: every issue is kept, whoever wrote it, as before", () => {

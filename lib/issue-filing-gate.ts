@@ -956,12 +956,17 @@ export async function countNetGrowth(
       }
       if (created >= from) opened += 1;
       const closedAt = r.state === "closed" && typeof r.closed_at === "string" ? Date.parse(r.closed_at) : Number.NaN;
+      const user = r.user !== null && typeof r.user === "object" ? (r.user as Record<string, unknown>) : undefined;
       if (
         Number.isFinite(closedAt) &&
         closedAt >= from &&
         closedIssueCounts({
           state_reason: typeof r.state_reason === "string" ? r.state_reason : null,
           author_association: typeof r.author_association === "string" ? r.author_association : "",
+          // #2953: so an issue the plan filed and finished counts as closed.
+          user_login: typeof user?.login === "string" ? user.login : "",
+          user_type: typeof user?.type === "string" ? user.type : "",
+          body: typeof r.body === "string" ? r.body : null,
         })
       ) {
         closed += 1;

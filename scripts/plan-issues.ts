@@ -280,18 +280,31 @@ function issueTitles(repo: string, state: "open" | "closed"): Map<string, number
     "--paginate",
     `repos/${repo}/issues?state=${state}&per_page=100`,
     "--jq",
-    ".[] | select(.pull_request == null) | [.number, .title, .state_reason, .author_association] | @json",
+    ".[] | select(.pull_request == null) | [.number, .title, .state_reason, .author_association, .user.login, .user.type, .body] | @json",
   ]);
+  return issueTitleMap(out, state);
+}
+
+/**
+ * Title to number, from the lines `issueTitles` reads, one JSON array per
+ * issue. A closed issue is kept only where `closedIssueCounts` says the close
+ * is finished work, which since #2953 includes an issue the plan itself filed
+ * as the workflow bot: login, type and body are read for that.
+ */
+export function issueTitleMap(out: string, state: "open" | "closed"): Map<string, number> {
   const map = new Map<string, number>();
   for (const line of out.split("\n")) {
     if (line.trim() === "") continue;
-    const [number, title, state_reason, author_association] = JSON.parse(line) as [
+    const [number, title, state_reason, author_association, user_login, user_type, body] = JSON.parse(line) as [
       number,
       string,
       string | null,
       string,
+      string,
+      string,
+      string | null,
     ];
-    if (state === "closed" && !closedIssueCounts({ state_reason, author_association })) continue;
+    if (state === "closed" && !closedIssueCounts({ state_reason, author_association, user_login, user_type, body })) continue;
     // The FIRST number seen for a title is kept. Two closed issues sharing a
     // title are both finished work; which one a blocked row points at does
     // not change what it waits for.
@@ -319,7 +332,7 @@ const LIVE_DECOMPOSE: DecomposeGitHub = {
   openTitles: async repo => issueTitles(repo, "open"),
   /**
    * The same read, for closed issues, kept only where `closedIssueCounts`
-   * says the close is finished work by a trusted author.
+   * says the close is finished work, by a trusted author or by the plan (#2953).
    */
   closedTitles: async repo => issueTitles(repo, "closed"),
   /**

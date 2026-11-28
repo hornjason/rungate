@@ -29,7 +29,6 @@ import {
   planDecomposition,
   proposedWithPlan,
 } from "../lib/issue-decomposition";
-import { WORKFLOW_BOT_LOGIN } from "../lib/github";
 import { readSuiteRun } from "../lib/suite-run-reading";
 
 const HEAD = ["| Criterion | Outcome | Files | Milestone | Blocked by |", "|---|---|---|---|---|"];
@@ -1810,7 +1809,7 @@ describe("#2953: a closed issue the plan filed counts as finished work, and noth
     expect(closedIssueCounts({ ...bot, state_reason: "completed", body: `see ${PLANNED_ISSUE_FOOTER}x` })).toBe(false);
   });
 
-  test("the bot login here is the one lib/github.ts names, so the two rules cannot drift apart", () => {
-    expect(PLAN_BOT_LOGIN).toBe(WORKFLOW_BOT_LOGIN);
-  });
+  // The agreement with lib/github.ts's WORKFLOW_BOT_LOGIN is asserted in
+  // test/plan-issues.test.ts: the SC-2602 battery copies THIS file and
+  // rewrites only its three relative imports.
 });

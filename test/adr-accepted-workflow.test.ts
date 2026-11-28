@@ -449,23 +449,26 @@ describe("SC-2738: the generated workflow runs the five steps in order", () => {
 });
 
 describe("SC-2738: a closed issue stands for a row only when it is finished work by a trusted author", () => {
+  // An ordinary person, so the association alone decides here; the plan's own
+  // issues, filed by the workflow bot, are #2953's case in test/issue-decomposition.test.ts.
+  const PERSON = { user_login: "someone", user_type: "User", body: null };
   // Security review of #2009: anyone can open an issue on a public repository
   // titled with a row's outcome and close it themselves.
   test("SC-2738: completed, by an owner, member or collaborator → counts", () => {
     for (const a of ["OWNER", "MEMBER", "COLLABORATOR"]) {
-      expect(closedIssueCounts({ state_reason: "completed", author_association: a })).toBe(true);
+      expect(closedIssueCounts({ state_reason: "completed", author_association: a, ...PERSON })).toBe(true);
     }
   });
 
   test("SC-2738: completed by a stranger does NOT count — the row is filed", () => {
     for (const a of ["NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER"]) {
-      expect(closedIssueCounts({ state_reason: "completed", author_association: a })).toBe(false);
+      expect(closedIssueCounts({ state_reason: "completed", author_association: a, ...PERSON })).toBe(false);
     }
   });
 
   test("SC-2738: closed as not planned or duplicate does NOT count, even by the owner", () => {
     for (const r of ["not_planned", "duplicate", null]) {
-      expect(closedIssueCounts({ state_reason: r, author_association: "OWNER" })).toBe(false);
+      expect(closedIssueCounts({ state_reason: r, author_association: "OWNER", ...PERSON })).toBe(false);
     }
   });
 });

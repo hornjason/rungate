@@ -41,6 +41,7 @@ import {
   type GitHubClient,
   type OpenIssue,
   type OpenIssuePage,
+  WORKFLOW_BOT_LOGIN,
 } from "../lib/github";
 import {
   adjudicateFiling,
@@ -7438,9 +7439,13 @@ describe("FG-266..FG-278: the filing cap in direct-ship mode is the ceiling what
       issue(6, { pull_request: { url: "u" }, ...closedAgo(1, "completed") }), // a pull request
       issue(7, { created_at: hoursAgo(72) }), // touched in the window, opened before it
       issue(8, { created_at: hoursAgo(30), ...closedAgo(25, "completed") }), // closed before it
+      // #2953: an issue the plan filed and finished is closed work; the
+      // same bot's status issue, which carries no planned-issue footer, is not.
+      issue(9, { created_at: hoursAgo(48), ...closedAgo(3, "completed", "NONE"), user: { login: WORKFLOW_BOT_LOGIN, type: "Bot" }, body: `x\n\n${PLANNED_ISSUE_FOOTER}docs/adr/A.md\`.` }),
+      issue(10, { created_at: hoursAgo(48), ...closedAgo(3, "completed", "NONE"), user: { login: WORKFLOW_BOT_LOGIN, type: "Bot" }, body: "Where we are" }),
     ];
     const r = await countNetGrowth(fakeClient(n => (n === 1 ? rows : []), seen), "o/r", nowMs);
-    expect(r).toEqual({ reading: "MEASURED", opened: 2, closed: 2 });
+    expect(r).toEqual({ reading: "MEASURED", opened: 2, closed: 3 });
     expect(seen[0], "the read must cover closed issues and the trailing window").toMatchObject({
       owner: "o",
       repo: "r",
