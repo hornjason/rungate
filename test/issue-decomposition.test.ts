@@ -21,6 +21,9 @@ import {
   MIN_OUTCOME,
   type DecompositionRow,
   type LiveTracker,
+  PLAN_BOT_LOGIN,
+  PLANNED_ISSUE_FOOTER,
+  closedIssueCounts,
   decomposedBody,
   parseDecompositionPlan,
   planDecomposition,
@@ -1775,4 +1778,40 @@ describe("#2921: an ADR is refused for merge only while it says proposed and car
     expect(proposedWithPlan(doc("status: proposed", "No plan here."))).toBe(false);
     expect(proposedWithPlan(`# ADR\n\nstatus: proposed\n\n${TABLE}`), "a body line is not frontmatter").toBe(false);
   });
+});
+
+/**
+ * #2953: a closed issue the plan itself filed is finished work. The plan files
+ * as the workflow bot (association NONE), so the #2009 trusted-author rule
+ * alone dropped every closed planned issue, and a re-run of the plan, such as
+ * an ADR amendment, planned their rows as `create` again. ADR-029's #2930,
+ * #2931 and #2932 were three of them.
+ */
+describe("#2953: a closed issue the plan filed counts as finished work, and nothing else new does", () => {
+  const planned = `## What must become true\n\nx\n\n---\n\n${PLANNED_ISSUE_FOOTER}docs/adr/ADR-029.md\` from a reviewed plan.\n`;
+  const bot = { author_association: "NONE", user_login: PLAN_BOT_LOGIN, user_type: "Bot" };
+
+  test("completed, by the workflow bot, carrying the planned-issue footer: counts", () => {
+    expect(closedIssueCounts({ ...bot, state_reason: "completed", body: planned })).toBe(true);
+  });
+
+  test("the same issue closed as not planned or duplicate does not count", () => {
+    for (const r of ["not_planned", "duplicate", null]) {
+      expect(closedIssueCounts({ ...bot, state_reason: r, body: planned }), String(r)).toBe(false);
+    }
+  });
+
+  test("the bot without the footer, the footer without the bot, and the footer mid-line do not count", () => {
+    // The pinned status issue is the bot's too, and its text is rebuilt from titles anybody can write.
+    expect(closedIssueCounts({ ...bot, state_reason: "completed", body: "Where we are\n\n- a title" })).toBe(false);
+    expect(closedIssueCounts({ ...bot, state_reason: "completed", body: null })).toBe(false);
+    // A stranger who copies the footer into an issue of their own.
+    expect(closedIssueCounts({ author_association: "NONE", user_login: "someone", user_type: "User", state_reason: "completed", body: planned })).toBe(false);
+    expect(closedIssueCounts({ ...bot, user_type: "User", state_reason: "completed", body: planned })).toBe(false);
+    expect(closedIssueCounts({ ...bot, state_reason: "completed", body: `see ${PLANNED_ISSUE_FOOTER}x` })).toBe(false);
+  });
+
+  // The agreement with lib/github.ts's WORKFLOW_BOT_LOGIN is asserted in
+  // test/plan-issues.test.ts: the SC-2602 battery copies THIS file and
+  // rewrites only its three relative imports.
 });

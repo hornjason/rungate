@@ -913,9 +913,10 @@ function errorText(e: unknown): string {
  * - **Opened** is every issue created in the window, by anyone. Counting a
  *   stranger's issue can only push the cap DOWN.
  * - **Closed** is an issue closed in the window that `closedIssueCounts`
- *   accepts: closed as completed, opened by somebody who can merge. On a
- *   public repository anyone can open an issue and close it themselves, and
- *   a close that counted would be a stranger raising our cap.
+ *   accepts: closed as completed, opened by somebody who can merge or by the
+ *   plan as the workflow bot (#2953). On a public repository anyone can open
+ *   an issue and close it themselves, and a close that counted would be a
+ *   stranger raising our cap.
  *
  * A page that is not a list, a row without a readable `created_at`, or a walk
  * that has not finished at `maxPages` is UNMEASURED, never a partial count.
@@ -956,12 +957,17 @@ export async function countNetGrowth(
       }
       if (created >= from) opened += 1;
       const closedAt = r.state === "closed" && typeof r.closed_at === "string" ? Date.parse(r.closed_at) : Number.NaN;
+      const user = r.user !== null && typeof r.user === "object" ? (r.user as Record<string, unknown>) : undefined;
       if (
         Number.isFinite(closedAt) &&
         closedAt >= from &&
         closedIssueCounts({
           state_reason: typeof r.state_reason === "string" ? r.state_reason : null,
           author_association: typeof r.author_association === "string" ? r.author_association : "",
+          // #2953: so an issue the plan filed and finished counts as closed.
+          user_login: typeof user?.login === "string" ? user.login : "",
+          user_type: typeof user?.type === "string" ? user.type : "",
+          body: typeof r.body === "string" ? r.body : null,
         })
       ) {
         closed += 1;

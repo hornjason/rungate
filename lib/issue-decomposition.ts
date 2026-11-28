@@ -643,6 +643,14 @@ export function planDecomposition(
 export const PLANNED_ISSUE_FOOTER = "Created by `rungate plan-issues --decompose ";
 
 /**
+ * The account an accepted plan files its issues as (#2953): the workflow
+ * bot, `WORKFLOW_BOT_LOGIN` in `lib/github.ts`. Spelled here rather than
+ * imported because this module imports nothing (its tests copy it into a
+ * scratch directory); `test/issue-decomposition.test.ts` asserts the two agree.
+ */
+export const PLAN_BOT_LOGIN = "github-actions[bot]";
+
+/**
  * The heading of the section `decomposedBody` writes the same way for every
  * row. Everything from it down is template, the footer included.
  */
@@ -811,14 +819,32 @@ export const TRUSTED_AUTHORS: readonly string[] = ["OWNER", "MEMBER", "COLLABORA
 /**
  * May this CLOSED issue stand for a plan row with the same title? (SC-2738)
  *
- * Only finished work by somebody who can merge. Security review of #2009: on a
- * public repository anyone can open an issue titled with a row's outcome
- * (copied from the open ADR pull request) and close it themselves; read as
- * done, the row is never filed and its dependents point at the stranger's
- * issue. A close as "not planned" or "duplicate" is not finished work either.
+ * Only finished work, opened by somebody who can merge or by the plan itself.
+ * Security review of #2009: on a public repository anyone can open an issue
+ * titled with a row's outcome (copied from the open ADR pull request) and
+ * close it themselves; read as done, the row is never filed and its
+ * dependents point at the stranger's issue. The plan's own issues are the one
+ * other author (#2953): opened as this repository's workflow bot, which no
+ * stranger can author as, and carrying the planned-issue footer. A close as
+ * "not planned" or "duplicate" is not finished work either.
  */
-export function closedIssueCounts(issue: { state_reason: string | null; author_association: string }): boolean {
-  return issue.state_reason === "completed" && TRUSTED_AUTHORS.includes(issue.author_association);
+export function closedIssueCounts(issue: {
+  state_reason: string | null;
+  author_association: string;
+  user_login: string;
+  user_type: string;
+  body: string | null;
+}): boolean {
+  if (issue.state_reason !== "completed") return false;
+  if (TRUSTED_AUTHORS.includes(issue.author_association)) return true;
+  // #2953: an issue the plan itself filed. The plan files as the workflow bot
+  // with association NONE, so without this arm every planned issue it closed
+  // read as unfinished and a re-run of the plan filed it again. The login
+  // and type alone are not enough, as #2901 found for the open-issue check:
+  // the same bot writes the pinned status issue, whose text comes from titles
+  // anybody can write. The planned-issue footer at the start of a line is
+  // what only a plan's issue carries, and a stranger cannot author as the bot.
+  return issue.user_type === "Bot" && issue.user_login === PLAN_BOT_LOGIN && isPlannedIssueBody(issue.body ?? "");
 }
 
 /** Whether a document carries a Decomposition table for `--decompose` to read. */
