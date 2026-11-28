@@ -32,7 +32,8 @@ import {
   parseRepairPlan,
 } from "../lib/issue-repair";
 import type { PlacingFamily } from "../lib/issue-repair";
-import { REFUSAL_EXIT, main as planIssuesMain } from "../scripts/plan-issues";
+import { REFUSAL_EXIT, issueTitleMap, main as planIssuesMain } from "../scripts/plan-issues";
+import { PLANNED_ISSUE_FOOTER } from "../lib/issue-decomposition";
 import type { IssueState, PlaceGitHub, PlanIssuesGitHub } from "../scripts/plan-issues";
 
 /** A plan document: a header, then the rows given. */
@@ -906,5 +907,42 @@ describe("SC-2779: plan-issues --place reads every opted-in spec and writes only
       expect(r.issueReads, extra.join(" ")).toBe(0);
       expect(r.out, extra.join(" ")).toContain("--place reads every opted-in spec itself");
     }
+  });
+});
+
+/**
+ * #2953: the closed-titles read keeps a closed issue the plan filed. Before,
+ * it kept only a trusted author's, so ADR-029's #2930 to #2932 (closed,
+ * completed, filed by the workflow bot) planned as `create` on any re-run.
+ */
+describe("#2953: the closed-titles read keeps a closed issue the plan filed", () => {
+  const footer = `${PLANNED_ISSUE_FOOTER}docs/adr/ADR-029.md\` from a reviewed plan.`;
+  // One line per issue, as the read's jq prints it.
+  const line = (...f: unknown[]) => JSON.stringify(f);
+  const out = [
+    line(2930, "row one", "completed", "NONE", "github-actions[bot]", "Bot", `body\n\n---\n\n${footer}`),
+    line(2931, "row two", "completed", "NONE", "github-actions[bot]", "Bot", `x\n${footer}`),
+    line(2932, "row three", "completed", "NONE", "github-actions[bot]", "Bot", `x\n${footer}`),
+    line(9001, "a stranger's copy", "completed", "NONE", "someone", "User", `x\n${footer}`),
+    line(9002, "row four", "not_planned", "NONE", "github-actions[bot]", "Bot", `x\n${footer}`),
+    line(9003, "the owner's", "completed", "OWNER", "hornjason", "User", null),
+  ].join("\n");
+
+  test("closed: the plan's finished issues and a trusted author's are kept; a stranger's and an unfinished one are not", () => {
+    expect([...issueTitleMap(out, "closed").entries()]).toEqual([
+      ["row one", 2930],
+      ["row two", 2931],
+      ["row three", 2932],
+      ["the owner's", 9003],
+    ]);
+  });
+
+  test("open: every issue is kept, whoever wrote it, as before", () => {
+    expect(issueTitleMap(out, "open").size).toBe(6);
+  });
+
+  test("the live read asks GitHub for the author's login and type and the body, in the order the parser reads them", () => {
+    const src = readFileSync(join(import.meta.dir, "..", "scripts", "plan-issues.ts"), "utf-8");
+    expect(src).toContain("[.number, .title, .state_reason, .author_association, .user.login, .user.type, .body]");
   });
 });
