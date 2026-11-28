@@ -1,8 +1,10 @@
 import { test, expect, describe } from "bun:test";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, readdirSync } from "fs";
+import { homedir } from "os";
 import { join } from "path";
 import { WorkflowStateSchema } from "./schema";
 import { SIGNAL_PHRASE_PATTERNS } from "../lib/conformity";
+import { shipSkillFolders, shipSkillPath } from "../lib/ship-skill-folder";
 
 const STANDALONE = !process.env.TEST_WORK_DIR;
 const TEST_DIR = process.env.TEST_WORK_DIR || "/tmp/gate-e2e-smoke";
@@ -205,30 +207,25 @@ describe("E2E: Marcus brief cites governing spec", () => {
 
 describe("E2E: ADR-008 migration", () => {
   test("ADR-008 'What to delete' files are actually deleted", () => {
-    const adrPath = join(process.env.HOME || "", ".claude", "PAI", "ADR", "ADR-008-harness-v3-bun-tests-migration.md");
+    const adrPath = join(homedir(), ".claude", "PAI", "ADR", "ADR-008-harness-v3-bun-tests-migration.md");
     if (!existsSync(adrPath)) return;
     const adr = readFileSync(adrPath, "utf-8");
 
-    const deletionTargets = [
-      "skills/ship/gate-runner.sh",
-      "skills/ship/gate-checks.sh",
-    ];
+    // #2933: in whichever of the skill's two folders the resolver finds them.
+    const deletionTargets = ["gate-runner.sh", "gate-checks.sh"];
+    const claudeDir = join(homedir(), ".claude");
 
-    const existing = deletionTargets.filter(f =>
-      existsSync(join(process.env.HOME || "", ".claude", f))
-    );
+    const existing = deletionTargets.filter(f => existsSync(shipSkillPath(claudeDir, f)));
     expect(existing).toEqual([]);
   });
 
-  test("stop-the-bleeding: no .sh files in skills/ship/", () => {
-    const { execSync } = require("child_process");
-    const shipDir = join(process.env.HOME || "", ".claude", "skills", "ship");
-    try {
-      const result = execSync(`find "${shipDir}" -name '*.sh'`, { encoding: "utf-8", timeout: 5000 }).trim();
-      const files = result ? result.split("\n").filter(Boolean) : [];
-      expect(files).toEqual([]);
-    } catch {
-      // find command failed — skip
-    }
+  test("stop-the-bleeding: no .sh files in either of the ship skill's folders", () => {
+    // Review of #2952: every folder of the skill that exists, both names, and
+    // the assertion outside any catch. The `find` this replaced sat in a
+    // `catch {}` that swallowed the assertion too, so a .sh file passed.
+    const files = shipSkillFolders(join(homedir(), ".claude")).flatMap(dir =>
+      (readdirSync(dir, { recursive: true }) as string[]).filter(f => f.endsWith(".sh")).map(f => join(dir, f)),
+    );
+    expect(files).toEqual([]);
   });
 });

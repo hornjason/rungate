@@ -6,7 +6,7 @@
  * `harnessRoot` at 44, `projectRoot` at 33 — and the only check any of them
  * had was that `repo` was present.
  *
- * Not a live exploit, and this file does not claim one: `Skill("ship")`
+ * Not a live exploit, and this file does not claim one: `Skill("ship-issue")`
  * derives the slug from `git remote get-url origin`. What makes it worth
  * fixing is that the same file already does the opposite thing one function
  * away — `isSafeBranchName` before a branch reaches a `git push` — and

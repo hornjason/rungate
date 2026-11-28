@@ -2,6 +2,7 @@ import { test, expect, describe, setDefaultTimeout } from "bun:test";
 import { readFileSync, existsSync, readdirSync } from "fs";
 import { execSync, execFileSync, spawnSync } from "child_process";
 import { createHash } from "crypto";
+import { homedir } from "os";
 import { join } from "path";
 import { WorkflowStateSchema } from "./schema";
 import { extractTestFailureCount, subtractTestBaseline } from "./gate-executor";
@@ -18,6 +19,7 @@ import {
 import { evidencePortabilityViolations } from "../lib/evidence-portability";
 import { alreadySatisfiedIds } from "../lib/evidence-prevalidator";
 import { readBranchDiff } from "../lib/branch-diff";
+import { shipSkillPath } from "../lib/ship-skill-folder";
 import { proveLabelGateVerdict, type LabelRead } from "../lib/prove-label-gate";
 import { worktreeDiskIdentity, type RemoteReading } from "../lib/worktree-repo";
 import { readSuiteMeasurement, type SuiteReading } from "../lib/suite-measurement";
@@ -1293,7 +1295,7 @@ describe("verify checks", () => {
   // 28. marcus-committed (GAP → PORTED)
   test("marcus-committed: no uncommitted Marcus changes", () => {
     if (!isVerifyPlus()) return;
-    const signalDir = join(process.env.RUNGATE_WORK_DIR || join(process.env.HOME || "", ".rungate"), "signals");
+    const signalDir = join(process.env.RUNGATE_WORK_DIR || join(homedir(), ".rungate"), "signals");
     const slug = sf("slug") || "";
     const signalFile = join(signalDir, `marcus-uncommitted-${slug.replace(/\//g, "-")}`);
     if (existsSync(signalFile)) {
@@ -1354,7 +1356,8 @@ describe("verify checks", () => {
   test("spec-decision-compliance: AC language aligns with spec decisions", () => {
     if (!isVerifyPlus()) return;
     const localPolicies = join(__dirname, "spec-policies.json");
-    const homePolicies = join(process.env.HOME || "", ".claude", "skills", "ship", "spec-policies.json");
+    // #2933: read through the resolver, so the renamed folder is found first.
+    const homePolicies = shipSkillPath(join(homedir(), ".claude"), "spec-policies.json");
     const policiesPath = existsSync(localPolicies) ? localPolicies : homePolicies;
     if (!existsSync(policiesPath)) return;
     const policies = JSON.parse(readFileSync(policiesPath, "utf-8"));

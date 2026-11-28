@@ -139,13 +139,13 @@ describe("#2932: no source reader spells the skill folder's path outside the res
   // The path whole (`skills/ship/`, `skills/ship-issue/`) or in parts
   // (`"skills", "ship"`), in any quote. Comments are stripped first, so a
   // sentence that mentions the path is not a read.
-  const SPELLING = /["'`]skills["'`]\s*,\s*["'`]ship(?:-issue)?["'`]|skills\/ship(?:-issue)?(?=[\/"'`])/g;
+  const SPELLING = /(?:["'`]|\/)skills["'`]\s*,\s*["'`]ship(?:-issue)?(?:["'`]|\/)|skills\/ship(?:-issue)?(?=[\/"'`])/g;
   // The two parts apart, anywhere in one file: `const SHIP = "ship"` beside
   // `join(home, ".claude", "skills", SHIP)` reads the folder and spells
   // neither part next to the other (review of #2936). Two of the 495 files
   // name a skills folder at all, and neither also names the skill.
-  const SKILLS_PART = /["'`]skills["'`]|skills\//;
-  const SHIP_PART = /["'`]ship(?:-issue)?["'`]|\/ship(?:-issue)?(?=[\/"'`])/;
+  const SKILLS_PART = /(?:["'`]|\/)skills["'`]|skills\//;
+  const SHIP_PART = /["'`]ship(?:-issue)?(?:["'`]|\/)|\/ship(?:-issue)?(?=[\/"'`])/;
   type TranspilerOptions = ConstructorParameters<typeof Bun.Transpiler>[0];
   const transpilers = {
     ts: new Bun.Transpiler({ loader: "ts", macro: false } as unknown as TranspilerOptions),
@@ -216,12 +216,17 @@ describe("#2932: no source reader spells the skill folder's path outside the res
       "constant.ts": `const SHIP = "ship";\nconst p = join(home, ".claude", "skills", SHIP, "x.json");`,
       "split.ts": `const SKILLS = "skills";\nconst p = join(home, ".claude", SKILLS, "ship-issue", "x.json");`,
       "template.ts": "const NAME = 'ship';\nconst p = `${home}/.claude/skills/${NAME}/x.json`;",
+      // Review of #2952: the folder ending one literal and the skill opening the next.
+      "nested.ts": `const p = join(home, ".claude/skills", "ship", "x.json");`,
+      "nested-file.ts": `const p = join(home, ".claude/skills", "ship/x.json");`,
+      // Only the pair rule can see this one: the skill's name is in a constant.
+      "nested-constant.ts": `const S = "ship";\nconst p = join(home, ".claude/skills", S, "x.json");`,
       // Controls: the skill's name with no skills folder, and another skill's folder.
       "gate-name.ts": `writeGateResult(sf, "ship", 1, 0, 0, results);`,
       "other-skill.ts": `const p = join(home, ".claude", "skills", "board", "x.json");`,
     };
     const hits = spellings(Object.keys(planted), f => planted[f]!);
-    expect(hits.map(h => h.split(":")[0]).sort()).toEqual(["constant.ts", "lines.ts", "parts.ts", "single.ts", "split.ts", "template.ts", "whole.ts", "workflow.js"]);
+    expect(hits.map(h => h.split(":")[0]).sort()).toEqual(["constant.ts", "lines.ts", "nested-constant.ts", "nested-file.ts", "nested.ts", "parts.ts", "single.ts", "split.ts", "template.ts", "whole.ts", "workflow.js"]);
   });
 
   test("a file that cannot be parsed fails the scan by name, rather than being read as clean", () => {

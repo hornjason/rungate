@@ -236,7 +236,7 @@ If Discovery returns >6 ACs, the issue MUST be decomposed before implementation:
 2. Group ACs by spec phase (≤6 per group)
 3. Create sub-issues — one per phase, each referencing the parent issue and spec section
 4. Rescope the parent issue to Phase 1 only
-5. Continue shipping Phase 1; subsequent phases ship as separate `/ship N` runs
+5. Continue shipping Phase 1; subsequent phases ship as separate `Skill("ship-issue")` runs, one per phase
 
 This is not a judgment call. If AC count > 6, decomposition is mandatory and automatic.
 
@@ -255,7 +255,7 @@ This is not a judgment call. If AC count > 6, decomposition is mandatory and aut
 
 ---
 
-## 4. EXECUTION — `Skill("ship")` BUILD step
+## 4. EXECUTION — `Skill("ship-issue")` BUILD step
 
 **Purpose:** Build the thing. TDD. Deploy.
 
@@ -1329,7 +1329,7 @@ instead of the text.
 binding is executed; the WIRING is asserted by reading ship.js's source. A
 mutation that changes `if (coverageGaps.length > 0)` to `if (false)` leaves
 every source-text assertion satisfied and is not caught. Closing that needs the
-negative-control run — a planted uncovered issue driven through `Skill("ship")`
+negative-control run — a planted uncovered issue driven through `Skill("ship-issue")`
 — which is the next item and not this one.
 
 ---
@@ -4665,7 +4665,7 @@ FEEDBACK    → ratings.jsonl + memories + docs + closed issue
 | RESEARCH | `Skill("Research")` / Context7 MCP | Only when unknowns exist |
 | PLANNING | `Skill("grill-with-docs")` | M+ size |
 | PLANNING | `Skill("to-prd")` → `Skill("to-issues")` | L size |
-| EXECUTION | `Skill("ship")` → `Skill("tdd")` → `Skill("simplify")` → `npx fallow` | Always |
+| EXECUTION | `Skill("ship-issue")` → `Skill("tdd")` → `Skill("simplify")` → `npx fallow` | Always |
 | VERIFICATION | verify workflow + Quinn + Rook | Always — Rook every cycle, Quinn when there is a UI |
 | ITERATION | (built into this standard) | When verification fails |
 | FEEDBACK | `Skill("doc-hygiene")` | Always — docs must match what shipped |
@@ -9327,7 +9327,7 @@ arguments UNQUOTED into shell command text inside agent prompts — `repo` at 6
 sites, `issueRepo` at 11, `harnessRoot` at 44 and `projectRoot` at 33 — and
 the only check any of them had was that `repo` was present.
 
-Not a live exploit, and this section does not claim one: `Skill("ship")`
+Not a live exploit, and this section does not claim one: `Skill("ship-issue")`
 derives the slug from `git remote get-url origin`. What makes it worth fixing
 is that **the same file already does the opposite thing one function away.**
 `isSafeBranchName` runs before a branch reaches a `git push`, and
