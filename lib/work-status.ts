@@ -12,6 +12,7 @@ import type { LaneReading } from "./board-lane-health";
 import type { NetGrowthBasis } from "./issue-filing-gate";
 import { readyOccupancy, undispatchableRemedy } from "./board-ready-rule";
 import { ladderViolations, nextStage, retrosOwed, type ItemScope, type Stage } from "./stage-ladder";
+import { UNREADABLE, successThing } from "./success-doc";
 
 /**
  * Is this issue something anybody may pick up right now?
@@ -369,6 +370,8 @@ export interface LadderRow {
 
 export type LadderReport =
   | { readonly kind: "UNMEASURED"; readonly why: string }
+  /** #2925, SC-2822: the document holds no `stages`, so there is no ladder to read. */
+  | { readonly kind: "UNWRITTEN"; readonly why: string }
   | {
       readonly kind: "READ";
       /** The stage id `nextStage` names, or `null` when every stage is complete. */
@@ -403,6 +406,33 @@ export type LadderReport =
  * mutation of either leaves the other holding every case up, and neither
  * reads as dead.
  */
+/**
+ * A key of `doc` that is `want` misspelled: one edit from it, ignoring case,
+ * where an edit is an insertion, a deletion, a substitution or a swap of two
+ * neighbours (`Stages`, `stage`, `stagse`, `stges` for `stages`). `notTypos`
+ * are real keys one edit away (`goals` for `goal`). The two readers that treat
+ * an absent key as "not written" ask this first, so a corrupt document is
+ * never read as an empty one (review of #2948, rounds 1 and 2). A key two
+ * edits away, such as `status`, is a different key.
+ */
+function misspelledKey(doc: object, want: string, notTypos: readonly string[] = []): string | undefined {
+  return Object.keys(doc).find(k => k !== want && !notTypos.includes(k) && oneEditApart(k.toLowerCase(), want));
+}
+
+/** Optimal string alignment distance of at most 1 (an adjacent swap counts as one edit). */
+function oneEditApart(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  if (a.length === b.length) {
+    if (a.slice(i + 1) === b.slice(i + 1)) return true; // one substitution
+    return a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2); // one swap
+  }
+  const [longer, shorter] = a.length > b.length ? [a, b] : [b, a];
+  return longer.slice(i + 1) === shorter.slice(i); // one insertion or deletion
+}
+
 export function ladderReport(source: string | null, where: string): LadderReport {
   if (source === null) {
     return { kind: "UNMEASURED", why: `${where} could not be read, so the plan was not consulted` };
@@ -416,6 +446,19 @@ export function ladderReport(source: string | null, where: string): LadderReport
       why: `${where} is not valid JSON (${e instanceof Error ? e.message : String(e)})`,
     };
   }
+  // #2925, SC-2822: a project-state.json with no `stages` key has no ladder
+  // written, which is a reading, not a failure to take one. The scaffold
+  // writes a consumer's file without one, and that read as UNMEASURED for the
+  // whole plan. A `stages` key that is present still goes to the validator.
+  if (doc !== null && typeof doc === "object" && !Array.isArray(doc) && !("stages" in doc)) {
+    // A key that is "stages" in another case or the singular is a ladder
+    // written under the wrong name, not an unwritten one (review of #2948).
+    const typo = misspelledKey(doc, "stages");
+    if (typo !== undefined) {
+      return { kind: "UNMEASURED", why: `${where} has no "stages" but has "${typo}"; a misspelled ladder is not an unwritten one` };
+    }
+    return { kind: "UNWRITTEN", why: `${where} holds no "stages", so there is no ladder to read` };
+  }
   const violations = ladderViolations(doc);
   if (violations.length > 0) {
     return {
@@ -426,6 +469,12 @@ export function ladderReport(source: string | null, where: string): LadderReport
   // `ladderViolations` returning empty is what establishes the shape. The
   // cast is the assertion it already made, not a second opinion about it.
   const stages = (doc as { stages: Stage[] }).stages;
+  // Review of #2948, round 2: a well-formed plan with `"stages": []` has no
+  // ladder written either. Read as READ it printed "every stage is complete",
+  // and `stageIsComplete` calls a stage with no items NOT complete.
+  if (stages.length === 0) {
+    return { kind: "UNWRITTEN", why: `${where} lists no stages, so there is no ladder to read` };
+  }
 
   const open: LadderRow[] = [];
   for (const stage of stages) {
@@ -451,6 +500,73 @@ export function ladderReport(source: string | null, where: string): LadderReport
   };
 }
 
+/** #2925, SC-2822: how both plan views say a project has no ladder written. */
+export const NO_STAGES_WRITTEN = "no stages written";
+
+/**
+ * The goal the plan views show, and where it came from (#2925, SC-2822).
+ *
+ * `project-state.json`'s `goal.statement` when the document has a `goal`.
+ * When it has none, SUCCESS.md's `## The thing` (`successThing`), which every
+ * consumer already writes with `create-success`: ADR-030 decision 6, one goal
+ * source per project. A goal key that is present is never replaced by
+ * SUCCESS.md, so a malformed one stays UNMEASURED, and a plan the ladder
+ * refuses gives the ladder's reason, as it did before.
+ */
+export type GoalReading =
+  | { readonly kind: "READ"; readonly statement: string; readonly from: "project-state.json" | "SUCCESS.md" }
+  | { readonly kind: "UNMEASURED"; readonly why: string };
+
+export function goalReading(source: string | null, where: string, success: string | null): GoalReading {
+  // The ladder first (review of #2948): a plan it refuses gives its reason
+  // for the goal too, whatever SUCCESS.md says, as it did before #2925.
+  const ladder = ladderReport(source, where);
+  if (ladder.kind === "UNMEASURED") return { kind: "UNMEASURED", why: ladder.why };
+  // READ or UNWRITTEN: the document parsed, as an object. A READ ladder
+  // always has a goal (`ladderViolations`), so SUCCESS.md is read only for a
+  // document with no ladder written.
+  const doc = JSON.parse(source as string) as Record<string, unknown>;
+  if (!("goal" in doc)) {
+    const typo = misspelledKey(doc, "goal", ["goals"]);
+    if (typo !== undefined) {
+      return { kind: "UNMEASURED", why: `${where} has no "goal" but has "${typo}"; a misspelled goal is not a missing one` };
+    }
+    const lead = `${where} has no goal, so it is read from SUCCESS.md's "## The thing"`;
+    if (success === null) return { kind: "UNMEASURED", why: `${lead}, and there is no SUCCESS.md` };
+    if (success === UNREADABLE) return { kind: "UNMEASURED", why: `${lead}, and SUCCESS.md could not be read` };
+    const thing = successThing(success);
+    if (thing === null) {
+      return { kind: "UNMEASURED", why: `${lead}, and that section is absent or still the template's placeholder` };
+    }
+    return { kind: "READ", statement: thing, from: "SUCCESS.md" };
+  }
+  // Read on a READ ladder, which `ladderViolations` checked, and on an
+  // UNWRITTEN one, which nothing else checked.
+  const goal = doc.goal;
+  const statement =
+    goal !== null && typeof goal === "object" && typeof (goal as { statement?: unknown }).statement === "string"
+      ? ((goal as { statement: string }).statement).trim()
+      : "";
+  if (statement === "") return { kind: "UNMEASURED", why: `${where}'s goal has no statement` };
+  return { kind: "READ", statement, from: "project-state.json" };
+}
+
+/**
+ * The goal as one string: the statement, and where it came from when that was
+ * SUCCESS.md. A goal from project-state.json prints as it always did.
+ */
+export function goalText(r: Extract<GoalReading, { kind: "READ" }>): string {
+  return r.from === "SUCCESS.md"
+    ? `${r.statement} (from SUCCESS.md's "## The thing": project-state.json has no goal)`
+    : r.statement;
+}
+
+/** The goal line of `work-status`'s plan section. A printer; `goalReading` decides. */
+export function goalLines(r: GoalReading): string[] {
+  const clean = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  return r.kind === "UNMEASURED" ? [`  Goal: UNMEASURED — ${clean(r.why)}`] : [`  Goal: ${clean(goalText(r))}`];
+}
+
 /**
  * The plan section of the report, as lines — #1984.
  *
@@ -467,6 +583,7 @@ export function ladderLines(r: LadderReport): string[] {
   // an item could otherwise redraw the rows above it (security review, #2014).
   const clean = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
   if (r.kind === "UNMEASURED") return [`  UNMEASURED — ${clean(r.why)}`];
+  if (r.kind === "UNWRITTEN") return [`  ${NO_STAGES_WRITTEN} — ${clean(r.why)}`];
   const out: string[] = [];
   out.push(`  Next stage: ${r.next ?? "none — every stage is complete"}`);
   if (r.blocked !== null) out.push(`  Blocked: ${clean(r.blocked)}`);

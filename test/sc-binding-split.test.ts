@@ -575,7 +575,12 @@ const UNCLAIMED_RATCHET = 150;
 // reading of the CLI's printed report that no registered pattern expresses;
 // the CRC-B16 describe in test/ai-review-model-alias.test.ts names it
 // (2026-11-27).
-const CLAIMED_UNBINDABLE = 221;
+// 222: SC-2822 (#2925) ticked by `sync-sc-status --only SC-2822` — the plan
+// views read the goal from SUCCESS.md when project-state.json has none, and
+// read "no stages written" when it holds no ladder, a reading of two reports
+// that no registered pattern expresses; the SC-2822 describes in
+// test/work-status.test.ts and test/status-view.test.ts name it (2026-11-27).
+const CLAIMED_UNBINDABLE = 222;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

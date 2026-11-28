@@ -44,7 +44,8 @@ import { nextCursor } from "../lib/graphql-cursor";
 import { readMilestoneTitle } from "../lib/milestone-title";
 import { parseCriteria } from "../lib/spec-evidence";
 import { PHASE_VALUE, parsePlacementRows } from "../lib/spec-placement";
-import { ladderReport } from "../lib/work-status";
+import { NO_STAGES_WRITTEN, goalReading, goalText, ladderReport } from "../lib/work-status";
+import { readSuccessDoc } from "../lib/success-doc";
 
 /** The marker that identifies the pinned issue this script owns. */
 export const STATUS_MARKER = "<!-- rungate:status-view -->";
@@ -166,16 +167,22 @@ const unmeasured = <T>(why: string): Reading<T> => ({ kind: "UNMEASURED", why })
  * `work-status` also uses, so the two reports cannot disagree about which
  * stage is next.
  */
-export function planLines(source: string | null, where: string): { goal: Reading<string>; stages: Reading<StageLine[]> } {
+export function planLines(
+  source: string | null,
+  where: string,
+  success: string | null,
+): { goal: Reading<string>; stages: Reading<StageLine[]> } {
+  // #2925, SC-2822: the goal is `goalReading`'s, the one decider `work-status`
+  // also prints, so a plan with no goal shows SUCCESS.md's and says so.
+  const g = goalReading(source, where, success);
+  const goal: Reading<string> = g.kind === "READ" ? read(goalText(g)) : unmeasured(g.why);
   const report = ladderReport(source, where);
-  if (report.kind === "UNMEASURED") return { goal: unmeasured(report.why), stages: unmeasured(report.why) };
-  // `ladderViolations` (inside `ladderReport`) has already refused a plan
-  // without a goal statement, so this reads it rather than re-checking it.
+  if (report.kind === "UNMEASURED") return { goal, stages: unmeasured(report.why) };
+  // No `stages` key: read, and empty. The finish line says so in words.
+  if (report.kind === "UNWRITTEN") return { goal, stages: read([]) };
   const doc = JSON.parse(source as string) as {
-    goal: { statement: string };
     stages: { id: string; name: string; goal?: unknown; items: { id: string; done: boolean }[] }[];
   };
-  const goal = read(doc.goal.statement.trim());
   const stages = doc.stages.map(s => {
     const open = s.items.filter(i => !i.done).map(i => i.id);
     const state: StageLine["state"] = open.length === 0 ? "done" : s.id === report.next ? "next" : "later";
@@ -450,11 +457,15 @@ function render(v: StatusView, f: Fmt, markdown: boolean): string {
 
   out.push(
     ...section(f, "The finish line", v.stages, stages =>
-      stages.map(s => {
-        const left = s.open.length === 0 ? "" : ` — ${s.open.length} of ${s.total} left: ${f.text(s.open.join(", "))}`;
-        const id = markdown ? `**${f.text(s.id)}**` : s.id;
-        return f.item(`${STAGE_MARK[s.state]} ${id} ${f.text(s.name)}: ${f.text(s.meaning)}${left}`);
-      }),
+      stages.length === 0
+        ? // A missing key and an empty list both get here, so the line says what
+          // is true of both (review of #2948).
+          [f.item(`${NO_STAGES_WRITTEN} — project-state.json lists no stages`)]
+        : stages.map(s => {
+            const left = s.open.length === 0 ? "" : ` — ${s.open.length} of ${s.total} left: ${f.text(s.open.join(", "))}`;
+            const id = markdown ? `**${f.text(s.id)}**` : s.id;
+            return f.item(`${STAGE_MARK[s.state]} ${id} ${f.text(s.name)}: ${f.text(s.meaning)}${left}`);
+          }),
     ),
   );
 
@@ -597,7 +608,7 @@ export function planFor(root: string, repo: string, gh: Gh = liveGh): ReturnType
     const b = canonical(repo);
     if (a.kind === "READ" && b.kind === "READ" && a.value === b.value) {
       const planPath = join(root, "project-state.json");
-      return planLines(existsSync(planPath) ? readFileSync(planPath, "utf-8") : null, "project-state.json");
+      return planLines(existsSync(planPath) ? readFileSync(planPath, "utf-8") : null, "project-state.json", readSuccessDoc(root));
     }
     const unresolved = [a, b].find(r => r.kind === "UNMEASURED");
     const why =
@@ -609,7 +620,7 @@ export function planFor(root: string, repo: string, gh: Gh = liveGh): ReturnType
     return { goal: unmeasured(why), stages: unmeasured(why) };
   }
   const planPath = join(root, "project-state.json");
-  return planLines(existsSync(planPath) ? readFileSync(planPath, "utf-8") : null, "project-state.json");
+  return planLines(existsSync(planPath) ? readFileSync(planPath, "utf-8") : null, "project-state.json", readSuccessDoc(root));
 }
 
 export function gather(

@@ -130,6 +130,40 @@ export function unfilled(text: string): boolean {
   return t.length < MIN_MEANINGFUL || UNFILLED.test(t);
 }
 
+/**
+ * #2925, SC-2822: the first paragraph of `## The thing`, on one line, or null
+ * when the section is absent, empty, unfilled, or still carries the template's
+ * placeholder. The plan views show it as the goal of a project whose
+ * project-state.json has none (ADR-030 decision 6). The first paragraph only:
+ * the template asks for one sentence there, and what follows elaborates it.
+ */
+export function successThing(text: string): string | null {
+  const lines = text.split(/\r?\n/);
+  // Fenced lines are skipped, as `parseSuccessDoc` skips them (#2130): an
+  // example section inside a code block is not this project's (review of #2948).
+  const { roles } = readFences(lines);
+  const prose = (i: number) => roles[i] !== "fence" && roles[i] !== "code";
+  const at = lines.findIndex((l, i) => prose(i) && /^##(?!#)\s+The thing\s*$/.test(l));
+  if (at < 0) return null;
+  const paragraph: string[] = [];
+  for (let i = at + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!prose(i)) {
+      if (paragraph.length > 0) break;
+      continue;
+    }
+    if (/^#{1,6}\s/.test(line)) break;
+    if (line.includes(PLACEHOLDER_MARKER)) return null;
+    if (line.trim() === "") {
+      if (paragraph.length > 0) break;
+      continue;
+    }
+    paragraph.push(line.trim());
+  }
+  const thing = paragraph.join(" ");
+  return unfilled(thing) ? null : thing;
+}
+
 export interface SuccessClaim {
   number: number;
   statement: string;

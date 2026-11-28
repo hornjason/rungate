@@ -21,6 +21,7 @@ import {
   otherFamilyLines,
   phaseBlurb,
   phaseLines,
+  planFor,
   planLines,
   plain,
   publish,
@@ -73,7 +74,7 @@ describe("#2097: the plan section reads project-state.json through ladderReport"
   test("the live plan: every stage's state agrees with its items and with ladderReport's next stage", () => {
     const text = readFileSync(join(ROOT, "project-state.json"), "utf-8");
     const doc = JSON.parse(text);
-    const lines = planLines(text, "project-state.json");
+    const lines = planLines(text, "project-state.json", null);
     expect(lines.goal).toEqual(read(doc.goal.statement.trim()));
     if (lines.stages.kind !== "READ") throw new Error(lines.stages.why);
     expect(lines.stages.value.map(s => s.id)).toEqual(doc.stages.map((s: any) => s.id));
@@ -91,11 +92,82 @@ describe("#2097: the plan section reads project-state.json through ladderReport"
       [null, "could not be read"],
       ["{ not json", "not valid JSON"],
     ] as const) {
-      const lines = planLines(source, "project-state.json");
+      const lines = planLines(source, "project-state.json", null);
       expect(lines.goal.kind).toBe("UNMEASURED");
       expect(lines.stages.kind).toBe("UNMEASURED");
       expect(lines.stages.kind === "UNMEASURED" && lines.stages.why).toContain(why);
     }
+  });
+});
+
+/**
+ * SC-2822 (#2925, ADR-030 decision 6): the status view of a consumer whose
+ * project-state.json is the scaffold's, with no goal and no stages.
+ */
+describe("SC-2822: the status view shows SUCCESS.md's goal and no stages written for a scaffolded plan", () => {
+  const SCAFFOLDED = JSON.stringify({ updated: "2026-11-27", priorities: [], notes: [], phases: [], sessions: [] });
+  const THING = "Every account brief is built from live data, and a stale one says so.";
+  const SUCCESS = `# What success looks like\n\n## The thing\n\n${THING}\n\n## The claims\n`;
+
+  /** The lines of one section of the plain-text view, up to the next heading. */
+  const sectionOf = (text: string, title: string): string => {
+    const lines = text.split("\n");
+    const at = lines.findIndex(l => l.includes(title));
+    if (at < 0) throw new Error(`no ${title} section in:\n${text}`);
+    // The next heading is the line above the next underline (`renderText`'s `─` rule).
+    const end = lines.findIndex((_, i) => i > at + 1 && /^─+$/.test(lines[i + 1] ?? ""));
+    return lines.slice(at, end < 0 ? undefined : end).join("\n");
+  };
+
+  test("planLines: the goal is SUCCESS.md's and says so, and the finish line is read and empty", () => {
+    const lines = planLines(SCAFFOLDED, "project-state.json", SUCCESS);
+    expect(lines.goal.kind === "READ" && lines.goal.value).toContain(THING);
+    expect(lines.goal.kind === "READ" && lines.goal.value).toContain(`SUCCESS.md's "## The thing"`);
+    expect(lines.stages).toEqual(read([]));
+  });
+
+  test("the rendered view says no stages written under the finish line, and nothing in either section is UNMEASURED", () => {
+    const lines = planLines(SCAFFOLDED, "project-state.json", SUCCESS);
+    const text = renderText(view({ goal: lines.goal, stages: lines.stages }));
+    const finish = sectionOf(text, "The finish line");
+    expect(finish).toContain("no stages written");
+    expect(finish).not.toContain("UNMEASURED");
+    const goal = sectionOf(text, "The goal");
+    expect(goal).toContain(THING);
+    expect(goal).not.toContain("UNMEASURED");
+  });
+
+  test("a missing stages key and an empty stages list get the same finish line, and it is true of both", () => {
+    // Review of #2948: the line once said the key was absent for `"stages": []` too.
+    const empty = JSON.stringify({ goal: { statement: "s", verify: "true" }, goals: [{ id: 1, goal: "g", doneWhen: "d" }], stages: [] });
+    const finish = (source: string) => {
+      const lines = planLines(source, "project-state.json", SUCCESS);
+      return sectionOf(renderText(view({ goal: lines.goal, stages: lines.stages })), "The finish line");
+    };
+    expect(finish(empty)).toBe(finish(SCAFFOLDED));
+    expect(finish(empty)).toContain("no stages written — project-state.json lists no stages");
+  });
+
+  test("planFor reads SUCCESS.md from the project root it is given", () => {
+    const root = mkdtempSync(join(tmpdir(), "status-view-sc2822-"));
+    try {
+      writeFileSync(join(root, "project-state.json"), SCAFFOLDED);
+      const without = planFor(root, "o/r");
+      expect(without.goal.kind === "UNMEASURED" && without.goal.why).toContain("there is no SUCCESS.md");
+      writeFileSync(join(root, "SUCCESS.md"), SUCCESS);
+      const withIt = planFor(root, "o/r");
+      expect(withIt.goal.kind === "READ" && withIt.goal.value).toContain(THING);
+      expect(withIt.stages).toEqual(read([]));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("rungate's own plan renders as before: the goal is project-state.json's statement, with no SUCCESS.md note", () => {
+    const text = readFileSync(join(ROOT, "project-state.json"), "utf-8");
+    const lines = planLines(text, "project-state.json", readFileSync(join(ROOT, "SUCCESS.md"), "utf-8"));
+    expect(lines.goal).toEqual(read(JSON.parse(text).goal.statement.trim()));
+    expect(lines.stages.kind).toBe("READ");
   });
 });
 
