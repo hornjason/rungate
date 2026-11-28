@@ -68,7 +68,7 @@ import {
   isSessionRecordOnly,
   linkedIssuesInThisRepo,
 } from "../lib/closing-reference-audit";
-import { proposedWithPlan } from "../lib/issue-decomposition";
+import { adrStatusRefusal, proposedWithPlan } from "../lib/issue-decomposition";
 import { ADR_TEMPLATE_PATH } from "../lib/scaffold/process-files";
 
 /** The one exit code every refusal travels through. */
@@ -271,16 +271,31 @@ async function main(): Promise<void> {
     }
     changedAdrs.add(file.path);
   }
-  // Only an ADR in the checkout that is proposed with a plan can be refused,
-  // so those are read first, and the file list is asked only about them
-  // (review of #2945: a pull request of 101 files with no such ADR was held up).
+  // Only an ADR in the checkout that is proposed with a plan, or whose status
+  // no reader knows (#2955), can be refused, so those are read first, and the
+  // file list is asked only about them (review of #2945: a pull request of
+  // 101 files with no such ADR was held up).
   const adrDir = join(process.cwd(), "docs", "adr");
+  const unreadStatus = new Map<string, string>();
   const candidates = (existsSync(adrDir) ? readdirSync(adrDir) : [])
     .map(name => `docs/adr/${name}`)
     .filter(p => ADR_PATH.test(p) && p !== ADR_TEMPLATE_PATH)
-    .filter(p => proposedWithPlan(readFileSync(join(process.cwd(), p), "utf-8")))
+    .filter(p => {
+      const text = readFileSync(join(process.cwd(), p), "utf-8");
+      const why = adrStatusRefusal(text);
+      if (why !== null) unreadStatus.set(p, why);
+      return why !== null || proposedWithPlan(text);
+    })
     .sort();
-  const proposed = candidates.filter(p => changedAdrs.has(p));
+  const unknown = candidates.filter(p => changedAdrs.has(p) && unreadStatus.has(p));
+  if (unknown.length > 0) {
+    refuse(
+      `PR #${prNumber} changes ` +
+        unknown.map(p => `\`${p}\`, which ${unreadStatus.get(p)}`).join("; and ") +
+        `. Write one of the known statuses in its frontmatter.`,
+    );
+  }
+  const proposed = candidates.filter(p => changedAdrs.has(p) && !unreadStatus.has(p));
   // GitHub's file list is cut at 100. A candidate outside a list that was cut,
   // or whose total was never sent, may be one this pull request changes:
   // UNMEASURED, as for issues and commits.
@@ -292,7 +307,7 @@ async function main(): Promise<void> {
         ? "the payload carries no filesTotal number, so whether the changed-file list was cut short was never read"
         : `this pull request changes ${filesTotal} file(s) and only ${changedPaths.length} were fetched`) +
         `, so whether it changes ${unread.map(p => `\`${p}\``).join(", ")}, an ADR that carries a plan and still says ` +
-        `\`status: proposed\`, was never read. UNMEASURED, not clean.`,
+        `\`status: proposed\` or whose status no reader knows, was never read. UNMEASURED, not clean.`,
     );
   }
   if (proposed.length > 0) {

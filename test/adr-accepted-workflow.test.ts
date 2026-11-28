@@ -293,6 +293,29 @@ describe("SC-2738: plan-issues --accepted-since lists what a push accepted", () 
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("#2955: an ADR whose status none of the readers knows REFUSES, naming it and the value, and is never listed", async () => {
+    // Read as "not accepted", a misspelled `accepted` placed nothing and said
+    // nothing: the plan was simply never filed, on a green run.
+    const { dir, git } = repo();
+    try {
+      writeFileSync(join(dir, "docs/adr/ADR-099-typo.md"), adr("proposed"));
+      git("add", "-A");
+      git("commit", "-q", "-m", "before");
+      const before = git("rev-parse", "HEAD");
+      writeFileSync(join(dir, "docs/adr/ADR-099-typo.md"), adr("acepted"));
+      git("add", "-A");
+      git("commit", "-q", "-m", "typo");
+      const r = await since(dir, before);
+      expect(r.code, r.err).toBe(REFUSAL_EXIT);
+      expect(r.out).not.toContain("ADR-099-typo.md");
+      expect(r.err).toContain("UNMEASURED");
+      expect(r.err).toContain("docs/adr/ADR-099-typo.md");
+      expect(r.err).toContain(`"acepted"`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 /** Scaffold a throwaway consumer with `board` in its config; hand back the generated adr-accepted.yml. */

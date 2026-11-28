@@ -973,4 +973,41 @@ describe("SC-2820: a pull request carrying a proposed ADR with a plan is refused
     const r = run(SCRIPT, { [RAW]: JSON.stringify({ ...base(CODE_ONLY), filesTotal: 1 }) }, THIS_REPO, ON, root);
     expect(r.code, r.err).toBe(0);
   });
+
+  // #2955: one reading for every reader. A table indented by up to three
+  // spaces is a table to GFM, and a status none of the readers knows is
+  // UNMEASURED, never "not proposed".
+  test("#2955: a proposed ADR whose plan table is indented by one to three spaces is refused like a flush one", () => {
+    for (const n of [1, 3]) {
+      const indented = TABLE.split("\n").map(l => (l === "" ? l : " ".repeat(n) + l)).join("\n");
+      const root = checkout({ "ADR-901-a-fixture.md": adr("proposed").replace(TABLE, indented) });
+      const r = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+      expect(r.code, `${n} spaces: ${r.err}`).toBe(REFUSE_EXIT);
+      expect(r.err).toContain(`${ADR}\`, an ADR that carries a Decomposition`);
+    }
+  });
+
+  test("#2955: a changed ADR whose status is none of the known ones is UNMEASURED, naming the value, and the mutant does not refuse", () => {
+    for (const [status, table] of [["acepted", true], ["draft", false]] as const) {
+      const root = checkout({ "ADR-901-a-fixture.md": adr(status, table) });
+      const real = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+      expect(real.code, `${status}: ${real.err}${real.out}`).toBe(REFUSE_EXIT);
+      expect(real.err).toContain("UNMEASURED");
+      expect(real.err).toContain(`"${status}"`);
+      expect(real.err).toContain(ADR);
+      const mutant = run(buildMutant(), payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+      expect(mutant.code, "the mutant should not refuse").toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain(`declares status "${status}"`);
+    }
+  });
+
+  test("#2955: an unreadable status the pull request does not change is not refused, unless a list cut short may hide it", () => {
+    const root = checkout({ "ADR-901-a-fixture.md": adr("acepted") });
+    const complete = run(SCRIPT, { [RAW]: JSON.stringify({ ...base(CODE_ONLY), filesTotal: 1 }) }, THIS_REPO, ON, root);
+    expect(complete.code, complete.err).toBe(0);
+    const cut = run(SCRIPT, { [RAW]: JSON.stringify({ ...base(CODE_ONLY), filesTotal: 101 }) }, THIS_REPO, ON, root);
+    expect(cut.code, cut.err).toBe(REFUSE_EXIT);
+    expect(cut.err).toContain("UNMEASURED");
+    expect(cut.err).toContain(ADR);
+  });
 });

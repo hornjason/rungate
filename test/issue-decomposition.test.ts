@@ -11,20 +11,25 @@
  */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join, relative } from "path";
 import { REFUSAL_EXIT, main as planIssuesMain } from "../scripts/plan-issues";
 import type { DecomposeGitHub } from "../scripts/plan-issues";
 import {
+  ADR_STATUSES,
   MAX_FILES,
   MIN_OUTCOME,
   type DecompositionRow,
   type LiveTracker,
   PLAN_BOT_LOGIN,
   PLANNED_ISSUE_FOOTER,
+  adrPlacement,
+  adrStatus,
   closedIssueCounts,
   decomposedBody,
+  hasDecompositionTable,
+  newlyAccepted,
   parseDecompositionPlan,
   planDecomposition,
   proposedWithPlan,
@@ -1814,4 +1819,87 @@ describe("#2953: a closed issue the plan filed counts as finished work, and noth
   // The agreement with lib/github.ts's WORKFLOW_BOT_LOGIN is asserted in
   // test/plan-issues.test.ts: the SC-2602 battery copies THIS file and
   // rewrites only its three relative imports.
+});
+
+/**
+ * #2955: an ADR's plan table and its status are read one way by every reader.
+ * GFM renders a table row indented by up to three spaces and reads four, or a
+ * tab, as a code block. So the merge refusal, the parser, the growth check and
+ * the table test all find a table indented by one to three spaces, and none
+ * finds one indented by four. A status outside the known set is UNMEASURED and
+ * keeps its value: never "not proposed", "not accepted" or "no status".
+ */
+describe("#2955: every reader finds the same Decomposition table and reads the same status", () => {
+  const ROW = "| SC-9955 | An indented table still places its one row | lib/x.ts | — | — |";
+  const table = (indent: string, rows = [ROW]) => [...HEAD, ...rows].map(l => indent + l).join("\n");
+  const doc = (status: string, body: string) => `---\nstatus: ${status}\n---\n\n# ADR\n\n## Decomposition\n\n${body}\n`;
+
+  test("a table indented by one to three spaces is refused while proposed, parsed, and placed on acceptance", () => {
+    for (const n of [0, 1, 2, 3]) {
+      const t = table(" ".repeat(n));
+      expect(proposedWithPlan(doc("proposed", t)), `${n} spaces`).toBe(true);
+      expect(hasDecompositionTable(doc("accepted", t)), `${n} spaces`).toBe(true);
+      const parsed = parseDecompositionPlan(doc("accepted", t));
+      expect(parsed.reading, `${n} spaces: ${parsed.unmeasuredReasons.join("; ")}`).toBe("MEASURED");
+      expect(parsed.rows.map(r => r.criterion), `${n} spaces`).toEqual(["SC-9955"]);
+      const placed = adrPlacement(doc("proposed", t), doc("accepted", t));
+      expect(placed.kind, `${n} spaces`).toBe("accepted");
+      expect(placed.rows.map(r => r.criterion), `${n} spaces`).toEqual(["SC-9955"]);
+      // The growth check reads the same table: an indented row added after acceptance is placed.
+      const grew = adrPlacement(doc("accepted", table(" ".repeat(n), [])), doc("accepted", t));
+      expect(grew.kind, `${n} spaces`).toBe("grew");
+      expect(grew.rows.map(r => r.criterion), `${n} spaces`).toEqual(["SC-9955"]);
+    }
+  });
+
+  test("four spaces or a tab is a code block: no reader finds a table", () => {
+    for (const indent of ["    ", "\t"]) {
+      const t = table(indent);
+      expect(proposedWithPlan(doc("proposed", t)), JSON.stringify(indent)).toBe(false);
+      expect(hasDecompositionTable(doc("accepted", t)), JSON.stringify(indent)).toBe(false);
+      expect(parseDecompositionPlan(doc("accepted", t)).rows).toEqual([]);
+      expect(adrPlacement(doc("proposed", t), doc("accepted", t)).rows).toEqual([]);
+    }
+  });
+
+  test("each known status reads as itself, in any YAML spelling, and the set is exactly five", () => {
+    expect([...ADR_STATUSES]).toEqual(["proposed", "accepted", "superseded", "deprecated", "rejected"]);
+    for (const s of ADR_STATUSES) {
+      expect(adrStatus(doc(s, "x")), s).toBe(s);
+      expect(adrStatus(doc(`"${s.toUpperCase()}"  # a comment`, "x")), s).toBe(s);
+    }
+    expect(adrStatus("# no frontmatter\n\nstatus: accepted\n"), "a body line is not a status").toBeNull();
+  });
+
+  test("a status outside the known set is UNMEASURED, keeps its value, and is neither proposed nor accepted", () => {
+    for (const value of ["acepted", "accepted, revised", "draft", '"proposed # not a comment"', ""]) {
+      const s = adrStatus(doc(value, table("")));
+      const read = value.startsWith('"') ? value.slice(1, -1) : value;
+      expect(s, JSON.stringify(value)).toEqual({ unmeasured: read });
+      expect(proposedWithPlan(doc(value, table(""))), JSON.stringify(value)).toBe(false);
+      expect(newlyAccepted(doc("proposed", table("")), doc(value, table(""))), JSON.stringify(value)).toBe(false);
+    }
+  });
+
+  test("an ADR whose status is UNMEASURED places nothing and says why, naming the value", () => {
+    const p = adrPlacement(doc("proposed", table("")), doc("acepted", table("")));
+    expect(p.kind).toBe("unmeasured");
+    expect(p.rows).toEqual([]);
+    expect(p.kind === "unmeasured" ? p.why : "").toContain('"acepted"');
+    // An edit to an ADR whose status was already unreadable is unmeasured too.
+    expect(adrPlacement(doc("acepted", table("")), doc("acepted", table(""))).kind).toBe("unmeasured");
+    // Control: an unreadable status BEFORE the change does not stop this change accepting it.
+    expect(adrPlacement(doc("acepted", table("")), doc("accepted", table(""))).kind).toBe("accepted");
+  });
+
+  test("every ADR in this repository declares a known status, so none is refused by this change", () => {
+    const dir = join(import.meta.dir, "..", "docs", "adr");
+    const names = readdirSync(dir).filter(n => /^ADR-.*\.md$/.test(n));
+    expect(names.length, "no ADRs listed, so this case measured nothing").toBeGreaterThan(20);
+    const unread = names.filter(n => {
+      const s = adrStatus(readFileSync(join(dir, n), "utf-8"));
+      return s === null || typeof s === "object";
+    });
+    expect(unread).toEqual([]);
+  });
 });
