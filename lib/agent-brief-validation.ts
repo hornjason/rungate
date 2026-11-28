@@ -17,6 +17,7 @@ import {
   statSync,
 } from 'fs';
 import { join } from 'path';
+import { shipSkillPath } from './ship-skill-folder';
 
 // --- Interfaces ---
 
@@ -219,21 +220,45 @@ function findSizingFromCheckpoint(workDir: string): string | null {
   } catch { return null; }
 }
 
-function validateBriefPolicies(baseDir: string, agent: AgentDef, prompt: string): string[] {
-  const policyPath = join(baseDir, 'skills', 'ship', 'brief-policies.json');
-  if (!existsSync(policyPath)) return [];
+/**
+ * The required content this brief lacks, or why the policy file could not be
+ * read. An absent file is the normal case and asks for nothing. A present file
+ * that is not a JSON object, or carries a pattern that is not a regular
+ * expression, is UNREADABLE: read as "no policies" it silenced the guard, and
+ * the resolver prefers the ship-issue copy, so a corrupt one shadowed a valid
+ * ship copy without a word (review round 2 of #2936;
+ * `.claude/rules/config-access.md`: a corrupt config is never a missing one).
+ */
+function validateBriefPolicies(
+  baseDir: string,
+  agent: AgentDef,
+  prompt: string,
+): { missing: string[] } | { unreadable: string } {
+  const policyPath = shipSkillPath(baseDir, 'brief-policies.json');
+  if (!existsSync(policyPath)) return { missing: [] };
+  let policies: unknown;
   try {
-    const raw = readFileSync(policyPath, 'utf-8').trim();
-    if (!raw.startsWith('{')) return [];
-    const policies = JSON.parse(raw);
-    const policy = policies.policies?.[agent.label.toLowerCase()];
-    if (!policy?.requiredPatterns) return [];
-    const missing: string[] = [];
-    for (const req of policy.requiredPatterns) {
-      if (!new RegExp(req.pattern, 'i').test(prompt)) missing.push(req.name);
+    policies = JSON.parse(readFileSync(policyPath, 'utf-8'));
+  } catch (e) {
+    return { unreadable: `${policyPath} is not JSON (${(e as Error).message})` };
+  }
+  if (policies === null || typeof policies !== 'object' || Array.isArray(policies)) {
+    return { unreadable: `${policyPath} is not a JSON object` };
+  }
+  const policy = (policies as { policies?: Record<string, { requiredPatterns?: { name: string; pattern: string }[] }> })
+    .policies?.[agent.label.toLowerCase()];
+  if (!policy?.requiredPatterns) return { missing: [] };
+  const missing: string[] = [];
+  for (const req of policy.requiredPatterns) {
+    let re: RegExp;
+    try {
+      re = new RegExp(req.pattern, 'i');
+    } catch (e) {
+      return { unreadable: `${policyPath}: the pattern for "${req.name}" is not a regular expression (${(e as Error).message})` };
     }
-    return missing;
-  } catch { return []; }
+    if (!re.test(prompt)) missing.push(req.name);
+  }
+  return { missing };
 }
 
 // --- Signal Logging ---
@@ -338,7 +363,11 @@ export function validateAgentBrief(
   }
 
   // Check 6: Brief content policies
-  const policyMissing = validateBriefPolicies(baseDir, agent, rawPrompt);
+  const policyReading = validateBriefPolicies(baseDir, agent, rawPrompt);
+  if ('unreadable' in policyReading) {
+    outputs.push(`BRIEF CONTENT UNMEASURED: ${agent.label} brief's content policies were not checked: ${policyReading.unreadable}. A corrupt policy file is not an absent one.`);
+  }
+  const policyMissing = 'missing' in policyReading ? policyReading.missing : [];
   if (policyMissing.length > 0) {
     outputs.push(`BRIEF CONTENT WARN: ${agent.label} brief missing: ${policyMissing.join(', ')}. See BRIEF-TEMPLATES/${agent.label.toLowerCase()}.md for required content.`);
     signalEvents.push({

@@ -2,6 +2,7 @@ import { execSync, execFileSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, readdirSync, statSync, rmSync } from "fs";
 import { join } from "path";
 import { splitGateRuns } from "../lib/gate-run-split";
+import { shipSkillPath } from "../lib/ship-skill-folder";
 import { gateSaltPath, workDir as slugWorkDir } from "../lib/paths";
 import {
   writeGateResult,
@@ -3228,7 +3229,7 @@ export async function executeGate(input: GateExecutorInput): Promise<GateExecuto
 
   const baseCeremonyProfile = existsSync(join(__dirname, "ceremony-profiles.json"))
     ? join(__dirname, "ceremony-profiles.json")
-    : join(process.env.HOME || "", ".claude", "skills", "ship", "ceremony-profiles.json");
+    : shipSkillPath(join(process.env.HOME || "", ".claude"), "ceremony-profiles.json");
 
   const state = JSON.parse(readFileSync(sf, "utf-8"));
   const issueRepo = state.issueRepo || state.repo || "";
