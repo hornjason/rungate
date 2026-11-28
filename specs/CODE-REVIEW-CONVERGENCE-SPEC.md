@@ -3132,6 +3132,8 @@ Recorded because each one invalidates a naive reading of the criteria above.
 - [ ] CRC-B15: When a pull request changes a `docs/adr/*.md` file that has a Decomposition table, the AI review job writes `plan-issues --decompose <adr> --json`, the dry run with no `--write`, into the findings directory, and the reviewer's prompt says that file is how the filing tool parsed the table (Jason, 2026-11-27, ADR-030).
       needs: test
       placement: Phase 2
-- [ ] CRC-B16: A scaffold run whose config pins a review model other than rungate's default prints a note naming the pin and the default, and saying that removing the key follows the default; the pin itself is kept (Jason, 2026-11-27, ADR-030).
+- [x] CRC-B16: A scaffold run whose config pins a review model other than rungate's default prints a note naming the pin and the default, and saying that removing the key follows the default; the pin itself is kept (Jason, 2026-11-27, ADR-030).
       needs: test
       placement: Phase 2
+      proved-by: test/ai-review-model-alias.test.ts "CRC-B16: a review model pin that differs from the default is named, and kept"
+      fingerprint: e131df9b
