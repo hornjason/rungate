@@ -48,6 +48,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 
 import { writeFileSync } from "fs";
+import { spawnSync } from "child_process";
 
 import {
   AI_REVIEW_JOB,
@@ -57,6 +58,7 @@ import {
   modelAliasViolations,
   vertexCiConfig,
   AI_REVIEW_RUNS,
+  reviewModelPinNote,
 } from "../lib/scaffold/ai-review-step";
 import { createCiWorkflows } from "../lib/scaffold/steps";
 
@@ -439,4 +441,114 @@ describe("CRC-B10: the generated AI review defaults to Haiku 5.5", () => {
     expect(committed).toContain(`--model ${HAIKU} `);
     expect(committed).not.toContain("--model claude-sonnet-5");
   });
+});
+
+/**
+ * CRC-B16 (#2926, ADR-030). A consumer's hand-typed `ci.vertex.model` kept the
+ * old model after the default moved, and nothing said so: DailyBriefDashboard
+ * reviewed on `claude-sonnet-5` until its #2425 removed the key by hand. The
+ * scaffold now names a pin that differs from the default, with the default and
+ * how to follow it, and keeps the pin — a pin is the consumer's to remove.
+ *
+ * The note reads the SAME binding the generated job's `--model` reads
+ * (`reviewModel`), so the last cases here compare the note with the generated
+ * bytes, fixture by fixture, instead of with a second reading of the config.
+ */
+describe("CRC-B16: a review model pin that differs from the default is named, and kept", () => {
+  const PIN = "claude-sonnet-5";
+  /** Vertex refused as a whole (no project): the job reviews on the default. */
+  const REFUSED = { ...VERTEX_CI, vertex: { model: PIN } };
+
+  /** Every `--model` the generated job hands the reviewer. */
+  const modelIn = (text: string): string[] => [...text.matchAll(/--model (\S+)/g)].map(m => m[1]!);
+
+  test("a pin that differs: the note names the pin and the default, says removing the key follows the default, and the pin is kept", () => {
+    const note = reviewModelPinNote(withModel(PIN));
+    expect(note).not.toBeNull();
+    expect(note!).toContain(PIN);
+    expect(note!).toContain(AI_REVIEW_MODEL);
+    expect(note!).toContain("Remove ci.vertex.model to follow the default");
+    expect(note!).toContain("The pin is kept");
+  });
+
+  test("no note when the review follows the default: no config, a Vertex block with no model, or the default spelled out", () => {
+    expect(reviewModelPinNote(undefined)).toBeNull();
+    expect(reviewModelPinNote(VERTEX_CI)).toBeNull();
+    expect(reviewModelPinNote(withModel(AI_REVIEW_MODEL))).toBeNull();
+  });
+
+  test("no note when ci.vertex is refused: the job reviews on the default, so the model key pins nothing", () => {
+    expect(vertexCiConfig(REFUSED).config).toBeNull();
+    expect(reviewModelPinNote(REFUSED)).toBeNull();
+  });
+
+  test("the note names the model the generated job reviews on, and only when it is not the default", () => {
+    const rows: Array<[string, unknown]> = [
+      ["no config", undefined],
+      ["no model", VERTEX_CI],
+      ["the default spelled out", withModel(AI_REVIEW_MODEL)],
+      ["a pin", withModel(PIN)],
+      ["a refused block", REFUSED],
+    ];
+    const seen = rows.map(([label, ci]) => {
+      const { text, cleanup } = generatedReviewWorkflow(ci);
+      try {
+        // One `--model` per review run (AI_REVIEW_RUNS), all naming one model.
+        const models = [...new Set(modelIn(text))];
+        expect(modelIn(text), `${label}: one --model per review run`).toHaveLength(AI_REVIEW_RUNS);
+        expect(models, `${label}: every run reviews on the same model`).toHaveLength(1);
+        const note = reviewModelPinNote(ci);
+        if (models[0] === AI_REVIEW_MODEL) expect(note, `${label}: no pin is in effect`).toBeNull();
+        else expect(note, `${label}: the note names the model the job keeps`).toContain(models[0]!);
+        return `${label}=${models[0]}`;
+      } finally { cleanup(); }
+    });
+    // The pin row is the only one whose job does not review on the default.
+    expect(seen.filter(s => !s.endsWith(`=${AI_REVIEW_MODEL}`))).toEqual([`a pin=${PIN}`]);
+  });
+
+  test("a model or region that is present and not a string refuses the block, so no default stands in for it", () => {
+    const rows: Array<["model" | "region", unknown]> = [["model", 5], ["model", null], ["model", true], ["model", [PIN]], ["region", 5]];
+    for (const [k, v] of rows) {
+      const d = vertexCiConfig({ ...VERTEX_CI, vertex: { ...VERTEX_CI.vertex, [k]: v } });
+      expect(d.config, `${k}: ${JSON.stringify(v)}`).toBeNull();
+      expect(d.reason).toContain(`ci.vertex.${k} is ${JSON.stringify(v)}, not a string`);
+    }
+    // The control: the same block with a string in the same key is accepted.
+    expect(vertexCiConfig(withModel(PIN)).config?.model).toBe(PIN);
+  });
+
+  /** Run the scaffold CLI (an audit, so nothing is applied) on a temp project with `ci`. */
+  const runCli = (ci: unknown, args: string[] = []): string => {
+      const root = mkdtempSync(join(tmpdir(), "rungate-crc-b16-"));
+      try {
+        writeFileSync(join(root, "package.json"), JSON.stringify({ name: "crc-b16-fixture", private: true }) + "\n");
+        mkdirSync(join(root, ".claude", "rungate"), { recursive: true });
+        writeFileSync(
+          join(root, ".claude", "rungate", "config.json"),
+          JSON.stringify({ project: "crc-b16-fixture", ci }, null, 2) + "\n",
+        );
+        const r = spawnSync("bun", [join(import.meta.dir, "..", "scripts", "scaffold-project.ts"), root, ...args], {
+          cwd: join(import.meta.dir, ".."), encoding: "utf-8", timeout: 300_000,
+          env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
+        });
+        const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+        // The run reached the report, so an absent note is a measured absence.
+        expect(out, out.slice(-2000)).toContain("Human steps owed on GitHub:");
+        return out;
+      } finally { rmSync(root, { recursive: true, force: true }); }
+    };
+
+  test("the scaffold CLI prints the note for a pinned project and not for one that follows the default", () => {
+    const pinned = runCli(withModel(PIN));
+    expect(pinned).toContain(reviewModelPinNote(withModel(PIN))!);
+    const following = runCli(VERTEX_CI);
+    expect(following).not.toContain("Remove ci.vertex.model");
+  }, 600_000);
+
+  test("under --profile=minimal, which writes no review job, the CLI prints no note, and a ci that is not an object does not stop the run", () => {
+    // runCli itself asserts each run reached "Human steps owed on GitHub:".
+    expect(runCli(withModel(PIN), ["--profile=minimal"])).not.toContain("Remove ci.vertex.model");
+    expect(runCli(null, ["--profile=minimal"])).not.toContain("must be an object");
+  }, 600_000);
 });

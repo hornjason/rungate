@@ -570,7 +570,12 @@ const UNCLAIMED_RATCHET = 150;
 // references audit, a reading of the audit against a checkout that no
 // registered pattern expresses; the SC-2820 describe in
 // test/audit-closing-references.test.ts names it (2026-11-27).
-const CLAIMED_UNBINDABLE = 220;
+// 221: CRC-B16 (#2926) ticked by `sync-sc-status --only CRC-B16` — a scaffold
+// run names a review model pin that differs from the default and keeps it, a
+// reading of the CLI's printed report that no registered pattern expresses;
+// the CRC-B16 describe in test/ai-review-model-alias.test.ts names it
+// (2026-11-27).
+const CLAIMED_UNBINDABLE = 221;
 
 function split() {
   return splitUnmatchedChecked({ projectRoot: REPO, claimed: claimedScKeys(SPECS), scopedKey });

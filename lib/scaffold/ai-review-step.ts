@@ -1615,6 +1615,12 @@ export function vertexCiConfig(ci: unknown): VertexCiDecision {
         `(projects/N/locations/L/workloadIdentityPools/P/providers/R)`,
     );
   }
+  // Review of #2947: a region or model that is present and not a string is
+  // refused, never read as absent. Read as absent, the default replaced the
+  // consumer's value with no line saying so, which is what CRC-B16 exists to stop.
+  for (const k of ["region", "model"] as const) {
+    if (k in block && typeof block[k] !== "string") return refuse(`ci.vertex.${k} is ${JSON.stringify(block[k])}, not a string`);
+  }
   if (!VERTEX_REGION.test(region)) return refuse(`ci.vertex.region is not a Vertex location`);
   if (!EXACT_MODEL_PATTERN.test(model)) {
     return refuse(
@@ -3368,6 +3374,32 @@ export function turnBudgetLever(depth: ReviewDepthDecision): string {
 }
 
 /**
+ * The model the generated job reviews on: the consumer's `ci.vertex.model` when
+ * the block was accepted, else `AI_REVIEW_MODEL`. A refused block pins nothing,
+ * because no part of it reaches the job. One binding, read by `--model` below
+ * and by `reviewModelPinNote`, so the note cannot name a model the job lacks.
+ */
+export function reviewModel(vertex: VertexCiDecision): string {
+  return vertex.config?.model ?? AI_REVIEW_MODEL;
+}
+
+/**
+ * #2926, CRC-B16: the scaffold's note when the config pins a review model other
+ * than the default, or `null` when the job reviews on the default. It names
+ * both and how to follow the default, and changes nothing: a pin is the
+ * consumer's to remove. One consumer kept `claude-sonnet-5` after the default
+ * moved, with nothing saying so, until it removed the key by hand (ADR-030).
+ */
+export function reviewModelPinNote(ci: unknown): string | null {
+  const model = reviewModel(vertexCiConfig(ci));
+  if (model === AI_REVIEW_MODEL) return null;
+  return (
+    `Review model: ci.vertex.model pins the AI review to ${model}; rungate's default is ` +
+    `${AI_REVIEW_MODEL}. The pin is kept. Remove ci.vertex.model to follow the default.`
+  );
+}
+
+/**
  * The `claude_args` line, with the model the consumer's config resolved.
  *
  * A function rather than a constant because the model is now a `ci.vertex`
@@ -3382,7 +3414,7 @@ export function turnBudgetLever(depth: ReviewDepthDecision): string {
  * whole subject.
  */
 export function aiReviewClaudeArgs(vertex: VertexCiDecision, depth: ReviewDepthDecision = AI_REVIEW_UNSET_DEPTH): string {
-  const model = vertex.config?.model ?? AI_REVIEW_MODEL;
+  const model = reviewModel(vertex);
   return (
     `--model ${model} --max-turns ${depth.maxTurns} ` +
     `--allowedTools ${AI_REVIEW_ALLOWED_TOOLS} ` +
