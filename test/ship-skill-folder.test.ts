@@ -219,12 +219,14 @@ describe("#2932: no source reader spells the skill folder's path outside the res
       // Review of #2952: the folder ending one literal and the skill opening the next.
       "nested.ts": `const p = join(home, ".claude/skills", "ship", "x.json");`,
       "nested-file.ts": `const p = join(home, ".claude/skills", "ship/x.json");`,
+      // Only the pair rule can see this one: the skill's name is in a constant.
+      "nested-constant.ts": `const S = "ship";\nconst p = join(home, ".claude/skills", S, "x.json");`,
       // Controls: the skill's name with no skills folder, and another skill's folder.
       "gate-name.ts": `writeGateResult(sf, "ship", 1, 0, 0, results);`,
       "other-skill.ts": `const p = join(home, ".claude", "skills", "board", "x.json");`,
     };
     const hits = spellings(Object.keys(planted), f => planted[f]!);
-    expect(hits.map(h => h.split(":")[0]).sort()).toEqual(["constant.ts", "lines.ts", "nested-file.ts", "nested.ts", "parts.ts", "single.ts", "split.ts", "template.ts", "whole.ts", "workflow.js"]);
+    expect(hits.map(h => h.split(":")[0]).sort()).toEqual(["constant.ts", "lines.ts", "nested-constant.ts", "nested-file.ts", "nested.ts", "parts.ts", "single.ts", "split.ts", "template.ts", "whole.ts", "workflow.js"]);
   });
 
   test("a file that cannot be parsed fails the scan by name, rather than being read as clean", () => {
