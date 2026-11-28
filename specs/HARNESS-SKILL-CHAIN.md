@@ -77,7 +77,7 @@ INTAKE → DEFINE → SHIP → PROVE → RELEASE
 - Council ran when uncertain? (councilRan: true/false)
 - Spec written for M/L? (specWritten: true/false)
 
-### Step 3: SHIP (`/ship`)
+### Step 3: SHIP (`Skill("ship-issue")`)
 
 **Trigger:** Issue exists with ACs. Scope gate passes.
 
@@ -275,7 +275,7 @@ Monthly audit: query telemetry, find skills with low success rates, council on i
 - `specs/HARNESS-STANDARD.md` — current harness loop (this project)
 - `specs/HARNESS-GATES.md` — gate documentation (this project)
 - `~/.claude/PAI/HARNESS-STANDARD.md` — PAI harness loop (global)
-- `~/.claude/skills/ship/SKILL.md` — ship skill v2 (global)
+- `~/.claude/skills/ship-issue/SKILL.md` — ship skill v2 (global; `lib/ship-skill-folder.ts` falls back to the folder's old name)
 - `~/.claude/skills/goal/SKILL.md` — goal skill (global)
 - `~/.claude/skills/testing-and-qa-validation/SKILL.md` — QA workflow (global)
 - `workflows/council.js` — council workflow (if exists in project)

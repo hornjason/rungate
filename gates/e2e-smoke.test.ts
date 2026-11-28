@@ -3,6 +3,7 @@ import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { WorkflowStateSchema } from "./schema";
 import { SIGNAL_PHRASE_PATTERNS } from "../lib/conformity";
+import { shipSkillPath } from "../lib/ship-skill-folder";
 
 const STANDALONE = !process.env.TEST_WORK_DIR;
 const TEST_DIR = process.env.TEST_WORK_DIR || "/tmp/gate-e2e-smoke";
@@ -209,20 +210,18 @@ describe("E2E: ADR-008 migration", () => {
     if (!existsSync(adrPath)) return;
     const adr = readFileSync(adrPath, "utf-8");
 
-    const deletionTargets = [
-      "skills/ship/gate-runner.sh",
-      "skills/ship/gate-checks.sh",
-    ];
+    // #2933: in whichever of the skill's two folders the resolver finds them.
+    const deletionTargets = ["gate-runner.sh", "gate-checks.sh"];
+    const claudeDir = join(process.env.HOME || "", ".claude");
 
-    const existing = deletionTargets.filter(f =>
-      existsSync(join(process.env.HOME || "", ".claude", f))
-    );
+    const existing = deletionTargets.filter(f => existsSync(shipSkillPath(claudeDir, f)));
     expect(existing).toEqual([]);
   });
 
-  test("stop-the-bleeding: no .sh files in skills/ship/", () => {
+  test("stop-the-bleeding: no .sh files in the ship skill's folder", () => {
     const { execSync } = require("child_process");
-    const shipDir = join(process.env.HOME || "", ".claude", "skills", "ship");
+    // #2933: the folder the resolver finds, the new name first.
+    const shipDir = shipSkillPath(join(process.env.HOME || "", ".claude"), ".");
     try {
       const result = execSync(`find "${shipDir}" -name '*.sh'`, { encoding: "utf-8", timeout: 5000 }).trim();
       const files = result ? result.split("\n").filter(Boolean) : [];
