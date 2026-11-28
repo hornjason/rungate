@@ -90,10 +90,13 @@ describe("SC-2738: newlyAccepted reads the frontmatter status at both ends", () 
     const body = adr("proposed").replace("# ADR-099 — a decision", "# ADR-099\n\nstatus: accepted");
     expect(adrStatus(body)).toBe("proposed");
     expect(newlyAccepted(adr("proposed"), body)).toBe(false);
-    // And a file with no frontmatter has no status at all.
-    expect(adrStatus("status: accepted\n")).toBeNull();
-    // Frontmatter with no status, and the body says accepted: still none.
-    expect(adrStatus("---\ndoc-type: adr\n---\n\nstatus: accepted\n")).toBeNull();
+    // And a file with no frontmatter is not accepted. Review of #2959: it is
+    // UNMEASURED, never "no status".
+    expect(adrStatus("status: accepted\n")).toEqual({ unmeasured: null });
+    // Frontmatter with no status, and the body says accepted: still not accepted.
+    // Review of #2959: a frontmatter with no `status:` key is UNMEASURED, not "no status".
+    expect(adrStatus("---\ndoc-type: adr\n---\n\nstatus: accepted\n")).toEqual({ unmeasured: null });
+    expect(newlyAccepted(adr("proposed"), "---\ndoc-type: adr\n---\n\nstatus: accepted\n")).toBe(false);
   });
 });
 
@@ -289,6 +292,50 @@ describe("SC-2738: plan-issues --accepted-since lists what a push accepted", () 
       const r = await since(dir, before);
       expect(r.code).toBe(0);
       expect(r.out.split("\n").filter(Boolean)).toEqual(["docs/adr/ADR-097-grows.md"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2955: an ADR whose status none of the readers knows REFUSES, naming it and the value, and is never listed", async () => {
+    // Read as "not accepted", a misspelled `accepted` placed nothing and said
+    // nothing: the plan was simply never filed, on a green run.
+    const { dir, git } = repo();
+    try {
+      writeFileSync(join(dir, "docs/adr/ADR-099-typo.md"), adr("proposed"));
+      git("add", "-A");
+      git("commit", "-q", "-m", "before");
+      const before = git("rev-parse", "HEAD");
+      writeFileSync(join(dir, "docs/adr/ADR-099-typo.md"), adr("acepted"));
+      git("add", "-A");
+      git("commit", "-q", "-m", "typo");
+      const r = await since(dir, before);
+      expect(r.code, r.err).toBe(REFUSAL_EXIT);
+      expect(r.out).not.toContain("ADR-099-typo.md");
+      expect(r.err).toContain("UNMEASURED");
+      expect(r.err).toContain("docs/adr/ADR-099-typo.md");
+      expect(r.err).toContain(`"acepted"`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("#2955, review of #2959: an unreadable status this push did not touch holds up nothing", async () => {
+    // Read as unmeasured on every run, one old ADR would stop every later plan from being placed.
+    const { dir, git } = repo();
+    try {
+      writeFileSync(join(dir, "docs/adr/ADR-098-old-typo.md"), adr("accepted, superseded by ADR-099"));
+      writeFileSync(join(dir, "docs/adr/ADR-099-new.md"), adr("proposed"));
+      git("add", "-A");
+      git("commit", "-q", "-m", "before");
+      const before = git("rev-parse", "HEAD");
+      writeFileSync(join(dir, "docs/adr/ADR-099-new.md"), adr("accepted"));
+      git("add", "-A");
+      git("commit", "-q", "-m", "accept");
+      const r = await since(dir, before);
+      expect(r.code, r.err).toBe(0);
+      expect(r.out.split("\n").filter(Boolean)).toEqual(["docs/adr/ADR-099-new.md"]);
+      expect(r.err).not.toContain("ADR-098-old-typo.md");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

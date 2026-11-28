@@ -502,6 +502,7 @@ function acceptedSince(root: string, since: string): number {
   }
   const dir = join(root, "docs", "adr");
   const names = existsSync(dir) ? readdirSync(dir).filter(n => n.endsWith(".md")).sort() : [];
+  const unmeasured: string[] = [];
   for (const name of names) {
     const path = `docs/adr/${name}`;
     const after = readFileSync(join(root, path), "utf-8");
@@ -512,11 +513,20 @@ function acceptedSince(root: string, since: string): number {
     }
     // Accepted by this push, or accepted already with rows added (#2366):
     // decompose files only the rows that have no issue yet.
-    if (adrPlacement(was === null ? null : was.stdout, after).kind === "none") continue;
+    const placement = adrPlacement(was === null ? null : was.stdout, after);
+    // #2955: a status no reader knows places nothing and says so. The run
+    // refuses after naming every such ADR, so the workflow stops red rather
+    // than reading the ADR as "not accepted" on a green run.
+    if (placement.kind === "unmeasured") {
+      unmeasured.push(`plan-issues: UNMEASURED — ${path} ${placement.why}. Nothing is placed from it.`);
+      continue;
+    }
+    if (placement.kind === "none") continue;
     if (hasDecompositionTable(after)) console.log(path);
     else console.error(`plan-issues: ${path} was accepted, and carries no Decomposition table — nothing to place.`);
   }
-  return 0;
+  for (const line of unmeasured) console.error(line);
+  return unmeasured.length > 0 ? REFUSAL_EXIT : 0;
 }
 
 async function decompose(
