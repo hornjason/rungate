@@ -280,7 +280,8 @@ export function boardReadInFull(statuses: ReadonlyMap<number, string>): boolean 
 /** The line that says a board holds no issue cards, or `null` when it holds some. */
 export function emptyBoardLine(statuses: ReadonlyMap<number, string>): string | null {
   return statuses.size === 0
-    ? "  The board holds no issue cards, so every lane below is a measured 0, not an unread one."
+    ? "  The board holds no issue cards, so every lane's count below is a measured 0, not an unread one. " +
+      "A lane whose target could not be read still says UNMEASURED."
     : null;
 }
 

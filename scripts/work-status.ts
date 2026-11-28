@@ -25,6 +25,7 @@ import {
   ladderLines,
   ladderReport,
   netGrowthLine,
+  emptyBoardReadyRefusal,
   readyRefusal,
   resolveFocus,
 } from "../lib/work-status";
@@ -1054,7 +1055,8 @@ export const EXIT_READY_UNMEASURED = 4;
 // `laneCounts` drops by design (the header says "issues only"). Without it the
 // gate judged a population one card smaller than the writer's and the two
 // disagreed again — inside the change that exists to stop them.
-const refusal = readyRefusal(laneReadings, readyNow.length, readyUnseen);
+// #2940, review of #2961: an empty board with work off it is asked first.
+const refusal = emptyBoardReadyRefusal(status, offBoardCount) ?? readyRefusal(laneReadings, readyNow.length, readyUnseen);
 if (refusal?.verdict === "REFUSE") {
   console.log(
     `\n  REFUSING: Ready is ${refusal.count} of ${refusal.against} — ${refusal.why}\n` +

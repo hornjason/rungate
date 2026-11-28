@@ -23,6 +23,7 @@ import {
   ladderReport,
   milestoneRollup,
   netGrowthLine,
+  emptyBoardReadyRefusal,
   readyRefusal,
   resolveFocus,
 } from "../lib/work-status";
@@ -1912,5 +1913,30 @@ describe("#2940: the report decides whether the board was read in full in one pl
     expect(script.split("complete: boardReadInFull(status)").length - 1).toBe(2);
     expect(script).not.toContain("status.size > 0");
     expect(script).toContain("emptyBoardLine(status)");
+  });
+});
+
+/**
+ * #2940, review of #2961: an empty board read in full made Ready "0 of 0 OK",
+ * because Ready's denominator is the board's own pickable work. With 248 open
+ * issues off the board, the gate passed a dry lane where it used to refuse.
+ */
+describe("#2940: an empty board with open issues off it does not pass the Ready gate", () => {
+  test("no cards and open issues off the board: UNMEASURED, naming the count and #2941", () => {
+    const r = emptyBoardReadyRefusal(new Map(), 248);
+    expect(r?.verdict).toBe("UNMEASURED");
+    expect(r?.why).toContain("248");
+    expect(r?.why).toContain("#2941");
+    expect(r?.why).toContain("holds no issue cards");
+  });
+
+  test("controls: an empty board with nothing off it, and a board holding cards, are left to readyRefusal", () => {
+    expect(emptyBoardReadyRefusal(new Map(), 0)).toBeNull();
+    expect(emptyBoardReadyRefusal(new Map([[1, "Ready"]]), 248)).toBeNull();
+  });
+
+  test("the report asks this before readyRefusal, so the gate exits UNMEASURED on that board", () => {
+    const script = readFileSync(join(ROOT, "scripts", "work-status.ts"), "utf-8");
+    expect(script).toMatch(/const refusal = emptyBoardReadyRefusal\(status, offBoardCount\) \?\? readyRefusal\(/);
   });
 });

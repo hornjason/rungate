@@ -731,4 +731,13 @@ describe("#2940: a board that holds no issues was read in full, and says so", ()
     expect(emptyBoardLine(new Map())).toContain("holds no issue cards");
     expect(emptyBoardLine(new Map([[1, "Ready"]]))).toBeNull();
   });
+
+  test("review of #2961: the line claims the counts are measured, never that every lane is, because Ready can still be UNMEASURED", () => {
+    const empty = new Map<number, string>();
+    const rows = laneHealth(census({ counts: new Map(), pickable: 0, openAssigned: 0, cancelledClosed: 0, throughput: null, complete: boardReadInFull(empty) }));
+    expect(rows.find(r => r.lane === "Ready")?.health, "the case this line must not contradict").toBe("UNMEASURED");
+    const line = emptyBoardLine(empty) ?? "";
+    expect(line).not.toMatch(/every lane below is a measured 0/);
+    expect(line).toContain("every lane's count below is a measured 0");
+  });
 });
