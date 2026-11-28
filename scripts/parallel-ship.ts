@@ -2,10 +2,11 @@
 
 import { execSync, spawn } from "child_process";
 import { rmSync, existsSync, readFileSync } from "fs";
-import { join } from "path";
+import { homedir } from "os";
+import { basename, join } from "path";
 
 import { readProjectSlug } from "../lib/config-readers.js";
-import { SHIP_SKILL_FOLDERS } from "../lib/ship-skill-folder";
+import { SHIP_SKILL_FOLDERS, shipSkillFolders } from "../lib/ship-skill-folder";
 
 export interface ShipJob {
   issue: number;
@@ -67,6 +68,24 @@ export function shipLaunchArgs(job: ShipJob): string[] {
   return ["--bg", "--project", job.worktreePath, `/${SHIP_SKILL_FOLDERS[0]} ${job.issue}`];
 }
 
+/**
+ * Why no session may be launched from this machine, or `null` (review of
+ * #2962). The launch names the skill by its new folder name, so where only
+ * the old folder is installed, the command names no skill; and the old name
+ * is Claude Code's built-in. Sessions are detached with their output
+ * discarded, so either way nothing would report it. Asked once, before any
+ * worktree is made.
+ */
+export function shipLaunchRefusal(claudeDir: string): string | null {
+  const installed = shipSkillFolders(claudeDir);
+  if (installed.length > 0 && basename(installed[0]!) === SHIP_SKILL_FOLDERS[0]) return null;
+  return installed.length === 0
+    ? `no ship skill is installed under ${claudeDir}, so /${SHIP_SKILL_FOLDERS[0]} would name no skill`
+    : `the ship skill is installed only under its old name (${installed[0]}), so /${SHIP_SKILL_FOLDERS[0]} would ` +
+        `name no skill, and the old name is Claude Code's built-in. Copy the folder to its new name ` +
+        `(ADR-029 step 1), then run this again`;
+}
+
 function launchShipSession(job: ShipJob): void {
   const cmd = "claude";
   const args = shipLaunchArgs(job);
@@ -125,6 +144,14 @@ async function main() {
 
   if (issues.length === 0) {
     console.error("No valid issue numbers provided.");
+    process.exit(1);
+  }
+
+  // Review of #2962: before any worktree is made, and for a dry run too, since
+  // a dry run that shows a launch which would run nothing is a false preview.
+  const refusal = shipLaunchRefusal(join(homedir(), ".claude"));
+  if (refusal !== null) {
+    console.error(`parallel-ship: REFUSED — ${refusal}.`);
     process.exit(1);
   }
 

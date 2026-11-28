@@ -30,7 +30,7 @@ const OLD_INVOCATION = /Skill\(\s*\\?(["'`])ship\\?\1\s*[,)]/g;
  * typed. Not a path segment, not an escaped slash or a regex literal, and not
  * the new name. The planted rows below name each case.
  */
-const OLD_SLASH = /(?<![\w./~\\-])\/ship(?![\w\\-]|\.\w)/g;
+const OLD_SLASH = /(?<![\w./~\\-])\/ship(?![\w-]|\.\w|\\[^"'`])/g;
 const oldInvocations = (text: string): number =>
   [...text.matchAll(OLD_INVOCATION)].length + [...text.matchAll(OLD_SLASH)].length;
 
@@ -109,6 +109,8 @@ describe("#2933: rungate tells an agent to invoke the ship skill by its new name
       `After /${OLD} to prove the fix works`,
       `| /${OLD} | Yes | After /goal |`,
       `Claude Code ships a built-in \`/${OLD}\`.`,
+      // Review of #2962: inside a string with escaped quotes.
+      `const s = "\\"/${OLD}\\"";`,
     ]) {
       expect(oldInvocations(s), s).toBe(1);
     }

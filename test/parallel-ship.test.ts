@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "fs";
-import { join } from "path";
+import { mkdirSync, mkdtempSync, rmSync } from "fs";
+import { dirname, join } from "path";
 import { execSync } from "child_process";
 import { tmpdir } from "os";
 import {
@@ -9,8 +9,9 @@ import {
   generateContainerName,
   cleanupShipWorktree,
   shipLaunchArgs,
+  shipLaunchRefusal,
 } from "../scripts/parallel-ship";
-import { SHIP_SKILL_FOLDERS } from "../lib/ship-skill-folder";
+import { SHIP_SKILL_FOLDERS, shipSkillPath } from "../lib/ship-skill-folder";
 import { initFixtureRepo, commitFixture } from "./helpers/git-fixture";
 
 describe("parallel-ship", () => {
@@ -147,5 +148,50 @@ describe("#2949: parallel-ship launches the ship skill by its new name", () => {
     const src = require("fs").readFileSync(join(import.meta.dir, "..", "scripts", "parallel-ship.ts"), "utf-8") as string;
     expect(src.match(/shipLaunchArgs\(job\)/g)?.length, "the launch and the dry run both build their arguments here").toBe(2);
     expect(src).not.toMatch(/`\/ship /);
+  });
+});
+
+// Review of #2962: the launch names the new folder, so a machine that has only
+// the old one (every machine until ADR-029 step 1 is run there) must not launch.
+describe("#2949: parallel-ship refuses to launch where the skill is not installed under its new name", () => {
+  const homes: string[] = [];
+  afterEach(() => {
+    for (const h of homes.splice(0)) rmSync(h, { recursive: true, force: true });
+  });
+  /** A `.claude` holding the named skill folders, the skills directory derived through the resolver. */
+  function claudeWith(folders: string[]): string {
+    const home = mkdtempSync(join(tmpdir(), "rg-2962-home-"));
+    homes.push(home);
+    const claude = join(home, ".claude");
+    const skills = dirname(dirname(shipSkillPath(claude, "probe")));
+    for (const f of folders) mkdirSync(join(skills, f), { recursive: true });
+    return claude;
+  }
+  const [NEW_NAME, OLD_NAME] = SHIP_SKILL_FOLDERS as readonly [string, string];
+
+  test("only the old folder, or none: refused, naming why; the new folder, alone or beside the old: launched", () => {
+    expect(shipLaunchRefusal(claudeWith([OLD_NAME])) ?? "").toContain("only under its old name");
+    expect(shipLaunchRefusal(claudeWith([OLD_NAME])) ?? "").toContain("ADR-029 step 1");
+    expect(shipLaunchRefusal(claudeWith([])) ?? "").toContain("no ship skill is installed");
+    expect(shipLaunchRefusal(claudeWith([NEW_NAME]))).toBeNull();
+    expect(shipLaunchRefusal(claudeWith([NEW_NAME, OLD_NAME]))).toBeNull();
+  });
+
+  test("the script refuses before it makes any worktree, dry run included", () => {
+    const claude = claudeWith([OLD_NAME]);
+    const repo = mkdtempSync(join(tmpdir(), "rg-2962-repo-"));
+    initFixtureRepo(repo);
+    execSync("git commit --allow-empty -m init", { cwd: repo });
+    const r = Bun.spawnSync(["bun", join(import.meta.dir, "..", "scripts", "parallel-ship.ts"), "dry-run", "42"], {
+      cwd: repo,
+      env: { ...process.env, HOME: dirname(claude) },
+    });
+    const err = new TextDecoder().decode(r.stderr);
+    expect(r.exitCode, err).toBe(1);
+    expect(err).toContain("parallel-ship: REFUSED");
+    expect(err).toContain("only under its old name");
+    const worktrees = execSync("git worktree list --porcelain", { cwd: repo, encoding: "utf-8" });
+    expect(worktrees, "a worktree was made before the refusal").not.toContain("ship-42");
+    rmSync(repo, { recursive: true, force: true });
   });
 });
