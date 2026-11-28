@@ -3381,8 +3381,8 @@ export function reviewModel(vertex: VertexCiDecision): string {
  * #2926, CRC-B16: the scaffold's note when the config pins a review model other
  * than the default, or `null` when the job reviews on the default. It names
  * both and how to follow the default, and changes nothing: a pin is the
- * consumer's to remove. DailyBriefDashboard kept `claude-sonnet-5` after the
- * default moved, with nothing saying so, until its #2425 removed the key.
+ * consumer's to remove. One consumer kept `claude-sonnet-5` after the default
+ * moved, with nothing saying so, until it removed the key by hand (ADR-030).
  */
 export function reviewModelPinNote(ci: unknown): string | null {
   const model = reviewModel(vertexCiConfig(ci));
