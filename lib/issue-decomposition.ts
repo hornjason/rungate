@@ -730,13 +730,19 @@ export type AdrStatusName = (typeof ADR_STATUSES)[number];
  * "not proposed" or "not accepted".
  */
 export interface UnmeasuredAdrStatus {
-  readonly unmeasured: string;
+  /**
+   * The value as read, or `null` when the frontmatter has no `status:` key at
+   * all, as with `Status: accepted` or `staus: accepted` (review of #2959).
+   */
+  readonly unmeasured: string | null;
 }
 
 /**
  * The `status:` an ADR's FRONTMATTER declares: one of {@link ADR_STATUSES},
- * {@link UnmeasuredAdrStatus} for any other value (#2955), or `null` when it
- * declares none.
+ * {@link UnmeasuredAdrStatus} for any other value or for a frontmatter with no
+ * `status:` key (#2955), or `null` when the text has no frontmatter at all.
+ * Every ADR here declares a status, so a frontmatter without the key is a key
+ * spelled some other way, which no reader can read.
  *
  * Only the frontmatter: an ADR's body quotes statuses freely ("revision 2 was
  * accepted"), and a body line must not be able to file a plan.
@@ -744,9 +750,12 @@ export interface UnmeasuredAdrStatus {
 export function adrStatus(text: string): AdrStatusName | UnmeasuredAdrStatus | null {
   const lines = text.split("\n");
   if (lines[0]?.trim() !== "---") return null;
+  // Review of #2959: a frontmatter with no `status:` key, closed or not, is a
+  // key no reader can read (`Status:`, `staus:`), never "declares no status".
+  const NO_KEY: UnmeasuredAdrStatus = { unmeasured: null };
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i]!;
-    if (line.trim() === "---") return null;
+    if (line.trim() === "---") return NO_KEY;
     // Quotes and case are YAML spelling, not a different status: `"accepted"`
     // and `Accepted` were read as not-accepted and the plan was silently
     // never placed (security review of #2009).
@@ -766,7 +775,7 @@ export function adrStatus(text: string): AdrStatusName | UnmeasuredAdrStatus | n
       return (ADR_STATUSES as readonly string[]).includes(value) ? (value as AdrStatusName) : { unmeasured: value };
     }
   }
-  return null;
+  return NO_KEY;
 }
 
 /**
@@ -831,7 +840,10 @@ export function adrPlacement(before: string | null, after: string): AdrPlacement
   // Only the AFTER text: an unreadable status before is not accepted, so a
   // change that corrects it to `accepted` is an acceptance.
   const why = adrStatusRefusal(after);
-  if (why !== null) return { kind: "unmeasured", rows: [], why };
+  // Review of #2959: an ADR this change did not touch places nothing and
+  // refuses nothing, so an old unreadable status cannot hold up a plan
+  // another ADR accepts in the same push.
+  if (why !== null) return before === after ? { kind: "none", rows: [] } : { kind: "unmeasured", rows: [], why };
   if (newlyAccepted(before, after)) return { kind: "accepted", rows: parseDecompositionPlan(after).rows };
   if (before === null || adrStatus(before) !== "accepted" || adrStatus(after) !== "accepted") return { kind: "none", rows: [] };
   // Counted, not collected: a second copy of a row the table already had
@@ -901,10 +913,11 @@ export function hasDecompositionTable(text: string): boolean {
 export function adrStatusRefusal(text: string): string | null {
   const s = adrStatus(text);
   if (s === null || typeof s === "string") return null;
-  return (
-    `declares status ${JSON.stringify(s.unmeasured)}, which is none of ${ADR_STATUSES.join(", ")}, so whether ` +
-    `its plan is proposed, accepted or neither was never read. UNMEASURED, not "not accepted"`
-  );
+  const declares =
+    s.unmeasured === null
+      ? "declares no `status:` key in its frontmatter (a key spelled any other way, such as `Status:`, is not read)"
+      : `declares status ${JSON.stringify(s.unmeasured)}, which is none of ${ADR_STATUSES.join(", ")}`;
+  return `${declares}, so whether its plan is proposed, accepted or neither was never read. UNMEASURED, not "not accepted"`;
 }
 
 /**

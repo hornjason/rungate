@@ -26,6 +26,7 @@ import {
   PLANNED_ISSUE_FOOTER,
   adrPlacement,
   adrStatus,
+  adrStatusRefusal,
   closedIssueCounts,
   decomposedBody,
   hasDecompositionTable,
@@ -1881,13 +1882,27 @@ describe("#2955: every reader finds the same Decomposition table and reads the s
     }
   });
 
+  test("review of #2959: a frontmatter with no `status:` key is UNMEASURED, so `Status:` and `staus:` are never read as no status", () => {
+    for (const key of ["Status", "staus", "doc-type"]) {
+      const text = `---\n${key}: accepted\n---\n\n# ADR\n\n${table("")}\n`;
+      expect(adrStatus(text), key).toEqual({ unmeasured: null });
+      expect(adrStatusRefusal(text) ?? "", key).toContain("declares no `status:` key");
+      expect(adrPlacement(null, text).kind, key).toBe("unmeasured");
+    }
+    // An unclosed frontmatter with no key is the same; no frontmatter at all has no status.
+    expect(adrStatus("---\ndoc-type: adr\n\n# ADR\n")).toEqual({ unmeasured: null });
+    expect(adrStatus("# ADR\n\nstatus: accepted\n")).toBeNull();
+  });
+
   test("an ADR whose status is UNMEASURED places nothing and says why, naming the value", () => {
     const p = adrPlacement(doc("proposed", table("")), doc("acepted", table("")));
     expect(p.kind).toBe("unmeasured");
     expect(p.rows).toEqual([]);
     expect(p.kind === "unmeasured" ? p.why : "").toContain('"acepted"');
     // An edit to an ADR whose status was already unreadable is unmeasured too.
-    expect(adrPlacement(doc("acepted", table("")), doc("acepted", table(""))).kind).toBe("unmeasured");
+    expect(adrPlacement(doc("acepted", table("")), doc("acepted", table("")) + "\nA paragraph added.\n").kind).toBe("unmeasured");
+    // Review of #2959: one the change did not touch places nothing and refuses nothing.
+    expect(adrPlacement(doc("acepted", table("")), doc("acepted", table("")))).toEqual({ kind: "none", rows: [] });
     // Control: an unreadable status BEFORE the change does not stop this change accepting it.
     expect(adrPlacement(doc("acepted", table("")), doc("accepted", table(""))).kind).toBe("accepted");
   });

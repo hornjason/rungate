@@ -901,12 +901,11 @@ describe("SC-2820: a pull request carrying a proposed ADR with a plan is refused
     }
   });
 
-  test("an accepted or superseded ADR with a plan, a proposed one with none, and one with no status are not refused", () => {
+  test("an accepted or superseded ADR with a plan, and a proposed one with none, are not refused", () => {
     for (const [label, text] of [
       ["accepted", adr("accepted")],
       ["superseded", adr("superseded")],
       ["proposed, no table", adr("proposed", false)],
-      ["no status", adr(null)],
     ] as const) {
       const root = checkout({ "ADR-901-a-fixture.md": text });
       const r = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
@@ -998,6 +997,20 @@ describe("SC-2820: a pull request carrying a proposed ADR with a plan is refused
       const mutant = run(buildMutant(), payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
       expect(mutant.code, "the mutant should not refuse").toBe(0);
       expect(mutant.err, "the mutant reached the refusal and printed it").toContain(`declares status "${status}"`);
+    }
+  });
+
+  test("#2955, review of #2959: a changed ADR with no `status:` key, or one spelled `Status:`, is UNMEASURED, not \"no status\"", () => {
+    for (const [label, text] of [
+      ["no status key", adr(null)],
+      ["Status: proposed", adr(null).replace("doc-type: adr", "doc-type: adr\nStatus: proposed")],
+    ] as const) {
+      const root = checkout({ "ADR-901-a-fixture.md": text });
+      const r = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);
+      expect(r.code, `${label}: ${r.err}`).toBe(REFUSE_EXIT);
+      expect(r.err).toContain("UNMEASURED");
+      expect(r.err).toContain("declares no `status:` key");
+      expect(r.err).toContain(ADR);
     }
   });
 
