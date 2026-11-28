@@ -29,7 +29,11 @@
  * returned policy is not a harness policy, so a fallback turns them red
  * rather than green.
  *
- * ## What was broken to prove it, over this file (28 tests)
+ * ## What was broken to prove it, over this file as it stood then (28 tests)
+ *
+ * The counts below are #911's, measured before #2944 added three unusable
+ * dates and three cases of its own; the file now holds 44 tests, and #2944's
+ * battery is recorded in its pull request, not here.
  *
  * Every count predicted before the battery ran, and **the baseline row was
  * read before any mutation row** — the first attempt at this battery had a
