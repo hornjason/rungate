@@ -450,26 +450,31 @@ describe("SC-2822: with no plan written, the goal comes from SUCCESS.md and the 
     }
   });
 
-  test("a misspelled stages or goal key is UNMEASURED and names the key, never no stages written or SUCCESS.md's goal", () => {
-    // Review of #2948: a ladder under the wrong name is corrupt, not unwritten.
-    // Round 2: any key one edit away, not a list of two spellings.
-    for (const key of ["stage", "Stages", "stagse", "stges"]) {
+  test("#2957: a key outside the known set is UNMEASURED and names the key, never no stages written or SUCCESS.md's goal", () => {
+    // Review of #2948 found one more misspelling each round. A closed set of
+    // keys ends the search: two edits away (`stgs`, `goa1`) is refused as
+    // surely as one, and so is a key that is no spelling of anything.
+    for (const key of ["stgs", "Stages", "stage", "goa1", "Goal", "gaol", "status"]) {
       const source = JSON.stringify({ updated: "2026-11-27", [key]: [STAGE] });
       const r = ladderReport(source, "project-state.json");
-      expect(r.kind === "UNMEASURED" && r.why, key).toContain(`has "${key}"`);
+      expect(r.kind === "UNMEASURED" && r.why, key).toContain(`"${key}"`);
       expect(ladderLines(r).join("\n")).not.toContain("no stages written");
-      expect(goalReading(source, "project-state.json", success(THING)).kind).toBe("UNMEASURED");
+      const g = goalReading(source, "project-state.json", success(THING));
+      expect(g.kind === "UNMEASURED" && g.why, key).toContain(`"${key}"`);
     }
-    for (const key of ["Goal", "gaol"]) {
-      const goalTypo = JSON.stringify({ updated: "2026-11-27", [key]: { statement: "a goal", verify: "true" } });
-      expect(ladderReport(goalTypo, "project-state.json").kind).toBe("UNWRITTEN");
-      const g = goalReading(goalTypo, "project-state.json", success(THING));
-      expect(g.kind === "UNMEASURED" && g.why, key).toContain(`has "${key}"`);
-    }
-    // Controls: a key two edits away is a different key, and `goals` is a real one.
-    expect(ladderReport(JSON.stringify({ updated: "2026-11-27", status: "fine" }), "project-state.json").kind).toBe("UNWRITTEN");
-    const goalsOnly = goalReading(JSON.stringify({ goals: [{ id: 1, goal: "g", doneWhen: "d" }] }), "project-state.json", success(THING));
-    expect(goalsOnly.kind === "READ" && goalsOnly.from).toBe("SUCCESS.md");
+    // A written ladder beside an unknown key is refused too, not read past it.
+    const beside = { ...JSON.parse(PLAN), stgs: [] };
+    const r = ladderReport(JSON.stringify(beside), "project-state.json");
+    expect(r.kind === "UNMEASURED" && r.why).toContain(`"stgs"`);
+    // Control: every known key but the plan's own reads as before, with no
+    // ladder written and the goal from SUCCESS.md.
+    const known = JSON.stringify({
+      updated: "2026-11-27", priorities: [], notes: "n", phases: [], sessions: [], session: {}, antipatterns: [],
+      goals: [{ id: 1, goal: "g", doneWhen: "d" }],
+    });
+    expect(ladderReport(known, "project-state.json").kind).toBe("UNWRITTEN");
+    const g = goalReading(known, "project-state.json", success(THING));
+    expect(g.kind === "READ" && g.from).toBe("SUCCESS.md");
   });
 
   test("a well-formed plan with an empty stages list has no ladder written, never \"every stage is complete\"", () => {

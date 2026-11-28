@@ -663,6 +663,27 @@ export function nextStage(
 }
 
 /**
+ * #2957: every top-level key a `project-state.json` may hold. Closed, so a
+ * key outside it is refused by name rather than guessed at: a misspelled
+ * `stages` or `goal` (`stgs`, `goa1`) would otherwise read as an absent one,
+ * which the plan views print as "no stages written" or replace with
+ * SUCCESS.md's goal. Review of #2948 found one more misspelling each round
+ * while the check was an edit distance.
+ *
+ * It holds the keys rungate's own file uses and the keys the scaffold's seed
+ * writes (`generateProjectState`); `test/stage-ladder.test.ts` reads both, so
+ * a key added in either place without adding it here is red there first.
+ */
+export const PROJECT_STATE_KEYS: readonly string[] = [
+  "antipatterns", "goal", "goals", "notes", "phases", "priorities", "session", "sessions", "stages", "updated",
+];
+
+/** The top-level keys of a parsed `project-state.json` outside `PROJECT_STATE_KEYS`, in document order. */
+export function unknownStateKeys(doc: object): string[] {
+  return Object.keys(doc).filter(k => !PROJECT_STATE_KEYS.includes(k));
+}
+
+/**
  * Every violation in the whole ladder document — the goal, the goals, and
  * the stages together.
  *

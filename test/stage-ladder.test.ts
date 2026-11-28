@@ -21,14 +21,16 @@
  * suite went red naming it, green again on restore.
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { spawnSync } from "child_process";
 import { BOARD_SNAPSHOT_DIR_ENV } from "../scripts/board-conformance";
+import { generateProjectState } from "../lib/scaffold/steps";
 import {
   COMMAND_NOT_FOUND,
   ITEM_SCOPES,
+  PROJECT_STATE_KEYS,
   REFUSAL_EXCERPT_CHARS,
   REFUSAL_EXCERPT_LINES,
   refusalExcerpt,
@@ -1029,5 +1031,32 @@ describe("completion is derived, never asserted", () => {
   test("retrosOwed names every complete stage missing one, and nothing else", () => {
     expect(retrosOwed([ok(), ok({ id: "B", retro: null }), ok({ id: "C", items: [{ id: "C1", what: "x", done: false, verify: null }], retro: null })]))
       .toEqual(["B"]);
+  });
+});
+
+describe("#2957: PROJECT_STATE_KEYS admits every key rungate and the scaffold write", () => {
+  // The set is closed, so a key written in either place and not added here
+  // turns the plan views UNMEASURED. These two cases make that edit red first.
+  const outside = (keys: string[]) => keys.filter(k => !PROJECT_STATE_KEYS.includes(k));
+
+  test("every top-level key of rungate's own project-state.json is in the set", () => {
+    const keys = Object.keys(doc);
+    expect(keys.length, "the live file has almost no keys, so this case measured nothing").toBeGreaterThan(3);
+    expect(outside(keys)).toEqual([]);
+  });
+
+  test("every top-level key of the scaffold's seed is in the set", () => {
+    const root = mkdtempSync(join(tmpdir(), "rg-2957-seed-"));
+    try {
+      mkdirSync(join(root, "specs"));
+      writeFileSync(join(root, "specs", "SEED-SPEC.md"), "# Seed\n\n- [ ] SC-9957: a planted criterion\n");
+      const actions: string[] = [];
+      generateProjectState(root, actions);
+      const keys = Object.keys(JSON.parse(readFileSync(join(root, "project-state.json"), "utf-8")));
+      expect(keys.length, actions.join("\n")).toBeGreaterThan(3);
+      expect(outside(keys)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
