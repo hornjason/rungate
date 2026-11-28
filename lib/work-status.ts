@@ -11,7 +11,7 @@
 import type { LaneReading } from "./board-lane-health";
 import type { NetGrowthBasis } from "./issue-filing-gate";
 import { readyOccupancy, undispatchableRemedy } from "./board-ready-rule";
-import { ladderViolations, nextStage, retrosOwed, type ItemScope, type Stage } from "./stage-ladder";
+import { PROJECT_STATE_KEYS, ladderViolations, nextStage, retrosOwed, unknownStateKeys, type ItemScope, type Stage } from "./stage-ladder";
 import { UNREADABLE, successThing } from "./success-doc";
 
 /**
@@ -406,33 +406,6 @@ export type LadderReport =
  * mutation of either leaves the other holding every case up, and neither
  * reads as dead.
  */
-/**
- * A key of `doc` that is `want` misspelled: one edit from it, ignoring case,
- * where an edit is an insertion, a deletion, a substitution or a swap of two
- * neighbours (`Stages`, `stage`, `stagse`, `stges` for `stages`). `notTypos`
- * are real keys one edit away (`goals` for `goal`). The two readers that treat
- * an absent key as "not written" ask this first, so a corrupt document is
- * never read as an empty one (review of #2948, rounds 1 and 2). A key two
- * edits away, such as `status`, is a different key.
- */
-function misspelledKey(doc: object, want: string, notTypos: readonly string[] = []): string | undefined {
-  return Object.keys(doc).find(k => k !== want && !notTypos.includes(k) && oneEditApart(k.toLowerCase(), want));
-}
-
-/** Optimal string alignment distance of at most 1 (an adjacent swap counts as one edit). */
-function oneEditApart(a: string, b: string): boolean {
-  if (a === b) return true;
-  if (Math.abs(a.length - b.length) > 1) return false;
-  let i = 0;
-  while (i < a.length && i < b.length && a[i] === b[i]) i++;
-  if (a.length === b.length) {
-    if (a.slice(i + 1) === b.slice(i + 1)) return true; // one substitution
-    return a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2); // one swap
-  }
-  const [longer, shorter] = a.length > b.length ? [a, b] : [b, a];
-  return longer.slice(i + 1) === shorter.slice(i); // one insertion or deletion
-}
-
 export function ladderReport(source: string | null, where: string): LadderReport {
   if (source === null) {
     return { kind: "UNMEASURED", why: `${where} could not be read, so the plan was not consulted` };
@@ -446,18 +419,27 @@ export function ladderReport(source: string | null, where: string): LadderReport
       why: `${where} is not valid JSON (${e instanceof Error ? e.message : String(e)})`,
     };
   }
-  // #2925, SC-2822: a project-state.json with no `stages` key has no ladder
-  // written, which is a reading, not a failure to take one. The scaffold
-  // writes a consumer's file without one, and that read as UNMEASURED for the
-  // whole plan. A `stages` key that is present still goes to the validator.
-  if (doc !== null && typeof doc === "object" && !Array.isArray(doc) && !("stages" in doc)) {
-    // A key that is "stages" in another case or the singular is a ladder
-    // written under the wrong name, not an unwritten one (review of #2948).
-    const typo = misspelledKey(doc, "stages");
-    if (typo !== undefined) {
-      return { kind: "UNMEASURED", why: `${where} has no "stages" but has "${typo}"; a misspelled ladder is not an unwritten one` };
+  if (doc !== null && typeof doc === "object" && !Array.isArray(doc)) {
+    // #2957: a key outside the closed set is refused before anything reads an
+    // absent key as unwritten, so a misspelled `stages` or `goal` is never an
+    // absent one. Both readers of the document come through here first.
+    const unknown = unknownStateKeys(doc);
+    if (unknown.length > 0) {
+      return {
+        kind: "UNMEASURED",
+        why:
+          `${where} has ${unknown.length === 1 ? "a key" : "keys"} outside the known set: ` +
+          `${unknown.map(k => JSON.stringify(k)).join(", ")}. The known keys are ${PROJECT_STATE_KEYS.join(", ")}; ` +
+          `a misspelled key is not an absent one`,
+      };
     }
-    return { kind: "UNWRITTEN", why: `${where} holds no "stages", so there is no ladder to read` };
+    // #2925, SC-2822: a project-state.json with no `stages` key has no ladder
+    // written, which is a reading, not a failure to take one. The scaffold
+    // writes a consumer's file without one, and that read as UNMEASURED for the
+    // whole plan. A `stages` key that is present still goes to the validator.
+    if (!("stages" in doc)) {
+      return { kind: "UNWRITTEN", why: `${where} holds no "stages", so there is no ladder to read` };
+    }
   }
   const violations = ladderViolations(doc);
   if (violations.length > 0) {
@@ -526,11 +508,9 @@ export function goalReading(source: string | null, where: string, success: strin
   // always has a goal (`ladderViolations`), so SUCCESS.md is read only for a
   // document with no ladder written.
   const doc = JSON.parse(source as string) as Record<string, unknown>;
+  // `ladderReport` refused any key outside the closed set, so an absent
+  // `goal` here is absent, never misspelled (#2957).
   if (!("goal" in doc)) {
-    const typo = misspelledKey(doc, "goal", ["goals"]);
-    if (typo !== undefined) {
-      return { kind: "UNMEASURED", why: `${where} has no "goal" but has "${typo}"; a misspelled goal is not a missing one` };
-    }
     const lead = `${where} has no goal, so it is read from SUCCESS.md's "## The thing"`;
     if (success === null) return { kind: "UNMEASURED", why: `${lead}, and there is no SUCCESS.md` };
     if (success === UNREADABLE) return { kind: "UNMEASURED", why: `${lead}, and SUCCESS.md could not be read` };
