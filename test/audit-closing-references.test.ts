@@ -228,6 +228,9 @@ describe("the refusal is observed, against a mutant that cannot refuse", () => {
       expect(real.err).toContain("CLOSING-REFERENCE REFUSED");
       const mutant = run(buildMutant(), payload, THIS_REPO, ON);
       expect(mutant.code, `mutant should NOT refuse on: ${name}`).toBe(0);
+      // Review of #2945: the mutant prints the refusal it reached, which a
+      // check that never fired does not.
+      expect(mutant.err, `mutant should reach the refusal on: ${name}`).toContain("CLOSING-REFERENCE REFUSED");
     });
   }
 });
@@ -441,7 +444,11 @@ describe("SC-2737: every pull request closes an issue that names a criterion", (
     const real = run(SCRIPT, payload, THIS_REPO, ON);
     expect(real.code).toBe(REFUSE_EXIT);
     expect(real.err).toContain("no closingIssuesTotal");
-    expect(run(buildMutant(), payload, THIS_REPO, ON).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), payload, THIS_REPO, ON);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("no --repo is UNMEASURED, not a clean pull request", () => {
@@ -561,7 +568,11 @@ describe("#2061: the closing check and the board answer the criterion question t
     const real = run(SCRIPT, p, THIS_REPO, ON);
     expect(real.code).toBe(REFUSE_EXIT);
     expect(real.err).toContain("#42, whose title and body name neither");
-    expect(run(buildMutant(), p, THIS_REPO, ON).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), p, THIS_REPO, ON);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("the declaration in the TITLE answers it, as it does for the label", () => {
@@ -585,7 +596,11 @@ describe("#2061: the closing check and the board answer the criterion question t
     const real = run(SCRIPT, payload([node]), THIS_REPO, ON);
     expect(real.code).toBe(REFUSE_EXIT);
     expect(real.err).toContain("carries no title");
-    expect(run(buildMutant(), payload([node]), THIS_REPO, ON).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), payload([node]), THIS_REPO, ON);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("a spec sweep that cannot be taken is UNMEASURED, and the mutant does not refuse", () => {
@@ -596,7 +611,11 @@ describe("#2061: the closing check and the board answer the criterion question t
     expect(real.code).toBe(REFUSE_EXIT);
     expect(real.err).toContain("spec sweep");
     expect(real.err).toContain("UNMEASURED");
-    expect(run(buildMutant(), p, THIS_REPO, ON, scratch).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), p, THIS_REPO, ON, scratch);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
     // The control: a session-record-only diff owes no criterion, so the same
     // unreadable tree does not stop it.
     const record = run(SCRIPT, payload([], [{ path: "project-state.json" }]), THIS_REPO, ON, scratch);
@@ -641,7 +660,11 @@ describe("#2005: closing a criterion's issue ticks the criterion, or says it doe
     expect(real.err).toContain("#77");
     expect(real.err).toContain("SC-9101");
     expect(real.err, "the refusal must print the exact words that excuse it").toContain("does not complete SC-9101");
-    expect(run(buildMutant(), payload("Fixes #77\n"), THIS_REPO, ON, root).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), payload("Fixes #77\n"), THIS_REPO, ON, root);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("the same pull request with the criterion ticked passes", () => {
@@ -715,7 +738,11 @@ describe("#1979: a closing keyword in a commit message is checked, backticks or 
     expect(real.code, real.out).toBe(REFUSE_EXIT);
     expect(real.err).toContain("#1717");
     expect(real.err).toContain("070052b5");
-    expect(run(buildMutant(), p, THIS_REPO, ON).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), p, THIS_REPO, ON);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("it refuses with the switch OFF too: closing live work is not a warning", () => {
@@ -780,7 +807,11 @@ describe("#1979: a closing keyword in a commit message is checked, backticks or 
     const real = run(SCRIPT, payload, THIS_REPO, ON);
     expect(real.code).toBe(REFUSE_EXIT);
     expect(real.err).toContain("no commits array");
-    expect(run(buildMutant(), payload, THIS_REPO, ON).code).toBe(0);
+    {
+      const mutant = run(buildMutant(), payload, THIS_REPO, ON);
+      expect(mutant.code).toBe(0);
+      expect(mutant.err, "the mutant reached the refusal and printed it").toContain("CLOSING-REFERENCE REFUSED");
+    }
   });
 
   test("a commit list GitHub cut short is UNMEASURED", () => {
