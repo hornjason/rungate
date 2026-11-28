@@ -452,17 +452,35 @@ describe("SC-2822: with no plan written, the goal comes from SUCCESS.md and the 
 
   test("a misspelled stages or goal key is UNMEASURED and names the key, never no stages written or SUCCESS.md's goal", () => {
     // Review of #2948: a ladder under the wrong name is corrupt, not unwritten.
-    for (const key of ["stage", "Stages"]) {
+    // Round 2: any key one edit away, not a list of two spellings.
+    for (const key of ["stage", "Stages", "stagse", "stges"]) {
       const source = JSON.stringify({ updated: "2026-11-27", [key]: [STAGE] });
       const r = ladderReport(source, "project-state.json");
       expect(r.kind === "UNMEASURED" && r.why, key).toContain(`has "${key}"`);
       expect(ladderLines(r).join("\n")).not.toContain("no stages written");
       expect(goalReading(source, "project-state.json", success(THING)).kind).toBe("UNMEASURED");
     }
-    const goalTypo = JSON.stringify({ updated: "2026-11-27", Goal: { statement: "a goal", verify: "true" } });
-    expect(ladderReport(goalTypo, "project-state.json").kind).toBe("UNWRITTEN");
-    const g = goalReading(goalTypo, "project-state.json", success(THING));
-    expect(g.kind === "UNMEASURED" && g.why).toContain(`has "Goal"`);
+    for (const key of ["Goal", "gaol"]) {
+      const goalTypo = JSON.stringify({ updated: "2026-11-27", [key]: { statement: "a goal", verify: "true" } });
+      expect(ladderReport(goalTypo, "project-state.json").kind).toBe("UNWRITTEN");
+      const g = goalReading(goalTypo, "project-state.json", success(THING));
+      expect(g.kind === "UNMEASURED" && g.why, key).toContain(`has "${key}"`);
+    }
+    // Controls: a key two edits away is a different key, and `goals` is a real one.
+    expect(ladderReport(JSON.stringify({ updated: "2026-11-27", status: "fine" }), "project-state.json").kind).toBe("UNWRITTEN");
+    const goalsOnly = goalReading(JSON.stringify({ goals: [{ id: 1, goal: "g", doneWhen: "d" }] }), "project-state.json", success(THING));
+    expect(goalsOnly.kind === "READ" && goalsOnly.from).toBe("SUCCESS.md");
+  });
+
+  test("a well-formed plan with an empty stages list has no ladder written, never \"every stage is complete\"", () => {
+    // Review of #2948, round 2: the two views agree, and neither reads a vacuous completion.
+    const empty = JSON.stringify({ goal: { statement: "the goal", verify: "true" }, goals: [{ id: 1, goal: "g", doneWhen: "d" }], stages: [] });
+    const r = ladderReport(empty, "project-state.json");
+    expect(r.kind).toBe("UNWRITTEN");
+    const text = ladderLines(r).join("\n");
+    expect(text).toContain("no stages written — project-state.json lists no stages");
+    expect(text).not.toContain("every stage is complete");
+    expect(goalReading(empty, "project-state.json", success(THING))).toEqual({ kind: "READ", statement: "the goal", from: "project-state.json" });
   });
 
   test("a refused plan with no goal key gives the ladder's reason for the goal, not SUCCESS.md's goal", () => {

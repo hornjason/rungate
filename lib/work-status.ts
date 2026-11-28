@@ -407,13 +407,30 @@ export type LadderReport =
  * reads as dead.
  */
 /**
- * A key of `doc` that is `want` written another way, lower-cased into one of
- * `spellings`: `Stages` or `stage` for `stages` (review of #2948). The two
- * readers that treat an absent key as "not written" ask this first, so a
- * corrupt document is never read as an empty one.
+ * A key of `doc` that is `want` misspelled: one edit from it, ignoring case,
+ * where an edit is an insertion, a deletion, a substitution or a swap of two
+ * neighbours (`Stages`, `stage`, `stagse`, `stges` for `stages`). `notTypos`
+ * are real keys one edit away (`goals` for `goal`). The two readers that treat
+ * an absent key as "not written" ask this first, so a corrupt document is
+ * never read as an empty one (review of #2948, rounds 1 and 2). A key two
+ * edits away, such as `status`, is a different key.
  */
-function misspelledKey(doc: object, want: string, spellings: readonly string[]): string | undefined {
-  return Object.keys(doc).find(k => k !== want && spellings.includes(k.toLowerCase()));
+function misspelledKey(doc: object, want: string, notTypos: readonly string[] = []): string | undefined {
+  return Object.keys(doc).find(k => k !== want && !notTypos.includes(k) && oneEditApart(k.toLowerCase(), want));
+}
+
+/** Optimal string alignment distance of at most 1 (an adjacent swap counts as one edit). */
+function oneEditApart(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  if (a.length === b.length) {
+    if (a.slice(i + 1) === b.slice(i + 1)) return true; // one substitution
+    return a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2); // one swap
+  }
+  const [longer, shorter] = a.length > b.length ? [a, b] : [b, a];
+  return longer.slice(i + 1) === shorter.slice(i); // one insertion or deletion
 }
 
 export function ladderReport(source: string | null, where: string): LadderReport {
@@ -436,7 +453,7 @@ export function ladderReport(source: string | null, where: string): LadderReport
   if (doc !== null && typeof doc === "object" && !Array.isArray(doc) && !("stages" in doc)) {
     // A key that is "stages" in another case or the singular is a ladder
     // written under the wrong name, not an unwritten one (review of #2948).
-    const typo = misspelledKey(doc, "stages", ["stages", "stage"]);
+    const typo = misspelledKey(doc, "stages");
     if (typo !== undefined) {
       return { kind: "UNMEASURED", why: `${where} has no "stages" but has "${typo}"; a misspelled ladder is not an unwritten one` };
     }
@@ -452,6 +469,12 @@ export function ladderReport(source: string | null, where: string): LadderReport
   // `ladderViolations` returning empty is what establishes the shape. The
   // cast is the assertion it already made, not a second opinion about it.
   const stages = (doc as { stages: Stage[] }).stages;
+  // Review of #2948, round 2: a well-formed plan with `"stages": []` has no
+  // ladder written either. Read as READ it printed "every stage is complete",
+  // and `stageIsComplete` calls a stage with no items NOT complete.
+  if (stages.length === 0) {
+    return { kind: "UNWRITTEN", why: `${where} lists no stages, so there is no ladder to read` };
+  }
 
   const open: LadderRow[] = [];
   for (const stage of stages) {
@@ -504,7 +527,7 @@ export function goalReading(source: string | null, where: string, success: strin
   // document with no ladder written.
   const doc = JSON.parse(source as string) as Record<string, unknown>;
   if (!("goal" in doc)) {
-    const typo = misspelledKey(doc, "goal", ["goal"]);
+    const typo = misspelledKey(doc, "goal", ["goals"]);
     if (typo !== undefined) {
       return { kind: "UNMEASURED", why: `${where} has no "goal" but has "${typo}"; a misspelled goal is not a missing one` };
     }
