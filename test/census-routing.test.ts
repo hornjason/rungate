@@ -660,16 +660,19 @@ describe("#1368: a generated workflow routes to the suites that read it", () => 
         mkdirSync(join(dir, "test"));
         const planted: Record<string, string> = {
           job: "const job = buildReviewRunStep(x);\n",
+          // Review of #2967: a plural emitter, as `buildShardMarkerSteps` is named.
+          plural: "const steps = buildShardMarkerSteps(indent);\n",
           future: "const wf = buildSomeNewWorkflow(cfg);\n",
           script: "const s = buildDriftScript();\n",
           comment: "// buildReviewRunStep(x) is not called here\nconst z = 1;\n",
         };
         for (const [name, src] of Object.entries(planted)) writeFileSync(join(dir, `test/${name}.test.ts`), src);
-        expect(generatedWorkflowCensusSuites(dir)).toEqual(["test/future.test.ts", "test/job.test.ts"]);
+        expect(generatedWorkflowCensusSuites(dir)).toEqual(["test/future.test.ts", "test/job.test.ts", "test/plural.test.ts"]);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+
 
     // Non-vacuity, both ends. A walk returning everything is a router nobody
     // runs — the state the row's own comment measured at 138 of 588 and

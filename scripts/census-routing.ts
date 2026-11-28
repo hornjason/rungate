@@ -1098,16 +1098,21 @@ export function testPopulationCensusSuites(root: string): string[] {
  * local run, against a miss that costs a CI round.
  *
  * #2966: an emitter is read by its SHAPE, `build…Workflow`, `build…Step` or
- * `build…Job`, which is how every one `lib/scaffold/` exports is named (13
- * today). The list it replaces named one of them, so a suite that builds the
- * review job with `buildReviewRunStep` and names nothing else was never
- * routed, and PR #2963 broke two of its cases unseen. Measured on this tree:
- * 124 suites before, 126 after, none lost. A builder of one script
+ * `build…Job`, singular or plural (`buildShardMarkerSteps`, review of PR
+ * #2967). That is how 14 of the emitters `lib/scaffold/` exports are named.
+ * The two named otherwise, `globalToolInstallStep` and `mergeManagedWorkflow`,
+ * are read by name. The list this replaces named one emitter, so a suite that
+ * builds the review job with `buildReviewRunStep` and names nothing else was
+ * never routed, and PR #2963 broke two of its cases unseen. Measured on this
+ * tree: 124 suites before, 126 after, none lost. A builder of one script
  * (`buildDriftScript`) is not an emitter of a workflow and stays out: its
  * suites are the targeted paths of a change to it.
+ * `test/census-routing.test.ts` asserts that every `lib/scaffold/` export
+ * named `…Workflow`, `…Step` or `…Job` is read here, or is one of the
+ * scaffold's own steps, which emit no workflow.
  */
 const NAMES_GENERATED_WORKFLOWS =
-  /\.github[\/"'`,\s]+[ \t]*["'`]?workflows|\bcreateCiWorkflows\b|\bbuild\w*(?:Workflow|Step|Job)\b/;
+  /\.github[\/"'`,\s]+[ \t]*["'`]?workflows|\bcreateCiWorkflows\b|\bbuild\w*(?:Workflow|Step|Job)s?\b|\bglobalToolInstallStep\b|\bmergeManagedWorkflow\b/;
 
 /**
  * #1927 — the suites with an opinion about a generated workflow, read from
