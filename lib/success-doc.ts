@@ -139,10 +139,19 @@ export function unfilled(text: string): boolean {
  */
 export function successThing(text: string): string | null {
   const lines = text.split(/\r?\n/);
-  const at = lines.findIndex(l => /^##(?!#)\s+The thing\s*$/.test(l));
+  // Fenced lines are skipped, as `parseSuccessDoc` skips them (#2130): an
+  // example section inside a code block is not this project's (review of #2948).
+  const { roles } = readFences(lines);
+  const prose = (i: number) => roles[i] !== "fence" && roles[i] !== "code";
+  const at = lines.findIndex((l, i) => prose(i) && /^##(?!#)\s+The thing\s*$/.test(l));
   if (at < 0) return null;
   const paragraph: string[] = [];
-  for (const line of lines.slice(at + 1)) {
+  for (let i = at + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!prose(i)) {
+      if (paragraph.length > 0) break;
+      continue;
+    }
     if (/^#{1,6}\s/.test(line)) break;
     if (line.includes(PLACEHOLDER_MARKER)) return null;
     if (line.trim() === "") {

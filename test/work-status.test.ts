@@ -382,6 +382,10 @@ describe("SC-2822: with no plan written, the goal comes from SUCCESS.md and the 
     expect(successThing(TEMPLATE)).toBeNull();
     expect(successThing("# x\n\n## Something else\n\nA paragraph long enough to be a goal.\n")).toBeNull();
     expect(successThing("# x\n\n## The thing\n\n## The claims\n\nA paragraph long enough to be a goal.\n")).toBeNull();
+    // Review of #2948: a heading inside a code fence is an example, not the section.
+    const example = "```markdown\n## The thing\n\nAn example goal sentence that is long enough.\n```\n";
+    expect(successThing(`# x\n\n${example}\n## The thing\n\n${THING}\n`)).toBe(THING);
+    expect(successThing(`# x\n\n${example}`)).toBeNull();
     const live = successThing(readFileSync(join(ROOT, "SUCCESS.md"), "utf-8"));
     expect(live ?? "").toStartWith("A ship harness someone else can point at their own repository");
   });
@@ -444,6 +448,31 @@ describe("SC-2822: with no plan written, the goal comes from SUCCESS.md and the 
       expect(l.kind).toBe("UNMEASURED");
       expect(g.kind === "UNMEASURED" && l.kind === "UNMEASURED" && g.why).toBe(l.kind === "UNMEASURED" ? l.why : "");
     }
+  });
+
+  test("a misspelled stages or goal key is UNMEASURED and names the key, never no stages written or SUCCESS.md's goal", () => {
+    // Review of #2948: a ladder under the wrong name is corrupt, not unwritten.
+    for (const key of ["stage", "Stages"]) {
+      const source = JSON.stringify({ updated: "2026-11-27", [key]: [STAGE] });
+      const r = ladderReport(source, "project-state.json");
+      expect(r.kind === "UNMEASURED" && r.why, key).toContain(`has "${key}"`);
+      expect(ladderLines(r).join("\n")).not.toContain("no stages written");
+      expect(goalReading(source, "project-state.json", success(THING)).kind).toBe("UNMEASURED");
+    }
+    const goalTypo = JSON.stringify({ updated: "2026-11-27", Goal: { statement: "a goal", verify: "true" } });
+    expect(ladderReport(goalTypo, "project-state.json").kind).toBe("UNWRITTEN");
+    const g = goalReading(goalTypo, "project-state.json", success(THING));
+    expect(g.kind === "UNMEASURED" && g.why).toContain(`has "Goal"`);
+  });
+
+  test("a refused plan with no goal key gives the ladder's reason for the goal, not SUCCESS.md's goal", () => {
+    // Review of #2948: SUCCESS.md stands in only where no ladder is written.
+    const source = JSON.stringify({ updated: "2026-11-27", stages: "not a ladder" });
+    const l = ladderReport(source, "project-state.json");
+    expect(l.kind).toBe("UNMEASURED");
+    expect(goalReading(source, "project-state.json", success(THING))).toEqual({
+      kind: "UNMEASURED", why: l.kind === "UNMEASURED" ? l.why : "",
+    });
   });
 
   test("rungate's own plan reads as before: its goal from project-state.json, its ladder READ", () => {

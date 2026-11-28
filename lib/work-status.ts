@@ -406,6 +406,16 @@ export type LadderReport =
  * mutation of either leaves the other holding every case up, and neither
  * reads as dead.
  */
+/**
+ * A key of `doc` that is `want` written another way, lower-cased into one of
+ * `spellings`: `Stages` or `stage` for `stages` (review of #2948). The two
+ * readers that treat an absent key as "not written" ask this first, so a
+ * corrupt document is never read as an empty one.
+ */
+function misspelledKey(doc: object, want: string, spellings: readonly string[]): string | undefined {
+  return Object.keys(doc).find(k => k !== want && spellings.includes(k.toLowerCase()));
+}
+
 export function ladderReport(source: string | null, where: string): LadderReport {
   if (source === null) {
     return { kind: "UNMEASURED", why: `${where} could not be read, so the plan was not consulted` };
@@ -424,6 +434,12 @@ export function ladderReport(source: string | null, where: string): LadderReport
   // writes a consumer's file without one, and that read as UNMEASURED for the
   // whole plan. A `stages` key that is present still goes to the validator.
   if (doc !== null && typeof doc === "object" && !Array.isArray(doc) && !("stages" in doc)) {
+    // A key that is "stages" in another case or the singular is a ladder
+    // written under the wrong name, not an unwritten one (review of #2948).
+    const typo = misspelledKey(doc, "stages", ["stages", "stage"]);
+    if (typo !== undefined) {
+      return { kind: "UNMEASURED", why: `${where} has no "stages" but has "${typo}"; a misspelled ladder is not an unwritten one` };
+    }
     return { kind: "UNWRITTEN", why: `${where} holds no "stages", so there is no ladder to read` };
   }
   const violations = ladderViolations(doc);
@@ -479,19 +495,19 @@ export type GoalReading =
   | { readonly kind: "UNMEASURED"; readonly why: string };
 
 export function goalReading(source: string | null, where: string, success: string | null): GoalReading {
+  // The ladder first (review of #2948): a plan it refuses gives its reason
+  // for the goal too, whatever SUCCESS.md says, as it did before #2925.
   const ladder = ladderReport(source, where);
-  let doc: unknown = null;
-  if (source !== null) {
-    try {
-      doc = JSON.parse(source);
-    } catch {
-      doc = null; // the ladder's reason names the parse failure
-    }
-  }
-  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
-    return { kind: "UNMEASURED", why: ladder.kind === "UNMEASURED" ? ladder.why : `${where} is not an object` };
-  }
+  if (ladder.kind === "UNMEASURED") return { kind: "UNMEASURED", why: ladder.why };
+  // READ or UNWRITTEN: the document parsed, as an object. A READ ladder
+  // always has a goal (`ladderViolations`), so SUCCESS.md is read only for a
+  // document with no ladder written.
+  const doc = JSON.parse(source as string) as Record<string, unknown>;
   if (!("goal" in doc)) {
+    const typo = misspelledKey(doc, "goal", ["goal"]);
+    if (typo !== undefined) {
+      return { kind: "UNMEASURED", why: `${where} has no "goal" but has "${typo}"; a misspelled goal is not a missing one` };
+    }
     const lead = `${where} has no goal, so it is read from SUCCESS.md's "## The thing"`;
     if (success === null) return { kind: "UNMEASURED", why: `${lead}, and there is no SUCCESS.md` };
     if (success === UNREADABLE) return { kind: "UNMEASURED", why: `${lead}, and SUCCESS.md could not be read` };
@@ -501,10 +517,9 @@ export function goalReading(source: string | null, where: string, success: strin
     }
     return { kind: "READ", statement: thing, from: "SUCCESS.md" };
   }
-  if (ladder.kind === "UNMEASURED") return { kind: "UNMEASURED", why: ladder.why };
   // Read on a READ ladder, which `ladderViolations` checked, and on an
   // UNWRITTEN one, which nothing else checked.
-  const goal = (doc as { goal: unknown }).goal;
+  const goal = doc.goal;
   const statement =
     goal !== null && typeof goal === "object" && typeof (goal as { statement?: unknown }).statement === "string"
       ? ((goal as { statement: string }).statement).trim()

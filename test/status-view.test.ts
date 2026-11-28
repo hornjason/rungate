@@ -137,6 +137,17 @@ describe("SC-2822: the status view shows SUCCESS.md's goal and no stages written
     expect(goal).not.toContain("UNMEASURED");
   });
 
+  test("a missing stages key and an empty stages list get the same finish line, and it is true of both", () => {
+    // Review of #2948: the line once said the key was absent for `"stages": []` too.
+    const empty = JSON.stringify({ goal: { statement: "s", verify: "true" }, goals: [{ id: 1, goal: "g", doneWhen: "d" }], stages: [] });
+    const finish = (source: string) => {
+      const lines = planLines(source, "project-state.json", SUCCESS);
+      return sectionOf(renderText(view({ goal: lines.goal, stages: lines.stages })), "The finish line");
+    };
+    expect(finish(empty)).toBe(finish(SCAFFOLDED));
+    expect(finish(empty)).toContain("no stages written — project-state.json lists no stages");
+  });
+
   test("planFor reads SUCCESS.md from the project root it is given", () => {
     const root = mkdtempSync(join(tmpdir(), "status-view-sc2822-"));
     try {

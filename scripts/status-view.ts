@@ -458,7 +458,9 @@ function render(v: StatusView, f: Fmt, markdown: boolean): string {
   out.push(
     ...section(f, "The finish line", v.stages, stages =>
       stages.length === 0
-        ? [f.item(`${NO_STAGES_WRITTEN} — project-state.json holds no "stages"`)]
+        ? // A missing key and an empty list both get here, so the line says what
+          // is true of both (review of #2948).
+          [f.item(`${NO_STAGES_WRITTEN} — project-state.json lists no stages`)]
         : stages.map(s => {
             const left = s.open.length === 0 ? "" : ` — ${s.open.length} of ${s.total} left: ${f.text(s.open.join(", "))}`;
             const id = markdown ? `**${f.text(s.id)}**` : s.id;
