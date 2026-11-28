@@ -336,6 +336,13 @@ describe("#911 AC-3: an unreadable ship block REFUSES rather than defaulting", (
     ["direct on 29 February of a year that is not a leap year", { mode: "direct", since: "2026-02-29", reason: "because" }],
   ];
 
+  test("#2944 review: a real date in years 0000 to 0099 resolves, so no century offset is applied", () => {
+    // `Date.UTC` reads years 0 to 99 as 1900 to 1999, and the read-back then refused a real day.
+    for (const since of ["0050-06-01", "0099-06-15", "0004-02-29"]) {
+      expect(resolveShipPolicy({ ship: { mode: "direct", since, reason: "because" } }), since).toEqual({ mode: "direct", since, reason: "because" });
+    }
+  });
+
   test("#2944: a real leap day resolves, so the calendar check is not refusing every 29 February", () => {
     expect(resolveShipPolicy({ ship: { mode: "direct", since: "2028-02-29", reason: "because" } })).toEqual({
       mode: "direct", since: "2028-02-29", reason: "because",

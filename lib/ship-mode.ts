@@ -73,11 +73,14 @@ const SINCE_FORMAT = /^\d{4}-\d{2}-\d{2}$/;
  * A real calendar date, not only the shape of one (#2944): `2026-02-31` has
  * the shape and names no day. Read back through UTC, a day that does not
  * exist rolls over into another month and no longer matches what was written.
+ * `setUTCFullYear` rather than `Date.UTC`, which reads years 0 to 99 as 1900
+ * to 1999 and so refused a real day there (review of #2956).
  */
 function isCalendarDate(value: string): boolean {
   if (!SINCE_FORMAT.test(value)) return false;
   const [y, m, d] = value.split("-").map(Number) as [number, number, number];
-  const t = new Date(Date.UTC(y, m - 1, d));
+  const t = new Date(0);
+  t.setUTCFullYear(y, m - 1, d);
   return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d;
 }
 
