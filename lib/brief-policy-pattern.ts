@@ -73,3 +73,28 @@ export function compileBriefPolicy(requiredPatterns: unknown): CompiledBriefPoli
   }
   return { ok: true, patterns };
 }
+
+export type BriefPolicyMap =
+  | { readonly ok: true; readonly policies: Readonly<Record<string, unknown>> }
+  | { readonly ok: false; readonly why: string };
+
+/**
+ * A policy file's `policies` map, or why the file's shape cannot be read
+ * (review of #2960). The file must be a JSON object, and its `policies` must
+ * be one too. Anything else (absent, null, an array, a string) is unreadable.
+ * Read as an empty map, the guard passed every brief while the gates refused
+ * the same file, and a corrupt config read as a missing one
+ * (`.claude/rules/config-access.md`). Both readers, and the gates' merge of a
+ * local override, ask this first.
+ */
+export function briefPolicyMap(doc: unknown): BriefPolicyMap {
+  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) {
+    return { ok: false, why: "is not a JSON object" };
+  }
+  const policies = (doc as { policies?: unknown }).policies;
+  if (policies === null || typeof policies !== "object" || Array.isArray(policies)) {
+    const was = policies === undefined ? "absent" : policies === null ? "null" : Array.isArray(policies) ? "an array" : typeof policies;
+    return { ok: false, why: `has no "policies" object (it is ${was})` };
+  }
+  return { ok: true, policies: policies as Record<string, unknown> };
+}

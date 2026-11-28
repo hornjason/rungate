@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 import { plantCanaries, getDefaultCanaries } from "../lib/canary.js";
 import { tryLoadRungateConfig } from "../lib/config-loader";
 import { shipSkillPath } from "../lib/ship-skill-folder";
-import { compileBriefPolicy } from "../lib/brief-policy-pattern";
+import { briefPolicyMap, compileBriefPolicy } from "../lib/brief-policy-pattern";
 import {
   classifyContextDoc, classifyContextDocs, contextDocLines, contextDocNotes, hasBriefUnsafeChars,
   type ContextDocVerdict,
@@ -389,10 +389,17 @@ export function loadBriefPolicies(): any {
   // Per agent type, so an override naming only `marcus` does not delete the
   // shipped `quinn` and `rook` entries.
   const override = JSON.parse(readFileSync(overridePath, "utf-8"));
+  // Review of #2960: an override whose `policies` is not an object was spread
+  // in silently (a string spreads its characters, null spreads nothing), so a
+  // corrupt override read as an absent one. It refuses, as the guard does.
+  const map = briefPolicyMap(override);
+  if (!map.ok) {
+    throw new Error(`brief policies override ${overridePath} ${map.why}. An unreadable override cannot validate a brief, so this refuses.`);
+  }
   return {
     ...shipped,
     ...override,
-    policies: { ...shipped.policies, ...override.policies },
+    policies: { ...shipped.policies, ...map.policies },
   };
 }
 
@@ -410,7 +417,11 @@ export function validateBriefAgainst(brief: string, policies: any): boolean {
   // before any is tested (review of #2960), so an unreadable entry after one
   // the brief misses is still named. An empty or absent list refuses: it
   // validates every brief, which is indistinguishable from not validating.
-  const compiled = compileBriefPolicy(policies?.policies?.marcus?.requiredPatterns);
+  const map = briefPolicyMap(policies);
+  if (!map.ok) {
+    throw new Error(`brief policies ${map.why}. An unreadable policy file cannot validate a brief, so this refuses.`);
+  }
+  const compiled = compileBriefPolicy((map.policies.marcus as { requiredPatterns?: unknown } | null | undefined)?.requiredPatterns);
   if (!compiled.ok) {
     throw new Error(`brief policies for "marcus": ${compiled.why}. An unreadable policy cannot validate a brief, so this refuses.`);
   }

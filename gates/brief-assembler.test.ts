@@ -476,7 +476,9 @@ describe("#1174: brief policies resolve to the packaged config", () => {
     // old `catch {}` fell into on a malformed file.
     expect(() => validateBriefAgainst("anything at all", { policies: { marcus: { requiredPatterns: [] } } }))
       .toThrow(/no requiredPatterns/);
-    expect(() => validateBriefAgainst("anything at all", {})).toThrow(/no requiredPatterns/);
+    // Review round 2 of #2960: a file with no `policies` object is refused one
+    // step earlier, naming that, as the guard names it.
+    expect(() => validateBriefAgainst("anything at all", {})).toThrow(/has no "policies" object/);
   });
 
   test("a brief missing a required section still fails, with the real patterns", () => {

@@ -14,10 +14,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 
-import { compileBriefPattern, compileBriefPolicy } from "../lib/brief-policy-pattern";
+import { briefPolicyMap, compileBriefPattern, compileBriefPolicy } from "../lib/brief-policy-pattern";
 import { validateAgentBrief } from "../lib/agent-brief-validation";
 import { shipSkillPath } from "../lib/ship-skill-folder";
-import { validateBriefAgainst } from "../gates/brief-assembler";
+import { loadBriefPolicies, validateBriefAgainst } from "../gates/brief-assembler";
 
 const ROOT = join(import.meta.dir, "..");
 const SHIPPED = readFileSync(join(ROOT, "config", "brief-policies.json"), "utf-8");
@@ -150,5 +150,49 @@ describe("#2946, review of #2960: both readers read the whole list, and an empty
     }
     // Control: a file that names no policy for this agent polices nothing for it.
     expect(guard(JSON.stringify({ policies: { quinn: { requiredPatterns: [{ name: "x", pattern: "x" }] } } }), BARE)).toEqual([]);
+  });
+});
+
+describe("#2946, review round 2 of #2960: a policies member that is not an object is unreadable, never no policy", () => {
+  const CORRUPT = [{ policies: "oops" }, { policies: null }, { policies: [] }, { description: "x" }];
+
+  test("briefPolicyMap refuses a file, or a policies member, that is not an object", () => {
+    for (const doc of [...CORRUPT, [], "x", null]) expect(briefPolicyMap(doc).ok, JSON.stringify(doc)).toBe(false);
+    expect(briefPolicyMap({ policies: "oops" })).toEqual({ ok: false, why: `has no "policies" object (it is string)` });
+    expect(briefPolicyMap({ policies: [] })).toEqual({ ok: false, why: `has no "policies" object (it is an array)` });
+    expect(briefPolicyMap({ description: "x" })).toEqual({ ok: false, why: `has no "policies" object (it is absent)` });
+    expect(briefPolicyMap([])).toEqual({ ok: false, why: "is not a JSON object" });
+    const ok = briefPolicyMap({ policies: { quinn: {} } });
+    expect(ok.ok && Object.keys(ok.policies)).toEqual(["quinn"]);
+  });
+
+  test("the guard reports each one UNMEASURED and the gates refuse it, both naming the policies member", () => {
+    for (const doc of CORRUPT) {
+      const said = guard(JSON.stringify(doc), BARE).filter(o => o.startsWith("BRIEF CONTENT UNMEASURED"));
+      expect(said.join(""), JSON.stringify(doc)).toContain(`has no "policies" object`);
+      expect(() => validateBriefAgainst(BARE, doc), JSON.stringify(doc)).toThrow(/has no "policies" object/);
+    }
+  });
+
+  test("the gates' loader refuses a local override whose policies is not an object, rather than merging it as nothing", () => {
+    const home = mkdtempSync(join(tmpdir(), "rg-2946-home-"));
+    scratch.push(home);
+    const file = shipSkillPath(join(home, ".claude"), "brief-policies.json");
+    mkdirSync(dirname(file), { recursive: true });
+    const was = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      for (const doc of CORRUPT) {
+        writeFileSync(file, JSON.stringify(doc));
+        expect(() => loadBriefPolicies(), JSON.stringify(doc)).toThrow(/override .* has no "policies" object/);
+      }
+      // Control: a readable override is merged over the shipped file.
+      const mine = [{ name: "x", pattern: "x" }];
+      writeFileSync(file, JSON.stringify({ policies: { marcus: { requiredPatterns: mine } } }));
+      expect(loadBriefPolicies().policies.marcus.requiredPatterns).toEqual(mine);
+    } finally {
+      if (was === undefined) delete process.env.HOME;
+      else process.env.HOME = was;
+    }
   });
 });

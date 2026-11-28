@@ -18,7 +18,7 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { shipSkillPath } from './ship-skill-folder';
-import { compileBriefPolicy } from './brief-policy-pattern';
+import { briefPolicyMap, compileBriefPolicy } from './brief-policy-pattern';
 
 // --- Interfaces ---
 
@@ -243,11 +243,12 @@ function validateBriefPolicies(
   } catch (e) {
     return { unreadable: `${policyPath} is not JSON (${(e as Error).message})` };
   }
-  if (policies === null || typeof policies !== 'object' || Array.isArray(policies)) {
-    return { unreadable: `${policyPath} is not a JSON object` };
-  }
+  // Review of #2960: a `policies` that is not an object is unreadable here, as
+  // the gates refuse it, never a file that names no policy.
+  const map = briefPolicyMap(policies);
+  if (!map.ok) return { unreadable: `${policyPath} ${map.why}` };
   const key = agent.label.toLowerCase();
-  const policy = (policies as { policies?: Record<string, unknown> }).policies?.[key];
+  const policy = map.policies[key];
   // No entry for this agent is no policy for it: the file names the agents it
   // polices. An entry that is there is read whole (review of #2960).
   if (policy === undefined) return { missing: [] };
