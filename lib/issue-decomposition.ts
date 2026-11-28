@@ -731,28 +731,30 @@ export type AdrStatusName = (typeof ADR_STATUSES)[number];
  */
 export interface UnmeasuredAdrStatus {
   /**
-   * The value as read, or `null` when the frontmatter has no `status:` key at
-   * all, as with `Status: accepted` or `staus: accepted` (review of #2959).
+   * The value as read, or `null` when there is no `status:` key to read: the
+   * key spelled another way (`Status:`, `staus:`), or no frontmatter opening
+   * on the first line at all (review of #2959, rounds 1 and 2).
    */
   readonly unmeasured: string | null;
 }
 
 /**
  * The `status:` an ADR's FRONTMATTER declares: one of {@link ADR_STATUSES},
- * {@link UnmeasuredAdrStatus} for any other value or for a frontmatter with no
- * `status:` key (#2955), or `null` when the text has no frontmatter at all.
- * Every ADR here declares a status, so a frontmatter without the key is a key
- * spelled some other way, which no reader can read.
+ * or {@link UnmeasuredAdrStatus} for anything else (#2955): any other value, a
+ * frontmatter with no `status:` key, or a text whose first line opens no
+ * frontmatter. Every ADR here declares a status in a frontmatter on its first
+ * line, so any other shape is one no reader can read, never "no status".
  *
  * Only the frontmatter: an ADR's body quotes statuses freely ("revision 2 was
  * accepted"), and a body line must not be able to file a plan.
  */
-export function adrStatus(text: string): AdrStatusName | UnmeasuredAdrStatus | null {
+export function adrStatus(text: string): AdrStatusName | UnmeasuredAdrStatus {
   const lines = text.split("\n");
-  if (lines[0]?.trim() !== "---") return null;
-  // Review of #2959: a frontmatter with no `status:` key, closed or not, is a
-  // key no reader can read (`Status:`, `staus:`), never "declares no status".
+  // Review of #2959: a frontmatter with no `status:` key, closed or not, and a
+  // text whose first line opens none (a body-only ADR, a blank line before the
+  // fence) are each a declaration no reader can read, never "no status".
   const NO_KEY: UnmeasuredAdrStatus = { unmeasured: null };
+  if (lines[0]?.trim() !== "---") return NO_KEY;
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i]!;
     if (line.trim() === "---") return NO_KEY;
@@ -912,10 +914,10 @@ export function hasDecompositionTable(text: string): boolean {
  */
 export function adrStatusRefusal(text: string): string | null {
   const s = adrStatus(text);
-  if (s === null || typeof s === "string") return null;
+  if (typeof s === "string") return null;
   const declares =
     s.unmeasured === null
-      ? "declares no `status:` key in its frontmatter (a key spelled any other way, such as `Status:`, is not read)"
+      ? "declares no `status:` key in a frontmatter opening on its first line (a key spelled any other way, such as `Status:`, or a status only the body states, is not read)"
       : `declares status ${JSON.stringify(s.unmeasured)}, which is none of ${ADR_STATUSES.join(", ")}`;
   return `${declares}, so whether its plan is proposed, accepted or neither was never read. UNMEASURED, not "not accepted"`;
 }

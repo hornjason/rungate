@@ -1004,6 +1004,8 @@ describe("SC-2820: a pull request carrying a proposed ADR with a plan is refused
     for (const [label, text] of [
       ["no status key", adr(null)],
       ["Status: proposed", adr(null).replace("doc-type: adr", "doc-type: adr\nStatus: proposed")],
+      // Round 2: no frontmatter at all, the status only in the body.
+      ["no frontmatter", adr("proposed").replace(/^---\n[\s\S]*?\n---\n/, "status: proposed\n")],
     ] as const) {
       const root = checkout({ "ADR-901-a-fixture.md": text });
       const r = run(SCRIPT, payload([{ path: ADR, changeType: "MODIFIED" }]), THIS_REPO, ON, root);

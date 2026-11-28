@@ -1869,7 +1869,7 @@ describe("#2955: every reader finds the same Decomposition table and reads the s
       expect(adrStatus(doc(s, "x")), s).toBe(s);
       expect(adrStatus(doc(`"${s.toUpperCase()}"  # a comment`, "x")), s).toBe(s);
     }
-    expect(adrStatus("# no frontmatter\n\nstatus: accepted\n"), "a body line is not a status").toBeNull();
+    expect(adrStatus("# no frontmatter\n\nstatus: accepted\n"), "a body line is not a status").toEqual({ unmeasured: null });
   });
 
   test("a status outside the known set is UNMEASURED, keeps its value, and is neither proposed nor accepted", () => {
@@ -1889,9 +1889,14 @@ describe("#2955: every reader finds the same Decomposition table and reads the s
       expect(adrStatusRefusal(text) ?? "", key).toContain("declares no `status:` key");
       expect(adrPlacement(null, text).kind, key).toBe("unmeasured");
     }
-    // An unclosed frontmatter with no key is the same; no frontmatter at all has no status.
+    // An unclosed frontmatter with no key is the same. Round 2: so is a text
+    // whose first line opens no frontmatter, body-only or with a blank line first.
     expect(adrStatus("---\ndoc-type: adr\n\n# ADR\n")).toEqual({ unmeasured: null });
-    expect(adrStatus("# ADR\n\nstatus: accepted\n")).toBeNull();
+    for (const text of [`# ADR\n\nstatus: accepted\n\n${table("")}\n`, `\n---\nstatus: proposed\n---\n\n${table("")}\n`]) {
+      expect(adrStatus(text), JSON.stringify(text.slice(0, 20))).toEqual({ unmeasured: null });
+      expect(proposedWithPlan(text)).toBe(false);
+      expect(adrPlacement(null, text).kind).toBe("unmeasured");
+    }
   });
 
   test("an ADR whose status is UNMEASURED places nothing and says why, naming the value", () => {

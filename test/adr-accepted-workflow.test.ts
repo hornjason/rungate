@@ -90,8 +90,9 @@ describe("SC-2738: newlyAccepted reads the frontmatter status at both ends", () 
     const body = adr("proposed").replace("# ADR-099 — a decision", "# ADR-099\n\nstatus: accepted");
     expect(adrStatus(body)).toBe("proposed");
     expect(newlyAccepted(adr("proposed"), body)).toBe(false);
-    // And a file with no frontmatter has no status at all.
-    expect(adrStatus("status: accepted\n")).toBeNull();
+    // And a file with no frontmatter is not accepted. Review of #2959: it is
+    // UNMEASURED, never "no status".
+    expect(adrStatus("status: accepted\n")).toEqual({ unmeasured: null });
     // Frontmatter with no status, and the body says accepted: still not accepted.
     // Review of #2959: a frontmatter with no `status:` key is UNMEASURED, not "no status".
     expect(adrStatus("---\ndoc-type: adr\n---\n\nstatus: accepted\n")).toEqual({ unmeasured: null });
