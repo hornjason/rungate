@@ -14,7 +14,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 
-import { compileBriefPattern } from "../lib/brief-policy-pattern";
+import { compileBriefPattern, compileBriefPolicy } from "../lib/brief-policy-pattern";
 import { validateAgentBrief } from "../lib/agent-brief-validation";
 import { shipSkillPath } from "../lib/ship-skill-folder";
 import { validateBriefAgainst } from "../gates/brief-assembler";
@@ -64,7 +64,10 @@ describe("#2946: one function compiles a brief-policy pattern", () => {
       [{ name: "goal", pattern: null }, `"goal" has a pattern that is null, not a string`],
       [{ name: "goal", pattern: "" }, `"goal" has an empty pattern`],
       [{ name: "goal", pattern: "(?i)" }, `"goal" has an empty pattern`],
-      [{ pattern: 7 }, "an entry with no name has a pattern that is number"],
+      // Review of #2960: a name is what a WARN reports, so an entry without one is refused.
+      [{ pattern: 7 }, "an entry with no name"],
+      [{ pattern: "(?i)goal" }, "an entry with no name"],
+      [{ name: " ", pattern: "(?i)goal" }, "an entry with no name"],
       ["goal", "an entry that is not an object"],
     ] as const) {
       const c = compileBriefPattern(entry);
@@ -91,11 +94,11 @@ describe("#2946: the guard and the gates read the shipped file the same way", ()
   });
 
   test("the guard and the gates agree on the shipped file: a bare brief fails both, a full one passes both", () => {
+    // Review of #2960: the Marcus template markers too, or the guard blocks the
+    // brief before it reads any policy and the last assertion holds vacuously.
     const full = [
-      "## Goal\n\nWhat to implement: the thing.",
-      "## Acceptance criteria\n\nAC-1 holds.",
-      "## Files to modify\n\nlib/x.ts",
-      "## Scope\n\nOut of scope: everything else. Do not touch lib/y.ts.",
+      "## Context\n\nThe goal is what to implement: the thing.",
+      "## Task\n\nAC-1 holds. Files to modify: lib/x.ts. Out of scope: everything else; do not touch lib/y.ts.",
       "## Verify\n\nRun the tests.",
       "## Report back\n\nSay what changed.",
     ].join("\n\n");
@@ -104,6 +107,9 @@ describe("#2946: the guard and the gates read the shipped file the same way", ()
     expect(guard(SHIPPED, BARE).some(o => o.startsWith("BRIEF CONTENT WARN"))).toBe(true);
     expect(validateBriefAgainst(full, policies)).toBe(true);
     expect(guard(SHIPPED, full), "a full brief got a content line from the guard").toEqual([]);
+    // The full brief reaches the policy stage: one more required pattern it lacks is warned about.
+    const plus = { policies: { marcus: { requiredPatterns: [...policies.policies.marcus.requiredPatterns, { name: "never", pattern: "zz-never-present-zz" }] } } };
+    expect(guard(JSON.stringify(plus), full).filter(o => o.startsWith("BRIEF CONTENT WARN")).join("")).toContain("never");
   });
 
   test("an entry with no pattern is reported unreadable by both readers, naming it", () => {
@@ -113,5 +119,36 @@ describe("#2946: the guard and the gates read the shipped file the same way", ()
     expect(unmeasured, said.join("\n")).toHaveLength(1);
     expect(unmeasured[0]).toContain(`"scope" has no pattern`);
     expect(() => validateBriefAgainst("goal and scope", policies)).toThrow(/"scope" has no pattern/);
+  });
+});
+
+describe("#2946, review of #2960: both readers read the whole list, and an empty one, the same way", () => {
+  test("compileBriefPolicy compiles every entry before any is tested, and refuses an absent or empty list", () => {
+    const ok = compileBriefPolicy([{ name: "goal", pattern: "(?i)goal" }, { name: "scope", pattern: "scope" }]);
+    expect(ok.ok && ok.patterns.map(p => p.name)).toEqual(["goal", "scope"]);
+    for (const list of [[], undefined, null, {}, "x"]) {
+      const c = compileBriefPolicy(list);
+      expect(c.ok ? "" : c.why, JSON.stringify(list)).toContain("declares no requiredPatterns");
+    }
+    const late = compileBriefPolicy([{ name: "goal", pattern: "(?i)goal" }, { name: "scope" }]);
+    expect(late.ok ? "" : late.why).toContain(`"scope" has no pattern`);
+  });
+
+  test("an unreadable entry after one the brief misses is named by the gates, as the guard names it", () => {
+    const policies = { policies: { marcus: { requiredPatterns: [{ name: "goal", pattern: "(?i)goal" }, { name: "scope" }] } } };
+    expect(() => validateBriefAgainst("nothing here", policies)).toThrow(/"scope" has no pattern/);
+    const said = guard(JSON.stringify(policies), BARE).filter(o => o.startsWith("BRIEF CONTENT UNMEASURED"));
+    expect(said.join(""), "the guard and the gates disagree on the file").toContain(`"scope" has no pattern`);
+  });
+
+  test("an empty or absent requiredPatterns is unreadable to the guard, as the gates refuse it", () => {
+    for (const marcus of [{ requiredPatterns: [] }, {}]) {
+      const policies = { policies: { marcus } };
+      expect(() => validateBriefAgainst(BARE, policies), JSON.stringify(marcus)).toThrow(/no requiredPatterns/);
+      const said = guard(JSON.stringify(policies), BARE);
+      expect(said.filter(o => o.startsWith("BRIEF CONTENT UNMEASURED")).join(""), JSON.stringify(marcus)).toContain("declares no requiredPatterns");
+    }
+    // Control: a file that names no policy for this agent polices nothing for it.
+    expect(guard(JSON.stringify({ policies: { quinn: { requiredPatterns: [{ name: "x", pattern: "x" }] } } }), BARE)).toEqual([]);
   });
 });

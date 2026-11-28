@@ -4,7 +4,7 @@ import { fileURLToPath } from "url";
 import { plantCanaries, getDefaultCanaries } from "../lib/canary.js";
 import { tryLoadRungateConfig } from "../lib/config-loader";
 import { shipSkillPath } from "../lib/ship-skill-folder";
-import { compileBriefPattern } from "../lib/brief-policy-pattern";
+import { compileBriefPolicy } from "../lib/brief-policy-pattern";
 import {
   classifyContextDoc, classifyContextDocs, contextDocLines, contextDocNotes, hasBriefUnsafeChars,
   type ContextDocVerdict,
@@ -406,28 +406,15 @@ function validateBrief(brief: string): boolean {
  * `.claude/rules/checks-must-be-able-to-fail.md`.
  */
 export function validateBriefAgainst(brief: string, policies: any): boolean {
-  const required = policies?.policies?.marcus?.requiredPatterns;
-
-  // An empty policy set validates every brief, which is indistinguishable
-  // from not validating at all — the exact state the issue asks be refused.
-  if (!Array.isArray(required) || required.length === 0) {
-    throw new Error(
-      `brief policies declare no requiredPatterns for "marcus". An empty policy set passes ` +
-        `every brief and cannot be told apart from no validation at all, so this refuses.`,
-    );
+  // #2946: the one reader the brief guard uses too. Every entry is compiled
+  // before any is tested (review of #2960), so an unreadable entry after one
+  // the brief misses is still named. An empty or absent list refuses: it
+  // validates every brief, which is indistinguishable from not validating.
+  const compiled = compileBriefPolicy(policies?.policies?.marcus?.requiredPatterns);
+  if (!compiled.ok) {
+    throw new Error(`brief policies for "marcus": ${compiled.why}. An unreadable policy cannot validate a brief, so this refuses.`);
   }
-
-  // #2946: the one compiler the brief guard uses too. An entry it cannot read
-  // refuses, naming it, as the empty policy set above does.
-  for (const entry of required) {
-    const compiled = compileBriefPattern(entry);
-    if (!compiled.ok) {
-      throw new Error(`brief policies for "marcus": ${compiled.why}. An unreadable policy cannot validate a brief, so this refuses.`);
-    }
-    if (!compiled.re.test(brief)) return false;
-  }
-
-  return true;
+  return compiled.patterns.every(p => p.re.test(brief));
 }
 
 // CLI entry point

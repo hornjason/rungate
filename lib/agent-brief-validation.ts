@@ -18,7 +18,7 @@ import {
 } from 'fs';
 import { join } from 'path';
 import { shipSkillPath } from './ship-skill-folder';
-import { compileBriefPattern } from './brief-policy-pattern';
+import { compileBriefPolicy } from './brief-policy-pattern';
 
 // --- Interfaces ---
 
@@ -246,18 +246,17 @@ function validateBriefPolicies(
   if (policies === null || typeof policies !== 'object' || Array.isArray(policies)) {
     return { unreadable: `${policyPath} is not a JSON object` };
   }
-  const policy = (policies as { policies?: Record<string, { requiredPatterns?: { name: string; pattern: unknown }[] }> })
-    .policies?.[agent.label.toLowerCase()];
-  if (!policy?.requiredPatterns) return { missing: [] };
-  const missing: string[] = [];
-  for (const req of policy.requiredPatterns) {
-    // #2946: the gates' compiler, so the shipped `(?i)` form reads here too,
-    // and an entry with no pattern is unreadable rather than an empty regex.
-    const compiled = compileBriefPattern(req);
-    if (!compiled.ok) return { unreadable: `${policyPath}: ${compiled.why}` };
-    if (!compiled.re.test(prompt)) missing.push(req.name);
-  }
-  return { missing };
+  const key = agent.label.toLowerCase();
+  const policy = (policies as { policies?: Record<string, unknown> }).policies?.[key];
+  // No entry for this agent is no policy for it: the file names the agents it
+  // polices. An entry that is there is read whole (review of #2960).
+  if (policy === undefined) return { missing: [] };
+  // #2946: the gates' compiler, so the shipped `(?i)` form reads here too. An
+  // entry with no pattern or name, or an empty list, is unreadable here as it
+  // is in the gates, never an empty regex or a clean brief.
+  const compiled = compileBriefPolicy((policy as { requiredPatterns?: unknown } | null)?.requiredPatterns);
+  if (!compiled.ok) return { unreadable: `${policyPath}: the "${key}" policy ${compiled.why}` };
+  return { missing: compiled.patterns.filter(p => !p.re.test(prompt)).map(p => p.name) };
 }
 
 // --- Signal Logging ---
